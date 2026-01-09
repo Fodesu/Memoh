@@ -9,11 +9,18 @@ export const rawMessages = (messages: ModelMessage[]) => {
       }
       return `User: ${message.content}`
     } else if (message.role === 'assistant') {
-      let toolCalls = ''
       if (Array.isArray(message.content)) {
-        toolCalls = message.content.filter(c => c.type === 'tool-call').map(c => c.toolName).join(', ')
+        return `You: ${message.content.map(m => {
+          if (m.type === 'text') {
+            return m.text
+          } else if (m.type === 'tool-call') {
+            return `[Tool Call: ${m.toolName}]`
+          } else {
+            return ''
+          }
+        }).join('\n')}`
       }
-      return `You: ${message.content} \n${toolCalls}`
+      return `You: ${message.content}`
     } else if (message.role === 'tool') {
       return `Tool Result: ${message.content}`
     } else {

@@ -63,7 +63,7 @@ export const createAgent = (params: AgentParams) => {
       yield event
     }
     const newMessages = (await response).messages
-    params.onFinish?.([
+    await params.onFinish?.([
       user as ModelMessage,
       ...newMessages,
     ])
