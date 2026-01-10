@@ -1,20 +1,12 @@
 import Elysia from 'elysia'
-import { bearer } from '@elysiajs/bearer'
-import { jwt } from '@elysiajs/jwt'
+import { jwtPlugin } from '../../middlewares/auth'
 import { LoginModel } from './model'
 import { validateUser } from './service'
 
 export const authModule = new Elysia({
   prefix: '/auth',
 })
-  .use(
-    jwt({
-      name: 'jwt',
-      secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      exp: process.env.JWT_EXPIRES_IN || '7d',
-    })
-  )
-  .use(bearer())
+  .use(jwtPlugin)
   // Login endpoint
   .post('/login', async ({ body, jwt, set }) => {
     try {

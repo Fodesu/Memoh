@@ -1,11 +1,14 @@
 import { Elysia } from 'elysia'
-import { corsMiddleware } from './middlewares'
+import { corsMiddleware, errorMiddleware } from './middlewares'
 import { agentModule, authModule, modelModule, settingsModule, userModule } from './modules'
 import { memoryModule } from './modules/memory'
+import openapi from '@elysiajs/openapi'
 
 const port = process.env.API_SERVER_PORT || 7002
 
 export const app = new Elysia()
+  .use(errorMiddleware)
+  .use(openapi())
   .use(corsMiddleware)
   .use(authModule)
   .use(agentModule)

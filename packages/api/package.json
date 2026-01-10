@@ -16,6 +16,7 @@
     "@elysiajs/cron": "^1.4.1",
     "@elysiajs/eden": "^1.4.6",
     "@elysiajs/jwt": "^1.2.0",
+    "@elysiajs/openapi": "^1.4.13",
     "@memohome/agent": "workspace:*",
     "@memohome/db": "workspace:*",
     "@memohome/memory": "workspace:*",

@@ -1,6 +1,5 @@
 import Elysia from 'elysia'
-import { bearer } from '@elysiajs/bearer'
-import { jwt } from '@elysiajs/jwt'
+import { authMiddleware } from '../../middlewares/auth'
 import { messageModule } from './message'
 import { AddMemoryModel, SearchMemoryModel } from './model'
 import { addMemory, searchMemory } from './service'
@@ -9,35 +8,7 @@ import { MemoryUnit } from '@memohome/memory'
 export const memoryModule = new Elysia({
   prefix: '/memory',
 })
-  .use(
-    jwt({
-      name: 'jwt',
-      secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      exp: process.env.JWT_EXPIRES_IN || '7d',
-    })
-  )
-  .use(bearer())
-  .derive(async ({ bearer, jwt, set }) => {
-    if (!bearer) {
-      set.status = 401
-      throw new Error('No bearer token provided')
-    }
-
-    const payload = await jwt.verify(bearer)
-
-    if (!payload) {
-      set.status = 401
-      throw new Error('Invalid or expired token')
-    }
-
-    return {
-      user: {
-        userId: payload.userId as string,
-        username: payload.username as string,
-        role: payload.role as string,
-      },
-    }
-  })
+  .use(authMiddleware)
   .use(messageModule)
   // Add memory for current user
   .post('/', async ({ user, body, set }) => {

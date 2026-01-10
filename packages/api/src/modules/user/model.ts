@@ -19,7 +19,7 @@ const UpdateUserSchema = z.object({
   role: UserRoleSchema.optional(),
   displayName: z.string().optional(),
   avatarUrl: z.string().url('Invalid URL format').optional(),
-  isActive: z.enum(['true', 'false']).optional(),
+  isActive: z.boolean().optional(),
 })
 
 // 更新密码的 Schema

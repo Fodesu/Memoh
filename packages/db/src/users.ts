@@ -1,4 +1,4 @@
-import { pgTable, pgEnum, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { pgTable, pgEnum, text, timestamp, uuid, boolean } from 'drizzle-orm/pg-core'
 
 // 定义用户角色枚举
 export const userRoleEnum = pgEnum('user_role', ['admin', 'member'])
@@ -27,7 +27,7 @@ export const users = pgTable('users', {
   avatarUrl: text('avatar_url'),
   
   // 账户状态（是否激活）
-  isActive: text('is_active').notNull().default('true'),
+  isActive: boolean('is_active').notNull().default(true),
   
   // 创建时间
   createdAt: timestamp('created_at').notNull().defaultNow(),

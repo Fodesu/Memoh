@@ -63,7 +63,7 @@ export const validateUser = async (username: string, password: string) => {
   }
 
   // 检查账户是否激活
-  if (user.isActive !== 'true') {
+  if (!user.isActive) {
     return null
   }
 

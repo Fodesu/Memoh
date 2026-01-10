@@ -1,12 +1,43 @@
 import { db } from '@memohome/db'
 import { model } from '@memohome/db/schema'
 import { Model } from '@memohome/shared'
-import { eq } from 'drizzle-orm'
+import { eq, sql, desc, asc } from 'drizzle-orm'
 import { getSettings } from '@/modules/settings/service'
+import { calculateOffset, createPaginatedResult, type PaginatedResult } from '../../utils/pagination'
 
-export const getModels = async () => {
-  const models = await db.select().from(model)
-  return models
+/**
+ * 模型列表返回类型
+ */
+type ModelListItem = {
+  id: string
+  model: Model
+}
+
+export const getModels = async (params?: {
+  page?: number
+  limit?: number
+  sortOrder?: 'asc' | 'desc'
+}): Promise<PaginatedResult<ModelListItem>> => {
+  const page = params?.page || 1
+  const limit = params?.limit || 10
+  const sortOrder = params?.sortOrder || 'desc'
+  const offset = calculateOffset(page, limit)
+
+  // 获取总数
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(model)
+
+  // 获取分页数据（按 id 排序，因为 model 表没有 createdAt）
+  const orderFn = sortOrder === 'desc' ? desc : asc
+  const models = await db
+    .select()
+    .from(model)
+    .orderBy(orderFn(model.id))
+    .limit(limit)
+    .offset(offset)
+
+  return createPaginatedResult(models, Number(count), page, limit)
 }
 
 export const getModelById = async (id: string) => {

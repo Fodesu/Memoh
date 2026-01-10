@@ -1,6 +1,5 @@
 import Elysia from 'elysia'
-import { bearer } from '@elysiajs/bearer'
-import { jwt } from '@elysiajs/jwt'
+import { authMiddleware } from '../../middlewares/auth'
 import { AgentStreamModel } from './model'
 import { createAgentStream } from './service'
 import { getChatModel, getEmbeddingModel, getSummaryModel } from '../model/service'
@@ -10,35 +9,7 @@ import { ChatModel, EmbeddingModel } from '@memohome/shared'
 export const agentModule = new Elysia({
   prefix: '/agent',
 })
-  .use(
-    jwt({
-      name: 'jwt',
-      secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      exp: process.env.JWT_EXPIRES_IN || '7d',
-    })
-  )
-  .use(bearer())
-  .derive(async ({ bearer, jwt, set }) => {
-    if (!bearer) {
-      set.status = 401
-      throw new Error('No bearer token provided')
-    }
-
-    const payload = await jwt.verify(bearer)
-
-    if (!payload) {
-      set.status = 401
-      throw new Error('Invalid or expired token')
-    }
-
-    return {
-      user: {
-        userId: payload.userId as string,
-        username: payload.username as string,
-        role: payload.role as string,
-      },
-    }
-  })
+  .use(authMiddleware)
   // Stream agent conversation
   .post('/stream', async ({ user, body, set }) => {
     try {

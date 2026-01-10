@@ -1,20 +1,12 @@
 import Elysia from 'elysia'
-import { bearer } from '@elysiajs/bearer'
-import { jwt } from '@elysiajs/jwt'
+import { authMiddleware } from '../../../middlewares/auth'
 import { GetMemoryMessageFilterModel, GetMemoryMessageModel } from './model'
 import { getMemoryMessages, getMemoryMessagesFilter } from './service'
 
 export const messageModule = new Elysia({
   prefix: '/message',
 })
-  .use(
-    jwt({
-      name: 'jwt',
-      secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      exp: process.env.JWT_EXPIRES_IN || '7d',
-    })
-  )
-  .use(bearer())
+  .use(authMiddleware)
   .derive(async ({ bearer, jwt, set }) => {
     if (!bearer) {
       set.status = 401

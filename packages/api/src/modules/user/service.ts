@@ -1,12 +1,55 @@
 import { db } from '@memohome/db'
 import { users, settings } from '@memohome/db/schema'
-import { eq } from 'drizzle-orm'
+import { eq, sql, desc, asc } from 'drizzle-orm'
 import type { CreateUserInput, UpdateUserInput } from './model'
+import { calculateOffset, createPaginatedResult, type PaginatedResult } from '../../utils/pagination'
 
 /**
- * 获取所有用户列表
+ * 用户列表返回类型
  */
-export const getUsers = async () => {
+type UserListItem = {
+  id: string
+  username: string
+  email: string | null
+  role: 'admin' | 'member'
+  displayName: string | null
+  avatarUrl: string | null
+  isActive: boolean
+  createdAt: Date
+  updatedAt: Date
+  lastLoginAt: Date | null
+}
+
+/**
+ * 获取所有用户列表（支持分页）
+ */
+export const getUsers = async (params?: {
+  page?: number
+  limit?: number
+  sortBy?: string
+  sortOrder?: 'asc' | 'desc'
+}): Promise<PaginatedResult<UserListItem>> => {
+  const page = params?.page || 1
+  const limit = params?.limit || 10
+  const sortBy = params?.sortBy || 'createdAt'
+  const sortOrder = params?.sortOrder || 'desc'
+  const offset = calculateOffset(page, limit)
+
+  // 获取总数
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(users)
+
+  // 动态排序
+  const orderColumn = sortBy === 'username' ? users.username :
+                      sortBy === 'email' ? users.email :
+                      sortBy === 'role' ? users.role :
+                      sortBy === 'updatedAt' ? users.updatedAt :
+                      users.createdAt
+
+  const orderFn = sortOrder === 'desc' ? desc : asc
+
+  // 获取分页数据
   const userList = await db
     .select({
       id: users.id,
@@ -21,9 +64,11 @@ export const getUsers = async () => {
       lastLoginAt: users.lastLoginAt,
     })
     .from(users)
-    .orderBy(users.createdAt)
+    .orderBy(orderFn(orderColumn))
+    .limit(limit)
+    .offset(offset)
 
-  return userList
+  return createPaginatedResult(userList, Number(count), page, limit)
 }
 
 /**

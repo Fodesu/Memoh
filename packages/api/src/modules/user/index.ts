@@ -22,12 +22,23 @@ export const userModule = new Elysia({
   // 使用管理员中间件保护所有路由
   .use(adminMiddleware)
   // Get all users
-  .get('/', async () => {
+  .get('/', async ({ query }) => {
     try {
-      const userList = await getUsers()
+      const page = parseInt(query.page as string) || 1
+      const limit = parseInt(query.limit as string) || 10
+      const sortBy = query.sortBy as string || 'createdAt'
+      const sortOrder = (query.sortOrder as string) || 'desc'
+
+      const result = await getUsers({
+        page,
+        limit,
+        sortBy,
+        sortOrder: sortOrder as 'asc' | 'desc',
+      })
+      
       return {
         success: true,
-        data: userList,
+        ...result,
       }
     } catch (error) {
       return {
