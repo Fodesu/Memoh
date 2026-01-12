@@ -1,19 +1,19 @@
 /**
- * MemoHome CLI Package
+ * Memoh CLI Package
  * 
  * This package provides both:
- * 1. A command-line interface (CLI) for interacting with MemoHome API
+ * 1. A command-line interface (CLI) for interacting with Memoh API
  * 2. Core functionality that can be imported and used in other projects
  * 
  * @example CLI Usage (from terminal)
  * ```bash
- * memohome auth login
- * memohome agent chat "Hello"
+ * memoh auth login
+ * memoh agent chat "Hello"
  * ```
  * 
  * @example Core API Usage (from code)
  * ```typescript
- * import { login, chat, listModels } from '@memohome/cli'
+ * import { login, chat, listModels } from '@memoh/cli'
  * 
  * // Login
  * await login({ username: 'admin', password: 'password' })

@@ -1,5 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai'
-import { EmbeddingModel } from '@memohome/shared'
+import { EmbeddingModel } from '@memoh/shared'
 
 export const createEmbeddingGateway = (model: EmbeddingModel) => {
   return createOpenAI({

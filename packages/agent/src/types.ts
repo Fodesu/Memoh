@@ -1,5 +1,5 @@
-import type { MemoryUnit } from '@memohome/memory'
-import { ChatModel, Platform, Schedule } from '@memohome/shared'
+import type { MemoryUnit } from '@memoh/memory'
+import { ChatModel, Platform, Schedule } from '@memoh/shared'
 import { ModelMessage } from 'ai'
 
 export interface SendMessageOptions {

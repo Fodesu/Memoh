@@ -1,6 +1,6 @@
-# @memohome/db
+# @memoh/db
 
-Database package for memohome project using Drizzle ORM and PostgreSQL.
+Database package for memoh project using Drizzle ORM and PostgreSQL.
 
 ## Database Schema
 

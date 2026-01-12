@@ -1,5 +1,5 @@
-import { db } from '@memohome/db'
-import { history } from '@memohome/db/schema'
+import { db } from '@memoh/db'
+import { history } from '@memoh/db/schema'
 import { and, gte, lte, asc, eq } from 'drizzle-orm'
 import { MemoryUnit } from './memory-unit'
 

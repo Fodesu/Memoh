@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterView } from 'vue-router'
-import { Alert, Button } from '@memohome/ui'
+import { Alert, Button } from '@memoh/ui'
 </script>
 
 <template>

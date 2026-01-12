@@ -1,4 +1,4 @@
-import { Platform } from '@memohome/shared'
+import { Platform } from '@memoh/shared'
 import { time } from './shared'
 import { quote } from './utils'
 

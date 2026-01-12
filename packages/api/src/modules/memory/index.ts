@@ -3,7 +3,7 @@ import { authMiddleware } from '../../middlewares/auth'
 import { messageModule } from './message'
 import { AddMemoryModel, SearchMemoryModel } from './model'
 import { addMemory, searchMemory } from './service'
-import { MemoryUnit } from '@memohome/memory'
+import { MemoryUnit } from '@memoh/memory'
 
 export const memoryModule = new Elysia({
   prefix: '/memory',

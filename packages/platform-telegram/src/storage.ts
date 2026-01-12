@@ -1,4 +1,4 @@
-import type { TokenStorage } from '@memohome/client'
+import type { TokenStorage } from '@memoh/client'
 import Redis from 'ioredis'
 import { Context } from 'telegraf'
 
@@ -16,16 +16,16 @@ export const getTokenStorage = async (ctx: Context): Promise<TelegramTokenStorag
     throw new Error('Unable to identify user')
   }
   const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
-  const isTokenExists = await redis.exists(`memohome:telegram:${telegramUserId}:token`)
-  const token = isTokenExists ? await redis.get(`memohome:telegram:${telegramUserId}:token`) : null
-  const isUserIdExists = await redis.exists(`memohome:telegram:${telegramUserId}:userId`)
-  const userId = isUserIdExists ? await redis.get(`memohome:telegram:${telegramUserId}:userId`) : null
+  const isTokenExists = await redis.exists(`memoh:telegram:${telegramUserId}:token`)
+  const token = isTokenExists ? await redis.get(`memoh:telegram:${telegramUserId}:token`) : null
+  const isUserIdExists = await redis.exists(`memoh:telegram:${telegramUserId}:userId`)
+  const userId = isUserIdExists ? await redis.get(`memoh:telegram:${telegramUserId}:userId`) : null
   const chatId = ctx.chat?.id.toString() ?? null
-  if (chatId) await redis.set(`memohome:telegram:${telegramUserId}:chatId`, chatId)
+  if (chatId) await redis.set(`memoh:telegram:${telegramUserId}:chatId`, chatId)
   return {
     getChatId: () => chatId,
     setChatId: (chatId: string) => {
-      redis.set(`memohome:telegram:${telegramUserId}:chatId`, chatId)
+      redis.set(`memoh:telegram:${telegramUserId}:chatId`, chatId)
         .then(() => {
           redis.save()
         })
@@ -34,27 +34,27 @@ export const getTokenStorage = async (ctx: Context): Promise<TelegramTokenStorag
     setApiUrl: () => {},
     getToken: () => token,
     setToken: (token: string) => {
-      redis.set(`memohome:telegram:${telegramUserId}:token`, token)
+      redis.set(`memoh:telegram:${telegramUserId}:token`, token)
         .then(() => {
           redis.save()
         })
     },
     clearToken: () => {
-      redis.del(`memohome:telegram:${telegramUserId}:token`)
+      redis.del(`memoh:telegram:${telegramUserId}:token`)
         .then(() => {
           redis.save()
         })
     },
     getUserId: () => userId,
     setUserId: (userId: string) => {
-      redis.set(`memohome:telegram:${telegramUserId}:userId`, userId)
+      redis.set(`memoh:telegram:${telegramUserId}:userId`, userId)
         .then(() => {
           redis.save()
         })
     },
     getTelegramIdByUserId: async (userId: string) => {
-      // 扫描所有 memohome:telegram:*:userId 的 key
-      const pattern = 'memohome:telegram:*:userId'
+      // 扫描所有 memoh:telegram:*:userId 的 key
+      const pattern = 'memoh:telegram:*:userId'
       let cursor = '0'
       
       do {
@@ -71,8 +71,8 @@ export const getTokenStorage = async (ctx: Context): Promise<TelegramTokenStorag
         for (const key of keys) {
           const storedUserId = await redis.get(key)
           if (storedUserId === userId) {
-            // 从 key 中提取 telegramUserId: memohome:telegram:{telegramUserId}:userId
-            const match = key.match(/^memohome:telegram:(.+):userId$/)
+            // 从 key 中提取 telegramUserId: memoh:telegram:{telegramUserId}:userId
+            const match = key.match(/^memoh:telegram:(.+):userId$/)
             if (match) {
               return match[1]
             }

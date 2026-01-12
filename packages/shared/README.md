@@ -1,1 +1,1 @@
-# @memohome/shared
+# @memoh/shared

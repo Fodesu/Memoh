@@ -1,1 +1,1 @@
-# @memohome/web
+# @memoh/web

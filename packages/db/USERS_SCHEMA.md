@@ -44,8 +44,8 @@ pnpm run push
 ### 3. 在代码中使用
 
 ```typescript
-import { users, userRoleEnum } from '@memohome/db/schema'
-import { db } from '@memohome/db'
+import { users, userRoleEnum } from '@memoh/db/schema'
+import { db } from '@memoh/db'
 
 // 创建用户
 const password = 'password123'
@@ -60,7 +60,7 @@ const newUser = await db.insert(users).values({
 }).returning()
 
 // 或者使用辅助函数
-import { createUser } from '@memohome/db/src/user-helpers'
+import { createUser } from '@memoh/db/src/user-helpers'
 
 const user = await createUser({
   username: 'john_doe',

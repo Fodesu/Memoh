@@ -7,7 +7,7 @@ export async function startInteractiveMode(options: { maxContextTime?: string; l
   try {
     requireAuth()
 
-    console.log(chalk.green.bold('🤖 MemoHome Agent Interactive Mode'))
+    console.log(chalk.green.bold('🤖 Memoh Agent Interactive Mode'))
     console.log(chalk.dim('Type /exit or /quit to exit, type /help for help\n'))
 
     const { createInterface } = await import('readline')

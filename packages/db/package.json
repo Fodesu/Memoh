@@ -1,5 +1,5 @@
 {
-  "name": "@memohome/db",
+  "name": "@memoh/db",
   "version": "1.0.0",
   "type": "module",
   "exports": {
@@ -13,7 +13,7 @@
     "studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@memohome/shared": "workspace:*",
+    "@memoh/shared": "workspace:*",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "pg": "^8.16.3"

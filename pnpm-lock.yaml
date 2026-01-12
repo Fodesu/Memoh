@@ -45,13 +45,13 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.7
         version: 3.0.7(zod@4.3.5)
-      '@memohome/ai-gateway':
+      '@memoh/ai-gateway':
         specifier: workspace:*
         version: link:../ai-gateway
-      '@memohome/memory':
+      '@memoh/memory':
         specifier: workspace:*
         version: link:../memory
-      '@memohome/shared':
+      '@memoh/shared':
         specifier: workspace:*
         version: link:../shared
       ai:
@@ -81,7 +81,7 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.7
         version: 3.0.7(zod@4.3.5)
-      '@memohome/shared':
+      '@memoh/shared':
         specifier: workspace:*
         version: link:../shared
       ai:
@@ -108,16 +108,16 @@ importers:
       '@elysiajs/openapi':
         specifier: ^1.4.13
         version: 1.4.13(elysia@1.4.21(@sinclair/typebox@0.34.47)(@types/bun@1.3.5)(exact-mirror@0.2.6(@sinclair/typebox@0.34.47))(file-type@21.3.0)(openapi-types@12.1.3)(typescript@5.9.3))
-      '@memohome/agent':
+      '@memoh/agent':
         specifier: workspace:*
         version: link:../agent
-      '@memohome/db':
+      '@memoh/db':
         specifier: workspace:*
         version: link:../db
-      '@memohome/memory':
+      '@memoh/memory':
         specifier: workspace:*
         version: link:../memory
-      '@memohome/shared':
+      '@memoh/shared':
         specifier: workspace:*
         version: link:../shared
       drizzle-orm:
@@ -142,10 +142,10 @@ importers:
       '@elysiajs/eden':
         specifier: ^1.4.6
         version: 1.4.6(elysia@1.4.21(@sinclair/typebox@0.34.47)(@types/bun@1.3.5)(exact-mirror@0.2.6(@sinclair/typebox@0.34.47))(file-type@21.3.0)(openapi-types@12.1.3)(typescript@5.9.3))
-      '@memohome/api':
+      '@memoh/api':
         specifier: workspace:*
         version: link:../api
-      '@memohome/shared':
+      '@memoh/shared':
         specifier: workspace:*
         version: link:../shared
       chalk:
@@ -185,7 +185,7 @@ importers:
 
   packages/db:
     dependencies:
-      '@memohome/shared':
+      '@memoh/shared':
         specifier: workspace:*
         version: link:../shared
       dotenv:
@@ -213,13 +213,13 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.7
         version: 3.0.7(zod@4.3.5)
-      '@memohome/ai-gateway':
+      '@memoh/ai-gateway':
         specifier: workspace:*
         version: link:../ai-gateway
-      '@memohome/db':
+      '@memoh/db':
         specifier: workspace:*
         version: link:../db
-      '@memohome/shared':
+      '@memoh/shared':
         specifier: workspace:*
         version: link:../shared
       ai:
@@ -249,10 +249,10 @@ importers:
 
   packages/platform-telegram:
     dependencies:
-      '@memohome/client':
+      '@memoh/client':
         specifier: workspace:*
         version: link:../cli
-      '@memohome/platform':
+      '@memoh/platform':
         specifier: workspace:*
         version: link:../platform
       dotenv:
@@ -352,10 +352,10 @@ importers:
 
   packages/web:
     dependencies:
-      '@memohome/shared':
+      '@memoh/shared':
         specifier: workspace:*
         version: link:../shared
-      '@memohome/ui':
+      '@memoh/ui':
         specifier: workspace:*
         version: link:../ui
       '@tailwindcss/vite':

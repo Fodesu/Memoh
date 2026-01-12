@@ -31,7 +31,7 @@ async function main() {
     console.log('Bot is running!')
     console.log('\nAvailable commands:')
     console.log('  /start - Welcome message')
-    console.log('  /login <username> <password> - Login to MemoHome')
+    console.log('  /login <username> <password> - Login to Memoh')
     console.log('  /whoami - Show current user')
     console.log('  /chat <message> - Chat with AI')
     console.log('  /logout - Logout')

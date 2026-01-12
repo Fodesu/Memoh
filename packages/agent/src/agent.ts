@@ -2,8 +2,8 @@ import { streamText, generateText, ModelMessage, stepCountIs, UserModelMessage }
 import { AgentParams } from './types'
 import { system, schedule as schedulePrompt } from './prompts'
 import { getMemoryTools, getScheduleTools, getMessageTools } from './tools'
-import { createChatGateway } from '@memohome/ai-gateway'
-import { Schedule } from '@memohome/shared'
+import { createChatGateway } from '@memoh/ai-gateway'
+import { Schedule } from '@memoh/shared'
 
 export const createAgent = (params: AgentParams) => {
   const messages: ModelMessage[] = []

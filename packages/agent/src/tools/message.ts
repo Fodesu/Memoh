@@ -1,4 +1,4 @@
-import { Platform } from '@memohome/shared'
+import { Platform } from '@memoh/shared'
 import { SendMessageOptions } from '../types'
 import { tool } from 'ai'
 import z from 'zod'

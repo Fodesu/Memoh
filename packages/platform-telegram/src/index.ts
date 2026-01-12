@@ -1,7 +1,7 @@
 import { Telegraf, type Context } from 'telegraf'
-import { BasePlatform, SendSchema } from '@memohome/platform'
+import { BasePlatform, SendSchema } from '@memoh/platform'
 import { handleLogin, handleLogout, handleWhoami, requireAuth } from './auth'
-import { chatStreamAsync, type StreamEvent } from '@memohome/client'
+import { chatStreamAsync, type StreamEvent } from '@memoh/client'
 import { getTokenStorage } from './storage'
 import z from 'zod'
 import Redis from 'ioredis'
@@ -14,7 +14,7 @@ export interface TelegramPlatformConfig {
 
 export class TelegramPlatform extends BasePlatform {
   name = 'telegram'
-  description = 'Telegram Bot platform for MemoHome'
+  description = 'Telegram Bot platform for Memoh'
   config = z.object({
     botToken: z.string(),
   })
@@ -60,7 +60,7 @@ export class TelegramPlatform extends BasePlatform {
   }
 
   async send({ userId, message }: z.infer<typeof SendSchema>): Promise<void> {
-    const pattern = 'memohome:telegram:*:userId'
+    const pattern = 'memoh:telegram:*:userId'
       let cursor = '0'
       let telegramUserId: string | null = null
       
@@ -78,8 +78,8 @@ export class TelegramPlatform extends BasePlatform {
         for (const key of keys) {
           const storedUserId = await this.redis.get(key)
           if (storedUserId === userId) {
-            // 从 key 中提取 telegramUserId: memohome:telegram:{telegramUserId}:userId
-            const match = key.match(/^memohome:telegram:(.+):userId$/)
+            // 从 key 中提取 telegramUserId: memoh:telegram:{telegramUserId}:userId
+            const match = key.match(/^memoh:telegram:(.+):userId$/)
             if (match) {
               telegramUserId = match[1]
               break
@@ -88,7 +88,7 @@ export class TelegramPlatform extends BasePlatform {
         }
       } while (cursor !== '0')
       if (telegramUserId) {
-        const chatId = await this.redis.get(`memohome:telegram:${telegramUserId}:chatId`)
+        const chatId = await this.redis.get(`memoh:telegram:${telegramUserId}:chatId`)
         if (chatId && this.bot) {
           await this.bot.telegram.sendMessage(chatId, message)
         }
@@ -103,7 +103,7 @@ export class TelegramPlatform extends BasePlatform {
     // Start command
     this.bot.command('start', async (ctx) => {
       await ctx.reply(
-        '👋 Welcome to MemoHome Bot!\n\n' +
+        '👋 Welcome to Memoh Bot!\n\n' +
         'Available commands:\n' +
         '/login <username> <password> - Login to your account\n' +
         '/logout - Logout from your account\n' +
@@ -116,7 +116,7 @@ export class TelegramPlatform extends BasePlatform {
     // Help command
     this.bot.command('help', async (ctx) => {
       await ctx.reply(
-        '📚 MemoHome Bot Help\n\n' +
+        '📚 Memoh Bot Help\n\n' +
         '🔐 Authentication:\n' +
         '/login <username> <password> - Login\n' +
         '/logout - Logout\n' +

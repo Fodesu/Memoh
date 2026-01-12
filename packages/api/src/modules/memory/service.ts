@@ -1,6 +1,6 @@
-import { createMemory, MemoryUnit } from '@memohome/memory'
+import { createMemory, MemoryUnit } from '@memoh/memory'
 import { getEmbeddingModel, getSummaryModel } from '@/modules/model/service'
-import { ChatModel, EmbeddingModel } from '@memohome/shared'
+import { ChatModel, EmbeddingModel } from '@memoh/shared'
 
 export const addMemory = async (memoryUnit: MemoryUnit) => {
   const [embeddingModel, summaryModel] = await Promise.all([

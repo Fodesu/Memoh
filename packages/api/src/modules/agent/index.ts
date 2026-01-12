@@ -4,7 +4,7 @@ import { AgentStreamModel } from './model'
 import { createAgent } from './service'
 import { getChatModel, getEmbeddingModel, getSummaryModel } from '../model/service'
 import { getSettings } from '../settings/service'
-import { ChatModel, EmbeddingModel } from '@memohome/shared'
+import { ChatModel, EmbeddingModel } from '@memoh/shared'
 
 export const agentModule = new Elysia({
   prefix: '/agent',

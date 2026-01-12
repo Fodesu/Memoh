@@ -1,5 +1,5 @@
 import { requireAuth, getToken, getApiUrl } from './client'
-import type { MemoHomeContext } from './context'
+import type { MemohContext } from './context'
 
 export interface ChatParams {
   message: string
@@ -22,7 +22,7 @@ export type StreamCallback = (event: StreamEvent) => void | Promise<void>
 export async function chatStream(
   params: ChatParams,
   onEvent: StreamCallback,
-  context?: MemoHomeContext
+  context?: MemohContext
 ): Promise<void> {
   requireAuth(context)
   const token = getToken(context)!
@@ -37,7 +37,7 @@ export async function chatStream(
 export async function chatStreamAsync(
   params: ChatParams,
   onEvent: StreamCallback,
-  context?: MemoHomeContext
+  context?: MemohContext
 ): Promise<void> {
   requireAuth(context)
   const token = getToken(context)!
@@ -126,7 +126,7 @@ async function performStreamChat(
 /**
  * Chat with AI Agent (non-streaming, collect full response) - sync version
  */
-export async function chat(params: ChatParams, context?: MemoHomeContext): Promise<string> {
+export async function chat(params: ChatParams, context?: MemohContext): Promise<string> {
   let fullResponse = ''
   
   await chatStream(params, async (event) => {
@@ -143,7 +143,7 @@ export async function chat(params: ChatParams, context?: MemoHomeContext): Promi
 /**
  * Chat with AI Agent (non-streaming, collect full response) - async version
  */
-export async function chatAsync(params: ChatParams, context?: MemoHomeContext): Promise<string> {
+export async function chatAsync(params: ChatParams, context?: MemohContext): Promise<string> {
   let fullResponse = ''
   
   await chatStreamAsync(params, async (event) => {

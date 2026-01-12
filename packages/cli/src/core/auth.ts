@@ -1,5 +1,5 @@
 import { createClient } from './client'
-import { getContext, type MemoHomeContext } from './context'
+import { getContext, type MemohContext } from './context'
 
 export interface LoginParams {
   username: string
@@ -28,11 +28,11 @@ export interface ConfigInfo {
 }
 
 /**
- * Login to MemoHome API (sync version for file storage)
+ * Login to Memoh API (sync version for file storage)
  * @param params - Login parameters
  * @param context - Optional context
  */
-export async function login(params: LoginParams, context?: MemoHomeContext): Promise<LoginResult> {
+export async function login(params: LoginParams, context?: MemohContext): Promise<LoginResult> {
   const client = createClient(context)
   
   const response = await client.auth.login.post({
@@ -70,7 +70,7 @@ export async function login(params: LoginParams, context?: MemoHomeContext): Pro
  * Logout current user
  * @param context - Optional context
  */
-export function logout(context?: MemoHomeContext): void {
+export function logout(context?: MemohContext): void {
   const ctx = context || getContext()
   const storage = ctx.storage
   
@@ -85,7 +85,7 @@ export function logout(context?: MemoHomeContext): void {
  * Check if user is logged in
  * @param context - Optional context
  */
-export function isLoggedIn(context?: MemoHomeContext): boolean {
+export function isLoggedIn(context?: MemohContext): boolean {
   const ctx = context || getContext()
   const storage = ctx.storage
   
@@ -102,7 +102,7 @@ export function isLoggedIn(context?: MemoHomeContext): boolean {
  * Get current logged in user info
  * @param context - Optional context
  */
-export async function getCurrentUser(context?: MemoHomeContext): Promise<UserInfo> {
+export async function getCurrentUser(context?: MemohContext): Promise<UserInfo> {
   const ctx = context || getContext()
   const storage = ctx.storage
   
@@ -136,7 +136,7 @@ export async function getCurrentUser(context?: MemoHomeContext): Promise<UserInf
  * Get current API configuration
  * @param context - Optional context
  */
-export function getConfig(context?: MemoHomeContext): ConfigInfo {
+export function getConfig(context?: MemohContext): ConfigInfo {
   const ctx = context || getContext()
   const storage = ctx.storage
   
@@ -158,7 +158,7 @@ export function getConfig(context?: MemoHomeContext): ConfigInfo {
  * @param url - API URL
  * @param context - Optional context
  */
-export function setConfig(url: string, context?: MemoHomeContext): void {
+export function setConfig(url: string, context?: MemohContext): void {
   const ctx = context || getContext()
   const storage = ctx.storage
   

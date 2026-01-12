@@ -1,4 +1,4 @@
-import { Model } from '@memohome/shared'
+import { Model } from '@memoh/shared'
 import { jsonb, pgTable, uuid } from 'drizzle-orm/pg-core'
 
 export const model = pgTable('model', {

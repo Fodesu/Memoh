@@ -1,5 +1,5 @@
 {
-  "name": "@memohome/web",
+  "name": "@memoh/web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,8 +9,8 @@
     "start": "vite preview"
   },
   "dependencies": {
-    "@memohome/shared": "workspace:*",
-    "@memohome/ui": "workspace:*",
+    "@memoh/shared": "workspace:*",
+    "@memoh/ui": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",
     "dotenv": "^17.2.3",
     "pinia": "^3.0.4",

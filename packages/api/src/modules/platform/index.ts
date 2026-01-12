@@ -19,7 +19,7 @@ import {
   activePlatform,
   setActivePlatform,
 } from './service'
-import { Platform } from '@memohome/shared'
+import { Platform } from '@memoh/shared'
 
 export const platformModule = new Elysia({
   prefix: '/platform',

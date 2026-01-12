@@ -1,5 +1,5 @@
 {
-  "name": "@memohome/memory",
+  "name": "@memoh/memory",
   "version": "1.0.0",
   "description": "",
   "exports": {
@@ -15,9 +15,9 @@
   "packageManager": "pnpm@10.27.0",
   "dependencies": {
     "@ai-sdk/openai": "^3.0.7",
-    "@memohome/ai-gateway": "workspace:*",
-    "@memohome/db": "workspace:*",
-    "@memohome/shared": "workspace:*",
+    "@memoh/ai-gateway": "workspace:*",
+    "@memoh/db": "workspace:*",
+    "@memoh/shared": "workspace:*",
     "ai": "^6.0.25",
     "drizzle-orm": "^0.45.1",
     "mem0ai": "^2.2.0",

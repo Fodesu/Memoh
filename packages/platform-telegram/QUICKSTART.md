@@ -31,7 +31,7 @@ EOF
 redis-server
 ```
 
-**Terminal 2 - 启动 MemoHome API:**
+**Terminal 2 - 启动 Memoh API:**
 ```bash
 cd packages/api
 pnpm start
@@ -50,7 +50,7 @@ pnpm start
 ```
 你: /start
 
-Bot: 👋 Welcome to MemoHome Bot!
+Bot: 👋 Welcome to Memoh Bot!
 
 Available commands:
 /login <username> <password> - Login to your account
@@ -69,13 +69,13 @@ Bot: ✅ Login successful!
 🎭 Role: admin
 🔑 User ID: xxx
 
-You can now use the bot to interact with MemoHome.
+You can now use the bot to interact with Memoh.
 ```
 
 ```
 你: /chat 你好，介绍一下你自己
 
-Bot: 🤖 你好！我是 MemoHome AI 助手...
+Bot: 🤖 你好！我是 Memoh AI 助手...
 ```
 
 ```
@@ -140,16 +140,16 @@ Bot: 🤖 你好 userB...
 redis-cli
 
 # 查看所有 token
-KEYS memohome:tg:token:*
+KEYS memoh:tg:token:*
 
 # 查看特定用户的 token
-GET memohome:tg:token:123456789
+GET memoh:tg:token:123456789
 
 # 查看用户信息
-GET memohome:tg:user:123456789
+GET memoh:tg:user:123456789
 
 # 查看过期时间
-TTL memohome:tg:token:123456789
+TTL memoh:tg:token:123456789
 ```
 
 ## 下一步
@@ -191,7 +191,7 @@ Bot: Hello! 你好！
 ```json
 {
   "apps": [{
-    "name": "memohome-tg-bot",
+    "name": "memoh-tg-bot",
     "script": "bun",
     "args": "run src/bot.ts",
     "env": {
@@ -206,7 +206,7 @@ Bot: Hello! 你好！
 启动：
 ```bash
 pm2 start ecosystem.json
-pm2 logs memohome-tg-bot
+pm2 logs memoh-tg-bot
 ```
 
 祝你使用愉快！🎉

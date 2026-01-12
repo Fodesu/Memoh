@@ -1,5 +1,5 @@
 import { getApiUrl, getToken } from './client'
-import type { MemoHomeContext } from './context'
+import type { MemohContext } from './context'
 
 export interface PingResult {
   success: boolean
@@ -12,7 +12,7 @@ export interface PingResult {
  * Test API server connection
  * @param context - Optional context, uses global context if not provided
  */
-export async function ping(context?: MemoHomeContext): Promise<PingResult> {
+export async function ping(context?: MemohContext): Promise<PingResult> {
   const apiUrl = getApiUrl(context)
   const token = getToken(context)
   
@@ -67,7 +67,7 @@ export async function ping(context?: MemoHomeContext): Promise<PingResult> {
  * Get connection info
  * @param context - Optional context, uses global context if not provided
  */
-export function getConnectionInfo(context?: MemoHomeContext): {
+export function getConnectionInfo(context?: MemohContext): {
   apiUrl: string
   hasToken: boolean
 } {

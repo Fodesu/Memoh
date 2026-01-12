@@ -1,4 +1,4 @@
-# @memohome/api
+# @memoh/api
 
 API 服务器，基于 Elysia 构建。
 

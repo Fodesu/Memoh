@@ -1,3 +1,3 @@
-# @memohome/agent
+# @memoh/agent
 
 Agent for PhoneTutor.

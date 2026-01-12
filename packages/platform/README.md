@@ -1,1 +1,1 @@
-# @memohome/platform
+# @memoh/platform

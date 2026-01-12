@@ -1,4 +1,4 @@
-import { Schedule } from '@memohome/shared'
+import { Schedule } from '@memoh/shared'
 import { tool } from 'ai'
 import z from 'zod'
 

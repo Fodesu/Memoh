@@ -19,7 +19,7 @@
    docker run -d -p 6379:6379 redis:latest
    ```
 
-3. **MemoHome API**
+3. **Memoh API**
    - Ensure the API server is running on `http://localhost:7002`
    - Or update `API_BASE_URL` to your API endpoint
 
@@ -68,7 +68,7 @@ Open Telegram and find your bot, then:
    /start
    ```
 
-2. **Login to MemoHome**
+2. **Login to Memoh**
    ```
    /login admin password
    ```
@@ -109,13 +109,13 @@ Open Telegram and find your bot, then:
 ```
 1. User: /login admin password
    │
-   ├──► Bot validates with MemoHome API
+   ├──► Bot validates with Memoh API
    │
    ├──► API returns token + user info
    │
    └──► Redis stores:
-        ├─ memohome:tg:token:123456 = "token_abc..."
-        └─ memohome:tg:user:123456 = { username, role, userId }
+        ├─ memoh:tg:token:123456 = "token_abc..."
+        └─ memoh:tg:user:123456 = { username, role, userId }
 
 2. User: /chat Hello
    │
@@ -123,7 +123,7 @@ Open Telegram and find your bot, then:
    │
    ├──► Get token from Redis by telegram_id
    │
-   ├──► Call MemoHome API with token
+   ├──► Call Memoh API with token
    │
    └──► Stream response back to user
 ```
@@ -210,7 +210,7 @@ import {
   chatStreamAsync, 
   listModels, 
   searchMemory 
-} from '@memohome/cli/core'
+} from '@memoh/cli/core'
 
 // In command handler
 const memoContext = getMemoContext(ctx, storage)
@@ -249,16 +249,16 @@ DEBUG=telegraf:* pnpm start
 redis-cli
 
 # List all keys
-KEYS memohome:tg:*
+KEYS memoh:tg:*
 
 # Get a token
-GET memohome:tg:token:123456
+GET memoh:tg:token:123456
 
 # Get user info
-GET memohome:tg:user:123456
+GET memoh:tg:user:123456
 
 # Check TTL (time to live)
-TTL memohome:tg:token:123456
+TTL memoh:tg:token:123456
 ```
 
 ### Test API Connection
@@ -345,7 +345,7 @@ API_BASE_URL=https://api.yourdomain.com
 **Solutions**:
 1. Verify API URL is accessible
 2. Check username/password are correct
-3. Ensure MemoHome API is running
+3. Ensure Memoh API is running
 4. Test API endpoint directly with curl
 
 ### Redis connection errors
@@ -365,7 +365,7 @@ API_BASE_URL=https://api.yourdomain.com
 **Solutions**:
 1. Tokens expire after 30 days
 2. User needs to `/logout` and `/login` again
-3. Check token TTL in Redis: `TTL memohome:tg:token:123456`
+3. Check token TTL in Redis: `TTL memoh:tg:token:123456`
 
 ## Advanced Usage
 
@@ -374,7 +374,7 @@ API_BASE_URL=https://api.yourdomain.com
 You can implement your own storage:
 
 ```typescript
-import type { TokenStorage } from '@memohome/cli/core'
+import type { TokenStorage } from '@memoh/cli/core'
 
 class MyCustomStorage implements TokenStorage {
   async getApiUrl(): Promise<string> { /* ... */ }

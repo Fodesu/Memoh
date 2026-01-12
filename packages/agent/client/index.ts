@@ -1,8 +1,8 @@
 import { createInterface } from 'node:readline'
 import { stdin as input, stdout as output } from 'node:process'
 import { createAgent } from '../src/agent'
-import { createMemory, filterByTimestamp, MemoryUnit } from '@memohome/memory'
-import { ModelClientType, ChatModel, EmbeddingModel } from '@memohome/shared'
+import { createMemory, filterByTimestamp, MemoryUnit } from '@memoh/memory'
+import { ModelClientType, ChatModel, EmbeddingModel } from '@memoh/shared'
 
 // Load environment variables
 const MODEL = process.env.MODEL

@@ -1,5 +1,5 @@
-import { db } from '@memohome/db'
-import { users, settings } from '@memohome/db/schema'
+import { db } from '@memoh/db'
+import { users, settings } from '@memoh/db/schema'
 import { eq, sql, desc, asc } from 'drizzle-orm'
 import type { CreateUserInput, UpdateUserInput } from './model'
 import { calculateOffset, createPaginatedResult, type PaginatedResult } from '../../utils/pagination'

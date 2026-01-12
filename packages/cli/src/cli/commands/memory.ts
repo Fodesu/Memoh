@@ -121,7 +121,7 @@ export function memoryCommands(program: Command) {
       try {
         if (!options.start || !options.end) {
           console.error(chalk.red('Please provide start and end dates'))
-          console.log(chalk.dim('Example: memohome memory filter -s 2024-01-01T00:00:00Z -e 2024-12-31T23:59:59Z'))
+          console.log(chalk.dim('Example: memoh memory filter -s 2024-01-01T00:00:00Z -e 2024-12-31T23:59:59Z'))
           process.exit(1)
         }
 

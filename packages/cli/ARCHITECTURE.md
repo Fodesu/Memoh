@@ -1,4 +1,4 @@
-# MemoHome CLI 架构说明
+# Memoh CLI 架构说明
 
 ## 项目重构概述
 
@@ -55,14 +55,14 @@ Core 层提供纯粹的功能函数，特点：
 
 ```typescript
 // Auth
-import { login, logout, getCurrentUser } from '@memohome/cli/core'
+import { login, logout, getCurrentUser } from '@memoh/cli/core'
 
 await login({ username: 'admin', password: 'password' })
 const user = await getCurrentUser()
 logout()
 
 // Agent
-import { chat, chatStream } from '@memohome/cli/core'
+import { chat, chatStream } from '@memoh/cli/core'
 
 // 非流式对话
 const response = await chat({ 
@@ -78,7 +78,7 @@ await chatStream({ message: 'Hello' }, async (event) => {
 })
 
 // Model
-import { listModels, createModel } from '@memohome/cli/core'
+import { listModels, createModel } from '@memoh/cli/core'
 
 const models = await listModels()
 const newModel = await createModel({
@@ -91,7 +91,7 @@ const newModel = await createModel({
 })
 
 // Memory
-import { searchMemory, addMemory, getMessages } from '@memohome/cli/core'
+import { searchMemory, addMemory, getMessages } from '@memoh/cli/core'
 
 const memories = await searchMemory({ query: 'test', limit: 10 })
 await addMemory({ content: 'Important note' })
@@ -117,9 +117,9 @@ CLI 层负责用户交互，特点：
 pnpm install
 
 # 运行命令
-memohome auth login
-memohome agent chat "Hello"
-memohome model list
+memoh auth login
+memoh agent chat "Hello"
+memoh model list
 ```
 
 ### 2. 作为库使用
@@ -128,17 +128,17 @@ memohome model list
 
 ```typescript
 // 导入所有功能
-import * as memohome from '@memohome/cli'
+import * as memoh from '@memoh/cli'
 
 // 或导入特定模块
-import { login, chat, listModels } from '@memohome/cli'
-import * as auth from '@memohome/cli/core'
-import type { User, Model } from '@memohome/cli/types'
+import { login, chat, listModels } from '@memoh/cli'
+import * as auth from '@memoh/cli/core'
+import type { User, Model } from '@memoh/cli/types'
 
 // 使用
-await memohome.login({ username: 'admin', password: 'password' })
-const response = await memohome.chat({ message: 'Hello' })
-const models = await memohome.listModels()
+await memoh.login({ username: 'admin', password: 'password' })
+const response = await memoh.chat({ message: 'Hello' })
+const models = await memoh.listModels()
 ```
 
 ## 包导出
@@ -154,7 +154,7 @@ const models = await memohome.listModels()
     "./utils": "./src/utils/index.ts"  // 工具函数
   },
   "bin": {
-    "memohome": "./src/cli/index.ts"  // CLI 入口
+    "memoh": "./src/cli/index.ts"  // CLI 入口
   }
 }
 ```
@@ -179,7 +179,7 @@ const models = await memohome.listModels()
 ### 新代码（Core 层调用）
 ```typescript
 // 可以在任何地方使用，无 UI 依赖
-import { login, chat } from '@memohome/cli'
+import { login, chat } from '@memoh/cli'
 
 try {
   await login({ username: 'admin', password: 'password' })
@@ -216,6 +216,6 @@ test('login should work', async () => {
 
 - Core 层函数通过 `throw Error` 返回错误，调用者需要处理
 - CLI 层负责美化错误信息和用户反馈
-- 配置文件位于 `~/.memohome/config.json`
+- 配置文件位于 `~/.memoh/config.json`
 - API 客户端使用 Eden Treaty
 

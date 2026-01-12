@@ -1,5 +1,5 @@
 /**
- * MemoHome Core Context
+ * Memoh Core Context
  * 
  * Provides a configurable context for core functions to use different storage backends
  */
@@ -10,7 +10,7 @@ import { FileTokenStorage } from './storage/file'
 /**
  * Global context for core functions
  */
-export interface MemoHomeContext {
+export interface MemohContext {
   storage: TokenStorage
   currentUserId?: string
 }
@@ -18,14 +18,14 @@ export interface MemoHomeContext {
 /**
  * Default context (uses file storage for CLI)
  */
-let defaultContext: MemoHomeContext = {
+let defaultContext: MemohContext = {
   storage: new FileTokenStorage(),
 }
 
 /**
  * Get the current context
  */
-export function getContext(): MemoHomeContext {
+export function getContext(): MemohContext {
   return defaultContext
 }
 
@@ -33,7 +33,7 @@ export function getContext(): MemoHomeContext {
  * Set the global context
  * Use this to configure storage backend (e.g., Redis for Telegram bot)
  */
-export function setContext(context: Partial<MemoHomeContext>): void {
+export function setContext(context: Partial<MemohContext>): void {
   defaultContext = { ...defaultContext, ...context }
 }
 
@@ -44,7 +44,7 @@ export function setContext(context: Partial<MemoHomeContext>): void {
 export function createContext(options: {
   storage: TokenStorage
   userId?: string
-}): MemoHomeContext {
+}): MemohContext {
   return {
     storage: options.storage,
     currentUserId: options.userId,

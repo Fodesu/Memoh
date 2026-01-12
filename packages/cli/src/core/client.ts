@@ -1,11 +1,11 @@
-import { getContext, type MemoHomeContext } from './context'
-import { createClient as createClientApi } from '@memohome/api/client'
+import { getContext, type MemohContext } from './context'
+import { createClient as createClientApi } from '@memoh/api/client'
 
 /**
  * Create API client
  * @param context - Optional context, uses global context if not provided
  */
-export function createClient(context?: MemoHomeContext) {
+export function createClient(context?: MemohContext) {
   const ctx = context || getContext()
   const storage = ctx.storage 
 
@@ -44,7 +44,7 @@ export function createClient(context?: MemoHomeContext) {
  * Throws error if not authenticated
  * @param context - Optional context, uses global context if not provided
  */
-export function requireAuth(context?: MemoHomeContext): string {
+export function requireAuth(context?: MemohContext): string {
   const ctx = context || getContext()
   const storage = ctx.storage
   
@@ -67,7 +67,7 @@ export function requireAuth(context?: MemoHomeContext): string {
  * Get API URL
  * @param context - Optional context, uses global context if not provided
  */
-export function getApiUrl(context?: MemoHomeContext): string {
+export function getApiUrl(context?: MemohContext): string {
   const ctx = context || getContext()
   const storage = ctx.storage
   
@@ -86,7 +86,7 @@ export function getApiUrl(context?: MemoHomeContext): string {
  * Get token
  * @param context - Optional context, uses global context if not provided
  */
-export function getToken(context?: MemoHomeContext): string | null {
+export function getToken(context?: MemohContext): string | null {
   const ctx = context || getContext()
   const storage = ctx.storage
   

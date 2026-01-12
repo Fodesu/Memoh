@@ -2,7 +2,7 @@ import { createGateway as createAiGateway } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import { ChatModel, ModelClientType } from '@memohome/shared'
+import { ChatModel, ModelClientType } from '@memoh/shared'
 
 export const createChatGateway = (model: ChatModel) => {
   const clients = {

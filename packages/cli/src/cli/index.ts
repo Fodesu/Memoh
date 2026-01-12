@@ -15,8 +15,8 @@ import { debugCommands } from './commands/debug'
 const program = new Command()
 
 program
-  .name('memohome')
-  .description(chalk.bold.blue('🏠 MemoHome Agent'))
+  .name('memoh')
+  .description(chalk.bold.blue('🏠 Memoh Agent'))
   .version('1.0.0')
 
 // Authentication commands

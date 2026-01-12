@@ -17,7 +17,7 @@ import {
   getSummaryModel,
   getEmbeddingModel,
 } from './service'
-import { Model } from '@memohome/shared'
+import { Model } from '@memoh/shared'
 
 export const modelModule = new Elysia({
   prefix: '/model',

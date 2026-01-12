@@ -1,6 +1,6 @@
-# @memohome/cli
+# @memoh/cli
 
-MemoHome 的命令行工具，使用 Elysia Eden 与 API 服务器通信。
+Memoh 的命令行工具，使用 Elysia Eden 与 API 服务器通信。
 
 ## 功能特性
 
@@ -59,45 +59,45 @@ bun run src/index.ts agent interactive
 
 ```bash
 # 登录
-memohome auth login [-u username] [-p password]
+memoh auth login [-u username] [-p password]
 
 # 登出
-memohome auth logout
+memoh auth logout
 
 # 查看当前登录用户
-memohome auth whoami
+memoh auth whoami
 
 # 查看/设置 API 配置
-memohome auth config [--set <url>]
+memoh auth config [--set <url>]
 ```
 
 ### 用户管理 (`user`) 🔒 需要管理员权限
 
 ```bash
 # 列出所有用户
-memohome user list
+memoh user list
 
 # 创建用户
-memohome user create [-u username] [-p password] [-r role]
+memoh user create [-u username] [-p password] [-r role]
 
 # 获取用户详情
-memohome user get <id>
+memoh user get <id>
 
 # 删除用户
-memohome user delete <id>
+memoh user delete <id>
 
 # 更新用户密码
-memohome user update-password <id> [-p password]
+memoh user update-password <id> [-p password]
 ```
 
 ### 模型管理 (`model`)
 
 ```bash
 # 列出所有模型
-memohome model list
+memoh model list
 
 # 创建聊天模型配置
-memohome model create \
+memoh model create \
   -n "GPT-4" \
   -m "gpt-4" \
   -u "https://api.openai.com/v1" \
@@ -106,7 +106,7 @@ memohome model create \
   -t "chat"
 
 # 创建 Embedding 模型配置
-memohome model create \
+memoh model create \
   -n "Text Embedding 3 Small" \
   -m "text-embedding-3-small" \
   -u "https://api.openai.com/v1" \
@@ -116,26 +116,26 @@ memohome model create \
   -d 1536
 
 # 获取模型详情
-memohome model get <id>
+memoh model get <id>
 
 # 删除模型
-memohome model delete <id>
+memoh model delete <id>
 
 # 查看默认模型配置
-memohome model defaults
+memoh model defaults
 ```
 
 ### Agent 对话 (`agent`)
 
 ```bash
 # 发送单条消息
-memohome agent chat "你好，介绍一下你自己" \
+memoh agent chat "你好，介绍一下你自己" \
   [-t 60] \
   [-l Chinese]
 
 # 进入交互模式
-memohome agent interactive
-memohome agent i  # 简写
+memoh agent interactive
+memoh agent i  # 简写
 
 # 交互模式命令:
 #   /exit, /quit - 退出
@@ -146,17 +146,17 @@ memohome agent i  # 简写
 
 ```bash
 # 搜索记忆
-memohome memory search "关键词" [-l 10]
+memoh memory search "关键词" [-l 10]
 
 # 添加记忆
-memohome memory add "这是一条记忆"
+memoh memory add "这是一条记忆"
 
 # 查看消息历史
-memohome memory messages [-p 1] [-l 20]
-memohome memory msg  # 简写
+memoh memory messages [-p 1] [-l 20]
+memoh memory msg  # 简写
 
 # 按日期过滤消息
-memohome memory filter \
+memoh memory filter \
   -s 2024-01-01T00:00:00Z \
   -e 2024-12-31T23:59:59Z
 ```
@@ -165,10 +165,10 @@ memohome memory filter \
 
 ```bash
 # 查看当前设置
-memohome settings get
+memoh settings get
 
 # 更新设置
-memohome settings set \
+memoh settings set \
   [--language Chinese] \
   [--max-context-time 60] \
   [--chat-model <id>] \
@@ -176,37 +176,37 @@ memohome settings set \
   [--embedding-model <id>]
 
 # 交互式设置向导
-memohome settings setup
+memoh settings setup
 ```
 
 ### 日程管理 (`schedule`)
 
 ```bash
 # 列出所有定时任务
-memohome schedule list
+memoh schedule list
 
 # 创建定时任务
-memohome schedule create \
+memoh schedule create \
   -t "每日提醒" \
   -d "每天早上9点的提醒" \
   -c "0 9 * * *" \
   -e
 
 # 获取任务详情
-memohome schedule get <id>
+memoh schedule get <id>
 
 # 更新任务
-memohome schedule update <id> \
+memoh schedule update <id> \
   [-t title] \
   [-d description] \
   [-c cron] \
   [-e true/false]
 
 # 删除任务
-memohome schedule delete <id>
+memoh schedule delete <id>
 
 # 切换任务启用状态
-memohome schedule toggle <id>
+memoh schedule toggle <id>
 ```
 
 ## 使用示例
@@ -215,10 +215,10 @@ memohome schedule toggle <id>
 
 ```bash
 # 1. 登录
-memohome auth login -u admin -p password
+memoh auth login -u admin -p password
 
 # 2. 创建模型配置（聊天模型）
-memohome model create \
+memoh model create \
   -n "GPT-4" \
   -m "gpt-4" \
   -u "https://api.openai.com/v1" \
@@ -227,7 +227,7 @@ memohome model create \
   -t "chat"
 
 # 如果需要 embedding 模型
-memohome model create \
+memoh model create \
   -n "Text Embedding" \
   -m "text-embedding-3-small" \
   -u "https://api.openai.com/v1" \
@@ -237,28 +237,28 @@ memohome model create \
   -d 1536
 
 # 3. 配置设置（使用模型ID）
-memohome settings set \
+memoh settings set \
   --language Chinese \
   --max-context-time 60 \
   --chat-model <model-id-from-step-2>
 
 # 4. 开始对话
-memohome agent chat "你好"
+memoh agent chat "你好"
 
 # 5. 进入交互模式
-memohome agent i
+memoh agent i
 ```
 
 ### Agent 交互模式示例
 
 ```bash
-$ memohome agent interactive
+$ memoh agent interactive
 
-🤖 MemoHome Agent 交互模式
+🤖 Memoh Agent 交互模式
 输入 /exit 或 /quit 退出，输入 /help 查看帮助
 
 You: 你好
-Agent: 你好！我是 MemoHome AI 助手，很高兴为你服务...
+Agent: 你好！我是 Memoh AI 助手，很高兴为你服务...
 
 You: 帮我总结一下今天的对话
 Agent: [🔧 使用工具: search_memory]
@@ -271,7 +271,7 @@ You: /exit
 ### 搜索记忆示例
 
 ```bash
-$ memohome memory search "项目计划"
+$ memoh memory search "项目计划"
 
 ✓ 找到 3 条记忆
 
@@ -290,7 +290,7 @@ $ memohome memory search "项目计划"
 
 ## 配置文件
 
-CLI 配置保存在 `~/.memohome/config.json`：
+CLI 配置保存在 `~/.memoh/config.json`：
 
 ```json
 {

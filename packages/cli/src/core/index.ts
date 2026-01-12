@@ -1,5 +1,5 @@
 /**
- * MemoHome Core API
+ * Memoh Core API
  * 
  * This module provides core functionality that can be used by CLI and other applications.
  * All functions are independent of CLI-specific UI concerns (no chalk, ora, inquirer, etc.)
@@ -11,7 +11,7 @@ export {
   setContext,
   createContext,
   resetContext,
-  type MemoHomeContext,
+  type MemohContext,
 } from './context'
 
 // Storage

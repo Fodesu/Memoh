@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import type { TokenStorage, Config } from '../storage'
 
-const CONFIG_DIR = join(homedir(), '.memohome')
+const CONFIG_DIR = join(homedir(), '.memoh')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 const DEFAULT_CONFIG: Config = {
@@ -12,7 +12,7 @@ const DEFAULT_CONFIG: Config = {
 
 /**
  * File-based token storage for CLI
- * Stores config in ~/.memohome/config.json
+ * Stores config in ~/.memoh/config.json
  */
 export class FileTokenStorage implements TokenStorage {
   private ensureConfigDir() {

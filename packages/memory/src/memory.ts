@@ -1,8 +1,8 @@
 import { Memory, type Message } from 'mem0ai/oss'
-import { ChatModel, EmbeddingModel } from '@memohome/shared'
+import { ChatModel, EmbeddingModel } from '@memoh/shared'
 import { MemoryUnit } from './memory-unit'
-import { db } from '@memohome/db'
-import { history } from '@memohome/db/schema'
+import { db } from '@memoh/db'
+import { history } from '@memoh/db/schema'
 
 export interface CreateMemoryParams {
   summaryModel: ChatModel

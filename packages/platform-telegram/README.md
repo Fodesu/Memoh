@@ -1,12 +1,12 @@
-# MemoHome Telegram Platform
+# Memoh Telegram Platform
 
-Telegram bot platform for MemoHome, supporting multi-user authentication with Redis storage.
+Telegram bot platform for Memoh, supporting multi-user authentication with Redis storage.
 
 ## Features
 
-- 🔐 **Multi-user Authentication**: Each Telegram user can login to their own MemoHome account
+- 🔐 **Multi-user Authentication**: Each Telegram user can login to their own Memoh account
 - 💾 **Redis Storage**: Token and user info stored in Redis
-- 💬 **AI Chat**: Stream responses from MemoHome AI agent
+- 💬 **AI Chat**: Stream responses from Memoh AI agent
 - 🔄 **Real-time Updates**: Live message editing during streaming responses
 - 🛡️ **Auth Middleware**: Protected commands require login
 
@@ -34,7 +34,7 @@ BOT_TOKEN=your_telegram_bot_token_here
 # Redis connection string
 REDIS_URL=redis://localhost:6379
 
-# MemoHome API URL
+# Memoh API URL
 API_BASE_URL=http://localhost:7002
 ```
 
@@ -57,7 +57,7 @@ pnpm dev
 ### As a Platform Module
 
 ```typescript
-import { TelegramPlatform } from '@memohome/platform-telegram'
+import { TelegramPlatform } from '@memoh/platform-telegram'
 
 const platform = new TelegramPlatform()
 
@@ -73,7 +73,7 @@ await platform.start({
 ### Authentication
 
 - `/start` - Welcome message and command list
-- `/login <username> <password>` - Login to your MemoHome account
+- `/login <username> <password>` - Login to your Memoh account
 - `/logout` - Logout from your account
 - `/whoami` - Show current user information
 
@@ -93,13 +93,13 @@ await platform.start({
 Redis keys follow this pattern:
 
 ```
-memohome:tg:token:{telegram_user_id} -> token (30 days TTL)
-memohome:tg:user:{telegram_user_id} -> { username, role, userId } (30 days TTL)
+memoh:tg:token:{telegram_user_id} -> token (30 days TTL)
+memoh:tg:user:{telegram_user_id} -> { username, role, userId } (30 days TTL)
 ```
 
 ### Multi-user Support
 
-Each Telegram user ID is mapped to their own MemoHome account token:
+Each Telegram user ID is mapped to their own Memoh account token:
 
 ```typescript
 // User 123456 logs in
@@ -114,7 +114,7 @@ telegram_user_id: "789012" -> userInfo: { username: "user2", ... }
 ### Authentication Flow
 
 1. User sends `/login username password`
-2. Bot validates credentials with MemoHome API
+2. Bot validates credentials with Memoh API
 3. Token is stored in Redis with Telegram user ID as key
 4. User info is cached in Redis
 5. Subsequent messages use the stored token
@@ -145,7 +145,7 @@ this.bot.command('mycommand', requireAuth(storage), async (ctx) => {
 ### Using Core Functions
 
 ```typescript
-import { chatStreamAsync, listModels } from '@memohome/cli/core'
+import { chatStreamAsync, listModels } from '@memoh/cli/core'
 import { getMemoContext } from './auth'
 
 // In a command handler
@@ -190,7 +190,7 @@ Or send a message directly:
 ### Bot not responding
 
 1. Check if the bot token is correct
-2. Ensure MemoHome API is running
+2. Ensure Memoh API is running
 3. Check Redis connection
 
 ### Login failed
@@ -234,7 +234,7 @@ Set these in your deployment environment:
 
 - `BOT_TOKEN` - Your Telegram bot token
 - `REDIS_URL` - Redis connection string
-- `API_BASE_URL` - MemoHome API URL
+- `API_BASE_URL` - Memoh API URL
 
 ## License
 

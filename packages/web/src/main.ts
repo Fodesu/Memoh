@@ -4,7 +4,7 @@ import App from './App.vue'
 import router from './router'
 import { createPinia } from 'pinia'
 import i18n from './i18n'
-import '@memohome/ui/style.css'
+import '@memoh/ui/style.css'
 
 createApp(App)
   .use(createPinia())

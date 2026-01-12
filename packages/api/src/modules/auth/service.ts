@@ -1,5 +1,5 @@
-import { db } from '@memohome/db'
-import { users, settings } from '@memohome/db/schema'
+import { db } from '@memoh/db'
+import { users, settings } from '@memoh/db/schema'
 import { eq } from 'drizzle-orm'
 
 /**

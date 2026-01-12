@@ -1,6 +1,6 @@
-import { createAgent as createAgentService } from '@memohome/agent'
-import { createMemory, filterByTimestamp, MemoryUnit } from '@memohome/memory'
-import { ChatModel, EmbeddingModel, Platform, Schedule } from '@memohome/shared'
+import { createAgent as createAgentService } from '@memoh/agent'
+import { createMemory, filterByTimestamp, MemoryUnit } from '@memoh/memory'
+import { ChatModel, EmbeddingModel, Platform, Schedule } from '@memoh/shared'
 import { createSchedule, deleteSchedule, getActiveSchedules } from '../schedule/service'
 import { getActivePlatforms, sendMessageToPlatform } from '../platform/service'
 

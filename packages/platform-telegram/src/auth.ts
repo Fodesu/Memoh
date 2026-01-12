@@ -1,5 +1,5 @@
 import type { Context } from 'telegraf'
-import { login, logout, isLoggedIn, getCurrentUser } from '@memohome/client'
+import { login, logout, isLoggedIn, getCurrentUser } from '@memoh/client'
 import { getTokenStorage } from './storage'
 
 
@@ -38,7 +38,7 @@ export async function handleLogin(ctx: Context) {
       `👤 Username: ${result.user.username}\n` +
       `🎭 Role: ${result.user.role}\n` +
       `🔑 User ID: ${result.user.id}\n\n` +
-      'You can now use the bot to interact with MemoHome.'
+      'You can now use the bot to interact with Memoh.'
     )
   } else {
     await ctx.reply('❌ Login failed: Invalid response from server')

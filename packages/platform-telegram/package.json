@@ -1,13 +1,13 @@
 {
-  "name": "@memohome/platform-telegram",
+  "name": "@memoh/platform-telegram",
   "version": "1.0.0",
-  "description": "Telegram platform for MemoHome",
+  "description": "Telegram platform for Memoh",
   "exports": {
     ".": "./src/index.ts"
   },
   "main": "src/index.ts",
   "bin": {
-    "memohome-tg-bot": "./src/bot.ts"
+    "memoh-tg-bot": "./src/bot.ts"
   },
   "scripts": {
     "start": "bun run src/bot.ts",
@@ -18,8 +18,8 @@
   "license": "ISC",
   "packageManager": "pnpm@10.27.0",
   "dependencies": {
-    "@memohome/client": "workspace:*",
-    "@memohome/platform": "workspace:*",
+    "@memoh/client": "workspace:*",
+    "@memoh/platform": "workspace:*",
     "dotenv": "^16.4.7",
     "ioredis": "^5.9.1",
     "telegraf": "^4.16.3",

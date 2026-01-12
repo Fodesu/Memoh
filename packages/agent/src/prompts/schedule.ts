@@ -1,4 +1,4 @@
-import { Schedule } from '@memohome/shared'
+import { Schedule } from '@memoh/shared'
 import { time } from './shared'
 
 export interface ScheduleParams {

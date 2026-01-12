@@ -8,7 +8,7 @@ import { formatError } from '../../utils'
 export function authCommands(program: Command) {
   program
     .command('login')
-    .description('Login to MemoHome')
+    .description('Login to Memoh')
     .option('-u, --username <username>', 'Username')
     .option('-p, --password <password>', 'Password')
     .action(async (options) => {
@@ -75,7 +75,7 @@ export function authCommands(program: Command) {
       try {
         if (!authCore.isLoggedIn()) {
           console.log(chalk.yellow('Not currently logged in'))
-          console.log(chalk.dim('Use "memohome auth login" to login'))
+          console.log(chalk.dim('Use "memoh auth login" to login'))
           return
         }
 
