@@ -6,6 +6,7 @@ export const AgentStreamModel = {
     // Optional overrides - if not provided, will use settings
     maxContextLoadTime: z.number().int().min(1).max(1440).optional(),
     language: z.string().optional(),
+    platform: z.string().optional(),
   }),
 }
 

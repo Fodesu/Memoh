@@ -24,7 +24,7 @@ export class TelegramPlatform extends BasePlatform {
   redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
   // private storage?: TelegramRedisStorage
 
-  async start(config: Record<string, unknown>): Promise<void> {
+  override async start(config: z.infer<typeof this.config>): Promise<void> {
     const botToken = config.botToken as string
     if (!botToken) {
       throw new Error('Bot token is required')

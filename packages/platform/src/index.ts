@@ -13,7 +13,7 @@ export class BasePlatform {
   started: boolean = false
   port: number = 7003
 
-  config = z.object()
+  config = z.record(z.string(), z.unknown())
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async start(config: z.infer<typeof this.config>): Promise<void> {}

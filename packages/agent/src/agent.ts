@@ -1,7 +1,7 @@
 import { streamText, generateText, ModelMessage, stepCountIs, UserModelMessage } from 'ai'
 import { AgentParams } from './types'
 import { system, schedule as schedulePrompt } from './prompts'
-import { getMemoryTools, getScheduleTools } from './tools'
+import { getMemoryTools, getScheduleTools, getMessageTools } from './tools'
 import { createChatGateway } from '@memohome/ai-gateway'
 import { Schedule } from '@memohome/shared'
 
@@ -10,8 +10,12 @@ export const createAgent = (params: AgentParams) => {
 
   const gateway = createChatGateway(params.model)
 
-  const maxContextLoadTime = params.maxContextLoadTime ?? 60
+  const maxContextLoadTime = params.maxContextLoadTime ?? 24 * 60 // 24 hours
   const language = params.language ?? 'Same as user input'
+  const platforms = params.platforms ?? []
+  const currentPlatform = params.platforms
+    ? platforms.find(p => p.name === params.currentPlatform)?.name ?? 'Unknown Platform'
+    : 'client'
 
   const getTools = async () => {
     return {
@@ -23,6 +27,10 @@ export const createAgent = (params: AgentParams) => {
         onRemoveSchedule: params.onRemoveSchedule ?? (() => Promise.resolve()),
         onSchedule: params.onSchedule ?? (() => Promise.resolve()),
       }),
+      ...getMessageTools(
+        platforms,
+        params.onSendMessage ?? (() => Promise.resolve())
+      ),
     }
   }
 
@@ -40,6 +48,8 @@ export const createAgent = (params: AgentParams) => {
       language,
       locale: params.locale,
       maxContextLoadTime,
+      platforms,
+      currentPlatform,
     })
   }
 

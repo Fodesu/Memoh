@@ -1,7 +1,8 @@
 import { createAgent as createAgentService } from '@memohome/agent'
 import { createMemory, filterByTimestamp, MemoryUnit } from '@memohome/memory'
-import { ChatModel, EmbeddingModel, Schedule } from '@memohome/shared'
+import { ChatModel, EmbeddingModel, Platform, Schedule } from '@memohome/shared'
 import { createSchedule, deleteSchedule, getActiveSchedules } from '../schedule/service'
+import { getActivePlatforms, sendMessageToPlatform } from '../platform/service'
 
 // Type for messages passed to onFinish callback
 type MessageType = Record<string, unknown>
@@ -13,6 +14,7 @@ export interface CreateAgentStreamParams {
   summaryModel: ChatModel
   maxContextLoadTime?: number
   language?: string
+  platform?: string
   onFinish?: (messages: MessageType[]) => Promise<void>
 }
 
@@ -24,6 +26,7 @@ export async function createAgent(params: CreateAgentStreamParams) {
     summaryModel,
     maxContextLoadTime,
     language,
+    platform,
     onFinish,
   } = params
 
@@ -33,11 +36,21 @@ export async function createAgent(params: CreateAgentStreamParams) {
     embeddingModel,
   })
 
+  const platforms = await getActivePlatforms()
+
   // Create agent
   const agent = createAgentService({
     model: chatModel,
     maxContextLoadTime,
     language: language || 'Same as user input',
+    platforms: platforms as Platform[],
+    currentPlatform: platform,
+    onSendMessage: async (platform: string, options) => {
+      await sendMessageToPlatform(platform, {
+        message: options.message,
+        userId,
+      })
+    },
     onReadMemory: async (from: Date, to: Date) => {
       return await filterByTimestamp(from, to, userId)
     },

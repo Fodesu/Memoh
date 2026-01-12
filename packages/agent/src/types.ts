@@ -1,6 +1,10 @@
 import type { MemoryUnit } from '@memohome/memory'
-import { ChatModel, Schedule } from '@memohome/shared'
+import { ChatModel, Platform, Schedule } from '@memohome/shared'
 import { ModelMessage } from 'ai'
+
+export interface SendMessageOptions {
+  message: string
+}
 
 export interface AgentParams {
   model: ChatModel
@@ -17,6 +21,12 @@ export interface AgentParams {
    * @default 'Same as user input'
    */
   language?: string
+
+  platforms?: Platform[]
+
+  currentPlatform?: string
+
+  onSendMessage?: (platform: string, options: SendMessageOptions) => Promise<void>
 
   onReadMemory?: (from: Date, to: Date) => Promise<MemoryUnit[]>
 
