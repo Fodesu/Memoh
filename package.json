@@ -18,6 +18,9 @@
     "db:studio": "pnpm --filter @memoh/db studio",
     "telegram:start": "pnpm --filter @memoh/platform-telegram start",
     "cli": "pnpm --filter @memoh/client start",
+    "docs:dev": "pnpm --filter @memoh/docs dev",
+    "docs:build": "pnpm --filter @memoh/docs build",
+    "docs:preview": "pnpm --filter @memoh/docs preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest"
@@ -36,5 +39,12 @@
   },
   "dependencies": {
     "dotenv": "^17.2.3"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "@algolia/client-search"
+      ]
+    }
   }
 }
