@@ -4,11 +4,12 @@ import { system, schedule as schedulePrompt } from './prompts'
 import { getMemoryTools, getScheduleTools, getMessageTools } from './tools'
 import { createChatGateway } from '@memoh/ai-gateway'
 import { MCPConnection, Schedule } from '@memoh/shared'
-import { createMCPClient } from '@ai-sdk/mcp'
+import { createMCPClient, MCPClient } from '@ai-sdk/mcp'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 export const createAgent = (params: AgentParams) => {
   const messages: ModelMessage[] = []
+  const mcpClients: MCPClient[] = []
 
   const gateway = createChatGateway(params.model)
 
@@ -47,6 +48,8 @@ export const createAgent = (params: AgentParams) => {
 
   const getTools = async () => {
     const connections = await launchMCPConnections()
+    mcpClients.length = 0
+    mcpClients.push(...connections)
     const mcpTools = await Promise.all(connections.map(connection => connection.tools())) as Record<string, Tool>[]
     const tools = Object.assign({}, ...mcpTools)
     return {
@@ -64,6 +67,10 @@ export const createAgent = (params: AgentParams) => {
       ),
       ...tools,
     }
+  }
+
+  const onComplete = async () => {
+    await Promise.all(mcpClients.map(client => client.close()))
   }
 
   const loadContext = async () => {
@@ -105,6 +112,9 @@ export const createAgent = (params: AgentParams) => {
       system: getSystemPrompt(),
       messages,
       tools: await getTools(),
+      onFinish: async () => {
+        await onComplete()
+      },
     })
     await params.onFinish?.([
       user as ModelMessage,
@@ -130,6 +140,9 @@ export const createAgent = (params: AgentParams) => {
       stopWhen: stepCountIs(10),
       messages,
       tools: await getTools(),
+      onFinish: async () => {
+        await onComplete()
+      },
     })
     for await (const event of fullStream) {
       yield event
@@ -153,5 +166,7 @@ export const createAgent = (params: AgentParams) => {
     getSystemPrompt,
     getSchedulePrompt,
     triggerSchedule,
+    onComplete,
+    launchMCPConnections,
   }
 }
