@@ -11,7 +11,7 @@
               Model Settings
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent class="mt-4">
             <FormField
               v-slot="{ componentField }"
               name="defaultChatModel"

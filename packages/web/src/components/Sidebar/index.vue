@@ -1,5 +1,5 @@
 <template>
-  <aside class="[&_[data-state=collapsed]_.title-container]:hidden">
+  <aside class="[&_[data-state=collapsed]_:is(.title-container,.exist-btn)]:hidden">
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
@@ -51,7 +51,7 @@
       </SidebarContent>
       <SidebarHeader>
         <SidebarMenu>
-          <SidebarMenuItem class="flex justify-center">
+          <SidebarMenuItem class="flex justify-center exist-btn">
             <Button
               class="flex-[0.7] mb-10"
               @click="exit"
