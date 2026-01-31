@@ -1,21 +1,21 @@
 -- name: CreateHistory :one
-INSERT INTO history (messages, timestamp, "user")
-VALUES ($1, $2, $3)
-RETURNING id, messages, timestamp, "user";
+INSERT INTO history (messages, skills, timestamp, "user")
+VALUES ($1, $2, $3, $4)
+RETURNING id, messages, skills, timestamp, "user";
 
 -- name: ListHistoryByUserSince :many
-SELECT id, messages, timestamp, "user"
+SELECT id, messages, skills, timestamp, "user"
 FROM history
 WHERE "user" = $1 AND timestamp >= $2
 ORDER BY timestamp ASC;
 
 -- name: GetHistoryByID :one
-SELECT id, messages, timestamp, "user"
+SELECT id, messages, skills, timestamp, "user"
 FROM history
 WHERE id = $1;
 
 -- name: ListHistoryByUser :many
-SELECT id, messages, timestamp, "user"
+SELECT id, messages, skills, timestamp, "user"
 FROM history
 WHERE "user" = $1
 ORDER BY timestamp DESC

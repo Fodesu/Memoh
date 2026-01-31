@@ -36,6 +36,7 @@ type ContainerVersion struct {
 type History struct {
 	ID        pgtype.UUID        `json:"id"`
 	Messages  []byte             `json:"messages"`
+	Skills    []string           `json:"skills"`
 	Timestamp pgtype.Timestamptz `json:"timestamp"`
 	User      pgtype.UUID        `json:"user"`
 }

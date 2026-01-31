@@ -1,4 +1,13 @@
 definitions:
+  chat.AgentSkill:
+    properties:
+      content:
+        type: string
+      description:
+        type: string
+      name:
+        type: string
+    type: object
   chat.ChatRequest:
     properties:
       current_platform:
@@ -25,6 +34,14 @@ definitions:
         type: string
       query:
         type: string
+      skills:
+        items:
+          $ref: '#/definitions/chat.AgentSkill'
+        type: array
+      use_skills:
+        items:
+          type: string
+        type: array
     type: object
   chat.ChatResponse:
     properties:
@@ -36,6 +53,10 @@ definitions:
         type: string
       provider:
         type: string
+      skills:
+        items:
+          type: string
+        type: array
     type: object
   chat.GatewayMessage:
     additionalProperties: true
@@ -162,6 +183,10 @@ definitions:
           additionalProperties: true
           type: object
         type: array
+      skills:
+        items:
+          type: string
+        type: array
     type: object
   history.ListResponse:
     properties:
@@ -178,6 +203,10 @@ definitions:
         items:
           additionalProperties: true
           type: object
+        type: array
+      skills:
+        items:
+          type: string
         type: array
       timestamp:
         type: string

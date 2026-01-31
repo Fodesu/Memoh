@@ -85,8 +85,13 @@ func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, err
 	}
 
 	var messages []GatewayMessage
+	var historySkills []string
 	if !skipHistory {
 		messages, err = r.loadHistoryMessages(ctx, req.UserID, maxContextLoadTime)
+		if err != nil {
+			return ChatResponse{}, err
+		}
+		historySkills, err = r.loadHistorySkills(ctx, req.UserID, maxContextLoadTime)
 		if err != nil {
 			return ChatResponse{}, err
 		}
@@ -95,6 +100,7 @@ func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, err
 		messages = append(messages, req.Messages...)
 	}
 	messages = sanitizeGatewayMessages(messages)
+	useSkills := normalizeSkills(append(historySkills, req.UseSkills...))
 
 	payload := agentGatewayRequest{
 		APIKey:             provider.ApiKey,
@@ -109,6 +115,8 @@ func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, err
 		CurrentPlatform:    req.CurrentPlatform,
 		Messages:           messages,
 		Query:              req.Query,
+		Skills:             req.Skills,
+		UseSkills:          useSkills,
 	}
 	payload.Language = language
 
@@ -117,7 +125,7 @@ func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, err
 		return ChatResponse{}, err
 	}
 
-	if err := r.storeHistory(ctx, req.UserID, req.Query, resp.Messages); err != nil {
+	if err := r.storeHistory(ctx, req.UserID, req.Query, resp.Messages, resp.Skills); err != nil {
 		return ChatResponse{}, err
 	}
 	if err := r.storeMemory(ctx, req.UserID, req.Query, resp.Messages); err != nil {
@@ -126,6 +134,7 @@ func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, err
 
 	return ChatResponse{
 		Messages: resp.Messages,
+		Skills:   resp.Skills,
 		Model:    chatModel.ModelID,
 		Provider: provider.ClientType,
 	}, nil
@@ -163,6 +172,11 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, userID string, schedule 
 	if err != nil {
 		return err
 	}
+	historySkills, err := r.loadHistorySkills(ctx, userID, maxContextLoadTime)
+	if err != nil {
+		return err
+	}
+	useSkills := normalizeSkills(historySkills)
 
 	payload := agentGatewayScheduleRequest{
 		APIKey:             provider.ApiKey,
@@ -178,13 +192,14 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, userID string, schedule 
 		Messages:           messages,
 		Query:              schedule.Command,
 		Schedule:           schedule,
+		UseSkills:          useSkills,
 	}
 
 	resp, err := r.postSchedule(ctx, payload, token)
 	if err != nil {
 		return err
 	}
-	if err := r.storeHistory(ctx, userID, schedule.Command, resp.Messages); err != nil {
+	if err := r.storeHistory(ctx, userID, schedule.Command, resp.Messages, resp.Skills); err != nil {
 		return err
 	}
 	if err := r.storeMemory(ctx, userID, schedule.Command, resp.Messages); err != nil {
@@ -235,8 +250,14 @@ func (r *Resolver) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stre
 		}
 
 		var messages []GatewayMessage
+		var historySkills []string
 		if !skipHistory {
 			messages, err = r.loadHistoryMessages(ctx, req.UserID, maxContextLoadTime)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			historySkills, err = r.loadHistorySkills(ctx, req.UserID, maxContextLoadTime)
 			if err != nil {
 				errChan <- err
 				return
@@ -246,6 +267,7 @@ func (r *Resolver) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stre
 			messages = append(messages, req.Messages...)
 		}
 		messages = sanitizeGatewayMessages(messages)
+		useSkills := normalizeSkills(append(historySkills, req.UseSkills...))
 
 		payload := agentGatewayRequest{
 			APIKey:             provider.ApiKey,
@@ -260,6 +282,8 @@ func (r *Resolver) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stre
 			CurrentPlatform:    req.CurrentPlatform,
 			Messages:           messages,
 			Query:              req.Query,
+			Skills:             req.Skills,
+			UseSkills:          useSkills,
 		}
 		payload.Language = language
 
@@ -285,6 +309,8 @@ type agentGatewayRequest struct {
 	CurrentPlatform    string           `json:"currentPlatform,omitempty"`
 	Messages           []GatewayMessage `json:"messages"`
 	Query              string           `json:"query"`
+	Skills             []AgentSkill     `json:"skills,omitempty"`
+	UseSkills          []string         `json:"useSkills,omitempty"`
 }
 
 type agentGatewayScheduleRequest struct {
@@ -301,10 +327,13 @@ type agentGatewayScheduleRequest struct {
 	Messages           []GatewayMessage `json:"messages"`
 	Query              string           `json:"query"`
 	Schedule           SchedulePayload  `json:"schedule"`
+	Skills             []AgentSkill     `json:"skills,omitempty"`
+	UseSkills          []string         `json:"useSkills,omitempty"`
 }
 
 type agentGatewayResponse struct {
 	Messages []GatewayMessage `json:"messages"`
+	Skills   []string         `json:"skills"`
 }
 
 func (r *Resolver) postChat(ctx context.Context, payload agentGatewayRequest, token string) (agentGatewayResponse, error) {
@@ -472,7 +501,36 @@ func (r *Resolver) loadHistoryMessages(ctx context.Context, userID string, maxCo
 	return messages, nil
 }
 
-func (r *Resolver) storeHistory(ctx context.Context, userID, query string, responseMessages []GatewayMessage) error {
+func (r *Resolver) loadHistorySkills(ctx context.Context, userID string, maxContextLoadTime int) ([]string, error) {
+	if r.queries == nil {
+		return nil, fmt.Errorf("history queries not configured")
+	}
+	pgUserID, err := parseUUID(userID)
+	if err != nil {
+		return nil, err
+	}
+	from := time.Now().UTC().Add(-time.Duration(normalizeMaxContextLoad(maxContextLoadTime)) * time.Minute)
+	rows, err := r.queries.ListHistoryByUserSince(ctx, sqlc.ListHistoryByUserSinceParams{
+		User: pgUserID,
+		Timestamp: pgtype.Timestamptz{
+			Time:  from,
+			Valid: true,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	combined := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if len(row.Skills) == 0 {
+			continue
+		}
+		combined = append(combined, row.Skills...)
+	}
+	return normalizeSkills(combined), nil
+}
+
+func (r *Resolver) storeHistory(ctx context.Context, userID, query string, responseMessages []GatewayMessage, skills []string) error {
 	if r.queries == nil {
 		return fmt.Errorf("history queries not configured")
 	}
@@ -493,8 +551,10 @@ func (r *Resolver) storeHistory(ctx context.Context, userID, query string, respo
 	if err := r.ensureUserExists(ctx, pgUserID); err != nil {
 		return err
 	}
+	normalizedSkills := normalizeSkills(skills)
 	_, err = r.queries.CreateHistory(ctx, sqlc.CreateHistoryParams{
 		Messages: payload,
+		Skills:   normalizedSkills,
 		Timestamp: pgtype.Timestamptz{
 			Time:  time.Now().UTC(),
 			Valid: true,
@@ -579,7 +639,7 @@ func (r *Resolver) tryStoreFromStreamPayload(ctx context.Context, userID, query,
 	// Case 1: event: done + data: {messages: [...]}
 	if eventType == "done" {
 		if parsed, ok := parseGatewayResponse([]byte(data)); ok {
-			return r.storeRound(ctx, userID, query, parsed.Messages)
+			return r.storeRound(ctx, userID, query, parsed.Messages, parsed.Skills)
 		}
 	}
 
@@ -591,14 +651,14 @@ func (r *Resolver) tryStoreFromStreamPayload(ctx context.Context, userID, query,
 	if err := json.Unmarshal([]byte(data), &envelope); err == nil {
 		if envelope.Type == "done" && len(envelope.Data) > 0 {
 			if parsed, ok := parseGatewayResponse(envelope.Data); ok {
-				return r.storeRound(ctx, userID, query, parsed.Messages)
+				return r.storeRound(ctx, userID, query, parsed.Messages, parsed.Skills)
 			}
 		}
 	}
 
 	// Case 3: data: {messages:[...]} without event
 	if parsed, ok := parseGatewayResponse([]byte(data)); ok {
-		return r.storeRound(ctx, userID, query, parsed.Messages)
+		return r.storeRound(ctx, userID, query, parsed.Messages, parsed.Skills)
 	}
 	return false, nil
 }
@@ -614,14 +674,31 @@ func parseGatewayResponse(payload []byte) (agentGatewayResponse, bool) {
 	return parsed, true
 }
 
-func (r *Resolver) storeRound(ctx context.Context, userID, query string, messages []GatewayMessage) (bool, error) {
-	if err := r.storeHistory(ctx, userID, query, messages); err != nil {
+func (r *Resolver) storeRound(ctx context.Context, userID, query string, messages []GatewayMessage, skills []string) (bool, error) {
+	if err := r.storeHistory(ctx, userID, query, messages, skills); err != nil {
 		return true, err
 	}
 	if err := r.storeMemory(ctx, userID, query, messages); err != nil {
 		return true, err
 	}
 	return true, nil
+}
+
+func normalizeSkills(skills []string) []string {
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		trimmed := strings.TrimSpace(skill)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
 }
 
 func gatewayMessageToMemory(msg GatewayMessage) (string, string) {

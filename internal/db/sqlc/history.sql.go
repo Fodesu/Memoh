@@ -12,23 +12,30 @@ import (
 )
 
 const createHistory = `-- name: CreateHistory :one
-INSERT INTO history (messages, timestamp, "user")
-VALUES ($1, $2, $3)
-RETURNING id, messages, timestamp, "user"
+INSERT INTO history (messages, skills, timestamp, "user")
+VALUES ($1, $2, $3, $4)
+RETURNING id, messages, skills, timestamp, "user"
 `
 
 type CreateHistoryParams struct {
 	Messages  []byte             `json:"messages"`
+	Skills    []string           `json:"skills"`
 	Timestamp pgtype.Timestamptz `json:"timestamp"`
 	User      pgtype.UUID        `json:"user"`
 }
 
 func (q *Queries) CreateHistory(ctx context.Context, arg CreateHistoryParams) (History, error) {
-	row := q.db.QueryRow(ctx, createHistory, arg.Messages, arg.Timestamp, arg.User)
+	row := q.db.QueryRow(ctx, createHistory,
+		arg.Messages,
+		arg.Skills,
+		arg.Timestamp,
+		arg.User,
+	)
 	var i History
 	err := row.Scan(
 		&i.ID,
 		&i.Messages,
+		&i.Skills,
 		&i.Timestamp,
 		&i.User,
 	)
@@ -56,7 +63,7 @@ func (q *Queries) DeleteHistoryByUser(ctx context.Context, user pgtype.UUID) err
 }
 
 const getHistoryByID = `-- name: GetHistoryByID :one
-SELECT id, messages, timestamp, "user"
+SELECT id, messages, skills, timestamp, "user"
 FROM history
 WHERE id = $1
 `
@@ -67,6 +74,7 @@ func (q *Queries) GetHistoryByID(ctx context.Context, id pgtype.UUID) (History, 
 	err := row.Scan(
 		&i.ID,
 		&i.Messages,
+		&i.Skills,
 		&i.Timestamp,
 		&i.User,
 	)
@@ -74,7 +82,7 @@ func (q *Queries) GetHistoryByID(ctx context.Context, id pgtype.UUID) (History, 
 }
 
 const listHistoryByUser = `-- name: ListHistoryByUser :many
-SELECT id, messages, timestamp, "user"
+SELECT id, messages, skills, timestamp, "user"
 FROM history
 WHERE "user" = $1
 ORDER BY timestamp DESC
@@ -98,6 +106,7 @@ func (q *Queries) ListHistoryByUser(ctx context.Context, arg ListHistoryByUserPa
 		if err := rows.Scan(
 			&i.ID,
 			&i.Messages,
+			&i.Skills,
 			&i.Timestamp,
 			&i.User,
 		); err != nil {
@@ -112,7 +121,7 @@ func (q *Queries) ListHistoryByUser(ctx context.Context, arg ListHistoryByUserPa
 }
 
 const listHistoryByUserSince = `-- name: ListHistoryByUserSince :many
-SELECT id, messages, timestamp, "user"
+SELECT id, messages, skills, timestamp, "user"
 FROM history
 WHERE "user" = $1 AND timestamp >= $2
 ORDER BY timestamp ASC
@@ -135,6 +144,7 @@ func (q *Queries) ListHistoryByUserSince(ctx context.Context, arg ListHistoryByU
 		if err := rows.Scan(
 			&i.ID,
 			&i.Messages,
+			&i.Skills,
 			&i.Timestamp,
 			&i.User,
 		); err != nil {

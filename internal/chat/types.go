@@ -9,6 +9,12 @@ type Message struct {
 
 type GatewayMessage map[string]interface{}
 
+type AgentSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
+}
+
 type ChatRequest struct {
 	UserID             string           `json:"-"`
 	Token              string           `json:"-"`
@@ -22,10 +28,13 @@ type ChatRequest struct {
 	Platforms          []string         `json:"platforms,omitempty"`
 	CurrentPlatform    string           `json:"current_platform,omitempty"`
 	Messages           []GatewayMessage `json:"messages,omitempty"`
+	Skills             []AgentSkill     `json:"skills,omitempty"`
+	UseSkills          []string         `json:"use_skills,omitempty"`
 }
 
 type ChatResponse struct {
 	Messages []GatewayMessage `json:"messages"`
+	Skills   []string         `json:"skills,omitempty"`
 	Model    string           `json:"model,omitempty"`
 	Provider string           `json:"provider,omitempty"`
 }

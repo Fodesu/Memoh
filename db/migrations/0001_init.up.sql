@@ -134,6 +134,7 @@ CREATE INDEX IF NOT EXISTS idx_lifecycle_events_event_type ON lifecycle_events(e
 CREATE TABLE IF NOT EXISTS history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   messages JSONB NOT NULL,
+  skills TEXT[] NOT NULL DEFAULT '{}'::text[],
   timestamp TIMESTAMPTZ NOT NULL,
   "user" UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE
 );
