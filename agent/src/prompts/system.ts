@@ -1,5 +1,6 @@
 import { time } from './shared'
 import { quote } from './utils'
+import { AgentSkill } from '../types'
 
 export interface SystemParams {
   date: Date
@@ -8,9 +9,20 @@ export interface SystemParams {
   maxContextLoadTime: number
   platforms: string[]
   currentPlatform?: string
+  skills: AgentSkill[]
+  enabledSkills: AgentSkill[]
 }
 
-export const system = ({ date, locale, language, maxContextLoadTime, platforms, currentPlatform }: SystemParams) => {
+export const skillPrompt = (skill: AgentSkill) => {
+  return `
+### ${skill.name}
+> ${skill.description}
+
+${skill.content}
+  `.trim()
+}
+
+export const system = ({ date, locale, language, maxContextLoadTime, platforms, currentPlatform, skills, enabledSkills }: SystemParams) => {
   return `
 ---
 ${time({ date, locale })}
@@ -46,5 +58,14 @@ Your abilities:
   + The ${quote('message')} is the message to send.
   + IF: the problem is initiated by a user, regardless of the platform the user is using, the content should be directly output in the content.
   + IF: the issue is initiated by a non-user (such as a scheduled task reminder), then it should be sent using the appropriate tools on the platform specified in the requirements.
+
+**Skills**
+
+There are ${skills.length} skills available, you can use ${quote('use_skill')} to use a skill.
+${skills.map(skill => `- ${skill.name}: ${skill.description}`).join('\n')}
+
+**Enabled Skills**
+
+${enabledSkills.map(skill => skillPrompt(skill)).join('\n\n---\n\n')}
   `.trim()
 }

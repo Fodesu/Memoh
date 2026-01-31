@@ -1,10 +1,11 @@
 import { generateText, ModelMessage, stepCountIs, streamText, TextStreamPart, ToolSet } from 'ai'
 import { createChatGateway } from './gateway'
-import { ClientType, Schedule } from './types'
+import { AgentSkill, ClientType, Schedule } from './types'
 import { system, schedule } from './prompts'
 import { AuthFetcher } from './index'
 import { getScheduleTools } from './tools/schedule'
 import { getWebTools } from './tools/web'
+import { getSkillTools } from './tools/skill'
 
 export interface AgentParams {
   apiKey: string
@@ -19,6 +20,8 @@ export interface AgentParams {
   currentPlatform?: string
   braveApiKey?: string
   braveBaseUrl?: string
+  skills?: AgentSkill[]
+  useSkills?: string[]
 }
 
 export interface AgentInput {
@@ -28,6 +31,7 @@ export interface AgentInput {
 
 export interface AgentResult {
   messages: ModelMessage[]
+  skills: string[]
 }
 
 export const createAgent = (
@@ -36,13 +40,27 @@ export const createAgent = (
 ) => {
   const gateway = createChatGateway(params.clientType)
   const messages: ModelMessage[] = []
+  const enabledSkills: AgentSkill[] = params.skills ?? []
+  enabledSkills.push(
+    ...params.useSkills?.map((name) => params.skills?.find((s) => s.name === name)
+  ).filter((s) => s !== undefined) ?? [])
 
   const maxSteps = params.maxSteps ?? 50
 
   const getTools = () => {
     const scheduleTools = getScheduleTools({ fetch: fetcher })
+    const skillTools = getSkillTools({
+      skills: params.skills ?? [],
+      useSkill: (skill) => {
+        if (enabledSkills.some((s) => s.name === skill.name)) {
+          return
+        }
+        enabledSkills.push(skill)
+      }
+    })
     const tools: ToolSet = {
       ...scheduleTools,
+      ...skillTools,
     }
 
     // Add web search tools if Brave API key is provided
@@ -65,6 +83,8 @@ export const createAgent = (
       maxContextLoadTime: params.maxContextLoadTime,
       platforms: params.platforms ?? [],
       currentPlatform: params.currentPlatform,
+      skills: params.skills ?? [],
+      enabledSkills,
     })
   }
 
@@ -83,10 +103,16 @@ export const createAgent = (
       system: generateSystem(),
       stopWhen: stepCountIs(maxSteps),
       messages,
+      prepareStep: () => {
+        return {
+          system: generateSystem(),
+        }
+      },
       tools: getTools(),
     })
     return {
       messages: [user, ...response.messages],
+      skills: enabledSkills.map((s) => s.name),
     }
   }
 
@@ -105,6 +131,11 @@ export const createAgent = (
       system: generateSystem(),
       stopWhen: stepCountIs(maxSteps),
       messages,
+      prepareStep: () => {
+        return {
+          system: generateSystem(),
+        }
+      },
       tools: getTools(),
     })
     for await (const event of fullStream) {
@@ -112,6 +143,7 @@ export const createAgent = (
     }
     return {
       messages: [user, ...(await response).messages],
+      skills: enabledSkills.map((s) => s.name),
     }
   }
 
@@ -137,10 +169,16 @@ export const createAgent = (
       system: generateSystem(),
       stopWhen: stepCountIs(maxSteps),
       messages,
+      prepareStep: () => {
+        return {
+          system: generateSystem(),
+        }
+      },
       tools: getTools(),
     })
     return {
       messages: [user, ...response.messages],
+      skills: enabledSkills.map((s) => s.name),
     }
   }
 

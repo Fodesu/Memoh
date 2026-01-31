@@ -7,6 +7,12 @@ import { ModelMessage } from 'ai'
 import { bearerMiddleware } from '../middlewares/bearer'
 import { loadConfig } from '../config'
 
+const Skill = z.object({
+  name: z.string().min(1, 'Skill name is required'),
+  description: z.string().min(1, 'Skill description is required'),
+  content: z.string().min(1, 'Skill content is required'),
+})
+
 const ChatBody = z.object({
   apiKey: z.string().min(1, 'API key is required'),
   baseUrl: z.string().min(1, 'Base URL is required'),
@@ -22,6 +28,8 @@ const ChatBody = z.object({
   maxContextLoadTime: z.number().min(1, 'Max context load time is required'),
   platforms: z.array(z.string()).optional(),
   currentPlatform: z.string().optional(),
+  skills: z.array(Skill).optional(),
+  useSkills: z.array(z.string()).optional(),
 
   messages: z.array(z.any()),
   query: z.string().min(1, 'Query is required'),
@@ -56,6 +64,8 @@ export const chatModule = new Elysia({ prefix: '/chat' })
       currentPlatform: body.currentPlatform,
       braveApiKey: config.brave?.api_key,
       braveBaseUrl: config.brave?.base_url,
+      skills: body.skills,
+      useSkills: body.useSkills,
     }, createAuthFetcher(bearer))
     try {
       const result = await ask({
@@ -98,6 +108,8 @@ export const chatModule = new Elysia({ prefix: '/chat' })
       currentPlatform: body.currentPlatform,
       braveApiKey: config.brave?.api_key,
       braveBaseUrl: config.brave?.base_url,
+      skills: body.skills,
+      useSkills: body.useSkills,
     }, createAuthFetcher(bearer))
     try {
       const streanGenerator = stream({
@@ -151,6 +163,8 @@ export const chatModule = new Elysia({ prefix: '/chat' })
       currentPlatform: body.currentPlatform,
       braveApiKey: config.brave?.api_key,
       braveBaseUrl: config.brave?.base_url,
+      skills: body.skills,
+      useSkills: body.useSkills,
     }, createAuthFetcher(bearer))
     try {
       return await triggerSchedule({

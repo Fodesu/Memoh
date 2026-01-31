@@ -12,3 +12,9 @@ export interface Schedule {
   maxCalls?: number
   command: string
 }
+
+export interface AgentSkill {
+  name: string
+  description: string
+  content: string
+}
