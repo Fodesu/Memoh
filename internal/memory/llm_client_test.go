@@ -11,7 +11,7 @@ func TestLLMClientExtract(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
+		if r.URL.Path != "/chat/completions" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
