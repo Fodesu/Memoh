@@ -23,7 +23,6 @@ interface ToolDisplayConfig {
 const TOOL_DISPLAY: Record<string, ToolDisplayConfig> = {
   exec:  { mode: 'expanded', label: 'exec' },
   write: { mode: 'expanded', expandParam: 'content', label: 'write' },
-  edit:  { mode: 'expanded', expandParam: 'patch',   label: 'edit' },
 }
 
 const getToolDisplay = (toolName: string): ToolDisplayConfig => {
@@ -59,6 +58,71 @@ const extractExecCommand = (toolInput: unknown): string => {
 const formatExecCall = (toolInput: unknown) => {
   const cmd = extractExecCommand(toolInput)
   return chalk.dim('  ▶ ') + chalk.white('$ ') + chalk.bold.white(cmd)
+}
+
+// ---------------------------------------------------------------------------
+// edit-specific helpers
+// ---------------------------------------------------------------------------
+
+const extractEditInput = (toolInput: unknown) => {
+  if (!toolInput || typeof toolInput !== 'object') {
+    return { path: '', oldText: '', newText: '' }
+  }
+  const input = toolInput as Record<string, unknown>
+  const path = typeof input.path === 'string' ? input.path : ''
+  const oldText =
+    typeof input.old_text === 'string'
+      ? input.old_text
+      : typeof input.oldText === 'string'
+        ? input.oldText
+        : ''
+  const newText =
+    typeof input.new_text === 'string'
+      ? input.new_text
+      : typeof input.newText === 'string'
+        ? input.newText
+        : ''
+  return { path, oldText, newText }
+}
+
+const countLines = (text: string) => (text ? text.split('\n').length : 0)
+
+const pushDetailBlock = (lines: string[], title: string, content: string) => {
+  lines.push(chalk.cyan('│ ') + chalk.dim(title))
+  const detailLines = content ? content.split('\n') : []
+  if (!detailLines.length) {
+    lines.push(chalk.cyan('│ ') + chalk.dim('∅'))
+    return
+  }
+  const maxLines = 12
+  const shown = detailLines.slice(0, maxLines)
+  for (const dl of shown) {
+    const truncated = dl.length > BOX_WIDTH - 4 ? dl.slice(0, BOX_WIDTH - 7) + '...' : dl
+    lines.push(chalk.cyan('│ ') + chalk.white(truncated))
+  }
+  if (detailLines.length > maxLines) {
+    lines.push(chalk.cyan('│ ') + chalk.dim(`... (${detailLines.length - maxLines} more lines)`))
+  }
+}
+
+const formatEditCall = (toolInput: unknown) => {
+  const { path, oldText, newText } = extractEditInput(toolInput)
+  const oldLines = countLines(oldText)
+  const newLines = countLines(newText)
+  const summary = ` path: ${path || '(unknown)'} · old: ${oldLines} lines · new: ${newLines} lines`
+
+  const topBorder = '┌' + '─'.repeat(BOX_WIDTH - 2) + '┐'
+  const botBorder = '└' + '─'.repeat(BOX_WIDTH - 2) + '┘'
+
+  const lines: string[] = []
+  lines.push(chalk.cyan(topBorder))
+  lines.push(chalk.cyan('│ ') + chalk.bold.white('edit') + chalk.gray(summary))
+  lines.push(chalk.cyan('│ ') + chalk.dim('─'.repeat(BOX_WIDTH - 4)))
+  pushDetailBlock(lines, 'old_text', oldText)
+  lines.push(chalk.cyan('│ ') + chalk.dim('─'.repeat(BOX_WIDTH - 4)))
+  pushDetailBlock(lines, 'new_text', newText)
+  lines.push(chalk.cyan(botBorder))
+  return lines.join('\n')
 }
 
 /** Try to unwrap MCP content-block results into a plain object */
@@ -204,7 +268,7 @@ const formatToolResult = (toolName: string, result: unknown) => {
     return formatExecResult(result)
   }
   const config = getToolDisplay(toolName)
-  if (config.mode === 'expanded') {
+  if (config.mode === 'expanded' || toolName === 'edit') {
     const r = unwrapToolResult(result)
     if (r) {
       if ('ok' in r) {
@@ -342,6 +406,8 @@ export const streamChat = async (query: string, botId: string, sessionId: string
           const toolInput = event.input
           if (toolName === 'exec') {
             console.log(formatExecCall(toolInput))
+          } else if (toolName === 'edit') {
+            console.log(formatEditCall(toolInput))
           } else {
             const displayConfig = getToolDisplay(toolName)
             if (displayConfig.mode === 'expanded') {

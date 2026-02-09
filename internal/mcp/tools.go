@@ -8,9 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -51,8 +51,9 @@ type FSListOutput struct {
 }
 
 type FSEditInput struct {
-	Path  string `json:"path" jsonschema:"relative file path"`
-	Patch string `json:"patch" jsonschema:"unified diff patch"`
+	Path    string `json:"path" jsonschema:"relative file path"`
+	OldText string `json:"old_text" jsonschema:"exact text to find"`
+	NewText string `json:"new_text" jsonschema:"replacement text"`
 }
 
 type FSEditOutput struct {
@@ -75,7 +76,7 @@ func RegisterTools(server *sdkmcp.Server) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "read", Description: "read file content"}, fsReadTool)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "write", Description: "write file content"}, fsWriteTool)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "list", Description: "list directory entries"}, fsListTool)
-	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "edit", Description: "apply unified diff patch"}, fsEditTool)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "edit", Description: "replace exact text in a file"}, fsEditTool)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "exec", Description: "execute command"}, execTool)
 }
 
@@ -196,15 +197,47 @@ func fsEditTool(ctx context.Context, req *sdkmcp.CallToolRequest, input FSEditIn
 	if err != nil {
 		return nil, FSEditOutput{}, err
 	}
-	updated, err := applyUnifiedPatch(string(orig), input.Patch)
-	if err != nil {
-		return nil, FSEditOutput{}, err
+	raw := string(orig)
+	bom, content := stripBOM(raw)
+	originalEnding := detectLineEnding(content)
+	normalizedContent := normalizeToLF(content)
+	normalizedOld := normalizeToLF(input.OldText)
+	normalizedNew := normalizeToLF(input.NewText)
+
+	match := fuzzyFindText(normalizedContent, normalizedOld)
+	if !match.Found {
+		return nil, FSEditOutput{}, fmt.Errorf(
+			"could not find the exact text in %s. the old text must match exactly including all whitespace and newlines",
+			input.Path,
+		)
 	}
+
+	fuzzyContent := normalizeForFuzzyMatch(normalizedContent)
+	fuzzyOld := normalizeForFuzzyMatch(normalizedOld)
+	occurrences := strings.Count(fuzzyContent, fuzzyOld)
+	if occurrences > 1 {
+		return nil, FSEditOutput{}, fmt.Errorf(
+			"found %d occurrences of the text in %s. the text must be unique. please provide more context to make it unique",
+			occurrences,
+			input.Path,
+		)
+	}
+
+	baseContent := match.ContentForReplacement
+	updated := baseContent[:match.Index] + normalizedNew + baseContent[match.Index+match.MatchLength:]
+	if baseContent == updated {
+		return nil, FSEditOutput{}, fmt.Errorf(
+			"no changes made to %s. the replacement produced identical content. this might indicate an issue with special characters or the text not existing as expected",
+			input.Path,
+		)
+	}
+
+	finalContent := bom + restoreLineEndings(updated, originalEnding)
 	info, err := os.Stat(target)
 	if err != nil {
 		return nil, FSEditOutput{}, err
 	}
-	if err := os.WriteFile(target, []byte(updated), info.Mode().Perm()); err != nil {
+	if err := os.WriteFile(target, []byte(finalContent), info.Mode().Perm()); err != nil {
 		return nil, FSEditOutput{}, err
 	}
 	return nil, FSEditOutput{OK: true}, nil
@@ -290,96 +323,99 @@ func entryForPath(root, target string, info os.FileInfo) (FSFileEntry, error) {
 	}, nil
 }
 
-func applyUnifiedPatch(original, patch string) (string, error) {
-	lines := strings.Split(original, "\n")
-	out := make([]string, 0, len(lines))
-	index := 0
-	patchLines := strings.Split(patch, "\n")
-	hunksApplied := 0
-
-	for i := 0; i < len(patchLines); i++ {
-		line := patchLines[i]
-		if !strings.HasPrefix(line, "@@") {
-			continue
-		}
-
-		origStart, err := parseUnifiedHunkHeader(line)
-		if err != nil {
-			return "", err
-		}
-		origStart--
-		if origStart < 0 {
-			origStart = 0
-		}
-		if origStart > len(lines) {
-			return "", fmt.Errorf("patch out of range")
-		}
-
-		out = append(out, lines[index:origStart]...)
-		index = origStart
-		hunksApplied++
-
-		for i+1 < len(patchLines) {
-			next := patchLines[i+1]
-			if strings.HasPrefix(next, "@@") {
-				break
-			}
-			i++
-
-			if next == "" {
-				if i == len(patchLines)-1 {
-					break
-				}
-				return "", fmt.Errorf("invalid patch line")
-			}
-			if next[0] == '\\' {
-				continue
-			}
-			op := next[0]
-			text := next[1:]
-			switch op {
-			case ' ':
-				if index >= len(lines) || lines[index] != text {
-					return "", fmt.Errorf("patch context mismatch")
-				}
-				out = append(out, text)
-				index++
-			case '-':
-				if index >= len(lines) || lines[index] != text {
-					return "", fmt.Errorf("patch delete mismatch")
-				}
-				index++
-			case '+':
-				out = append(out, text)
-			default:
-				return "", fmt.Errorf("invalid patch operation")
-			}
-		}
-	}
-	if hunksApplied == 0 {
-		return "", fmt.Errorf("patch contains no hunks")
-	}
-
-	out = append(out, lines[index:]...)
-	return strings.Join(out, "\n"), nil
+type FuzzyMatchResult struct {
+	Found                 bool
+	Index                 int
+	MatchLength           int
+	UsedFuzzyMatch        bool
+	ContentForReplacement string
 }
 
-func parseUnifiedHunkHeader(header string) (int, error) {
-	trimmed := strings.TrimPrefix(header, "@@")
-	trimmed = strings.TrimSpace(trimmed)
-	if !strings.HasPrefix(trimmed, "-") {
-		return 0, fmt.Errorf("invalid hunk header")
+func detectLineEnding(content string) string {
+	crlfIdx := strings.Index(content, "\r\n")
+	lfIdx := strings.Index(content, "\n")
+	if lfIdx == -1 {
+		return "\n"
 	}
-	parts := strings.SplitN(trimmed, " ", 2)
-	if len(parts) < 2 {
-		return 0, fmt.Errorf("invalid hunk header")
+	if crlfIdx == -1 {
+		return "\n"
+	}
+	if crlfIdx < lfIdx {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func normalizeToLF(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.ReplaceAll(text, "\r", "\n")
+}
+
+func restoreLineEndings(text, ending string) string {
+	if ending == "\r\n" {
+		return strings.ReplaceAll(text, "\n", "\r\n")
+	}
+	return text
+}
+
+func stripBOM(content string) (string, string) {
+	if strings.HasPrefix(content, "\uFEFF") {
+		return "\uFEFF", content[1:]
+	}
+	return "", content
+}
+
+func normalizeForFuzzyMatch(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRightFunc(line, unicode.IsSpace)
+	}
+	trimmed := strings.Join(lines, "\n")
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\u2018', '\u2019', '\u201A', '\u201B':
+			return '\''
+		case '\u201C', '\u201D', '\u201E', '\u201F':
+			return '"'
+		case '\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212':
+			return '-'
+		case '\u00A0', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200A', '\u202F', '\u205F', '\u3000':
+			return ' '
+		default:
+			return r
+		}
+	}, trimmed)
+}
+
+func fuzzyFindText(content, oldText string) FuzzyMatchResult {
+	exactIndex := strings.Index(content, oldText)
+	if exactIndex != -1 {
+		return FuzzyMatchResult{
+			Found:                 true,
+			Index:                 exactIndex,
+			MatchLength:           len(oldText),
+			UsedFuzzyMatch:        false,
+			ContentForReplacement: content,
+		}
 	}
 
-	origPart := strings.TrimPrefix(parts[0], "-")
-	origFields := strings.SplitN(origPart, ",", 2)
-	origStart, err := strconv.Atoi(origFields[0])
-	if err != nil {
-		return 0, fmt.Errorf("invalid hunk header")
+	fuzzyContent := normalizeForFuzzyMatch(content)
+	fuzzyOld := normalizeForFuzzyMatch(oldText)
+	fuzzyIndex := strings.Index(fuzzyContent, fuzzyOld)
+	if fuzzyIndex == -1 {
+		return FuzzyMatchResult{
+			Found:                 false,
+			Index:                 -1,
+			MatchLength:           0,
+			UsedFuzzyMatch:        false,
+			ContentForReplacement: content,
+		}
 	}
-	return origStart, nil
+	return FuzzyMatchResult{
+		Found:                 true,
+		Index:                 fuzzyIndex,
+		MatchLength:           len(fuzzyOld),
+		UsedFuzzyMatch:        true,
+		ContentForReplacement: fuzzyContent,
+	}
 }

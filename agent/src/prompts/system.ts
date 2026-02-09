@@ -49,26 +49,20 @@ ${quote('/data')} is your HOME, you are allowed to read and write files in it, t
 - ${quote('read')}: read file content
 - ${quote('write')}: write file content
 - ${quote('list')}: list directory entries
-- ${quote('edit')}: apply unified diff patch. Format:
+- ${quote('edit')}: replace exact text in a file. Input format:
 
 ${block([
-  '@@ -<orig_start>,<orig_count> +<new_start>,<new_count> @@',
-  '-old line',
-  '+new line',
-  '',
-  '@@ -3,1 +3,2 @@',
-  ' existing line 3',
-  '+added line after 3',
-  '',
-  '@@ -2,1 +2,0 @@',
-  '-deleted line',
+  '{',
+  '  "path": "relative/path/to/file.txt",',
+  '  "old_text": "exact text to find (must match exactly)",',
+  '  "new_text": "replacement text"',
+  '}',
 ].join('\n'))}
 
   Rules:
-  - Lines prefixed with ${quote(' ')} (space) are context (unchanged) lines
-  - Lines prefixed with ${quote('-')} are removed, ${quote('+')} are added
-  - ${quote('orig_count')} / ${quote('new_count')} must match the actual number of lines (context + removed / context + added)
-  - Multiple hunks allowed in one patch
+  - ${quote('old_text')} must be unique in the file
+  - Matching is exact (including whitespace and newlines)
+  - If multiple occurrences exist, include more context in ${quote('old_text')}
 
 - ${quote('exec')}: execute command
 
