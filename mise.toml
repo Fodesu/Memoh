@@ -11,6 +11,8 @@ bun = "latest"
 pnpm = "10"
 # sqlc for sql management
 sqlc = "latest"
+# typos for spell check
+typos = "latest"
 # Lima for macOS
 lima = { version = "system", platform = "darwin" }
 
