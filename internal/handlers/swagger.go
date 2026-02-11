@@ -12,7 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-//go:generate go run github.com/swaggo/swag/cmd/swag@latest init -g swagger.go -o ../../docs --parseDependency --parseInternal
+//go:generate go run github.com/swaggo/swag/cmd/swag@latest init -g swagger.go -o ../../spec --parseDependency --parseInternal
 
 var (
 	swaggerSpec []byte
@@ -36,7 +36,7 @@ func (h *SwaggerHandler) Register(e *echo.Echo) {
 
 func (h *SwaggerHandler) Spec(c echo.Context) error {
 	swaggerOnce.Do(func() {
-		swaggerSpec, swaggerErr = os.ReadFile("docs/swagger.json")
+		swaggerSpec, swaggerErr = os.ReadFile("spec/swagger.json")
 	})
 	if swaggerErr != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, swaggerErr.Error())
