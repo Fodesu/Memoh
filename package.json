@@ -12,6 +12,7 @@
     "agent:dev": "pnpm --filter @memoh/agent-gateway dev",
     "agent:build": "pnpm --filter @memoh/agent-gateway build",
     "agent:start": "pnpm --filter @memoh/agent-gateway start",
+    "generate-sdk": "openapi-ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest"
@@ -20,6 +21,7 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@hey-api/openapi-ts": "0.92.3",
     "@types/node": "^25.0.3",
     "eslint": "^9.39.2",
     "eslint-plugin-vue": "^10.6.2",
@@ -38,5 +40,5 @@
         "@algolia/client-search"
       ]
     }
-  }  
+  }
 }

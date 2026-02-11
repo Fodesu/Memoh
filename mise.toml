@@ -46,6 +46,11 @@ run = "scripts/containerd-install.sh"
 description = "Generate Swagger documentation"
 run = "cd internal/handlers && go generate"
 
+[tasks.sdk-generate]
+description = "Generate SDK code"
+run = "pnpm run generate-sdk"
+depends = ["//:swagger-generate"]
+
 [tasks.sqlc-generate]
 description = "Generate SQL code"
 run = "sqlc generate"
@@ -88,6 +93,7 @@ run = "scripts/compile-mcp.sh"
 description = "Start development environment"
 depends = [
   "//:swagger-generate",
+  "//:sdk-generate",
   "//agent:dev",
   "//cmd/agent:start",
   "//packages/web:dev",

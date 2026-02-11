@@ -11,6 +11,7 @@
   "dependencies": {
     "@memoh/shared": "workspace:*",
     "@memoh/ui": "workspace:*",
+    "@memoh/sdk": "workspace:*",
     "@pinia/colada": "^0.21.1",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/vue-table": "^8.21.3",

@@ -1,0 +1,13 @@
+{
+  "name": "@memoh/sdk",
+  "version": "1.0.0",
+  "description": "",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "index.js",
+  "scripts": {
+    
+  },
+  "packageManager": "pnpm@10.27.0"
+}
