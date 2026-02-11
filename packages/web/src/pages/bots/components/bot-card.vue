@@ -80,17 +80,17 @@ import {
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import type { BotInfo } from '@/composables/api/useBots'
+import type { BotsBot } from '@memoh/sdk'
 
 const router = useRouter()
 
 const props = defineProps<{
-  bot: BotInfo
+  bot: BotsBot
   deleteLoading: boolean
 }>()
 
 defineEmits<{
-  edit: [bot: BotInfo]
+  edit: [bot: BotsBot]
   delete: [id: string]
 }>()
 

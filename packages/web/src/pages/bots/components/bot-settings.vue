@@ -94,9 +94,9 @@ import { reactive, computed, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { useI18n } from 'vue-i18n'
 import ModelSelect from './model-select.vue'
-import { useBotSettings, useUpdateBotSettings, type BotSettings } from '@/composables/api/useBotSettings'
-import { useAllModels } from '@/composables/api/useModels'
-import { useAllProviders } from '@/composables/api/useProviders'
+import { useQuery, useMutation, useQueryCache } from '@pinia/colada'
+import { getBotsByBotIdSettings, putBotsByBotIdSettings, getModels, getProviders } from '@memoh/sdk'
+import type { SettingsSettings } from '@memoh/sdk'
 import type { Ref } from 'vue'
 
 const props = defineProps<{
@@ -108,16 +108,50 @@ const { t } = useI18n()
 const botIdRef = computed(() => props.botId) as Ref<string>
 
 // ---- Data ----
-const { data: settings } = useBotSettings(botIdRef)
-const { data: modelData } = useAllModels()
-const { data: providerData } = useAllProviders()
-const { mutateAsync: updateSettings, isLoading } = useUpdateBotSettings(botIdRef)
+const queryCache = useQueryCache()
+
+const { data: settings } = useQuery({
+  key: () => ['bot-settings', botIdRef.value],
+  query: async () => {
+    const { data } = await getBotsByBotIdSettings({ path: { bot_id: botIdRef.value }, throwOnError: true })
+    return data
+  },
+  enabled: () => !!botIdRef.value,
+})
+
+const { data: modelData } = useQuery({
+  key: ['all-models'],
+  query: async () => {
+    const { data } = await getModels({ throwOnError: true })
+    return data
+  },
+})
+
+const { data: providerData } = useQuery({
+  key: ['all-providers'],
+  query: async () => {
+    const { data } = await getProviders({ throwOnError: true })
+    return data
+  },
+})
+
+const { mutateAsync: updateSettings, isLoading } = useMutation({
+  mutation: async (body: Partial<SettingsSettings>) => {
+    const { data } = await putBotsByBotIdSettings({
+      path: { bot_id: botIdRef.value },
+      body,
+      throwOnError: true,
+    })
+    return data
+  },
+  onSettled: () => queryCache.invalidateQueries({ key: ['bot-settings', botIdRef.value] }),
+})
 
 const models = computed(() => modelData.value ?? [])
 const providers = computed(() => providerData.value ?? [])
 
 // ---- Form ----
-const form = reactive<BotSettings>({
+const form = reactive<SettingsSettings>({
   chat_model_id: '',
   memory_model_id: '',
   embedding_model_id: '',

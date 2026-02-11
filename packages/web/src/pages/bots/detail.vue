@@ -117,14 +117,22 @@ import {
 } from '@memoh/ui'
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { useBotDetail } from '@/composables/api/useBots'
+import { useQuery } from '@pinia/colada'
+import { getBotsById } from '@memoh/sdk'
 import BotSettings from './components/bot-settings.vue'
 import BotChannels from './components/bot-channels.vue'
 
 const route = useRoute()
 const botId = computed(() => route.params.botId as string)
 
-const { data: bot } = useBotDetail(botId)
+const { data: bot } = useQuery({
+  key: () => ['bot', botId.value],
+  query: async () => {
+    const { data } = await getBotsById({ path: { id: botId.value }, throwOnError: true })
+    return data
+  },
+  enabled: () => !!botId.value,
+})
 
 // 加载到 bot 数据后，用名称替换 breadcrumb 中的 botId
 watch(bot, (val) => {

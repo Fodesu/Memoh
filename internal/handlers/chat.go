@@ -47,6 +47,7 @@ func (h *ChatHandler) Register(e *echo.Echo) {
 // @Tags chat
 // @Accept json
 // @Produce json
+// @Param bot_id path string true "Bot ID"
 // @Param request body chat.ChatRequest true "Chat request"
 // @Success 200 {object} chat.ChatResponse
 // @Failure 400 {object} ErrorResponse
@@ -102,6 +103,7 @@ func (h *ChatHandler) Chat(c echo.Context) error {
 // @Tags chat
 // @Accept json
 // @Produce text/event-stream
+// @Param bot_id path string true "Bot ID"
 // @Param request body chat.ChatRequest true "Chat request"
 // @Success 200 {string} string
 // @Failure 400 {object} ErrorResponse

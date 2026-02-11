@@ -94,11 +94,11 @@ func (h *ChannelHandler) UpsertUserConfig(c echo.Context) error {
 }
 
 type ChannelMeta struct {
-	Type             string                      `json:"type"`
-	DisplayName      string                      `json:"display_name"`
+	Type             string                      `json:"type" validate:"required"`
+	DisplayName      string                      `json:"display_name" validate:"required"`
 	Configless       bool                        `json:"configless"`
-	Capabilities     channel.ChannelCapabilities `json:"capabilities"`
-	ConfigSchema     channel.ConfigSchema        `json:"config_schema"`
+	Capabilities     channel.ChannelCapabilities `json:"capabilities" validate:"required"`
+	ConfigSchema     channel.ConfigSchema        `json:"config_schema" validate:"required"`
 	UserConfigSchema channel.ConfigSchema        `json:"user_config_schema"`
 	TargetSpec       channel.TargetSpec          `json:"target_spec"`
 }

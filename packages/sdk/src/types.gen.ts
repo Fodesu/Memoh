@@ -6,16 +6,16 @@ export type ClientOptions = {
 
 export type BotsBot = {
     avatar_url?: string;
-    created_at?: string;
-    display_name?: string;
-    id?: string;
-    is_active?: boolean;
+    created_at: string;
+    display_name: string;
+    id: string;
+    is_active: boolean;
     metadata?: {
         [key: string]: unknown;
     };
-    owner_user_id?: string;
-    type?: string;
-    updated_at?: string;
+    owner_user_id: string;
+    type: string;
+    updated_at: string;
 };
 
 export type BotsBotMember = {
@@ -36,7 +36,7 @@ export type BotsCreateBotRequest = {
 };
 
 export type BotsListBotsResponse = {
-    items?: Array<BotsBot>;
+    items: Array<BotsBot>;
 };
 
 export type BotsListMembersResponse = {
@@ -273,25 +273,25 @@ export type ChatToolCallFunction = {
 };
 
 export type GithubComMemohaiMemohInternalMcpConnection = {
-    active?: boolean;
-    bot_id?: string;
-    config?: {
+    active: boolean;
+    bot_id: string;
+    config: {
         [key: string]: unknown;
     };
-    created_at?: string;
-    id?: string;
-    name?: string;
-    type?: string;
-    updated_at?: string;
+    created_at: string;
+    id: string;
+    name: string;
+    type: string;
+    updated_at: string;
 };
 
 export type HandlersChannelMeta = {
-    capabilities?: ChannelChannelCapabilities;
-    config_schema?: ChannelConfigSchema;
+    capabilities: ChannelChannelCapabilities;
+    config_schema: ChannelConfigSchema;
     configless?: boolean;
-    display_name?: string;
+    display_name: string;
     target_spec?: ChannelTargetSpec;
-    type?: string;
+    type: string;
     user_config_schema?: ChannelConfigSchema;
 };
 
@@ -429,18 +429,18 @@ export type HandlersListSnapshotsResponse = {
 };
 
 export type HandlersLoginRequest = {
-    password?: string;
-    username?: string;
+    password: string;
+    username: string;
 };
 
 export type HandlersLoginResponse = {
-    access_token?: string;
-    display_name?: string;
-    expires_at?: string;
-    role?: string;
-    token_type?: string;
-    user_id?: string;
-    username?: string;
+    access_token: string;
+    display_name: string;
+    expires_at: string;
+    role: string;
+    token_type: string;
+    user_id: string;
+    username: string;
 };
 
 export type HandlersMcpStdioRequest = {
@@ -634,10 +634,10 @@ export type ModelsAddRequest = {
     dimensions?: number;
     input?: Array<string>;
     is_multimodal?: boolean;
-    llm_provider_id?: string;
-    model_id?: string;
-    name?: string;
-    type?: ModelsModelType;
+    llm_provider_id: string;
+    model_id: string;
+    name: string;
+    type: ModelsModelType;
 };
 
 export type ModelsAddResponse = {
@@ -653,10 +653,10 @@ export type ModelsGetResponse = {
     dimensions?: number;
     input?: Array<string>;
     is_multimodal?: boolean;
-    llm_provider_id?: string;
-    model_id?: string;
-    name?: string;
-    type?: ModelsModelType;
+    llm_provider_id: string;
+    model_id: string;
+    name: string;
+    type: ModelsModelType;
 };
 
 export type ModelsModelType = 'chat' | 'embedding';
@@ -665,10 +665,10 @@ export type ModelsUpdateRequest = {
     dimensions?: number;
     input?: Array<string>;
     is_multimodal?: boolean;
-    llm_provider_id?: string;
-    model_id?: string;
-    name?: string;
-    type?: ModelsModelType;
+    llm_provider_id: string;
+    model_id: string;
+    name: string;
+    type: ModelsModelType;
 };
 
 export type ProvidersClientType = 'openai' | 'openai-compat' | 'anthropic' | 'google' | 'ollama';
@@ -692,15 +692,15 @@ export type ProvidersGetResponse = {
      * masked in response
      */
     api_key?: string;
-    base_url?: string;
-    client_type?: string;
-    created_at?: string;
-    id?: string;
+    base_url: string;
+    client_type: string;
+    created_at: string;
+    id: string;
     metadata?: {
         [key: string]: unknown;
     };
-    name?: string;
-    updated_at?: string;
+    name: string;
+    updated_at: string;
 };
 
 export type ProvidersUpdateRequest = {
@@ -755,12 +755,12 @@ export type ScheduleUpdateRequest = {
 };
 
 export type SettingsSettings = {
-    allow_guest?: boolean;
-    chat_model_id?: string;
-    embedding_model_id?: string;
-    language?: string;
-    max_context_load_time?: number;
-    memory_model_id?: string;
+    allow_guest: boolean;
+    chat_model_id: string;
+    embedding_model_id: string;
+    language: string;
+    max_context_load_time: number;
+    memory_model_id: string;
 };
 
 export type SettingsUpsertRequest = {
@@ -1001,7 +1001,12 @@ export type PostBotsByBotIdChatData = {
      * Chat request
      */
     body: ChatChatRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/chat';
 };
@@ -1033,7 +1038,12 @@ export type PostBotsByBotIdChatStreamData = {
      * Chat request
      */
     body: ChatChatRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/chat/stream';
 };
@@ -1823,7 +1833,12 @@ export type PostBotsByBotIdContainerStopResponse = PostBotsByBotIdContainerStopR
 
 export type DeleteBotsByBotIdHistoryData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/history';
 };
@@ -1850,7 +1865,12 @@ export type DeleteBotsByBotIdHistoryResponses = {
 
 export type GetBotsByBotIdHistoryData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: {
         /**
          * Limit
@@ -1887,7 +1907,12 @@ export type PostBotsByBotIdHistoryData = {
      * History payload
      */
     body: HistoryCreateRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/history';
 };
@@ -1917,6 +1942,10 @@ export type PostBotsByBotIdHistoryResponse = PostBotsByBotIdHistoryResponses[key
 export type DeleteBotsByBotIdHistoryByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * History ID
          */
@@ -1954,6 +1983,10 @@ export type GetBotsByBotIdHistoryByIdData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * History ID
          */
         id: string;
@@ -1990,7 +2023,12 @@ export type GetBotsByBotIdHistoryByIdResponse = GetBotsByBotIdHistoryByIdRespons
 
 export type GetBotsByBotIdMcpData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp';
 };
@@ -2030,7 +2068,12 @@ export type PostBotsByBotIdMcpData = {
      * MCP payload
      */
     body: McpUpsertRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp';
 };
@@ -2159,6 +2202,10 @@ export type DeleteBotsByBotIdMcpByIdData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP ID
          */
         id: string;
@@ -2198,6 +2245,10 @@ export type DeleteBotsByBotIdMcpByIdResponses = {
 export type GetBotsByBotIdMcpByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * MCP ID
          */
@@ -2244,6 +2295,10 @@ export type PutBotsByBotIdMcpByIdData = {
     body: McpUpsertRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP ID
          */
         id: string;
@@ -2287,7 +2342,12 @@ export type PostBotsByBotIdMemoryAddData = {
      * Add request
      */
     body: HandlersMemoryAddPayload;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/memory/add';
 };
@@ -2319,7 +2379,12 @@ export type PostBotsByBotIdMemoryEmbedData = {
      * Embed upsert request
      */
     body: HandlersMemoryEmbedUpsertPayload;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/memory/embed';
 };
@@ -2351,7 +2416,12 @@ export type DeleteBotsByBotIdMemoryMemoriesData = {
      * Delete all request
      */
     body: HandlersMemoryDeleteAllPayload;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/memory/memories';
 };
@@ -2380,7 +2450,12 @@ export type DeleteBotsByBotIdMemoryMemoriesResponse = DeleteBotsByBotIdMemoryMem
 
 export type GetBotsByBotIdMemoryMemoriesData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: {
         /**
          * Run ID
@@ -2420,6 +2495,10 @@ export type DeleteBotsByBotIdMemoryMemoriesByMemoryIdData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * Memory ID
          */
         memoryId: string;
@@ -2453,6 +2532,10 @@ export type DeleteBotsByBotIdMemoryMemoriesByMemoryIdResponse = DeleteBotsByBotI
 export type GetBotsByBotIdMemoryMemoriesByMemoryIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Memory ID
          */
@@ -2489,7 +2572,12 @@ export type PostBotsByBotIdMemorySearchData = {
      * Search request
      */
     body: HandlersMemorySearchPayload;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/memory/search';
 };
@@ -2521,7 +2609,12 @@ export type PostBotsByBotIdMemoryUpdateData = {
      * Update request
      */
     body: MemoryUpdateRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/memory/update';
 };
@@ -2550,7 +2643,12 @@ export type PostBotsByBotIdMemoryUpdateResponse = PostBotsByBotIdMemoryUpdateRes
 
 export type GetBotsByBotIdScheduleData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/schedule';
 };
@@ -2582,7 +2680,12 @@ export type PostBotsByBotIdScheduleData = {
      * Schedule payload
      */
     body: ScheduleCreateRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/schedule';
 };
@@ -2612,6 +2715,10 @@ export type PostBotsByBotIdScheduleResponse = PostBotsByBotIdScheduleResponses[k
 export type DeleteBotsByBotIdScheduleByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Schedule ID
          */
@@ -2644,6 +2751,10 @@ export type DeleteBotsByBotIdScheduleByIdResponses = {
 export type GetBotsByBotIdScheduleByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Schedule ID
          */
@@ -2686,6 +2797,10 @@ export type PutBotsByBotIdScheduleByIdData = {
     body: ScheduleUpdateRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * Schedule ID
          */
         id: string;
@@ -2718,7 +2833,12 @@ export type PutBotsByBotIdScheduleByIdResponse = PutBotsByBotIdScheduleByIdRespo
 
 export type DeleteBotsByBotIdSettingsData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/settings';
 };
@@ -2745,7 +2865,12 @@ export type DeleteBotsByBotIdSettingsResponses = {
 
 export type GetBotsByBotIdSettingsData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/settings';
 };
@@ -2777,7 +2902,12 @@ export type PostBotsByBotIdSettingsData = {
      * Settings payload
      */
     body: SettingsUpsertRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/settings';
 };
@@ -2809,7 +2939,12 @@ export type PutBotsByBotIdSettingsData = {
      * Settings payload
      */
     body: SettingsUpsertRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/settings';
 };
@@ -2838,7 +2973,12 @@ export type PutBotsByBotIdSettingsResponse = PutBotsByBotIdSettingsResponses[key
 
 export type GetBotsByBotIdSubagentsData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/subagents';
 };
@@ -2870,7 +3010,12 @@ export type PostBotsByBotIdSubagentsData = {
      * Subagent payload
      */
     body: SubagentCreateRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/subagents';
 };
@@ -2900,6 +3045,10 @@ export type PostBotsByBotIdSubagentsResponse = PostBotsByBotIdSubagentsResponses
 export type DeleteBotsByBotIdSubagentsByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Subagent ID
          */
@@ -2936,6 +3085,10 @@ export type DeleteBotsByBotIdSubagentsByIdResponses = {
 export type GetBotsByBotIdSubagentsByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Subagent ID
          */
@@ -2978,6 +3131,10 @@ export type PutBotsByBotIdSubagentsByIdData = {
     body: SubagentUpdateRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * Subagent ID
          */
         id: string;
@@ -3015,6 +3172,10 @@ export type PutBotsByBotIdSubagentsByIdResponse = PutBotsByBotIdSubagentsByIdRes
 export type GetBotsByBotIdSubagentsByIdContextData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Subagent ID
          */
@@ -3057,6 +3218,10 @@ export type PutBotsByBotIdSubagentsByIdContextData = {
     body: SubagentUpdateContextRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * Subagent ID
          */
         id: string;
@@ -3094,6 +3259,10 @@ export type PutBotsByBotIdSubagentsByIdContextResponse = PutBotsByBotIdSubagents
 export type GetBotsByBotIdSubagentsByIdSkillsData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Subagent ID
          */
@@ -3136,6 +3305,10 @@ export type PostBotsByBotIdSubagentsByIdSkillsData = {
     body: SubagentAddSkillsRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * Subagent ID
          */
         id: string;
@@ -3176,6 +3349,10 @@ export type PutBotsByBotIdSubagentsByIdSkillsData = {
      */
     body: SubagentUpdateSkillsRequest;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Subagent ID
          */

@@ -20,6 +20,14 @@ definitions:
         type: string
       updated_at:
         type: string
+    required:
+    - created_at
+    - display_name
+    - id
+    - is_active
+    - owner_user_id
+    - type
+    - updated_at
     type: object
   bots.BotMember:
     properties:
@@ -52,6 +60,8 @@ definitions:
         items:
           $ref: '#/definitions/bots.Bot'
         type: array
+    required:
+    - items
     type: object
   bots.ListMembersResponse:
     properties:
@@ -502,6 +512,15 @@ definitions:
         type: string
       updated_at:
         type: string
+    required:
+    - active
+    - bot_id
+    - config
+    - created_at
+    - id
+    - name
+    - type
+    - updated_at
     type: object
   handlers.ChannelMeta:
     properties:
@@ -519,6 +538,11 @@ definitions:
         type: string
       user_config_schema:
         $ref: '#/definitions/channel.ConfigSchema'
+    required:
+    - capabilities
+    - config_schema
+    - display_name
+    - type
     type: object
   handlers.CreateContainerRequest:
     properties:
@@ -735,6 +759,9 @@ definitions:
         type: string
       username:
         type: string
+    required:
+    - password
+    - username
     type: object
   handlers.LoginResponse:
     properties:
@@ -752,6 +779,14 @@ definitions:
         type: string
       username:
         type: string
+    required:
+    - access_token
+    - display_name
+    - expires_at
+    - role
+    - token_type
+    - user_id
+    - username
     type: object
   handlers.MCPStdioRequest:
     properties:
@@ -1062,6 +1097,11 @@ definitions:
         type: string
       type:
         $ref: '#/definitions/models.ModelType'
+    required:
+    - llm_provider_id
+    - model_id
+    - name
+    - type
     type: object
   models.AddResponse:
     properties:
@@ -1093,6 +1133,11 @@ definitions:
         type: string
       type:
         $ref: '#/definitions/models.ModelType'
+    required:
+    - llm_provider_id
+    - model_id
+    - name
+    - type
     type: object
   models.ModelType:
     enum:
@@ -1120,6 +1165,11 @@ definitions:
         type: string
       type:
         $ref: '#/definitions/models.ModelType'
+    required:
+    - llm_provider_id
+    - model_id
+    - name
+    - type
     type: object
   providers.ClientType:
     enum:
@@ -1178,6 +1228,13 @@ definitions:
         type: string
       updated_at:
         type: string
+    required:
+    - base_url
+    - client_type
+    - created_at
+    - id
+    - name
+    - updated_at
     type: object
   providers.UpdateRequest:
     properties:
@@ -1276,6 +1333,13 @@ definitions:
         type: integer
       memory_model_id:
         type: string
+    required:
+    - allow_guest
+    - chat_model_id
+    - embedding_model_id
+    - language
+    - max_context_load_time
+    - memory_model_id
     type: object
   settings.UpsertRequest:
     properties:
@@ -1572,6 +1636,11 @@ paths:
       description: Send a chat message and get a response. The system will automatically
         select an appropriate chat model from the database.
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Chat request
         in: body
         name: request
@@ -1603,6 +1672,11 @@ paths:
       description: Send a chat message and get a streaming response. The system will
         automatically select an appropriate chat model from the database.
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Chat request
         in: body
         name: request
@@ -2227,6 +2301,12 @@ paths:
   /bots/{bot_id}/history:
     delete:
       description: Delete all history records for current user
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "204":
           description: No Content
@@ -2244,6 +2324,11 @@ paths:
     get:
       description: List history records for current user
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Limit
         in: query
         name: limit
@@ -2267,6 +2352,11 @@ paths:
     post:
       description: Create a history record for current user
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: History payload
         in: body
         name: payload
@@ -2293,6 +2383,11 @@ paths:
     delete:
       description: Delete a history record by ID (must belong to current user)
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: History ID
         in: path
         name: id
@@ -2319,6 +2414,11 @@ paths:
     get:
       description: Get a history record by ID (must belong to current user)
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: History ID
         in: path
         name: id
@@ -2347,6 +2447,12 @@ paths:
   /bots/{bot_id}/mcp:
     get:
       description: List MCP connections for a bot
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "200":
           description: OK
@@ -2374,6 +2480,11 @@ paths:
     post:
       description: Create a MCP connection for a bot
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP payload
         in: body
         name: payload
@@ -2484,6 +2595,11 @@ paths:
     delete:
       description: Delete a MCP connection by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP ID
         in: path
         name: id
@@ -2514,6 +2630,11 @@ paths:
     get:
       description: Get a MCP connection by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP ID
         in: path
         name: id
@@ -2546,6 +2667,11 @@ paths:
     put:
       description: Update a MCP connection by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP ID
         in: path
         name: id
@@ -2586,6 +2712,11 @@ paths:
       description: 'Add memory for a user via memory. Auth: Bearer JWT determines
         user_id (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Add request
         in: body
         name: payload
@@ -2613,6 +2744,11 @@ paths:
       description: 'Embed text or multimodal input and upsert into memory store. Auth:
         Bearer JWT determines user_id (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Embed upsert request
         in: body
         name: payload
@@ -2640,6 +2776,11 @@ paths:
       description: 'Delete all memories for a user via memory. Auth: Bearer JWT determines
         user_id (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Delete all request
         in: body
         name: payload
@@ -2666,6 +2807,11 @@ paths:
       description: 'List memories for a user via memory. Auth: Bearer JWT determines
         user_id (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Run ID
         in: query
         name: run_id
@@ -2695,6 +2841,11 @@ paths:
       description: 'Delete a memory by ID via memory. Auth: Bearer JWT determines
         user_id (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Memory ID
         in: path
         name: memoryId
@@ -2720,6 +2871,11 @@ paths:
       description: 'Get a memory by ID via memory. Auth: Bearer JWT determines user_id
         (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Memory ID
         in: path
         name: memoryId
@@ -2746,6 +2902,11 @@ paths:
       description: 'Search memories for a user via memory. Auth: Bearer JWT determines
         user_id (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Search request
         in: body
         name: payload
@@ -2773,6 +2934,11 @@ paths:
       description: 'Update a memory by ID via memory. Auth: Bearer JWT determines
         user_id (sub or user_id).'
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Update request
         in: body
         name: payload
@@ -2798,6 +2964,12 @@ paths:
   /bots/{bot_id}/schedule:
     get:
       description: List schedules for current user
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "200":
           description: OK
@@ -2817,6 +2989,11 @@ paths:
     post:
       description: Create a schedule for current user
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Schedule payload
         in: body
         name: payload
@@ -2843,6 +3020,11 @@ paths:
     delete:
       description: Delete a schedule by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Schedule ID
         in: path
         name: id
@@ -2865,6 +3047,11 @@ paths:
     get:
       description: Get a schedule by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Schedule ID
         in: path
         name: id
@@ -2893,6 +3080,11 @@ paths:
     put:
       description: Update a schedule by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Schedule ID
         in: path
         name: id
@@ -2923,6 +3115,12 @@ paths:
   /bots/{bot_id}/settings:
     delete:
       description: Remove agent settings for current user
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "204":
           description: No Content
@@ -2939,6 +3137,12 @@ paths:
       - settings
     get:
       description: Get agent settings for current user
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "200":
           description: OK
@@ -2958,6 +3162,11 @@ paths:
     post:
       description: Update or create agent settings for current user
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Settings payload
         in: body
         name: payload
@@ -2983,6 +3192,11 @@ paths:
     put:
       description: Update or create agent settings for current user
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Settings payload
         in: body
         name: payload
@@ -3008,6 +3222,12 @@ paths:
   /bots/{bot_id}/subagents:
     get:
       description: List subagents for current user
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "200":
           description: OK
@@ -3027,6 +3247,11 @@ paths:
     post:
       description: Create a subagent for current user
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent payload
         in: body
         name: payload
@@ -3053,6 +3278,11 @@ paths:
     delete:
       description: Delete a subagent by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id
@@ -3079,6 +3309,11 @@ paths:
     get:
       description: Get a subagent by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id
@@ -3107,6 +3342,11 @@ paths:
     put:
       description: Update a subagent by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id
@@ -3142,6 +3382,11 @@ paths:
     get:
       description: Get a subagent's message context
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id
@@ -3170,6 +3415,11 @@ paths:
     put:
       description: Update a subagent's message context
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id
@@ -3205,6 +3455,11 @@ paths:
     get:
       description: Get a subagent's skills
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id
@@ -3233,6 +3488,11 @@ paths:
     post:
       description: Add skills to a subagent
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id
@@ -3267,6 +3527,11 @@ paths:
     put:
       description: Replace a subagent's skills
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: Subagent ID
         in: path
         name: id

@@ -90,6 +90,7 @@ func (h *MemoryHandler) checkService() error {
 // @Summary Embed and upsert memory
 // @Description Embed text or multimodal input and upsert into memory store. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param payload body memoryEmbedUpsertPayload true "Embed upsert request"
 // @Success 200 {object} memory.EmbedUpsertResponse
 // @Failure 400 {object} ErrorResponse
@@ -144,6 +145,7 @@ func (h *MemoryHandler) EmbedUpsert(c echo.Context) error {
 // @Summary Add memory
 // @Description Add memory for a user via memory. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param payload body memoryAddPayload true "Add request"
 // @Success 200 {object} memory.SearchResponse
 // @Failure 400 {object} ErrorResponse
@@ -197,6 +199,7 @@ func (h *MemoryHandler) Add(c echo.Context) error {
 // @Summary Search memories
 // @Description Search memories for a user via memory. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param payload body memorySearchPayload true "Search request"
 // @Success 200 {object} memory.SearchResponse
 // @Failure 400 {object} ErrorResponse
@@ -249,6 +252,7 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 // @Summary Update memory
 // @Description Update a memory by ID via memory. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param payload body memory.UpdateRequest true "Update request"
 // @Success 200 {object} memory.MemoryItem
 // @Failure 400 {object} ErrorResponse
@@ -296,6 +300,7 @@ func (h *MemoryHandler) Update(c echo.Context) error {
 // @Summary Get memory
 // @Description Get a memory by ID via memory. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param memoryId path string true "Memory ID"
 // @Success 200 {object} memory.MemoryItem
 // @Failure 400 {object} ErrorResponse
@@ -337,6 +342,7 @@ func (h *MemoryHandler) Get(c echo.Context) error {
 // @Summary List memories
 // @Description List memories for a user via memory. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param run_id query string false "Run ID"
 // @Param limit query int false "Limit"
 // @Success 200 {object} memory.SearchResponse
@@ -388,6 +394,7 @@ func (h *MemoryHandler) GetAll(c echo.Context) error {
 // @Summary Delete memory
 // @Description Delete a memory by ID via memory. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param memoryId path string true "Memory ID"
 // @Success 200 {object} memory.DeleteResponse
 // @Failure 400 {object} ErrorResponse
@@ -434,6 +441,7 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 // @Summary Delete memories
 // @Description Delete all memories for a user via memory. Auth: Bearer JWT determines user_id (sub or user_id).
 // @Tags memory
+// @Param bot_id path string true "Bot ID"
 // @Param payload body memoryDeleteAllPayload true "Delete all request"
 // @Success 200 {object} memory.DeleteResponse
 // @Failure 400 {object} ErrorResponse

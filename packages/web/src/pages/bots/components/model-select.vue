@@ -89,12 +89,11 @@ import {
   ScrollArea,
 } from '@memoh/ui'
 import { computed, ref, watch } from 'vue'
-import type { ModelInfo } from '@/composables/api/useModels'
-import type { ProviderWithId } from '@/composables/api/useProviders'
+import type { ModelsGetResponse, ProvidersGetResponse } from '@memoh/sdk'
 
 const props = defineProps<{
-  models: ModelInfo[]
-  providers: ProviderWithId[]
+  models: ModelsGetResponse[]
+  providers: ProvidersGetResponse[]
   modelType: 'chat' | 'embedding'
   placeholder?: string
 }>()
@@ -131,7 +130,7 @@ const filteredGroups = computed(() => {
     )
     : typeFilteredModels.value
 
-  const groups = new Map<string, { providerName: string; models: ModelInfo[] }>()
+  const groups = new Map<string, { providerName: string; models: ModelsGetResponse[] }>()
   for (const model of models) {
     const pid = model.llm_provider_id
     const providerName = providerMap.value.get(pid) ?? pid

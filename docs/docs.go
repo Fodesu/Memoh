@@ -163,6 +163,13 @@ const docTemplate = `{
                 "summary": "Chat with AI",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
                         "description": "Chat request",
                         "name": "request",
                         "in": "body",
@@ -208,6 +215,13 @@ const docTemplate = `{
                 ],
                 "summary": "Stream chat with AI",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Chat request",
                         "name": "request",
@@ -1137,6 +1151,13 @@ const docTemplate = `{
                 "summary": "List history records",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
                         "type": "integer",
                         "description": "Limit",
                         "name": "limit",
@@ -1171,6 +1192,13 @@ const docTemplate = `{
                 ],
                 "summary": "Create history record",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "History payload",
                         "name": "payload",
@@ -1208,6 +1236,15 @@ const docTemplate = `{
                     "history"
                 ],
                 "summary": "Delete all history records",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "204": {
                         "description": "No Content"
@@ -1235,6 +1272,13 @@ const docTemplate = `{
                 ],
                 "summary": "Get history record",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "History ID",
@@ -1279,6 +1323,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "History ID",
                         "name": "id",
                         "in": "path",
@@ -1317,6 +1368,15 @@ const docTemplate = `{
                     "mcp"
                 ],
                 "summary": "List MCP connections",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1357,6 +1417,13 @@ const docTemplate = `{
                 ],
                 "summary": "Create MCP connection",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "MCP payload",
                         "name": "payload",
@@ -1524,6 +1591,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "MCP ID",
                         "name": "id",
                         "in": "path",
@@ -1570,6 +1644,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update MCP connection",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "MCP ID",
@@ -1629,6 +1710,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "MCP ID",
                         "name": "id",
                         "in": "path",
@@ -1675,6 +1763,13 @@ const docTemplate = `{
                 "summary": "Add memory",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
                         "description": "Add request",
                         "name": "payload",
                         "in": "body",
@@ -1714,6 +1809,13 @@ const docTemplate = `{
                 ],
                 "summary": "Embed and upsert memory",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Embed upsert request",
                         "name": "payload",
@@ -1756,6 +1858,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "Run ID",
                         "name": "run_id",
                         "in": "query"
@@ -1795,6 +1904,13 @@ const docTemplate = `{
                 ],
                 "summary": "Delete memories",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Delete all request",
                         "name": "payload",
@@ -1837,6 +1953,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "Memory ID",
                         "name": "memoryId",
                         "in": "path",
@@ -1871,6 +1994,13 @@ const docTemplate = `{
                 ],
                 "summary": "Delete memory",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "Memory ID",
@@ -1909,6 +2039,13 @@ const docTemplate = `{
                 ],
                 "summary": "Search memories",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Search request",
                         "name": "payload",
@@ -1950,6 +2087,13 @@ const docTemplate = `{
                 "summary": "Update memory",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
                         "description": "Update request",
                         "name": "payload",
                         "in": "body",
@@ -1988,6 +2132,15 @@ const docTemplate = `{
                     "schedule"
                 ],
                 "summary": "List schedules",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -2016,6 +2169,13 @@ const docTemplate = `{
                 ],
                 "summary": "Create schedule",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Schedule payload",
                         "name": "payload",
@@ -2058,6 +2218,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "Schedule ID",
                         "name": "id",
                         "in": "path",
@@ -2098,6 +2265,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update schedule",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "Schedule ID",
@@ -2145,6 +2319,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "Schedule ID",
                         "name": "id",
                         "in": "path",
@@ -2177,6 +2358,15 @@ const docTemplate = `{
                     "settings"
                 ],
                 "summary": "Get user settings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -2205,6 +2395,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update user settings",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Settings payload",
                         "name": "payload",
@@ -2243,6 +2440,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update user settings",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Settings payload",
                         "name": "payload",
@@ -2280,6 +2484,15 @@ const docTemplate = `{
                     "settings"
                 ],
                 "summary": "Delete user settings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "204": {
                         "description": "No Content"
@@ -2306,6 +2519,15 @@ const docTemplate = `{
                     "subagent"
                 ],
                 "summary": "List subagents",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -2334,6 +2556,13 @@ const docTemplate = `{
                 ],
                 "summary": "Create subagent",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Subagent payload",
                         "name": "payload",
@@ -2376,6 +2605,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "Subagent ID",
                         "name": "id",
                         "in": "path",
@@ -2416,6 +2652,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update subagent",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "Subagent ID",
@@ -2469,6 +2712,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "Subagent ID",
                         "name": "id",
                         "in": "path",
@@ -2508,6 +2758,13 @@ const docTemplate = `{
                 ],
                 "summary": "Get subagent context",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "Subagent ID",
@@ -2550,6 +2807,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update subagent context",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "Subagent ID",
@@ -2605,6 +2869,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "Subagent ID",
                         "name": "id",
                         "in": "path",
@@ -2645,6 +2916,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update subagent skills",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "Subagent ID",
@@ -2696,6 +2974,13 @@ const docTemplate = `{
                 ],
                 "summary": "Add subagent skills",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "Subagent ID",
@@ -4744,6 +5029,15 @@ const docTemplate = `{
     "definitions": {
         "bots.Bot": {
             "type": "object",
+            "required": [
+                "created_at",
+                "display_name",
+                "id",
+                "is_active",
+                "owner_user_id",
+                "type",
+                "updated_at"
+            ],
             "properties": {
                 "avatar_url": {
                     "type": "string"
@@ -4815,6 +5109,9 @@ const docTemplate = `{
         },
         "bots.ListBotsResponse": {
             "type": "object",
+            "required": [
+                "items"
+            ],
             "properties": {
                 "items": {
                     "type": "array",
@@ -5459,6 +5756,16 @@ const docTemplate = `{
         },
         "github_com_memohai_memoh_internal_mcp.Connection": {
             "type": "object",
+            "required": [
+                "active",
+                "bot_id",
+                "config",
+                "created_at",
+                "id",
+                "name",
+                "type",
+                "updated_at"
+            ],
             "properties": {
                 "active": {
                     "type": "boolean"
@@ -5489,6 +5796,12 @@ const docTemplate = `{
         },
         "handlers.ChannelMeta": {
             "type": "object",
+            "required": [
+                "capabilities",
+                "config_schema",
+                "display_name",
+                "type"
+            ],
             "properties": {
                 "capabilities": {
                     "$ref": "#/definitions/channel.ChannelCapabilities"
@@ -5839,6 +6152,10 @@ const docTemplate = `{
         },
         "handlers.LoginRequest": {
             "type": "object",
+            "required": [
+                "password",
+                "username"
+            ],
             "properties": {
                 "password": {
                     "type": "string"
@@ -5850,6 +6167,15 @@ const docTemplate = `{
         },
         "handlers.LoginResponse": {
             "type": "object",
+            "required": [
+                "access_token",
+                "display_name",
+                "expires_at",
+                "role",
+                "token_type",
+                "user_id",
+                "username"
+            ],
             "properties": {
                 "access_token": {
                     "type": "string"
@@ -6318,6 +6644,12 @@ const docTemplate = `{
         },
         "models.AddRequest": {
             "type": "object",
+            "required": [
+                "llm_provider_id",
+                "model_id",
+                "name",
+                "type"
+            ],
             "properties": {
                 "dimensions": {
                     "type": "integer"
@@ -6366,6 +6698,12 @@ const docTemplate = `{
         },
         "models.GetResponse": {
             "type": "object",
+            "required": [
+                "llm_provider_id",
+                "model_id",
+                "name",
+                "type"
+            ],
             "properties": {
                 "dimensions": {
                     "type": "integer"
@@ -6406,6 +6744,12 @@ const docTemplate = `{
         },
         "models.UpdateRequest": {
             "type": "object",
+            "required": [
+                "llm_provider_id",
+                "model_id",
+                "name",
+                "type"
+            ],
             "properties": {
                 "dimensions": {
                     "type": "integer"
@@ -6486,6 +6830,14 @@ const docTemplate = `{
         },
         "providers.GetResponse": {
             "type": "object",
+            "required": [
+                "base_url",
+                "client_type",
+                "created_at",
+                "id",
+                "name",
+                "updated_at"
+            ],
             "properties": {
                 "api_key": {
                     "description": "masked in response",
@@ -6644,6 +6996,14 @@ const docTemplate = `{
         },
         "settings.Settings": {
             "type": "object",
+            "required": [
+                "allow_guest",
+                "chat_model_id",
+                "embedding_model_id",
+                "language",
+                "max_context_load_time",
+                "memory_model_id"
+            ],
             "properties": {
                 "allow_guest": {
                     "type": "boolean"

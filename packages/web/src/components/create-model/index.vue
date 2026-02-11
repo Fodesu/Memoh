@@ -172,8 +172,9 @@ import { useForm } from 'vee-validate'
 import { inject, computed, watch, nextTick, type Ref, ref } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import z from 'zod'
-import { type ModelInfo } from '@/composables/api/useModels'
-import { useCreateModel, useUpdateModel } from '@/composables/api/useModels'
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { postModels, putModelsModelByModelId } from '@memoh/sdk'
+import type { ModelsGetResponse } from '@memoh/sdk'
 
 const formSchema = toTypedSchema(z.object({
   type: z.string().min(1),
@@ -191,7 +192,7 @@ const selectedType = computed(() => form.values.type || editInfo?.value?.type)
 
 const open = inject<Ref<boolean>>('openModel', ref(false))
 const title = inject<Ref<'edit' | 'title'>>('openModelTitle', ref('title'))
-const editInfo = inject<Ref<ModelInfo | null>>('openModelState', ref(null))
+const editInfo = inject<Ref<ModelsGetResponse | null>>('openModelState', ref(null))
 
 // 保存按钮：编辑模式直接可提交（表单已预填充，handleSubmit 内部会校验）
 // 新建模式需要必填字段有值
@@ -229,8 +230,25 @@ function onNameInput(e: Event) {
 
 const { id } = defineProps<{ id: string }>()
 
-const { mutateAsync: createModel, isLoading: createLoading } = useCreateModel()
-const { mutateAsync: updateModel, isLoading: updateLoading } = useUpdateModel()
+const queryCache = useQueryCache()
+const { mutateAsync: createModel, isLoading: createLoading } = useMutation({
+  mutation: async (data: Record<string, unknown>) => {
+    const { data: result } = await postModels({ body: data as any, throwOnError: true })
+    return result
+  },
+  onSettled: () => queryCache.invalidateQueries({ key: ['provider-models'] }),
+})
+const { mutateAsync: updateModel, isLoading: updateLoading } = useMutation({
+  mutation: async ({ modelId, data }: { modelId: string; data: Record<string, unknown> }) => {
+    const { data: result } = await putModelsModelByModelId({
+      path: { modelId },
+      body: data as any,
+      throwOnError: true,
+    })
+    return result
+  },
+  onSettled: () => queryCache.invalidateQueries({ key: ['provider-models'] }),
+})
 const isLoading = computed(() => createLoading.value || updateLoading.value)
 
 async function addModel(e: Event) {

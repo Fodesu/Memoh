@@ -69,19 +69,25 @@ import {
 import { ref, computed } from 'vue'
 import BotCard from './components/bot-card.vue'
 import CreateBot from './components/create-bot.vue'
-import { useBotList, useDeleteBot, type BotInfo } from '@/composables/api/useBots'
+import { useQuery, useMutation, useQueryCache } from '@pinia/colada'
+import { getBotsQuery, getBotsQueryKey, deleteBotsByIdMutation } from '@memoh/sdk/colada'
+import type { BotsBot } from '@memoh/sdk'
 
 const searchText = ref('')
 const dialogOpen = ref(false)
-const editingBot = ref<BotInfo | null>(null)
+const editingBot = ref<BotsBot | null>(null)
 
-const { data: botData, status } = useBotList()
-const { mutate: deleteBot, isLoading: deleteLoading } = useDeleteBot()
+const queryCache = useQueryCache()
+const { data: botData, status } = useQuery(getBotsQuery())
+const { mutate: deleteBot, isLoading: deleteLoading } = useMutation({
+  ...deleteBotsByIdMutation(),
+  onSettled: () => queryCache.invalidateQueries({ key: getBotsQueryKey() }),
+})
 
 const isLoading = computed(() => status.value === 'loading')
 
 const filteredBots = computed(() => {
-  const list = botData.value ?? []
+  const list = botData.value?.items ?? []
   const keyword = searchText.value.trim().toLowerCase()
   if (!keyword) return list
   return list.filter((bot) =>
@@ -91,14 +97,14 @@ const filteredBots = computed(() => {
   )
 })
 
-function handleEdit(bot: BotInfo) {
+function handleEdit(bot: BotsBot) {
   editingBot.value = bot
   dialogOpen.value = true
 }
 
 async function handleDelete(id: string) {
   try {
-    await deleteBot(id)
+    await deleteBot({ path: { id } })
   } catch {
     return
   }

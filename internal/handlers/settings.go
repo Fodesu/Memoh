@@ -44,6 +44,7 @@ func (h *SettingsHandler) Register(e *echo.Echo) {
 // @Summary Get user settings
 // @Description Get agent settings for current user
 // @Tags settings
+// @Param bot_id path string true "Bot ID"
 // @Success 200 {object} settings.Settings
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
@@ -71,6 +72,7 @@ func (h *SettingsHandler) Get(c echo.Context) error {
 // @Summary Update user settings
 // @Description Update or create agent settings for current user
 // @Tags settings
+// @Param bot_id path string true "Bot ID"
 // @Param payload body settings.UpsertRequest true "Settings payload"
 // @Success 200 {object} settings.Settings
 // @Failure 400 {object} ErrorResponse
@@ -104,6 +106,7 @@ func (h *SettingsHandler) Upsert(c echo.Context) error {
 // @Summary Delete user settings
 // @Description Remove agent settings for current user
 // @Tags settings
+// @Param bot_id path string true "Bot ID"
 // @Success 204 "No Content"
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse

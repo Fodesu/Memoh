@@ -153,10 +153,12 @@ import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import z from 'zod'
 import { computed, watch } from 'vue'
-import { useCreateBot, useUpdateBot, type BotInfo } from '@/composables/api/useBots'
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { postBotsMutation, putBotsByIdMutation, getBotsQueryKey } from '@memoh/sdk/colada'
+import type { BotsBot } from '@memoh/sdk'
 
 const open = defineModel<boolean>('open', { default: false })
-const editBot = defineModel<BotInfo | null>('editBot', { default: null })
+const editBot = defineModel<BotsBot | null>('editBot', { default: null })
 
 const isEdit = computed(() => !!editBot.value)
 
@@ -174,8 +176,15 @@ const form = useForm({
   },
 })
 
-const { mutate: createBot, isLoading: createLoading } = useCreateBot()
-const { mutate: updateBot, isLoading: updateLoading } = useUpdateBot()
+const queryCache = useQueryCache()
+const { mutate: createBot, isLoading: createLoading } = useMutation({
+  ...postBotsMutation(),
+  onSettled: () => queryCache.invalidateQueries({ key: getBotsQueryKey() }),
+})
+const { mutate: updateBot, isLoading: updateLoading } = useMutation({
+  ...putBotsByIdMutation(),
+  onSettled: () => queryCache.invalidateQueries({ key: getBotsQueryKey() }),
+})
 
 const submitLoading = computed(() => createLoading.value || updateLoading.value)
 
@@ -199,17 +208,21 @@ const handleSubmit = form.handleSubmit(async (values) => {
   try {
     if (isEdit.value && editBot.value) {
       await updateBot({
-        id: editBot.value.id,
-        display_name: values.display_name,
-        avatar_url: values.avatar_url || undefined,
-        is_active: values.is_active,
+        path: { id: editBot.value.id },
+        body: {
+          display_name: values.display_name,
+          avatar_url: values.avatar_url || undefined,
+          is_active: values.is_active,
+        },
       })
     } else {
       await createBot({
-        display_name: values.display_name,
-        avatar_url: values.avatar_url || undefined,
-        type: values.type || undefined,
-        is_active: true,
+        body: {
+          display_name: values.display_name,
+          avatar_url: values.avatar_url || undefined,
+          type: values.type || undefined,
+          is_active: true,
+        },
       })
     }
     open.value = false

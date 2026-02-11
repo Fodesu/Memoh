@@ -6,15 +6,15 @@ import (
 )
 
 type Bot struct {
-	ID          string         `json:"id"`
-	OwnerUserID string         `json:"owner_user_id"`
-	Type        string         `json:"type"`
-	DisplayName string         `json:"display_name"`
+	ID          string         `json:"id" validate:"required"`
+	OwnerUserID string         `json:"owner_user_id" validate:"required"`
+	Type        string         `json:"type" validate:"required"`
+	DisplayName string         `json:"display_name" validate:"required"`
 	AvatarURL   string         `json:"avatar_url,omitempty"`
-	IsActive    bool           `json:"is_active"`
+	IsActive    bool           `json:"is_active" validate:"required"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	CreatedAt   time.Time      `json:"created_at" validate:"required"`
+	UpdatedAt   time.Time      `json:"updated_at" validate:"required"`
 }
 
 type BotMember struct {
@@ -49,7 +49,7 @@ type UpsertMemberRequest struct {
 }
 
 type ListBotsResponse struct {
-	Items []Bot `json:"items"`
+	Items []Bot `json:"items" validate:"required"`
 }
 
 type ListMembersResponse struct {

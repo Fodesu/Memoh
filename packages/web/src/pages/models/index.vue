@@ -28,20 +28,32 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@memoh/ui'
-import { type ProviderInfo, CLIENT_TYPES } from '@/composables/api/useProviders'
+import { getProviders } from '@memoh/sdk'
+import type { ProvidersGetResponse, ProvidersClientType } from '@memoh/sdk'
 import AddProvider from '@/components/add-provider/index.vue'
-import { useProviderList } from '@/composables/api/useProviders'
+import { useQuery } from '@pinia/colada'
+
+const CLIENT_TYPES: ProvidersClientType[] = ['openai', 'openai-compat', 'anthropic', 'google', 'ollama']
 
 const filterProvider = ref('')
-const { data: providerData } = useProviderList(filterProvider)
+const { data: providerData } = useQuery({
+  key: () => ['providers', filterProvider.value],
+  query: async () => {
+    const { data } = await getProviders({
+      query: filterProvider.value ? { client_type: filterProvider.value } : undefined,
+      throwOnError: true,
+    })
+    return data
+  },
+})
 const queryCache = useQueryCache()
 
 watch(filterProvider, () => {
-  queryCache.invalidateQueries({ key: ['provider'] })
+  queryCache.invalidateQueries({ key: ['providers'] })
 }, { immediate: true })
 
 
-const curProvider = ref<Partial<ProviderInfo> & { id: string }>()
+const curProvider = ref<ProvidersGetResponse>()
 provide('curProvider', curProvider)
 
 const selectProvider = (value: string) => computed(() => {
@@ -58,7 +70,7 @@ const curFilterProvider = computed(() => {
     return []
   }
   const searchReg = new RegExp([...searchProviderTxt.value].map(v => `\\u{${v.codePointAt(0)?.toString(16)}}`).join(''), 'u')
-  return providerData.value.filter((provider: Partial<ProviderInfo> & { id: string }) => {
+  return providerData.value.filter((provider: ProvidersGetResponse) => {
     return searchReg.test(provider.name as string)
   })
 })

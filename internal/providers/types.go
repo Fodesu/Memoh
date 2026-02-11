@@ -33,14 +33,14 @@ type UpdateRequest struct {
 
 // GetResponse represents the response for getting a provider
 type GetResponse struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	ClientType string         `json:"client_type"`
-	BaseURL    string         `json:"base_url"`
+	ID         string         `json:"id" validate:"required"`
+	Name       string         `json:"name" validate:"required"`
+	ClientType string         `json:"client_type" validate:"required"`
+	BaseURL    string         `json:"base_url" validate:"required"`
 	APIKey     string         `json:"api_key,omitempty"` // masked in response
 	Metadata   map[string]any `json:"metadata,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
+	CreatedAt  time.Time      `json:"created_at" validate:"required"`
+	UpdatedAt  time.Time      `json:"updated_at" validate:"required"`
 }
 
 // ListResponse represents the response for listing providers

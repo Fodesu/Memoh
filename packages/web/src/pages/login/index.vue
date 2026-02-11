@@ -107,11 +107,11 @@ import { useRouter } from 'vue-router'
 import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import * as z from 'zod'
-import { useUserStore } from '@/store/User'
+import { useUserStore } from '@/store/user'
 import { ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { useI18n } from 'vue-i18n'
-import { login as loginApi } from '@/composables/api/useAuth'
+import { postAuthLogin } from '@memoh/sdk'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -130,13 +130,13 @@ const loading = ref(false)
 const login = form.handleSubmit(async (values) => {
   try {
     loading.value = true
-    const data = await loginApi(values)
+    const { data } = await postAuthLogin({ body: values })
     if (data?.access_token && data?.user_id) {
       loginHandle({
         id: data.user_id,
         username: data.username,
-        displayName: '',
-        role: '',
+        displayName: data.display_name ?? '',
+        role: data.role ?? '',
       }, data.access_token)
     } else {
       throw new Error(t('auth.loginFailed'))

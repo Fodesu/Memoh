@@ -45,6 +45,7 @@ func (h *ScheduleHandler) Register(e *echo.Echo) {
 // @Summary Create schedule
 // @Description Create a schedule for current user
 // @Tags schedule
+// @Param bot_id path string true "Bot ID"
 // @Param payload body schedule.CreateRequest true "Schedule payload"
 // @Success 201 {object} schedule.Schedule
 // @Failure 400 {object} ErrorResponse
@@ -77,6 +78,7 @@ func (h *ScheduleHandler) Create(c echo.Context) error {
 // @Summary List schedules
 // @Description List schedules for current user
 // @Tags schedule
+// @Param bot_id path string true "Bot ID"
 // @Success 200 {object} schedule.ListResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
@@ -104,6 +106,7 @@ func (h *ScheduleHandler) List(c echo.Context) error {
 // @Summary Get schedule
 // @Description Get a schedule by ID
 // @Tags schedule
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Schedule ID"
 // @Success 200 {object} schedule.Schedule
 // @Failure 400 {object} ErrorResponse
@@ -140,6 +143,7 @@ func (h *ScheduleHandler) Get(c echo.Context) error {
 // @Summary Update schedule
 // @Description Update a schedule by ID
 // @Tags schedule
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Schedule ID"
 // @Param payload body schedule.UpdateRequest true "Schedule payload"
 // @Success 200 {object} schedule.Schedule
@@ -184,6 +188,7 @@ func (h *ScheduleHandler) Update(c echo.Context) error {
 // @Summary Delete schedule
 // @Description Delete a schedule by ID
 // @Tags schedule
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Schedule ID"
 // @Success 204 "No Content"
 // @Failure 400 {object} ErrorResponse

@@ -142,15 +142,48 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from '@memoh/ui'
-import { useBotChannels, type BotChannelItem } from '@/composables/api/useChannels'
+import { useQuery, useQueryCache } from '@pinia/colada'
+import { getChannels, getBotsByIdChannelByPlatform } from '@memoh/sdk'
+import type { HandlersChannelMeta, ChannelChannelConfig } from '@memoh/sdk'
 import ChannelSettingsPanel from './channel-settings-panel.vue'
+
+export interface BotChannelItem {
+  meta: HandlersChannelMeta
+  config: ChannelChannelConfig | null
+  configured: boolean
+}
 
 const props = defineProps<{
   botId: string
 }>()
 
 const botIdRef = computed(() => props.botId)
-const { data: channels, isLoading, refetch } = useBotChannels(botIdRef)
+
+const { data: channels, isLoading, refetch } = useQuery({
+  key: () => ['bot-channels', botIdRef.value],
+  query: async (): Promise<BotChannelItem[]> => {
+    const { data: metas } = await getChannels({ throwOnError: true })
+    if (!metas) return []
+
+    const configurableTypes = metas.filter((m) => !m.configless)
+
+    const results = await Promise.all(
+      configurableTypes.map(async (meta) => {
+        try {
+          const { data: config } = await getBotsByIdChannelByPlatform({
+            path: { id: botIdRef.value, platform: meta.type },
+            throwOnError: true,
+          })
+          return { meta, config: config ?? null, configured: true } as BotChannelItem
+        } catch {
+          return { meta, config: null, configured: false } as BotChannelItem
+        }
+      }),
+    )
+    return results
+  },
+  enabled: () => !!botIdRef.value,
+})
 
 const selectedType = ref<string | null>(null)
 const addPopoverOpen = ref(false)

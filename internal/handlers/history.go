@@ -46,6 +46,7 @@ func (h *HistoryHandler) Register(e *echo.Echo) {
 // @Summary Create history record
 // @Description Create a history record for current user
 // @Tags history
+// @Param bot_id path string true "Bot ID"
 // @Param payload body history.CreateRequest true "History payload"
 // @Success 201 {object} history.Record
 // @Failure 400 {object} ErrorResponse
@@ -82,6 +83,7 @@ func (h *HistoryHandler) Create(c echo.Context) error {
 // @Summary Get history record
 // @Description Get a history record by ID (must belong to current user)
 // @Tags history
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "History ID"
 // @Success 200 {object} history.Record
 // @Failure 400 {object} ErrorResponse
@@ -118,6 +120,7 @@ func (h *HistoryHandler) Get(c echo.Context) error {
 // @Summary List history records
 // @Description List history records for current user
 // @Tags history
+// @Param bot_id path string true "Bot ID"
 // @Param limit query int false "Limit"
 // @Success 200 {object} history.ListResponse
 // @Failure 400 {object} ErrorResponse
@@ -156,6 +159,7 @@ func (h *HistoryHandler) List(c echo.Context) error {
 // @Summary Delete history record
 // @Description Delete a history record by ID (must belong to current user)
 // @Tags history
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "History ID"
 // @Success 204 "No Content"
 // @Failure 400 {object} ErrorResponse
@@ -195,6 +199,7 @@ func (h *HistoryHandler) Delete(c echo.Context) error {
 // @Summary Delete all history records
 // @Description Delete all history records for current user
 // @Tags history
+// @Param bot_id path string true "Bot ID"
 // @Success 204 "No Content"
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse

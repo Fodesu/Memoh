@@ -444,14 +444,14 @@ export const deleteBotsByBotIdHistoryMutation = (options?: Partial<Options<Delet
     }
 });
 
-export const getBotsByBotIdHistoryQueryKey = (options?: Options<GetBotsByBotIdHistoryData>) => createQueryKey('getBotsByBotIdHistory', options);
+export const getBotsByBotIdHistoryQueryKey = (options: Options<GetBotsByBotIdHistoryData>) => createQueryKey('getBotsByBotIdHistory', options);
 
 /**
  * List history records
  *
  * List history records for current user
  */
-export const getBotsByBotIdHistoryQuery = defineQueryOptions((options?: Options<GetBotsByBotIdHistoryData>) => ({
+export const getBotsByBotIdHistoryQuery = defineQueryOptions((options: Options<GetBotsByBotIdHistoryData>) => ({
     key: getBotsByBotIdHistoryQueryKey(options),
     query: async (context) => {
         const { data } = await getBotsByBotIdHistory({
@@ -514,14 +514,14 @@ export const getBotsByBotIdHistoryByIdQuery = defineQueryOptions((options: Optio
     }
 }));
 
-export const getBotsByBotIdMcpQueryKey = (options?: Options<GetBotsByBotIdMcpData>) => createQueryKey('getBotsByBotIdMcp', options);
+export const getBotsByBotIdMcpQueryKey = (options: Options<GetBotsByBotIdMcpData>) => createQueryKey('getBotsByBotIdMcp', options);
 
 /**
  * List MCP connections
  *
  * List MCP connections for a bot
  */
-export const getBotsByBotIdMcpQuery = defineQueryOptions((options?: Options<GetBotsByBotIdMcpData>) => ({
+export const getBotsByBotIdMcpQuery = defineQueryOptions((options: Options<GetBotsByBotIdMcpData>) => ({
     key: getBotsByBotIdMcpQueryKey(options),
     query: async (context) => {
         const { data } = await getBotsByBotIdMcp({
@@ -680,14 +680,14 @@ export const deleteBotsByBotIdMemoryMemoriesMutation = (options?: Partial<Option
     }
 });
 
-export const getBotsByBotIdMemoryMemoriesQueryKey = (options?: Options<GetBotsByBotIdMemoryMemoriesData>) => createQueryKey('getBotsByBotIdMemoryMemories', options);
+export const getBotsByBotIdMemoryMemoriesQueryKey = (options: Options<GetBotsByBotIdMemoryMemoriesData>) => createQueryKey('getBotsByBotIdMemoryMemories', options);
 
 /**
  * List memories
  *
  * List memories for a user via memory. Auth: Bearer JWT determines user_id (sub or user_id).
  */
-export const getBotsByBotIdMemoryMemoriesQuery = defineQueryOptions((options?: Options<GetBotsByBotIdMemoryMemoriesData>) => ({
+export const getBotsByBotIdMemoryMemoriesQuery = defineQueryOptions((options: Options<GetBotsByBotIdMemoryMemoriesData>) => ({
     key: getBotsByBotIdMemoryMemoriesQueryKey(options),
     query: async (context) => {
         const { data } = await getBotsByBotIdMemoryMemories({
@@ -766,14 +766,14 @@ export const postBotsByBotIdMemoryUpdateMutation = (options?: Partial<Options<Po
     }
 });
 
-export const getBotsByBotIdScheduleQueryKey = (options?: Options<GetBotsByBotIdScheduleData>) => createQueryKey('getBotsByBotIdSchedule', options);
+export const getBotsByBotIdScheduleQueryKey = (options: Options<GetBotsByBotIdScheduleData>) => createQueryKey('getBotsByBotIdSchedule', options);
 
 /**
  * List schedules
  *
  * List schedules for current user
  */
-export const getBotsByBotIdScheduleQuery = defineQueryOptions((options?: Options<GetBotsByBotIdScheduleData>) => ({
+export const getBotsByBotIdScheduleQuery = defineQueryOptions((options: Options<GetBotsByBotIdScheduleData>) => ({
     key: getBotsByBotIdScheduleQueryKey(options),
     query: async (context) => {
         const { data } = await getBotsByBotIdSchedule({
@@ -868,14 +868,14 @@ export const deleteBotsByBotIdSettingsMutation = (options?: Partial<Options<Dele
     }
 });
 
-export const getBotsByBotIdSettingsQueryKey = (options?: Options<GetBotsByBotIdSettingsData>) => createQueryKey('getBotsByBotIdSettings', options);
+export const getBotsByBotIdSettingsQueryKey = (options: Options<GetBotsByBotIdSettingsData>) => createQueryKey('getBotsByBotIdSettings', options);
 
 /**
  * Get user settings
  *
  * Get agent settings for current user
  */
-export const getBotsByBotIdSettingsQuery = defineQueryOptions((options?: Options<GetBotsByBotIdSettingsData>) => ({
+export const getBotsByBotIdSettingsQuery = defineQueryOptions((options: Options<GetBotsByBotIdSettingsData>) => ({
     key: getBotsByBotIdSettingsQueryKey(options),
     query: async (context) => {
         const { data } = await getBotsByBotIdSettings({
@@ -919,14 +919,14 @@ export const putBotsByBotIdSettingsMutation = (options?: Partial<Options<PutBots
     }
 });
 
-export const getBotsByBotIdSubagentsQueryKey = (options?: Options<GetBotsByBotIdSubagentsData>) => createQueryKey('getBotsByBotIdSubagents', options);
+export const getBotsByBotIdSubagentsQueryKey = (options: Options<GetBotsByBotIdSubagentsData>) => createQueryKey('getBotsByBotIdSubagents', options);
 
 /**
  * List subagents
  *
  * List subagents for current user
  */
-export const getBotsByBotIdSubagentsQuery = defineQueryOptions((options?: Options<GetBotsByBotIdSubagentsData>) => ({
+export const getBotsByBotIdSubagentsQuery = defineQueryOptions((options: Options<GetBotsByBotIdSubagentsData>) => ({
     key: getBotsByBotIdSubagentsQueryKey(options),
     query: async (context) => {
         const { data } = await getBotsByBotIdSubagents({

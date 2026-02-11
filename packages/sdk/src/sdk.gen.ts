@@ -246,14 +246,14 @@ export const postBotsByBotIdContainerStop = <ThrowOnError extends boolean = fals
  *
  * Delete all history records for current user
  */
-export const deleteBotsByBotIdHistory = <ThrowOnError extends boolean = false>(options?: Options<DeleteBotsByBotIdHistoryData, ThrowOnError>) => (options?.client ?? client).delete<DeleteBotsByBotIdHistoryResponses, DeleteBotsByBotIdHistoryErrors, ThrowOnError>({ url: '/bots/{bot_id}/history', ...options });
+export const deleteBotsByBotIdHistory = <ThrowOnError extends boolean = false>(options: Options<DeleteBotsByBotIdHistoryData, ThrowOnError>) => (options.client ?? client).delete<DeleteBotsByBotIdHistoryResponses, DeleteBotsByBotIdHistoryErrors, ThrowOnError>({ url: '/bots/{bot_id}/history', ...options });
 
 /**
  * List history records
  *
  * List history records for current user
  */
-export const getBotsByBotIdHistory = <ThrowOnError extends boolean = false>(options?: Options<GetBotsByBotIdHistoryData, ThrowOnError>) => (options?.client ?? client).get<GetBotsByBotIdHistoryResponses, GetBotsByBotIdHistoryErrors, ThrowOnError>({ url: '/bots/{bot_id}/history', ...options });
+export const getBotsByBotIdHistory = <ThrowOnError extends boolean = false>(options: Options<GetBotsByBotIdHistoryData, ThrowOnError>) => (options.client ?? client).get<GetBotsByBotIdHistoryResponses, GetBotsByBotIdHistoryErrors, ThrowOnError>({ url: '/bots/{bot_id}/history', ...options });
 
 /**
  * Create history record
@@ -288,7 +288,7 @@ export const getBotsByBotIdHistoryById = <ThrowOnError extends boolean = false>(
  *
  * List MCP connections for a bot
  */
-export const getBotsByBotIdMcp = <ThrowOnError extends boolean = false>(options?: Options<GetBotsByBotIdMcpData, ThrowOnError>) => (options?.client ?? client).get<GetBotsByBotIdMcpResponses, GetBotsByBotIdMcpErrors, ThrowOnError>({ url: '/bots/{bot_id}/mcp', ...options });
+export const getBotsByBotIdMcp = <ThrowOnError extends boolean = false>(options: Options<GetBotsByBotIdMcpData, ThrowOnError>) => (options.client ?? client).get<GetBotsByBotIdMcpResponses, GetBotsByBotIdMcpErrors, ThrowOnError>({ url: '/bots/{bot_id}/mcp', ...options });
 
 /**
  * Create MCP connection
@@ -407,7 +407,7 @@ export const deleteBotsByBotIdMemoryMemories = <ThrowOnError extends boolean = f
  *
  * List memories for a user via memory. Auth: Bearer JWT determines user_id (sub or user_id).
  */
-export const getBotsByBotIdMemoryMemories = <ThrowOnError extends boolean = false>(options?: Options<GetBotsByBotIdMemoryMemoriesData, ThrowOnError>) => (options?.client ?? client).get<GetBotsByBotIdMemoryMemoriesResponses, GetBotsByBotIdMemoryMemoriesErrors, ThrowOnError>({ url: '/bots/{bot_id}/memory/memories', ...options });
+export const getBotsByBotIdMemoryMemories = <ThrowOnError extends boolean = false>(options: Options<GetBotsByBotIdMemoryMemoriesData, ThrowOnError>) => (options.client ?? client).get<GetBotsByBotIdMemoryMemoriesResponses, GetBotsByBotIdMemoryMemoriesErrors, ThrowOnError>({ url: '/bots/{bot_id}/memory/memories', ...options });
 
 /**
  * Delete memory
@@ -456,7 +456,7 @@ export const postBotsByBotIdMemoryUpdate = <ThrowOnError extends boolean = false
  *
  * List schedules for current user
  */
-export const getBotsByBotIdSchedule = <ThrowOnError extends boolean = false>(options?: Options<GetBotsByBotIdScheduleData, ThrowOnError>) => (options?.client ?? client).get<GetBotsByBotIdScheduleResponses, GetBotsByBotIdScheduleErrors, ThrowOnError>({ url: '/bots/{bot_id}/schedule', ...options });
+export const getBotsByBotIdSchedule = <ThrowOnError extends boolean = false>(options: Options<GetBotsByBotIdScheduleData, ThrowOnError>) => (options.client ?? client).get<GetBotsByBotIdScheduleResponses, GetBotsByBotIdScheduleErrors, ThrowOnError>({ url: '/bots/{bot_id}/schedule', ...options });
 
 /**
  * Create schedule
@@ -505,14 +505,14 @@ export const putBotsByBotIdScheduleById = <ThrowOnError extends boolean = false>
  *
  * Remove agent settings for current user
  */
-export const deleteBotsByBotIdSettings = <ThrowOnError extends boolean = false>(options?: Options<DeleteBotsByBotIdSettingsData, ThrowOnError>) => (options?.client ?? client).delete<DeleteBotsByBotIdSettingsResponses, DeleteBotsByBotIdSettingsErrors, ThrowOnError>({ url: '/bots/{bot_id}/settings', ...options });
+export const deleteBotsByBotIdSettings = <ThrowOnError extends boolean = false>(options: Options<DeleteBotsByBotIdSettingsData, ThrowOnError>) => (options.client ?? client).delete<DeleteBotsByBotIdSettingsResponses, DeleteBotsByBotIdSettingsErrors, ThrowOnError>({ url: '/bots/{bot_id}/settings', ...options });
 
 /**
  * Get user settings
  *
  * Get agent settings for current user
  */
-export const getBotsByBotIdSettings = <ThrowOnError extends boolean = false>(options?: Options<GetBotsByBotIdSettingsData, ThrowOnError>) => (options?.client ?? client).get<GetBotsByBotIdSettingsResponses, GetBotsByBotIdSettingsErrors, ThrowOnError>({ url: '/bots/{bot_id}/settings', ...options });
+export const getBotsByBotIdSettings = <ThrowOnError extends boolean = false>(options: Options<GetBotsByBotIdSettingsData, ThrowOnError>) => (options.client ?? client).get<GetBotsByBotIdSettingsResponses, GetBotsByBotIdSettingsErrors, ThrowOnError>({ url: '/bots/{bot_id}/settings', ...options });
 
 /**
  * Update user settings
@@ -547,7 +547,7 @@ export const putBotsByBotIdSettings = <ThrowOnError extends boolean = false>(opt
  *
  * List subagents for current user
  */
-export const getBotsByBotIdSubagents = <ThrowOnError extends boolean = false>(options?: Options<GetBotsByBotIdSubagentsData, ThrowOnError>) => (options?.client ?? client).get<GetBotsByBotIdSubagentsResponses, GetBotsByBotIdSubagentsErrors, ThrowOnError>({ url: '/bots/{bot_id}/subagents', ...options });
+export const getBotsByBotIdSubagents = <ThrowOnError extends boolean = false>(options: Options<GetBotsByBotIdSubagentsData, ThrowOnError>) => (options.client ?? client).get<GetBotsByBotIdSubagentsResponses, GetBotsByBotIdSubagentsErrors, ThrowOnError>({ url: '/bots/{bot_id}/subagents', ...options });
 
 /**
  * Create subagent

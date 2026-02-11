@@ -50,6 +50,7 @@ func (h *SubagentHandler) Register(e *echo.Echo) {
 // @Summary Create subagent
 // @Description Create a subagent for current user
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param payload body subagent.CreateRequest true "Subagent payload"
 // @Success 201 {object} subagent.Subagent
 // @Failure 400 {object} ErrorResponse
@@ -82,6 +83,7 @@ func (h *SubagentHandler) Create(c echo.Context) error {
 // @Summary List subagents
 // @Description List subagents for current user
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Success 200 {object} subagent.ListResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
@@ -109,6 +111,7 @@ func (h *SubagentHandler) List(c echo.Context) error {
 // @Summary Get subagent
 // @Description Get a subagent by ID
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Success 200 {object} subagent.Subagent
 // @Failure 400 {object} ErrorResponse
@@ -145,6 +148,7 @@ func (h *SubagentHandler) Get(c echo.Context) error {
 // @Summary Update subagent
 // @Description Update a subagent by ID
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Param payload body subagent.UpdateRequest true "Subagent payload"
 // @Success 200 {object} subagent.Subagent
@@ -190,6 +194,7 @@ func (h *SubagentHandler) Update(c echo.Context) error {
 // @Summary Delete subagent
 // @Description Delete a subagent by ID
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Success 204 "No Content"
 // @Failure 400 {object} ErrorResponse
@@ -229,6 +234,7 @@ func (h *SubagentHandler) Delete(c echo.Context) error {
 // @Summary Get subagent context
 // @Description Get a subagent's message context
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Success 200 {object} subagent.ContextResponse
 // @Failure 400 {object} ErrorResponse
@@ -265,6 +271,7 @@ func (h *SubagentHandler) GetContext(c echo.Context) error {
 // @Summary Update subagent context
 // @Description Update a subagent's message context
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Param payload body subagent.UpdateContextRequest true "Context payload"
 // @Success 200 {object} subagent.ContextResponse
@@ -310,6 +317,7 @@ func (h *SubagentHandler) UpdateContext(c echo.Context) error {
 // @Summary Get subagent skills
 // @Description Get a subagent's skills
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Success 200 {object} subagent.SkillsResponse
 // @Failure 400 {object} ErrorResponse
@@ -346,6 +354,7 @@ func (h *SubagentHandler) GetSkills(c echo.Context) error {
 // @Summary Update subagent skills
 // @Description Replace a subagent's skills
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Param payload body subagent.UpdateSkillsRequest true "Skills payload"
 // @Success 200 {object} subagent.SkillsResponse
@@ -391,6 +400,7 @@ func (h *SubagentHandler) UpdateSkills(c echo.Context) error {
 // @Summary Add subagent skills
 // @Description Add skills to a subagent
 // @Tags subagent
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "Subagent ID"
 // @Param payload body subagent.AddSkillsRequest true "Skills payload"
 // @Success 200 {object} subagent.SkillsResponse

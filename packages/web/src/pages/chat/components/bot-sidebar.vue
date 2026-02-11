@@ -65,17 +65,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Avatar, AvatarImage, AvatarFallback, ScrollArea } from '@memoh/ui'
-import { useBotList, type BotInfo } from '@/composables/api/useBots'
+import { useQuery } from '@pinia/colada'
+import { getBotsQuery } from '@memoh/sdk/colada'
+import type { BotsBot } from '@memoh/sdk'
 import { useChatStore } from '@/store/chat-list'
 import { storeToRefs } from 'pinia'
 
 const chatStore = useChatStore()
 const { currentBotId } = storeToRefs(chatStore)
 
-const { data: botData, isLoading } = useBotList()
-const bots = computed<BotInfo[]>(() => botData.value ?? [])
+const { data: botData, isLoading } = useQuery(getBotsQuery())
+const bots = computed<BotsBot[]>(() => botData.value?.items ?? [])
 
-function handleSelect(bot: BotInfo) {
+function handleSelect(bot: BotsBot) {
   chatStore.selectBot(bot.id)
 }
 </script>

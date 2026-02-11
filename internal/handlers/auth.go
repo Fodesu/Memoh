@@ -21,18 +21,18 @@ type AuthHandler struct {
 }
 
 type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" validate:"required"`
+	Password string `json:"password" validate:"required"`
 }
 
 type LoginResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresAt   string `json:"expires_at"`
-	UserID      string `json:"user_id"`
-	Role        string `json:"role"`
-	DisplayName string `json:"display_name"`
-	Username    string `json:"username"`
+	AccessToken string `json:"access_token" validate:"required"`
+	TokenType   string `json:"token_type" validate:"required"`
+	ExpiresAt   string `json:"expires_at" validate:"required"`
+	UserID      string `json:"user_id" validate:"required"`
+	Role        string `json:"role" validate:"required"`
+	DisplayName string `json:"display_name" validate:"required"`
+	Username    string `json:"username" validate:"required"`
 }
 
 func NewAuthHandler(log *slog.Logger, userService *users.Service, jwtSecret string, expiresIn time.Duration) *AuthHandler {

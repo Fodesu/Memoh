@@ -151,13 +151,16 @@ import {
 import { reactive, watch, computed } from 'vue'
 import { toast } from 'vue-sonner'
 import { useI18n } from 'vue-i18n'
-import {
-  useUpsertBotChannel,
-  type BotChannelItem,
-  type FieldSchema,
-} from '@/composables/api/useChannels'
-import { ApiError } from '@/utils/request'
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { putBotsByIdChannelByPlatform } from '@memoh/sdk'
+import type { HandlersChannelMeta, ChannelChannelConfig, ChannelFieldSchema } from '@memoh/sdk'
 import type { Ref } from 'vue'
+
+interface BotChannelItem {
+  meta: HandlersChannelMeta
+  config: ChannelChannelConfig | null
+  configured: boolean
+}
 
 const props = defineProps<{
   botId: string
@@ -170,7 +173,18 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const botIdRef = computed(() => props.botId) as Ref<string>
-const { mutateAsync: upsertChannel, isLoading } = useUpsertBotChannel(botIdRef)
+const queryCache = useQueryCache()
+const { mutateAsync: upsertChannel, isLoading } = useMutation({
+  mutation: async ({ platform, data }: { platform: string; data: Record<string, unknown> }) => {
+    const { data: result } = await putBotsByIdChannelByPlatform({
+      path: { id: botIdRef.value, platform },
+      body: data as any,
+      throwOnError: true,
+    })
+    return result
+  },
+  onSettled: () => queryCache.invalidateQueries({ key: ['bot-channels', botIdRef.value] }),
+})
 
 // ---- Form state ----
 
@@ -193,7 +207,7 @@ const orderedFields = computed(() => {
     if (!a.required && b.required) return 1
     return 0
   })
-  return Object.fromEntries(entries) as Record<string, FieldSchema>
+  return Object.fromEntries(entries) as Record<string, ChannelFieldSchema>
 })
 
 // 初始化表单
@@ -252,10 +266,7 @@ async function handleSave() {
     emit('saved')
   } catch (err) {
     let detail = ''
-    if (err instanceof ApiError && err.body) {
-      const body = err.body as Record<string, unknown>
-      detail = String(body.message || body.error || '')
-    } else if (err instanceof Error) {
+    if (err instanceof Error) {
       detail = err.message
     }
     toast.error(detail ? `${t('bots.channels.saveFailed')}: ${detail}` : t('bots.channels.saveFailed'))

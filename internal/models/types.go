@@ -32,13 +32,13 @@ const (
 )
 
 type Model struct {
-	ModelID       string    `json:"model_id"`
-	Name          string    `json:"name"`
-	LlmProviderID string    `json:"llm_provider_id"`
-	IsMultimodal  bool      `json:"is_multimodal"`
-	Input         []string  `json:"input"`
-	Type          ModelType `json:"type"`
-	Dimensions    int       `json:"dimensions"`
+	ModelID        string    `json:"model_id" validate:"required"`
+	Name           string    `json:"name" validate:"required"`
+	LlmProviderID  string    `json:"llm_provider_id" validate:"required"`
+	IsMultimodal   bool      `json:"is_multimodal"`
+	Input          []string  `json:"input"`
+	Type           ModelType `json:"type" validate:"required"`
+	Dimensions     int       `json:"dimensions"`
 }
 
 func (m *Model) Validate() error {

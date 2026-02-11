@@ -46,6 +46,7 @@ func (h *MCPHandler) Register(e *echo.Echo) {
 // @Summary List MCP connections
 // @Description List MCP connections for a bot
 // @Tags mcp
+// @Param bot_id path string true "Bot ID"
 // @Success 200 {object} mcp.ListResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
@@ -75,6 +76,7 @@ func (h *MCPHandler) List(c echo.Context) error {
 // @Summary Create MCP connection
 // @Description Create a MCP connection for a bot
 // @Tags mcp
+// @Param bot_id path string true "Bot ID"
 // @Param payload body mcp.UpsertRequest true "MCP payload"
 // @Success 201 {object} mcp.Connection
 // @Failure 400 {object} ErrorResponse
@@ -109,6 +111,7 @@ func (h *MCPHandler) Create(c echo.Context) error {
 // @Summary Get MCP connection
 // @Description Get a MCP connection by ID
 // @Tags mcp
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "MCP ID"
 // @Success 200 {object} mcp.Connection
 // @Failure 400 {object} ErrorResponse
@@ -146,6 +149,7 @@ func (h *MCPHandler) Get(c echo.Context) error {
 // @Summary Update MCP connection
 // @Description Update a MCP connection by ID
 // @Tags mcp
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "MCP ID"
 // @Param payload body mcp.UpsertRequest true "MCP payload"
 // @Success 200 {object} mcp.Connection
@@ -188,6 +192,7 @@ func (h *MCPHandler) Update(c echo.Context) error {
 // @Summary Delete MCP connection
 // @Description Delete a MCP connection by ID
 // @Tags mcp
+// @Param bot_id path string true "Bot ID"
 // @Param id path string true "MCP ID"
 // @Success 204 "No Content"
 // @Failure 400 {object} ErrorResponse
