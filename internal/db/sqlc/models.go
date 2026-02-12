@@ -49,6 +49,7 @@ type BotChannelRoute struct {
 	ChannelConfigID        pgtype.UUID        `json:"channel_config_id"`
 	ExternalConversationID string             `json:"external_conversation_id"`
 	ExternalThreadID       pgtype.Text        `json:"external_thread_id"`
+	ConversationType       pgtype.Text        `json:"conversation_type"`
 	DefaultReplyTarget     pgtype.Text        `json:"default_reply_target"`
 	Metadata               []byte             `json:"metadata"`
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`

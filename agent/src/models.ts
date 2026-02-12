@@ -33,6 +33,7 @@ export const IdentityContextModel = z.object({
   contactAlias: z.string().optional(),
   userId: z.string().optional(),
   currentPlatform: z.string().optional(),
+  conversationType: z.string().optional(),
   replyTarget: z.string().optional(),
   sessionToken: z.string().optional(),
 })

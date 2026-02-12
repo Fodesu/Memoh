@@ -279,6 +279,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		RouteID:                 resolved.RouteID,
 		ChatToken:               chatToken,
 		ExternalMessageID:       sourceMessageID,
+		ConversationType:        msg.Conversation.Type,
 		Query:                   text,
 		CurrentChannel:          msg.Channel.String(),
 		Channels:                []string{msg.Channel.String()},

@@ -16,6 +16,7 @@ export interface IdentityContext {
   userId?: string
 
   currentPlatform?: string
+  conversationType?: string
   replyTarget?: string
   sessionToken?: string
 }

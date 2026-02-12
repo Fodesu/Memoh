@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS bot_channel_routes (
   channel_config_id UUID REFERENCES bot_channel_configs(id) ON DELETE SET NULL,
   external_conversation_id TEXT NOT NULL,
   external_thread_id TEXT,
+  conversation_type TEXT,
   default_reply_target TEXT,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

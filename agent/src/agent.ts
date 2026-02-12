@@ -178,6 +178,7 @@ export const createAgent = (
       channelIdentityId: identity.channelIdentityId || identity.contactId || '',
       displayName: identity.displayName || identity.contactName || 'User',
       channel: currentChannel,
+      conversationType: identity.conversationType || 'direct',
       date: new Date(),
       attachments: files,
     })

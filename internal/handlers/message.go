@@ -98,6 +98,9 @@ func (h *MessageHandler) SendMessage(c echo.Context) error {
 	if strings.TrimSpace(req.CurrentChannel) == "" {
 		req.CurrentChannel = "web"
 	}
+	if strings.TrimSpace(req.ConversationType) == "" {
+		req.ConversationType = "direct"
+	}
 	if len(req.Channels) == 0 {
 		req.Channels = []string{req.CurrentChannel}
 	}
@@ -144,6 +147,9 @@ func (h *MessageHandler) StreamMessage(c echo.Context) error {
 	req.SourceChannelIdentityID = channelIdentityID
 	if strings.TrimSpace(req.CurrentChannel) == "" {
 		req.CurrentChannel = "web"
+	}
+	if strings.TrimSpace(req.ConversationType) == "" {
+		req.ConversationType = "direct"
 	}
 	if len(req.Channels) == 0 {
 		req.Channels = []string{req.CurrentChannel}
@@ -198,12 +204,12 @@ func (h *MessageHandler) StreamMessage(c echo.Context) error {
 				h.logger.Error("conversation stream failed", slog.Any("error", err))
 				if processingState == "started" {
 					processingState = "failed"
-				if writeErr := writeSSEJSON(writer, flusher, map[string]string{
-					"type":  "processing_failed",
-					"error": err.Error(),
-				}); writeErr != nil {
-					h.logger.Warn("write SSE processing_failed event failed", slog.Any("error", writeErr))
-				}
+					if writeErr := writeSSEJSON(writer, flusher, map[string]string{
+						"type":  "processing_failed",
+						"error": err.Error(),
+					}); writeErr != nil {
+						h.logger.Warn("write SSE processing_failed event failed", slog.Any("error", writeErr))
+					}
 				}
 				errData := map[string]string{
 					"type":    "error",

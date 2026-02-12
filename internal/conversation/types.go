@@ -203,6 +203,7 @@ type ChatRequest struct {
 	RouteID                 string `json:"-"`
 	ChatToken               string `json:"-"`
 	ExternalMessageID       string `json:"-"`
+	ConversationType        string `json:"-"`
 	UserMessagePersisted    bool   `json:"-"`
 
 	Query              string         `json:"query"`

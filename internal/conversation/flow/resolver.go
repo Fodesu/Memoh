@@ -122,6 +122,7 @@ type gatewayIdentity struct {
 	ChannelIdentityID string `json:"channelIdentityId"`
 	DisplayName       string `json:"displayName"`
 	CurrentPlatform   string `json:"currentPlatform,omitempty"`
+	ConversationType  string `json:"conversationType,omitempty"`
 	SessionToken      string `json:"sessionToken,omitempty"`
 }
 
@@ -270,6 +271,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 			ChannelIdentityID: strings.TrimSpace(req.SourceChannelIdentityID),
 			DisplayName:       r.resolveDisplayName(ctx, req),
 			CurrentPlatform:   req.CurrentChannel,
+			ConversationType:  strings.TrimSpace(req.ConversationType),
 			SessionToken:      req.ChatToken,
 		},
 		Attachments: []any{},
