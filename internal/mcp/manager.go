@@ -27,7 +27,6 @@ import (
 const (
 	BotLabelKey     = "mcp.bot_id"
 	ContainerPrefix = "mcp-"
-	DefaultImageRef = "memoh-mcp:dev"
 )
 
 type ExecRequest struct {
@@ -78,7 +77,7 @@ func NewManager(log *slog.Logger, service ctr.Service, cfg config.MCPConfig, nam
 }
 
 func (m *Manager) Init(ctx context.Context) error {
-	image := DefaultImageRef
+	image := m.imageRef()
 
 	_, err := m.service.PullImage(ctx, image, &ctr.PullImageOptions{
 		Unpack:      true,
@@ -388,7 +387,10 @@ func (m *Manager) dataMount() string {
 }
 
 func (m *Manager) imageRef() string {
-	return DefaultImageRef
+	if m.cfg.Image != "" {
+		return m.cfg.Image
+	}
+	return config.DefaultMCPImage
 }
 
 func validateBotID(botID string) error {

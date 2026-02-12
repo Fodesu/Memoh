@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: memoh
       POSTGRES_USER: memoh
-      POSTGRES_PASSWORD: memoh123
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-memoh123}
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./db/migrations:/docker-entrypoint-initdb.d:ro
@@ -39,25 +39,15 @@ services:
       - memoh-network
 
   containerd:
-    image: docker.io/library/alpine:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.containerd
     container_name: memoh-containerd
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        apk add --no-cache containerd containerd-ctr
-        mkdir -p /run/containerd
-        containerd
     privileged: true
     volumes:
       - containerd_sock:/run/containerd
       - containerd_data:/var/lib/containerd
       - memoh_data:/opt/memoh/data
-    healthcheck:
-      test: ["CMD-SHELL", "test -S /run/containerd/containerd.sock"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
     restart: unless-stopped
     networks:
       - memoh-network
@@ -73,7 +63,7 @@ services:
     container_name: memoh-server
     pid: host
     volumes:
-      - ./config.toml:/app/config.toml:ro
+      - ${MEMOH_CONFIG:-./docker/config/config.docker.toml}:/app/config.toml:ro
       - containerd_sock:/run/containerd
       - containerd_data:/var/lib/containerd
       - server_cni_state:/var/lib/cni
@@ -103,7 +93,7 @@ services:
       dockerfile: docker/Dockerfile.agent
     container_name: memoh-agent
     volumes:
-      - ./config.toml:/config.toml:ro
+      - ${MEMOH_CONFIG:-./docker/config/config.docker.toml}:/config.toml:ro
     ports:
       - "8081:8081"
     healthcheck:

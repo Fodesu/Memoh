@@ -152,7 +152,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	}
 	containerID := mcp.ContainerPrefix + botID
 
-	image := mcp.DefaultImageRef
+	image := h.mcpImageRef()
 	snapshotter := strings.TrimSpace(req.Snapshotter)
 	if snapshotter == "" {
 		snapshotter = h.cfg.Snapshotter
@@ -622,6 +622,13 @@ func (h *ContainerdHandler) ListSnapshots(c echo.Context) error {
 
 // ---------- auth helpers ----------
 
+func (h *ContainerdHandler) mcpImageRef() string {
+	if h.cfg.Image != "" {
+		return h.cfg.Image
+	}
+	return config.DefaultMCPImage
+}
+
 // requireBotAccess extracts bot_id from path, validates user auth, and authorizes bot access.
 func (h *ContainerdHandler) requireBotAccess(c echo.Context) (string, error) {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
@@ -683,7 +690,7 @@ func (h *ContainerdHandler) authorizeBotAccess(ctx context.Context, channelIdent
 func (h *ContainerdHandler) SetupBotContainer(ctx context.Context, botID string) error {
 	containerID := mcp.ContainerPrefix + botID
 
-	image := mcp.DefaultImageRef
+	image := h.mcpImageRef()
 	snapshotter := strings.TrimSpace(h.cfg.Snapshotter)
 
 	if strings.TrimSpace(h.namespace) != "" {
