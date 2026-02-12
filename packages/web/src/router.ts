@@ -76,14 +76,6 @@ const routes = [
         },
       },
       {
-        name: 'mcp',
-        path: '/mcp',
-        component: () => import('@/pages/mcp/index.vue'),
-        meta: {
-          breadcrumb: i18nRef('sidebar.mcp'),
-        },
-      },
-      {
         name: 'platform',
         path: '/platform',
         component: () => import('@/pages/platform/index.vue'),

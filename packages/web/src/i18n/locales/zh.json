@@ -11,7 +11,11 @@
     "loading": "加载中...",
     "operation": "操作",
     "enable": "启用",
-    "optional": "可选"
+    "optional": "可选",
+    "import": "导入",
+    "export": "导出",
+    "copy": "复制",
+    "copied": "已复制到剪贴板"
   },
   "auth": {
     "welcome": "欢迎回来",
@@ -167,7 +171,19 @@
       "cwd": "工作目录",
       "arguments": "参数",
       "env": "环境变量"
-    }
+    },
+    "empty": "暂未配置 MCP 服务器。",
+    "deleteConfirm": "确定要删除这个 MCP 服务器吗？",
+    "loadFailed": "加载 MCP 服务器列表失败",
+    "saveFailed": "保存 MCP 服务器失败",
+    "createSuccess": "MCP 服务器已创建",
+    "updateSuccess": "MCP 服务器已更新",
+    "deleteSuccess": "MCP 服务器已删除",
+    "deleteFailed": "删除 MCP 服务器失败",
+    "importHint": "粘贴标准 mcpServers JSON 配置。同名的服务器会被更新配置。",
+    "importSuccess": "MCP 服务器已导入",
+    "importFailed": "导入 MCP 服务器失败",
+    "exportFailed": "导出 MCP 服务器失败"
   },
   "home": {
     "title": "首页"

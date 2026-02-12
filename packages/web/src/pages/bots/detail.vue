@@ -434,7 +434,7 @@
         value="mcp"
         class="mt-6"
       >
-        <!-- TODO: MCP content -->
+        <BotMcp :bot-id="botId" />
       </TabsContent>
       <TabsContent
         value="subagents"
@@ -550,6 +550,7 @@ import type {
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import BotSettings from './components/bot-settings.vue'
 import BotChannels from './components/bot-channels.vue'
+import BotMcp from './components/bot-mcp.vue'
 
 type BotCheck = BotsBotCheck
 type BotContainerInfo = HandlersGetContainerResponse
