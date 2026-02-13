@@ -219,6 +219,14 @@ func (s *DBService) ResolveConversation(ctx context.Context, input ResolveInput)
 		ReplyTarget:      input.ReplyTarget,
 	})
 	if err != nil {
+		// Concurrent insert race: another goroutine created the same route between
+		// our Find and Create calls. Fall back to Find the winning row.
+		if dbpkg.IsUniqueViolation(err) {
+			existing, findErr := s.Find(ctx, input.BotID, input.Platform, input.ConversationID, input.ThreadID)
+			if findErr == nil {
+				return ResolveConversationResult{ChatID: existing.ChatID, RouteID: existing.ID, Created: false}, nil
+			}
+		}
 		return ResolveConversationResult{}, fmt.Errorf("create route: %w", err)
 	}
 
