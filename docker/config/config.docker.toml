@@ -50,6 +50,11 @@ host = "agent"
 port = 8081
 server_addr = "server:8080"
 
+## Web
+[web]
+host = "127.0.0.1"
+port = 8082
+
 [brave]
 api_key = ""
 base_url = "https://api.search.brave.com/res/v1/"
