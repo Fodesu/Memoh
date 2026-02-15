@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	toolScheduleList   = "schedule_list"
-	toolScheduleGet    = "schedule_get"
-	toolScheduleCreate = "schedule_create"
-	toolScheduleUpdate = "schedule_update"
-	toolScheduleDelete = "schedule_delete"
+	toolScheduleList   = "list_schedule"
+	toolScheduleGet    = "get_schedule"
+	toolScheduleCreate = "create_schedule"
+	toolScheduleUpdate = "update_schedule"
+	toolScheduleDelete = "delete_schedule"
 )
 
 type Scheduler interface {
