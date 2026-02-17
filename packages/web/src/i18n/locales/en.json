@@ -149,7 +149,15 @@
     "displayNamePlaceholder": "Custom display name",
     "dimensions": "Dimensions",
     "dimensionsPlaceholder": "e.g. 1536",
-    "multimodal": "Multimodal"
+    "multimodal": "Multimodal",
+    "inputModalities": "Input Modalities",
+    "modality": {
+      "text": "Text",
+      "image": "Image",
+      "audio": "Audio",
+      "video": "Video",
+      "file": "File"
+    }
   },
   "provider": {
     "add": "Add Provider",
@@ -250,13 +258,22 @@
     },
     "checks": {
       "title": "Runtime Checks",
-      "subtitle": "Resource health is evaluated at request time.",
+      "subtitle": "View current health status and issue details.",
       "ok": "No issues",
       "hasIssue": "Has issues",
       "issueCount": "{count} issues",
       "empty": "No check items",
       "loadFailed": "Failed to load runtime checks",
       "actions": {},
+      "titles": {
+        "containerInit": "Container initialization",
+        "containerRecord": "Container record",
+        "containerTask": "Container task",
+        "containerDataPath": "Container data path",
+        "botDelete": "Bot deletion",
+        "mcpConnection": "MCP connection",
+        "channelConnection": "Channel connection"
+      },
       "keys": {
         "containerInit": "Container initialization",
         "containerRecord": "Container record",
@@ -363,7 +380,13 @@
       "save": "Save Platform Configuration",
       "statusActive": "Active",
       "statusInactive": "Inactive",
+      "actionEnable": "Enable",
+      "actionDisable": "Disable",
+      "saveOnly": "Save only",
+      "saveAndEnable": "Save and enable",
       "deleteConfirm": "Are you sure you want to remove this platform?",
+      "deleteSuccess": "Platform removed",
+      "deleteFailed": "Failed to remove platform",
       "noAvailableTypes": "All platform types have been configured",
       "types": {
         "feishu": "Feishu",

@@ -32,8 +32,8 @@
           <FormItem>
             <FormControl>
               <Input
-                type="text"
-                :placeholder="$t('provider.apiKeyPlaceholder')"
+                type="password"
+                :placeholder="props.provider?.api_key || $t('provider.apiKeyPlaceholder')"
                 v-bind="componentField"
               />
             </FormControl>
@@ -109,7 +109,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  submit: [values: typeof form.values]
+  submit: [values: Record<string, unknown>]
   delete: []
 }>()
 
@@ -117,7 +117,7 @@ const providerSchema = toTypedSchema(z.object({
   name: z.string().min(1),
   base_url: z.string().min(1),
   client_type: z.string().min(1),
-  api_key: z.string().min(1),
+  api_key: z.string().optional(),
   metadata: z.object({
     additionalProp1: z.object({}),
   }),
@@ -133,23 +133,40 @@ watch(() => props.provider, (newVal) => {
       name: newVal.name,
       base_url: newVal.base_url,
       client_type: newVal.client_type,
-      api_key: newVal.api_key,
+      // Keep key input empty by default so masked placeholders are never submitted back.
+      api_key: '',
     })
   }
 }, { immediate: true })
 
 const hasChanges = computed(() => {
   const raw = props.provider
-  return JSON.stringify(form.values) !== JSON.stringify({
+  const baseChanged = JSON.stringify({
+    name: form.values.name,
+    base_url: form.values.base_url,
+    client_type: form.values.client_type,
+    metadata: form.values.metadata,
+  }) !== JSON.stringify({
     name: raw?.name,
     base_url: raw?.base_url,
     client_type: raw?.client_type,
-    api_key: raw?.api_key,
     metadata: { additionalProp1: {} },
   })
+
+  const apiKeyChanged = Boolean(form.values.api_key && form.values.api_key.trim() !== '')
+  return baseChanged || apiKeyChanged
 })
 
 const editProvider = form.handleSubmit(async (value) => {
-  emit('submit', value)
+  const payload: Record<string, unknown> = {
+    name: value.name,
+    base_url: value.base_url,
+    client_type: value.client_type,
+    metadata: value.metadata,
+  }
+  if (value.api_key && value.api_key.trim() !== '') {
+    payload.api_key = value.api_key
+  }
+  emit('submit', payload)
 })
 </script>

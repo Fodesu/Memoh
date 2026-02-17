@@ -28,6 +28,8 @@ image = "docker.io/library/memoh-mcp:dev"
 snapshotter = "overlayfs"
 data_root = "data"
 data_mount = "/data"
+cni_bin_dir = "/opt/cni/bin"
+cni_conf_dir = "/etc/cni/net.d"
 
 ## Postgres configuration
 [postgres]
@@ -56,7 +58,3 @@ server_addr = ":8080"
 [web]
 host = "127.0.0.1"
 port = 8082
-
-[brave]
-api_key = ""
-base_url = "https://api.search.brave.com/res/v1/"

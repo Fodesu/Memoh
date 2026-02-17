@@ -15,6 +15,7 @@ import (
 )
 
 const telegramStreamEditThrottle = 5000 * time.Millisecond
+const telegramStreamToolHintText = "Calling tools..."
 
 var testEditFunc func(bot *tgbotapi.BotAPI, chatID int64, msgID int, text string, parseMode string) error
 
@@ -33,12 +34,20 @@ type telegramOutboundStream struct {
 	lastEditedAt time.Time
 }
 
-func (s *telegramOutboundStream) getBotAndReply(ctx context.Context) (bot *tgbotapi.BotAPI, replyTo int, err error) {
+func (s *telegramOutboundStream) getBot(ctx context.Context) (bot *tgbotapi.BotAPI, err error) {
 	telegramCfg, err := parseConfig(s.cfg.Credentials)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	bot, err = s.adapter.getOrCreateBot(telegramCfg.BotToken, s.cfg.ID)
+	if err != nil {
+		return nil, err
+	}
+	return bot, nil
+}
+
+func (s *telegramOutboundStream) getBotAndReply(ctx context.Context) (bot *tgbotapi.BotAPI, replyTo int, err error) {
+	bot, err = s.getBot(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -46,8 +55,21 @@ func (s *telegramOutboundStream) getBotAndReply(ctx context.Context) (bot *tgbot
 	return bot, replyTo, nil
 }
 
+func (s *telegramOutboundStream) refreshTypingAction(ctx context.Context) error {
+	// When ensureStreamMessage is called, always means that the message has not been completely generated
+	// so always refresh the "typing" action to improve the user experience
+	bot, err := s.getBot(ctx)
+	if err != nil {
+		return err
+	}
+	action := tgbotapi.NewChatAction(s.streamChatID, tgbotapi.ChatTyping)
+	_, err = bot.Request(action)
+	return err
+}
+
 func (s *telegramOutboundStream) ensureStreamMessage(ctx context.Context, text string) error {
 	s.mu.Lock()
+	go s.refreshTypingAction(ctx)
 	if s.streamMsgID != 0 {
 		s.mu.Unlock()
 		return nil
@@ -59,6 +81,8 @@ func (s *telegramOutboundStream) ensureStreamMessage(ctx context.Context, text s
 	}
 	if strings.TrimSpace(text) == "" {
 		text = "..."
+	} else {
+		text = text + "\n……"
 	}
 	chatID, msgID, err := sendTelegramTextReturnMessage(bot, s.target, text, replyTo, s.parseMode)
 	if err != nil {
@@ -83,6 +107,7 @@ func (s *telegramOutboundStream) editStreamMessage(ctx context.Context, text str
 	if msgID == 0 {
 		return nil
 	}
+	text = text + "\n……"
 	if strings.TrimSpace(text) == lastEdited {
 		return nil
 	}
@@ -184,6 +209,15 @@ func (s *telegramOutboundStream) Push(ctx context.Context, event channel.StreamE
 	switch event.Type {
 	case channel.StreamEventStatus:
 		return nil
+	case channel.StreamEventToolCallStart:
+		if err := s.ensureStreamMessage(ctx, telegramStreamToolHintText); err != nil {
+			return err
+		}
+		return s.editStreamMessageFinal(ctx, telegramStreamToolHintText)
+	case channel.StreamEventToolCallEnd:
+		return nil
+	case channel.StreamEventAttachment, channel.StreamEventProcessingFailed, channel.StreamEventAgentStart, channel.StreamEventAgentEnd, channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd, channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted:
+		return nil
 	case channel.StreamEventDelta:
 		if event.Delta == "" {
 			return nil
@@ -265,7 +299,7 @@ func (s *telegramOutboundStream) Push(ctx context.Context, event channel.StreamE
 		}
 		return s.editStreamMessage(ctx, display)
 	default:
-		return fmt.Errorf("unsupported stream event type: %s", event.Type)
+		return nil
 	}
 }
 

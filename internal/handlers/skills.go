@@ -311,11 +311,13 @@ type parsedSkill struct {
 //	---
 //	# Body content ...
 func parseSkillFile(raw string, fallbackName string) parsedSkill {
-	result := parsedSkill{Name: fallbackName}
-
 	trimmed := strings.TrimSpace(raw)
+	result := parsedSkill{
+		Name:    strings.TrimSpace(fallbackName),
+		Content: trimmed,
+	}
 	if !strings.HasPrefix(trimmed, "---") {
-		return result
+		return normalizeParsedSkill(result)
 	}
 
 	// Find closing "---".
@@ -328,7 +330,7 @@ func parseSkillFile(raw string, fallbackName string) parsedSkill {
 	}
 	closingIdx := strings.Index(rest, "\n---")
 	if closingIdx < 0 {
-		return result
+		return normalizeParsedSkill(result)
 	}
 
 	frontmatterRaw := rest[:closingIdx]
@@ -342,7 +344,7 @@ func parseSkillFile(raw string, fallbackName string) parsedSkill {
 		Metadata    map[string]any `yaml:"metadata"`
 	}
 	if err := yaml.Unmarshal([]byte(frontmatterRaw), &fm); err != nil {
-		return result
+		return normalizeParsedSkill(result)
 	}
 
 	if strings.TrimSpace(fm.Name) != "" {
@@ -351,7 +353,25 @@ func parseSkillFile(raw string, fallbackName string) parsedSkill {
 	result.Description = strings.TrimSpace(fm.Description)
 	result.Metadata = fm.Metadata
 
-	return result
+	return normalizeParsedSkill(result)
+}
+
+func normalizeParsedSkill(skill parsedSkill) parsedSkill {
+	if strings.TrimSpace(skill.Name) == "" {
+		skill.Name = "default"
+	}
+	skill.Name = strings.TrimSpace(skill.Name)
+	skill.Description = strings.TrimSpace(skill.Description)
+	skill.Content = strings.TrimSpace(skill.Content)
+
+	if skill.Description == "" {
+		skill.Description = skill.Name
+	}
+	if skill.Content == "" {
+		skill.Content = skill.Description
+	}
+
+	return skill
 }
 
 func buildSkillContent(name, description string) string {

@@ -245,7 +245,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 		UseStdio: false,
 	}); err == nil {
 		started = true
-		if netErr := ctr.SetupNetwork(ctx, task, containerID); netErr != nil {
+		if netErr := ctr.SetupNetwork(ctx, task, containerID, h.cfg.CNIBinaryDir, h.cfg.CNIConfigDir); netErr != nil {
 			h.logger.Warn("mcp container network setup failed, task kept running",
 				slog.String("container_id", containerID),
 				slog.Any("error", netErr),
@@ -301,6 +301,14 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 	}
 	if len(tasks) > 0 {
 		if tasks[0].Status == tasktypes.Status_RUNNING {
+			// Task is running but CNI state may be stale (e.g. server container restarted).
+			// Re-apply network to ensure connectivity.
+			if task, taskErr := h.service.GetTask(ctx, containerID); taskErr == nil {
+				if netErr := ctr.SetupNetwork(ctx, task, containerID, h.cfg.CNIBinaryDir, h.cfg.CNIConfigDir); netErr != nil {
+					h.logger.Warn("network re-setup failed for running task",
+						slog.String("container_id", containerID), slog.Any("error", netErr))
+				}
+			}
 			return nil
 		}
 		if err := h.service.DeleteTask(ctx, containerID, &ctr.DeleteTaskOptions{Force: true}); err != nil {
@@ -314,7 +322,7 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 	if err != nil {
 		return err
 	}
-	if netErr := ctr.SetupNetwork(ctx, task, containerID); netErr != nil {
+	if netErr := ctr.SetupNetwork(ctx, task, containerID, h.cfg.CNIBinaryDir, h.cfg.CNIConfigDir); netErr != nil {
 		h.logger.Warn("network setup failed, task kept running",
 			slog.String("container_id", containerID), slog.Any("error", netErr))
 	}
@@ -773,7 +781,7 @@ func (h *ContainerdHandler) SetupBotContainer(ctx context.Context, botID string)
 	if task, err := h.service.StartTask(ctx, containerID, &ctr.StartTaskOptions{
 		UseStdio: false,
 	}); err == nil {
-		if netErr := ctr.SetupNetwork(ctx, task, containerID); netErr != nil {
+		if netErr := ctr.SetupNetwork(ctx, task, containerID, h.cfg.CNIBinaryDir, h.cfg.CNIConfigDir); netErr != nil {
 			h.logger.Warn("setup bot container: network setup failed, task kept running",
 				slog.String("bot_id", botID),
 				slog.String("container_id", containerID),
@@ -825,7 +833,7 @@ func (h *ContainerdHandler) CleanupBotContainer(ctx context.Context, botID strin
 
 	if task, taskErr := h.service.GetTask(ctx, containerID); taskErr == nil {
 		h.logger.Info("CleanupBotContainer: removing network", slog.String("container_id", containerID))
-		if err := ctr.RemoveNetwork(ctx, task, containerID); err != nil {
+		if err := ctr.RemoveNetwork(ctx, task, containerID, h.cfg.CNIBinaryDir, h.cfg.CNIConfigDir); err != nil {
 			h.logger.Warn("cleanup: remove network failed", slog.String("container_id", containerID), slog.Any("error", err))
 		}
 	}
@@ -927,6 +935,20 @@ func (h *ContainerdHandler) ReconcileContainers(ctx context.Context) {
 					h.logger.Error("reconcile: failed to update DB status to running",
 						slog.String("bot_id", botID), slog.Any("error", dbErr))
 				}
+			}
+			// Re-apply CNI networking: server container restart drops cni0 bridge,
+			// veth endpoints and iptables masquerade rules while the MCP task keeps
+			// running inside containerd.
+			if task, taskErr := h.service.GetTask(ctx, containerID); taskErr == nil {
+				if netErr := ctr.SetupNetwork(ctx, task, containerID, h.cfg.CNIBinaryDir, h.cfg.CNIConfigDir); netErr != nil {
+					h.logger.Warn("reconcile: network re-setup failed for running task",
+						slog.String("bot_id", botID),
+						slog.String("container_id", containerID),
+						slog.Any("error", netErr))
+				}
+			} else {
+				h.logger.Warn("reconcile: failed to get task for network re-setup",
+					slog.String("bot_id", botID), slog.Any("error", taskErr))
 			}
 			h.logger.Info("reconcile: container healthy",
 				slog.String("bot_id", botID), slog.String("container_id", containerID))

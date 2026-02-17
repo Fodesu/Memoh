@@ -142,10 +142,7 @@ func (s *Service) Update(ctx context.Context, id string, req UpdateRequest) (Get
 		baseURL = *req.BaseURL
 	}
 
-	apiKey := existing.ApiKey
-	if req.APIKey != nil {
-		apiKey = *req.APIKey
-	}
+	apiKey := resolveUpdatedAPIKey(existing.ApiKey, req.APIKey)
 
 	metadata := existing.Metadata
 	if req.Metadata != nil {
@@ -252,4 +249,16 @@ func maskAPIKey(apiKey string) string {
 		return strings.Repeat("*", len(apiKey))
 	}
 	return apiKey[:8] + strings.Repeat("*", len(apiKey)-8)
+}
+
+// resolveUpdatedAPIKey keeps the original key when the request value matches the masked version.
+// This prevents masked placeholder values from overwriting the real stored credential.
+func resolveUpdatedAPIKey(existing string, updated *string) string {
+	if updated == nil {
+		return existing
+	}
+	if *updated == maskAPIKey(existing) {
+		return existing
+	}
+	return *updated
 }

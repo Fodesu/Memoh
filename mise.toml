@@ -61,6 +61,10 @@ run = "scripts/db-up.sh"
 description = "Drop Database"
 run = "scripts/db-drop.sh"
 
+[tasks.release]
+description = "Release new version"
+run = "pnpm release"
+
 [tasks.install-cli]
 description = "Install CLI"
 depends = ["//:pnpm-install"]

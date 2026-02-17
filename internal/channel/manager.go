@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,16 @@ type ManagerStore interface {
 	ConfigResolver
 }
 
+// ConnectionStatus describes runtime status for one configured channel connection.
+type ConnectionStatus struct {
+	ConfigID    string      `json:"config_id"`
+	BotID       string      `json:"bot_id"`
+	ChannelType ChannelType `json:"channel_type"`
+	Running     bool        `json:"running"`
+	LastError   string      `json:"last_error,omitempty"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+}
+
 // Manager coordinates channel adapters, connection lifecycle, and message dispatch.
 // Connection lifecycle lives in connection.go, inbound dispatch in inbound.go,
 // and outbound pipeline in outbound.go.
@@ -63,6 +74,7 @@ type Manager struct {
 	mu             sync.Mutex
 	refreshMu      sync.Mutex
 	connections    map[string]*connectionEntry
+	connectionMeta map[string]ConnectionStatus
 }
 
 // NewManager creates a Manager with the given logger, registry, config store, and inbound processor.
@@ -77,8 +89,9 @@ func NewManager(log *slog.Logger, registry *Registry, service ManagerStore, proc
 		registry:        registry,
 		service:         service,
 		processor:       processor,
-		refreshInterval: 30 * time.Second,
+		refreshInterval: 5 * time.Minute,
 		connections:     map[string]*connectionEntry{},
+		connectionMeta:  map[string]ConnectionStatus{},
 		logger:          log.With(slog.String("component", "channel")),
 		middlewares:     []Middleware{},
 		inboundQueue:    make(chan inboundTask, 256),
@@ -140,6 +153,15 @@ func (m *Manager) RemoveAdapter(ctx context.Context, channelType ChannelType) {
 	m.registry.Unregister(channelType)
 }
 
+// Refresh performs a full reconcile of all adapter connections against the DB.
+// Prefer EnsureConnection / RemoveConnection for targeted changes after API operations.
+// Refresh is mainly used at startup and as a periodic safety net.
+func (m *Manager) Refresh(ctx context.Context) {
+	if ctx != nil {
+		m.refresh(ctx)
+	}
+}
+
 // Start begins the periodic config refresh loop and inbound worker pool.
 func (m *Manager) Start(ctx context.Context) {
 	if m.logger != nil {
@@ -182,7 +204,7 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 	if target == "" {
 		targetChannelIdentityID := strings.TrimSpace(req.ChannelIdentityID)
 		if targetChannelIdentityID == "" {
-			return fmt.Errorf("target or user_id is required")
+			return fmt.Errorf("target or channel_identity_id is required")
 		}
 		userCfg, err := m.service.GetChannelIdentityConfig(ctx, targetChannelIdentityID, channelType)
 		if err != nil {
@@ -273,4 +295,27 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 	m.stopAll(ctx)
 	return nil
+}
+
+// ConnectionStatusesByBot returns observed channel connection statuses for a bot.
+func (m *Manager) ConnectionStatusesByBot(botID string) []ConnectionStatus {
+	botID = strings.TrimSpace(botID)
+	if botID == "" {
+		return []ConnectionStatus{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]ConnectionStatus, 0, len(m.connectionMeta))
+	for _, status := range m.connectionMeta {
+		if status.BotID == botID {
+			items = append(items, status)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].ChannelType == items[j].ChannelType {
+			return items[i].ConfigID < items[j].ConfigID
+		}
+		return items[i].ChannelType < items[j].ChannelType
+	})
+	return items
 }

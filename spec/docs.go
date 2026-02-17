@@ -2674,6 +2674,52 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "description": "Remove bot channel configuration",
+                "tags": [
+                    "bots"
+                ],
+                "summary": "Delete bot channel config",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Channel platform",
+                        "name": "platform",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
             }
         },
         "/bots/{id}/channel/{platform}/send": {
@@ -2814,6 +2860,72 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{id}/channel/{platform}/status": {
+            "patch": {
+                "description": "Update bot channel enabled/disabled status",
+                "tags": [
+                    "bots"
+                ],
+                "summary": "Update bot channel status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Channel platform",
+                        "name": "platform",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Channel status payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/channel.UpdateChannelStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/channel.ChannelConfig"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{id}/checks": {
             "get": {
                 "description": "Evaluate bot attached resource checks in runtime",
@@ -2859,65 +2971,6 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{id}/checks/keys": {
-            "get": {
-                "description": "Returns all check keys available for a bot (builtin + MCP connections)",
-                "tags": [
-                    "bots"
-                ],
-                "summary": "List available check keys",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/bots.ListCheckKeysResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{id}/checks/run/{key}": {
-            "get": {
-                "description": "Evaluate one check key for a bot",
-                "tags": [
-                    "bots"
-                ],
-                "summary": "Run a single bot check",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Check key",
-                        "name": "key",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/bots.BotCheck"
                         }
                     }
                 }
@@ -4907,10 +4960,10 @@ const docTemplate = `{
         "bots.BotCheck": {
             "type": "object",
             "properties": {
-                "check_key": {
+                "detail": {
                     "type": "string"
                 },
-                "detail": {
+                "id": {
                     "type": "string"
                 },
                 "metadata": {
@@ -4920,7 +4973,16 @@ const docTemplate = `{
                 "status": {
                     "type": "string"
                 },
+                "subtitle": {
+                    "type": "string"
+                },
                 "summary": {
+                    "type": "string"
+                },
+                "title_key": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 }
             }
@@ -4970,17 +5032,6 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/bots.Bot"
-                    }
-                }
-            }
-        },
-        "bots.ListCheckKeysResponse": {
-            "type": "object",
-            "properties": {
-                "keys": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
                     }
                 }
             }
@@ -5064,6 +5115,13 @@ const docTemplate = `{
         "channel.Attachment": {
             "type": "object",
             "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "base64": {
+                    "description": "data URL for agent delivery",
+                    "type": "string"
+                },
                 "caption": {
                     "type": "string"
                 },
@@ -5197,6 +5255,9 @@ const docTemplate = `{
                     "type": "object",
                     "additionalProperties": {}
                 },
+                "disabled": {
+                    "type": "boolean"
+                },
                 "external_identity": {
                     "type": "string"
                 },
@@ -5210,9 +5271,6 @@ const docTemplate = `{
                 "self_identity": {
                     "type": "object",
                     "additionalProperties": {}
-                },
-                "status": {
-                    "type": "string"
                 },
                 "updated_at": {
                     "type": "string"
@@ -5479,6 +5537,14 @@ const docTemplate = `{
                 }
             }
         },
+        "channel.UpdateChannelStatusRequest": {
+            "type": "object",
+            "properties": {
+                "disabled": {
+                    "type": "boolean"
+                }
+            }
+        },
         "channel.UpsertChannelIdentityConfigRequest": {
             "type": "object",
             "properties": {
@@ -5495,6 +5561,9 @@ const docTemplate = `{
                     "type": "object",
                     "additionalProperties": {}
                 },
+                "disabled": {
+                    "type": "boolean"
+                },
                 "external_identity": {
                     "type": "string"
                 },
@@ -5505,9 +5574,6 @@ const docTemplate = `{
                 "self_identity": {
                     "type": "object",
                     "additionalProperties": {}
-                },
-                "status": {
-                    "type": "string"
                 },
                 "verified_at": {
                     "type": "string"
@@ -6334,6 +6400,12 @@ const docTemplate = `{
         "message.Message": {
             "type": "object",
             "properties": {
+                "assets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/message.MessageAsset"
+                    }
+                },
                 "bot_id": {
                     "type": "string"
                 },
@@ -6382,20 +6454,55 @@ const docTemplate = `{
                 }
             }
         },
+        "message.MessageAsset": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "duration_ms": {
+                    "type": "integer"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "media_type": {
+                    "type": "string"
+                },
+                "mime": {
+                    "type": "string"
+                },
+                "ordinal": {
+                    "type": "integer"
+                },
+                "original_name": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "storage_key": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.AddRequest": {
             "type": "object",
             "properties": {
                 "dimensions": {
                     "type": "integer"
                 },
-                "input": {
+                "input_modalities": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
-                },
-                "is_multimodal": {
-                    "type": "boolean"
                 },
                 "llm_provider_id": {
                     "type": "string"
@@ -6436,14 +6543,11 @@ const docTemplate = `{
                 "dimensions": {
                     "type": "integer"
                 },
-                "input": {
+                "input_modalities": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
-                },
-                "is_multimodal": {
-                    "type": "boolean"
                 },
                 "llm_provider_id": {
                     "type": "string"
@@ -6476,14 +6580,11 @@ const docTemplate = `{
                 "dimensions": {
                     "type": "integer"
                 },
-                "input": {
+                "input_modalities": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
-                },
-                "is_multimodal": {
-                    "type": "boolean"
                 },
                 "llm_provider_id": {
                     "type": "string"
