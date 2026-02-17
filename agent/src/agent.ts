@@ -17,7 +17,7 @@ import {
   Schedule,
 } from './types'
 import { ModelInput, hasInputModality } from './types/model'
-import { system, schedule, trustedTurnContext, user, subagentSystem } from './prompts'
+import { system, schedule, user, subagentSystem } from './prompts'
 import { AuthFetcher } from './index'
 import { createModel } from './model'
 import { AgentAction } from './types/action'
@@ -49,7 +49,6 @@ export const createAgent = (
       botId: '',
       containerId: '',
       channelIdentityId: '',
-      speakerAlias: '',
       displayName: '',
     },
     auth,
@@ -145,6 +144,9 @@ export const createAgent = (
     if (identity.currentPlatform) {
       headers['X-Memoh-Current-Platform'] = identity.currentPlatform
     }
+    if (identity.replyTarget) {
+      headers['X-Memoh-Reply-Target'] = identity.replyTarget
+    }
     const attachments = await Promise.all(
       input.attachments.map(async (attachment) => {
         if (attachment.type !== 'image') {
@@ -200,10 +202,10 @@ export const createAgent = (
     return { ...input, attachments }
   }
 
-  const generateSystemPrompt = async (turnContext?: string) => {
+  const generateSystemPrompt = async () => {
     const { identityContent, soulContent, toolsContent } =
       await loadSystemFiles()
-    const baseSystemPrompt = system({
+    return system({
       date: new Date(),
       language,
       maxContextLoadTime: activeContextTime,
@@ -215,10 +217,6 @@ export const createAgent = (
       soulContent,
       toolsContent,
     })
-    if (!turnContext || !turnContext.trim()) {
-      return baseSystemPrompt
-    }
-    return `${baseSystemPrompt}\n\n${turnContext.trim()}`
   }
 
   const getAgentTools = async () => {
@@ -260,7 +258,7 @@ export const createAgent = (
     }
   }
 
-  const generateUserTurn = (input: AgentInput) => {
+  const generateUserPrompt = (input: AgentInput) => {
     const supportsImage = hasInputModality(modelConfig, ModelInput.Image)
 
     // Separate attachments by model capability: native images vs fallback file paths.
@@ -287,15 +285,14 @@ export const createAgent = (
       ...unsupportedImages,
     ]
 
-    const turnContext = trustedTurnContext({
-      speakerId: identity.speakerAlias || '',
-      displayName: identity.displayName || 'User',
+    const text = user(input.query, {
+      channelIdentityId: identity.channelIdentityId || identity.contactId || '',
+      displayName: identity.displayName || identity.contactName || 'User',
       channel: currentChannel,
       conversationType: identity.conversationType || 'direct',
       date: new Date(),
       attachments: allFiles,
     })
-    const text = user(input.query)
     const imageParts: ImagePart[] = nativeImages
       .map((image) => {
         const img = image as ImageAttachment
@@ -312,15 +309,15 @@ export const createAgent = (
       role: 'user',
       content: [{ type: 'text', text }, ...imageParts],
     }
-    return { turnContext, userMessage }
+    return userMessage
   }
 
   const ask = async (input: AgentInput) => {
     const preparedInput = await prepareInputWithMCPImageBase64(input)
-    const { turnContext, userMessage } = generateUserTurn(preparedInput)
-    const messages = [...preparedInput.messages, userMessage]
+    const userPrompt = generateUserPrompt(preparedInput)
+    const messages = [...preparedInput.messages, userPrompt]
     preparedInput.skills.forEach((skill) => enableSkill(skill))
-    const systemPrompt = await generateSystemPrompt(turnContext)
+    const systemPrompt = await generateSystemPrompt()
     const { tools, close } = await getAgentTools()
     const { response, reasoning, text, usage } = await generateText({
       model,
@@ -458,10 +455,10 @@ export const createAgent = (
 
   async function* stream(input: AgentInput): AsyncGenerator<AgentAction> {
     const preparedInput = await prepareInputWithMCPImageBase64(input)
-    const { turnContext, userMessage } = generateUserTurn(preparedInput)
-    const messages = [...preparedInput.messages, userMessage]
+    const userPrompt = generateUserPrompt(preparedInput)
+    const messages = [...preparedInput.messages, userPrompt]
     preparedInput.skills.forEach((skill) => enableSkill(skill))
-    const systemPrompt = await generateSystemPrompt(turnContext)
+    const systemPrompt = await generateSystemPrompt()
     const attachmentsExtractor = new AttachmentsStreamExtractor()
     const result: {
       messages: ModelMessage[];
