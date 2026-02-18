@@ -52,4 +52,5 @@ then type your prompt to test the Bot configuration
 
 ## Next Steps
 
-Once you have at least one bot, you can add bot **Platform** (e.g. `telegram`, `feishu(lark)`, `wechat`, `discord`) and manage **Memory** in bot settings.
+- add [channel](/concepts/channel) to `Platform`(e.g. [telegram](/getting-started/platform-telegram), `feishu(lark)`, `wechat`, `discord`)
+- manage your bot [Memory](/concepts/memory)

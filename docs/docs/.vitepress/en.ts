@@ -32,6 +32,10 @@ export const en = [
       {
         text: 'Create Bot',
         link: '/getting-started/create-bot.md'
+      },
+      {
+        text: 'telegram platform',
+        link: '/getting-started/platform-telegram.md'
       }
     ]
   },
