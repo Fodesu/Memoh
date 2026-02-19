@@ -5,7 +5,15 @@ on:
     tags: ["v*.*.*"]
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "devenv/**"
   workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -78,7 +86,7 @@ jobs:
           push: ${{ startsWith(github.ref, 'refs/tags/') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             COMMIT_HASH=${{ github.sha }}

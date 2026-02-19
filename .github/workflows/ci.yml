@@ -3,8 +3,20 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "devenv/**"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "devenv/**"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -33,6 +45,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Build
+        run: go build -o memoh-server ./cmd/agent
+
       - name: Generate config
         run: |
           cat > config.toml <<'TOML'
@@ -46,10 +61,10 @@ jobs:
           TOML
 
       - name: Migrate up
-        run: go run ./cmd/agent migrate up
+        run: ./memoh-server migrate up
 
       - name: Migrate down
-        run: go run ./cmd/agent migrate down
+        run: ./memoh-server migrate down
 
       - name: Migrate up (idempotent)
-        run: go run ./cmd/agent migrate up
+        run: ./memoh-server migrate up
