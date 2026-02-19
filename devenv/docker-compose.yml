@@ -7,9 +7,9 @@ services:
       POSTGRES_DB: memoh
       POSTGRES_USER: memoh
       POSTGRES_PASSWORD: memoh123
-      TZ: ${TZ:-UTC}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
     ports:
       - "5432:5432"
     healthcheck:

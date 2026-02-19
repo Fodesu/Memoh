@@ -134,6 +134,7 @@ func (m *Manager) EnsureBot(ctx context.Context, botID string) error {
 			},
 		}),
 	}
+	specOpts = append(specOpts, ctr.TimezoneSpecOpts()...)
 
 	_, err = m.service.CreateContainer(ctx, ctr.CreateContainerRequest{
 		ID:          m.containerID(botID),

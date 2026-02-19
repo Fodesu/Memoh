@@ -177,6 +177,7 @@ func (m *Manager) CreateVersion(ctx context.Context, botID string) (*VersionInfo
 			},
 		}),
 	}
+	specOpts = append(specOpts, ctr.TimezoneSpecOpts()...)
 
 	_, err = m.service.CreateContainerFromSnapshot(ctx, ctr.CreateContainerRequest{
 		ID:          containerID,
@@ -318,6 +319,7 @@ func (m *Manager) RollbackVersion(ctx context.Context, botID string, version int
 			},
 		}),
 	}
+	specOpts = append(specOpts, ctr.TimezoneSpecOpts()...)
 
 	_, err = m.service.CreateContainerFromSnapshot(ctx, ctr.CreateContainerRequest{
 		ID:          containerID,
