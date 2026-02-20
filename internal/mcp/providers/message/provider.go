@@ -72,15 +72,7 @@ func (p *Executor) ListTools(ctx context.Context, session mcpgw.ToolSessionConte
 					},
 					"target": map[string]any{
 						"type":        "string",
-						"description": "Channel target (chat/group/thread ID)",
-					},
-					"channel_identity_id": map[string]any{
-						"type":        "string",
-						"description": "Target identity ID when direct target is absent",
-					},
-					"to_user_id": map[string]any{
-						"type":        "string",
-						"description": "Alias for channel_identity_id",
+						"description": "Channel target (chat/group/thread ID). Use get_contacts to find available targets.",
 					},
 					"text": map[string]any{
 						"type":        "string",
@@ -180,15 +172,13 @@ func (p *Executor) callSend(ctx context.Context, session mcpgw.ToolSessionContex
 	if target == "" {
 		target = strings.TrimSpace(session.ReplyTarget)
 	}
-	channelIdentityID := mcpgw.FirstStringArg(arguments, "channel_identity_id", "to_user_id")
-	if target == "" && channelIdentityID == "" {
-		return mcpgw.BuildToolErrorResult("target or channel_identity_id is required"), nil
+	if target == "" {
+		return mcpgw.BuildToolErrorResult("target is required"), nil
 	}
 
 	sendReq := channel.SendRequest{
-		Target:            target,
-		ChannelIdentityID: channelIdentityID,
-		Message:           outboundMessage,
+		Target:  target,
+		Message: outboundMessage,
 	}
 	if err := p.sender.Send(ctx, botID, channelType, sendReq); err != nil {
 		p.logger.Warn("send failed", slog.Any("error", err), slog.String("bot_id", botID), slog.String("platform", string(channelType)))
@@ -196,12 +186,11 @@ func (p *Executor) callSend(ctx context.Context, session mcpgw.ToolSessionContex
 	}
 
 	payload := map[string]any{
-		"ok":                  true,
-		"bot_id":              botID,
-		"platform":            channelType.String(),
-		"target":              target,
-		"channel_identity_id": channelIdentityID,
-		"instruction":         "Message delivered successfully. You have completed your response. Please STOP now and do not call any more tools.",
+		"ok":          true,
+		"bot_id":      botID,
+		"platform":    channelType.String(),
+		"target":      target,
+		"instruction": "Message delivered successfully. You have completed your response. Please STOP now and do not call any more tools.",
 	}
 	return mcpgw.BuildToolSuccessResult(payload), nil
 }
