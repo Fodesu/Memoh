@@ -45,7 +45,7 @@ import (
 	"github.com/memohai/memoh/internal/logger"
 	"github.com/memohai/memoh/internal/mcp"
 	mcpcontainer "github.com/memohai/memoh/internal/mcp/providers/container"
-	mcpdirectory "github.com/memohai/memoh/internal/mcp/providers/directory"
+	mcpcontacts "github.com/memohai/memoh/internal/mcp/providers/contacts"
 	mcpmemory "github.com/memohai/memoh/internal/mcp/providers/memory"
 	mcpmessage "github.com/memohai/memoh/internal/mcp/providers/message"
 	mcpschedule "github.com/memohai/memoh/internal/mcp/providers/schedule"
@@ -436,9 +436,9 @@ func provideContainerdHandler(log *slog.Logger, service ctr.Service, manager *mc
 	return handlers.NewContainerdHandler(log, service, manager, cfg.MCP, cfg.Containerd.Namespace, botService, accountService, policyService, queries)
 }
 
-func provideToolGatewayService(log *slog.Logger, cfg config.Config, channelManager *channel.Manager, registry *channel.Registry, channelStore *channel.Store, scheduleService *schedule.Service, memoryService *memory.Service, chatService *conversation.Service, accountService *accounts.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *mcp.Manager, containerdHandler *handlers.ContainerdHandler, mcpConnService *mcp.ConnectionService) *mcp.ToolGatewayService {
+func provideToolGatewayService(log *slog.Logger, cfg config.Config, channelManager *channel.Manager, registry *channel.Registry, routeService *route.DBService, scheduleService *schedule.Service, memoryService *memory.Service, chatService *conversation.Service, accountService *accounts.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *mcp.Manager, containerdHandler *handlers.ContainerdHandler, mcpConnService *mcp.ConnectionService) *mcp.ToolGatewayService {
 	messageExec := mcpmessage.NewExecutor(log, channelManager, channelManager, registry)
-	directoryExec := mcpdirectory.NewExecutor(log, registry, channelStore, registry)
+	contactsExec := mcpcontacts.NewExecutor(log, routeService)
 	scheduleExec := mcpschedule.NewExecutor(log, scheduleService)
 	memoryExec := mcpmemory.NewExecutor(log, memoryService, chatService, accountService)
 	webExec := mcpweb.NewExecutor(log, settingsService, searchProviderService)
@@ -453,7 +453,7 @@ func provideToolGatewayService(log *slog.Logger, cfg config.Config, channelManag
 
 	svc := mcp.NewToolGatewayService(
 		log,
-		[]mcp.ToolExecutor{messageExec, directoryExec, scheduleExec, memoryExec, webExec, fsExec},
+		[]mcp.ToolExecutor{messageExec, contactsExec, scheduleExec, memoryExec, webExec, fsExec},
 		[]mcp.ToolSource{fedSource},
 	)
 	containerdHandler.SetToolGatewayService(svc)
