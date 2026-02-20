@@ -22,6 +22,7 @@ experimental = true
 
 [tasks.pnpm-install]
 description = "Install dependencies"
+env = { CI = "true" }
 run = "pnpm install"
 
 [tasks.go-install]
@@ -30,12 +31,18 @@ run = "go mod download"
 
 [tasks.swagger-generate]
 description = "Generate Swagger documentation"
+depends = [
+  "//:go-install",
+]
 run = "cd internal/handlers && go generate"
 
 [tasks.sdk-generate]
 description = "Generate SDK code"
 run = "pnpm run generate-sdk"
-depends = ["//:swagger-generate"]
+depends = [
+  "//:pnpm-install",
+  "//:swagger-generate"
+]
 
 [tasks.sqlc-generate]
 description = "Generate SQL code"

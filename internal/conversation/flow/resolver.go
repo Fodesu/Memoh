@@ -1102,7 +1102,7 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 		return nil
 	}
 	msg := conversation.ModelMessage{
-		Role:    "system",
+		Role:    "user",
 		Content: conversation.NewTextContent(payload),
 	}
 	return &msg
