@@ -6,7 +6,7 @@ import vue from 'eslint-plugin-vue'
 export default [
   ...tseslint.configs.recommended,
   ...vue.configs['flat/recommended'],
-  { ignores: ['**/node_modules/**', '**/dist/**', 'packages/sdk/src/**'] },
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/cache/**', 'packages/sdk/src/**'] },
   {
     files: ['packages/**/*.{js,jsx,ts,tsx}', 'agent/**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
