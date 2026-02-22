@@ -42,7 +42,7 @@ func (s *discordOutboundStream) Push(ctx context.Context, event channel.StreamEv
     switch event.Type {
     case channel.StreamEventStatus:
         if event.Status == channel.StreamStatusStarted {
-            return s.ensureMessage(ctx, "Thinking...")
+			return s.ensureMessage("Thinking...")
         }
         return nil
 
@@ -56,7 +56,7 @@ func (s *discordOutboundStream) Push(ctx context.Context, event channel.StreamEv
 
         // Discord has strict rate limits, only update periodically
         if time.Since(s.lastUpdate) > 2*time.Second {
-            return s.updateMessage(ctx)
+			return s.updateMessage()
         }
         return nil
 
@@ -64,14 +64,14 @@ func (s *discordOutboundStream) Push(ctx context.Context, event channel.StreamEv
         if event.Final != nil && !event.Final.Message.IsEmpty() {
             finalText := strings.TrimSpace(event.Final.Message.PlainText())
             if finalText != "" {
-                return s.finalizeMessage(ctx, finalText)
+				return s.finalizeMessage(finalText)
             }
         }
         s.mu.Lock()
         finalText := strings.TrimSpace(s.buffer.String())
         s.mu.Unlock()
         if finalText != "" {
-            return s.finalizeMessage(ctx, finalText)
+			return s.finalizeMessage(finalText)
         }
         return nil
 
@@ -80,7 +80,7 @@ func (s *discordOutboundStream) Push(ctx context.Context, event channel.StreamEv
         if errText == "" {
             return nil
         }
-        return s.finalizeMessage(ctx, "Error: "+errText)
+		return s.finalizeMessage("Error: " + errText)
 
     case channel.StreamEventAgentStart, channel.StreamEventAgentEnd, channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd, channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted, channel.StreamEventProcessingFailed, channel.StreamEventToolCallStart, channel.StreamEventToolCallEnd:
         // Status events - no action needed for Discord
@@ -104,7 +104,7 @@ func (s *discordOutboundStream) Close(ctx context.Context) error {
     return nil
 }
 
-func (s *discordOutboundStream) ensureMessage(ctx context.Context, text string) error {
+func (s *discordOutboundStream) ensureMessage(text string) error {
     s.mu.Lock()
     defer s.mu.Unlock()
 
@@ -112,11 +112,7 @@ func (s *discordOutboundStream) ensureMessage(ctx context.Context, text string) 
         return nil
     }
 
-    // Discord limit: 2000 characters
-    content := text
-    if len(content) > 2000 {
-        content = content[:1997] + "..."
-    }
+	content := truncateDiscordText(text)
 
     msg, err := s.session.ChannelMessageSend(s.target, content)
     if err != nil {
@@ -128,7 +124,7 @@ func (s *discordOutboundStream) ensureMessage(ctx context.Context, text string) 
     return nil
 }
 
-func (s *discordOutboundStream) updateMessage(ctx context.Context) error {
+func (s *discordOutboundStream) updateMessage() error {
     s.mu.Lock()
     defer s.mu.Unlock()
 
@@ -141,10 +137,7 @@ func (s *discordOutboundStream) updateMessage(ctx context.Context) error {
         return nil
     }
 
-    // Discord limit
-    if len(content) > 2000 {
-        content = content[:1997] + "..."
-    }
+	content = truncateDiscordText(content)
 
     _, err := s.session.ChannelMessageEdit(s.target, s.msgID, content)
     if err != nil {
@@ -155,18 +148,20 @@ func (s *discordOutboundStream) updateMessage(ctx context.Context) error {
     return nil
 }
 
-func (s *discordOutboundStream) finalizeMessage(ctx context.Context, text string) error {
+func (s *discordOutboundStream) finalizeMessage(text string) error {
     s.mu.Lock()
     defer s.mu.Unlock()
 
-    // Discord limit
-    if len(text) > 2000 {
-        text = text[:1997] + "..."
-    }
+	text = truncateDiscordText(text)
 
     if s.msgID == "" {
-        _, err := s.session.ChannelMessageSend(s.target, text)
-        return err
+		msg, err := s.session.ChannelMessageSend(s.target, text)
+		if err != nil {
+			return err
+		}
+		s.msgID = msg.ID
+		s.lastUpdate = time.Now()
+		return nil
     }
 
     _, err := s.session.ChannelMessageEdit(s.target, s.msgID, text)
