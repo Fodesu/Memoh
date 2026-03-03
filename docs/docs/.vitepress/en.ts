@@ -72,6 +72,10 @@ export const en = [
         text: 'Email Providers',
         link: '/getting-started/email.md'
       },
+      {
+        text: 'Helicone',
+        link: '/getting-started/helicone.md'
+      },
     ]
   },
   {
