@@ -52,7 +52,7 @@ server_addr = "server:8080"
 host = "0.0.0.0"
 port = 8082
 
-# [helicone]
-# enabled = false
-# api_key = ""
-# base_url = ""
+[helicone]
+enabled = false
+api_key = ""
+base_url = ""

@@ -48,3 +48,8 @@ timeout_seconds = 10
 host = "127.0.0.1"
 port = 8081
 server_addr = "127.0.0.1:8080"
+
+[helicone]
+enabled = false
+api_key = ""
+base_url = ""
