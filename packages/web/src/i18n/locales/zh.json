@@ -54,6 +54,7 @@
     "bots": "Bots",
     "models": "模型管理",
     "searchProvider": "搜索提供方",
+    "memoryProvider": "记忆",
     "emailProvider": "邮件提供方",
     "settings": "设置",
     "home": "首页",
@@ -131,6 +132,14 @@
     "toolRunning": "运行中",
     "toolInput": "输入",
     "toolResult": "结果",
+    "toolWriteContent": "内容",
+    "toolEditChanges": "变更",
+    "toolSearchResults": "{count} 条结果",
+    "toolSearchResultsLabel": "结果",
+    "toolExecOutput": "输出",
+    "toolExecExit": "退出: {code}",
+    "toolExecError": "错误",
+    "toolScheduleItems": "{count} 条",
     "unknownUser": "{platform}用户",
     "files": "文件管理"
   },
@@ -164,7 +173,12 @@
     "testOk": "正常",
     "testAuthError": "认证失败",
     "testError": "异常",
-    "testFailed": "测试失败"
+    "testFailed": "测试失败",
+    "importModels": "导入模型",
+    "importSuccess": "成功导入 {created} 个模型，跳过 {skipped} 个",
+    "importFailed": "导入模型失败",
+    "importClientType": "模型客户端类型",
+    "importClientTypeHint": "为导入的模型设置默认客户端类型"
   },
   "provider": {
     "add": "添加服务商",
@@ -180,7 +194,9 @@
     "testConnection": "测试连接",
     "reachable": "可连接",
     "unreachable": "不可连接",
-    "testFailed": "测试失败"
+    "testFailed": "测试失败",
+    "autoImport": "自动导入模型",
+    "autoImportHint": "创建后自动从服务商获取并导入模型"
   },
   "searchProvider": {
     "title": "搜索提供方",
@@ -209,6 +225,28 @@
       "bocha": "博查",
       "duckduckgo": "DuckDuckGo",
       "yandex": "Yandex"
+    }
+  },
+  "memoryProvider": {
+    "title": "记忆提供方",
+    "add": "添加记忆提供方",
+    "empty": "暂无记忆提供方",
+    "provider": "提供方类型",
+    "searchPlaceholder": "搜索提供方...",
+    "emptyTitle": "暂无记忆提供方",
+    "emptyDescription": "添加记忆提供方以启用 Bot 的长期记忆功能",
+    "saveSuccess": "记忆提供方已保存",
+    "deleteSuccess": "记忆提供方已删除",
+    "deleteFailed": "删除记忆提供方失败",
+    "deleteConfirm": "确定要删除该记忆提供方吗？使用它的 Bot 将失去记忆访问。",
+    "name": "名称",
+    "namePlaceholder": "输入提供方名称",
+    "memoryModel": "记忆模型",
+    "memoryModelDescription": "用于记忆提取和决策的 LLM 模型",
+    "embeddingModel": "向量化模型",
+    "embeddingModelDescription": "用于稠密向量搜索的embedding模型",
+    "providerNames": {
+      "builtin": "内置"
     }
   },
   "emailProvider": {
@@ -273,7 +311,49 @@
     "importHint": "粘贴标准 mcpServers JSON 配置。同名的服务器会被更新配置。",
     "importSuccess": "MCP 服务器已导入",
     "importFailed": "导入 MCP 服务器失败",
-    "exportFailed": "导出 MCP 服务器失败"
+    "exportFailed": "导出 MCP 服务器失败",
+    "probe": "测试连接",
+    "probing": "测试中...",
+    "probeSuccess": "连接验证成功",
+    "probeFailed": "连接测试失败",
+    "probeRefresh": "刷新",
+    "tools": "工具",
+    "toolsEmpty": "未发现工具",
+    "toolsCount": "已发现 {count} 个工具",
+    "statusConnected": "已连接",
+    "statusError": "错误",
+    "statusUnknown": "未测试",
+    "lastProbed": "上次测试",
+    "authRequired": "需要授权",
+    "oauth": {
+      "title": "认证",
+      "status": "OAuth 状态",
+      "notConfigured": "未配置",
+      "authorized": "已授权",
+      "expired": "令牌已过期",
+      "discover": "检测 OAuth",
+      "discovering": "检测中...",
+      "authorize": "授权",
+      "authorizing": "授权中...",
+      "revoke": "撤销",
+      "revokeConfirm": "确定要撤销 OAuth 授权吗？",
+      "revokeSuccess": "OAuth 授权已撤销",
+      "revokeFailed": "撤销 OAuth 失败",
+      "discoverSuccess": "已检测到 OAuth 服务器",
+      "discoverFailed": "OAuth 检测失败",
+      "authSuccess": "授权成功",
+      "authFailed": "授权失败",
+      "scopes": "权限范围",
+      "authServer": "授权服务器",
+      "clientId": "Client ID",
+      "clientIdPlaceholder": "OAuth 应用的 Client ID",
+      "clientSecret": "Client Secret",
+      "clientSecretPlaceholder": "OAuth 应用的 Client Secret（如需要）",
+      "clientIdHint": "该授权服务器不支持自动注册，请创建 OAuth 应用并输入其 Client ID。",
+      "callbackUrl": "回调地址",
+      "callbackUrlHint": "请在 OAuth 应用设置中填入此回调地址。",
+      "callbackMissingParams": "缺少授权码或状态参数"
+    }
   },
   "home": {
     "title": "首页"
@@ -467,6 +547,8 @@
       "embeddingModel": "向量模型",
       "searchProvider": "搜索提供方",
       "searchProviderPlaceholder": "选择搜索提供方",
+      "memoryProvider": "记忆提供方",
+      "memoryProviderPlaceholder": "选择记忆提供方（为空则禁用）",
       "maxContextLoadTime": "最大上下文加载时间",
       "maxContextTokens": "最大上下文Token数",
       "language": "语言",

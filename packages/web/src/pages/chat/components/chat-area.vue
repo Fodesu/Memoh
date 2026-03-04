@@ -103,9 +103,10 @@
             <InputGroup>
               <InputGroupTextarea
                 v-model="inputText"
-                class="pr-24 max-h-15 resize-none"
+                class=" max-h-15 resize-none break-all!"
                 :placeholder="activeChatReadOnly ? $t('chat.readonlyHint') : $t('chat.inputPlaceholder')"
                 :disabled="!currentBotId || activeChatReadOnly"
+                style="scrollbar-width: none;"
                 @keydown.enter.exact="handleKeydown"
                 @paste="handlePaste"
               />
@@ -124,6 +125,19 @@
                 >
                   <FontAwesomeIcon
                     :icon="['fas', 'paperclip']"
+                    class="size-3.5"
+                  />
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  :disabled="!currentBotId"
+                  :aria-label="$t('chat.files')"
+                  @click="fileManagerOpen = true"
+                >
+                  <FontAwesomeIcon
+                    :icon="['fas', 'folder-open']"
                     class="size-3.5"
                   />
                 </Button>
@@ -153,19 +167,6 @@
                     class="size-3.5 animate-spin"
                   />
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  :disabled="!currentBotId"
-                  :aria-label="$t('chat.files')"
-                  @click="fileManagerOpen = true"
-                >
-                  <FontAwesomeIcon
-                    :icon="['fas', 'folder-open']"
-                    class="size-3.5"
-                  />
-                </Button>
               </InputGroupAddon>
             </InputGroup>
           </section>
@@ -187,6 +188,7 @@
         </SheetHeader>
         <FileManager
           v-if="currentBotId"
+          ref="fileManagerRef"
           :bot-id="currentBotId"
           :sync-url="false"
           class="flex-1 min-h-0"
@@ -197,7 +199,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, provide } from 'vue'
 import { Textarea, Button, Avatar, AvatarImage, AvatarFallback, Badge, InputGroup, InputGroupAddon, InputGroupButton, InputGroupText, InputGroupTextarea, Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@memoh/ui'
 import { useChatStore } from '@/store/chat-list'
 import { storeToRefs } from 'pinia'
@@ -205,12 +207,26 @@ import MessageItem from './message-item.vue'
 import MediaGalleryLightbox from './media-gallery-lightbox.vue'
 import FileManager from '@/components/file-manager/index.vue'
 import { useMediaGallery } from '../composables/useMediaGallery'
+import { openInFileManagerKey } from '../composables/useFileManagerProvider'
 import type { ChatAttachment } from '@/composables/api/useChat'
 
 const chatStore = useChatStore()
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingFiles = ref<File[]>([])
 const fileManagerOpen = ref(false)
+const fileManagerRef = ref<InstanceType<typeof FileManager> | null>(null)
+
+provide(openInFileManagerKey, (path: string, isDir = false) => {
+  fileManagerOpen.value = true
+  nextTick(() => {
+    if (!fileManagerRef.value) return
+    if (isDir) {
+      fileManagerRef.value.navigateTo(path)
+    } else {
+      fileManagerRef.value.openFileByPath(path)
+    }
+  })
+})
 const {
   messages,
   streaming,

@@ -109,6 +109,17 @@ CREATE TABLE IF NOT EXISTS model_variants (
 CREATE INDEX IF NOT EXISTS idx_model_variants_model_uuid ON model_variants(model_uuid);
 CREATE INDEX IF NOT EXISTS idx_model_variants_variant_id ON model_variants(variant_id);
 
+CREATE TABLE IF NOT EXISTS memory_providers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT memory_providers_name_unique UNIQUE (name)
+);
+
 CREATE TABLE IF NOT EXISTS bots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -125,9 +136,8 @@ CREATE TABLE IF NOT EXISTS bots (
   reasoning_effort TEXT NOT NULL DEFAULT 'medium',
   max_inbox_items INTEGER NOT NULL DEFAULT 50,
   chat_model_id UUID REFERENCES models(id) ON DELETE SET NULL,
-  memory_model_id UUID REFERENCES models(id) ON DELETE SET NULL,
-  embedding_model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   search_provider_id UUID REFERENCES search_providers(id) ON DELETE SET NULL,
+  memory_provider_id UUID REFERENCES memory_providers(id) ON DELETE SET NULL,
   heartbeat_enabled BOOLEAN NOT NULL DEFAULT false,
   heartbeat_interval INTEGER NOT NULL DEFAULT 30,
   heartbeat_prompt TEXT NOT NULL DEFAULT '',
@@ -160,6 +170,11 @@ CREATE TABLE IF NOT EXISTS mcp_connections (
   type TEXT NOT NULL,
   config JSONB NOT NULL DEFAULT '{}'::jsonb,
   is_active BOOLEAN NOT NULL DEFAULT true,
+  status TEXT NOT NULL DEFAULT 'unknown',
+  tools_cache JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_probed_at TIMESTAMPTZ,
+  status_message TEXT NOT NULL DEFAULT '',
+  auth_type TEXT NOT NULL DEFAULT 'none',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT mcp_connections_type_check CHECK (type IN ('stdio', 'http', 'sse')),
@@ -167,6 +182,32 @@ CREATE TABLE IF NOT EXISTS mcp_connections (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mcp_connections_bot_id ON mcp_connections(bot_id);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  connection_id UUID NOT NULL UNIQUE REFERENCES mcp_connections(id) ON DELETE CASCADE,
+  resource_metadata_url TEXT NOT NULL DEFAULT '',
+  authorization_server_url TEXT NOT NULL DEFAULT '',
+  authorization_endpoint TEXT NOT NULL DEFAULT '',
+  token_endpoint TEXT NOT NULL DEFAULT '',
+  registration_endpoint TEXT NOT NULL DEFAULT '',
+  scopes_supported TEXT[] NOT NULL DEFAULT '{}',
+  client_id TEXT NOT NULL DEFAULT '',
+  client_secret TEXT NOT NULL DEFAULT '',
+  access_token TEXT NOT NULL DEFAULT '',
+  refresh_token TEXT NOT NULL DEFAULT '',
+  token_type TEXT NOT NULL DEFAULT 'Bearer',
+  expires_at TIMESTAMPTZ,
+  scope TEXT NOT NULL DEFAULT '',
+  pkce_code_verifier TEXT NOT NULL DEFAULT '',
+  state_param TEXT NOT NULL DEFAULT '',
+  resource_uri TEXT NOT NULL DEFAULT '',
+  redirect_uri TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_connection_id ON mcp_oauth_tokens(connection_id);
 
 -- Bot history is bot-scoped (one history container per bot).
 

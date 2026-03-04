@@ -1,11 +1,11 @@
 <template>
   <section class="p-4  mx-auto">
     <!-- Header: search + create -->
-    <div class="flex items-center justify-between mb-6">
-      <h2 class="text-xl font-semibold tracking-tight">
+    <div class="flex items-center justify-between mb-6 flex-wrap">
+      <h2 class="text-xl font-semibold tracking-tight max-md:hidden">
         {{ $t('bots.title') }}
       </h2>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 ">
         <div class="relative">
           <FontAwesomeIcon
             :icon="['fas', 'magnifying-glass']"
@@ -25,7 +25,7 @@
     <div
       v-if="filteredBots.length > 0"
       class="grid gap-4"
-      style="grid-template-columns:repeat(auto-fill,minmax(300px,calc(25% - 1em)))!important"
+      style="grid-template-columns:repeat(auto-fill,minmax(400px,calc(25% - 1em)))!important"
     >
       <BotCard
         v-for="bot in filteredBots"

@@ -142,7 +142,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	if sender == nil {
 		return fmt.Errorf("reply sender not configured")
 	}
-	text := buildInboundQuery(msg.Message)
+	text := buildInboundQuery(msg.Message, nil)
 	if p.logger != nil {
 		p.logger.Debug("inbound handle start",
 			slog.String("channel", msg.Channel.String()),
@@ -153,7 +153,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			slog.String("conversation_id", strings.TrimSpace(msg.Conversation.ID)),
 		)
 	}
-	if strings.TrimSpace(text) == "" && len(msg.Message.Attachments) == 0 {
+	if strings.TrimSpace(msg.Message.PlainText()) == "" && len(msg.Message.Attachments) == 0 {
 		if p.logger != nil {
 			p.logger.Debug("inbound dropped empty", slog.String("channel", msg.Channel.String()))
 		}
@@ -185,6 +185,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	identity := state.Identity
 	resolvedAttachments := p.ingestInboundAttachments(ctx, cfg, msg, strings.TrimSpace(identity.BotID), msg.Message.Attachments)
 	attachments := mapChannelToChatAttachments(resolvedAttachments)
+	text = buildInboundQuery(msg.Message, attachments)
 
 	// Resolve or create the route via channel_routes.
 	if p.routeResolver == nil {
@@ -233,9 +234,6 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 				slog.String("query", strings.TrimSpace(text)),
 				slog.Int("attachments", len(attachments)),
 			)
-		}
-		if !strings.EqualFold(identity.BotType, "personal") {
-			p.persistInboundUser(ctx, resolved.RouteID, identity, msg, text, attachments, "passive_sync")
 		}
 		return nil
 	}
@@ -325,7 +323,8 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		Reply:           replyRef,
 		SourceMessageID: sourceMessageID,
 		Metadata: map[string]any{
-			"route_id": resolved.RouteID,
+			"route_id":          resolved.RouteID,
+			"conversation_type": msg.Conversation.Type,
 		},
 	})
 	if err != nil {
@@ -1054,7 +1053,7 @@ func mapStreamChunkToChannelEvents(chunk conversation.StreamChunk) ([]channel.St
 	}
 }
 
-func buildInboundQuery(message channel.Message) string {
+func buildInboundQuery(message channel.Message, attachments []conversation.ChatAttachment) string {
 	text := strings.TrimSpace(message.PlainText())
 	if text != "" {
 		return text
@@ -1063,10 +1062,46 @@ func buildInboundQuery(message channel.Message) string {
 		return ""
 	}
 	count := len(message.Attachments)
+	fallback := fmt.Sprintf("[User sent %d attachments]", count)
 	if count == 1 {
-		return "[User sent 1 attachment]"
+		fallback = "[User sent 1 attachment]"
 	}
-	return fmt.Sprintf("[User sent %d attachments]", count)
+	refs := collectContainerAttachmentRefs(attachments)
+	if len(refs) == 0 {
+		return fallback
+	}
+	var sb strings.Builder
+	sb.WriteString(fallback)
+	sb.WriteString("\n[Attachment refs: container paths]\n")
+	for _, ref := range refs {
+		sb.WriteString("- ")
+		sb.WriteString(ref)
+		sb.WriteByte('\n')
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func collectContainerAttachmentRefs(attachments []conversation.ChatAttachment) []string {
+	if len(attachments) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(attachments))
+	refs := make([]string, 0, len(attachments))
+	for _, att := range attachments {
+		ref := strings.TrimSpace(att.Path)
+		if ref == "" {
+			continue
+		}
+		if _, exists := seen[ref]; exists {
+			continue
+		}
+		seen[ref] = struct{}{}
+		refs = append(refs, ref)
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return refs
 }
 
 func normalizeContentPartType(raw string) channel.MessagePartType {

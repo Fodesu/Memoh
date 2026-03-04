@@ -242,6 +242,7 @@ import { useI18n } from 'vue-i18n'
 import { useMutation, useQueryCache } from '@pinia/colada'
 import { putBotsByIdChannelByPlatform, deleteBotsByIdChannelByPlatform, patchBotsByIdChannelByPlatformStatus } from '@memoh/sdk'
 import type { HandlersChannelMeta, ChannelChannelConfig, ChannelFieldSchema, ChannelUpsertConfigRequest } from '@memoh/sdk'
+import { client } from '@memoh/sdk/client'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 
 interface BotChannelItem {

@@ -1,12 +1,13 @@
 import {
   generateText,
-  ImagePart,
+  type ImagePart,
   LanguageModelUsage,
   ModelMessage,
   stepCountIs,
   streamText,
   ToolSet,
   UserModelMessage,
+  type PrepareStepFunction,
 } from 'ai'
 import {
   AgentInput,
@@ -17,6 +18,7 @@ import {
   Heartbeat,
   MCPConnection,
   Schedule,
+  SystemFile,
 } from './types'
 import { ClientType, ModelConfig, ModelInput, hasInputModality } from './types/model'
 import { system, schedule, heartbeat, subagentSystem } from './prompts'
@@ -35,6 +37,7 @@ import { buildIdentityHeaders } from './utils/headers'
 import { createFS } from './utils'
 import { createTextLoopGuard, createTextLoopProbeBuffer } from './sential'
 import { createToolLoopGuardedTools } from './tool-loop'
+import { createPrepareStepWithReadMedia } from './utils/read-media-injector'
 
 const ANTHROPIC_BUDGET: Record<string, number> = { low: 5000, medium: 16000, high: 50000 }
 const GOOGLE_BUDGET: Record<string, number> = { low: 5000, medium: 16000, high: 50000 }
@@ -83,7 +86,7 @@ export const buildNativeImageParts = (attachments: GatewayInputAttachment[]): Im
       (attachment.transport === 'inline_data_url' || attachment.transport === 'public_url') &&
       Boolean(attachment.payload),
     )
-    .map((attachment) => ({ type: 'image', image: attachment.payload } as ImagePart))
+    .map((attachment): ImagePart => ({ type: 'image', image: attachment.payload }))
 }
 
 export const createAgent = (
@@ -113,6 +116,7 @@ export const createAgent = (
     botId: identity?.botId,
     channel: currentChannel,
   })
+  const supportsImageInput = hasInputModality(modelConfig, ModelInput.Image)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providerOptions = buildProviderOptions(modelConfig) as any
   const loopDetectionEnabled = loopDetection?.enabled === true
@@ -130,22 +134,31 @@ export const createAgent = (
     return enabledSkills.map((skill) => skill.name)
   }
 
-  const loadSystemFiles = async () => {
+  const loadSystemFiles = async (): Promise<SystemFile[]> => {
     const home = '/data'
-    const [identityContent, soulContent, toolsContent] = await Promise.all([
-      fs.readText(`${home}/IDENTITY.md`),
-      fs.readText(`${home}/SOUL.md`),
-      fs.readText(`${home}/TOOLS.md`),
-    ]).catch((error) => {
-      console.error(error)
-      return ['', '', '']
-    })
-    return { identityContent, soulContent, toolsContent }
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    const getDateString = (date: Date) =>
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    const _today = getDateString(new Date())
+    const _yesterday = getDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    const files = [
+      'IDENTITY.md',
+      'SOUL.md',
+      'TOOLS.md',
+      'MEMORY.md',
+      'PROFILES.md',
+      `memory/${_today}.md`,
+      `memory/${_yesterday}.md`,      
+    ]
+    const promises = files.map((file) => (async () => ({
+      filename: file,
+      content: await fs.readText(`${home}/${file}`).catch(() => ''),
+    }))())
+    return await Promise.all(promises) as SystemFile[]
   }
 
   const generateSystemPrompt = async () => {
-    const { identityContent, soulContent, toolsContent } =
-      await loadSystemFiles()
+    const files = await loadSystemFiles()
     return system({
       date: new Date(),
       language,
@@ -154,10 +167,9 @@ export const createAgent = (
       currentChannel,
       skills,
       enabledSkills,
-      identityContent,
-      soulContent,
-      toolsContent,
       inbox,
+      supportsImageInput,
+      files,
     })
   }
 
@@ -201,8 +213,7 @@ export const createAgent = (
   }
 
   const generateUserPrompt = (input: AgentInput) => {
-    const supportsImage = hasInputModality(modelConfig, ModelInput.Image)
-    const imageParts = supportsImage ? buildNativeImageParts(input.attachments) : []
+    const imageParts = supportsImageInput ? buildNativeImageParts(input.attachments) : []
 
     const userMessage: UserModelMessage = {
       role: 'user',
@@ -246,13 +257,20 @@ export const createAgent = (
   const runTextGeneration = async ({
     messages,
     systemPrompt,
-    prepareStep,
+    basePrepareStep,
   }: {
     messages: ModelMessage[]
     systemPrompt: string
-    prepareStep?: () => { system: string }
+    basePrepareStep?: PrepareStepFunction
   }) => {
-    const { tools, close } = await getAgentTools()
+    const { tools: baseTools, close } = await getAgentTools()
+    const { prepareStep, tools: readMediaTools } = createPrepareStepWithReadMedia({
+      modelConfig,
+      fs,
+      systemPrompt,
+      basePrepareStep,
+    })
+    const tools = { ...baseTools, ...readMediaTools }
     let shouldAbortForToolLoop = false
     const guardedTools = buildGuardedTools(tools, () => {
       shouldAbortForToolLoop = true
@@ -266,7 +284,7 @@ export const createAgent = (
         system: systemPrompt,
         ...(providerOptions && { providerOptions }),
         stopWhen: stepCountIs(Infinity),
-        ...(prepareStep && { prepareStep }),
+        prepareStep,
         ...(loopDetectionEnabled && {
           onStepFinish: ({ text }: { text: string }) => {
             if (shouldAbortForToolLoop) {
@@ -302,11 +320,7 @@ export const createAgent = (
     const { response, reasoning, text, usage, steps } = await runTextGeneration({
       messages,
       systemPrompt,
-      prepareStep: () => {
-        return {
-          system: systemPrompt,
-        }
-      },
+      basePrepareStep: () => ({ system: systemPrompt }),
     })
     const stepUsages = buildStepUsages(steps)
     const { cleanedText, attachments: textAttachments } =
@@ -348,15 +362,12 @@ export const createAgent = (
         description: params.description,
       })
     }
+    const systemPrompt = generateSubagentSystemPrompt()
     const messages = [...params.messages, userPrompt]
     const { response, reasoning, text, usage, steps } = await runTextGeneration({
       messages,
-      systemPrompt: generateSubagentSystemPrompt(),
-      prepareStep: () => {
-        return {
-          system: generateSubagentSystemPrompt(),
-        }
-      },
+      systemPrompt,
+      basePrepareStep: () => ({ system: generateSubagentSystemPrompt() }),
     })
     const stepUsages = buildStepUsages(steps)
     return {
@@ -493,7 +504,14 @@ export const createAgent = (
       usages: [],
     }
     const toolLoopAbortCallIds = new Set<string>()
-    const { tools, close } = await getAgentTools()
+    const { tools: baseTools, close } = await getAgentTools()
+    const { prepareStep, tools: readMediaTools } = createPrepareStepWithReadMedia({
+      modelConfig,
+      fs,
+      systemPrompt,
+      basePrepareStep: () => ({ system: systemPrompt }),
+    })
+    const tools = { ...baseTools, ...readMediaTools }
     // Stream path needs deferred abort to keep tool_call_start/tool_call_end event pairing.
     const guardedTools = buildGuardedTools(tools, (toolCallId) => {
       toolLoopAbortCallIds.add(toolCallId)
@@ -513,11 +531,7 @@ export const createAgent = (
         system: systemPrompt,
         ...(providerOptions && { providerOptions }),
         stopWhen: stepCountIs(Infinity),
-        prepareStep: () => {
-          return {
-            system: systemPrompt,
-          }
-        },
+        prepareStep,
         tools: guardedTools,
         onFinish: async ({ usage, reasoning, response, steps }) => {
           await closeTools()

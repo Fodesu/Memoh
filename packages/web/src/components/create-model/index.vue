@@ -365,7 +365,7 @@ async function addModel() {
         }
         return updateModelByLegacyModelID({ modelId: fallback!.model_id, data: payload as any })
       }
-      return createModel(payload as any)
+      return createModel(payload)
     },
     {
       fallbackMessage: t('common.saveFailed'),

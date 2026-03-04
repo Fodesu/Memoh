@@ -690,8 +690,25 @@ definitions:
       provider:
         type: string
     type: object
+  github_com_memohai_memoh_internal_fs.FileInfo:
+    properties:
+      isDir:
+        type: boolean
+      modTime:
+        type: string
+      mode:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      size:
+        type: integer
+    type: object
   github_com_memohai_memoh_internal_mcp.Connection:
     properties:
+      auth_type:
+        type: string
       bot_id:
         type: string
       config:
@@ -703,8 +720,18 @@ definitions:
         type: string
       is_active:
         type: boolean
+      last_probed_at:
+        type: string
       name:
         type: string
+      status:
+        type: string
+      status_message:
+        type: string
+      tools_cache:
+        items:
+          $ref: '#/definitions/mcp.ToolDescriptor'
+        type: array
       type:
         type: string
       updated_at:
@@ -783,56 +810,6 @@ definitions:
       reasoning_tokens:
         type: integer
     type: object
-  handlers.EmbeddingsInput:
-    properties:
-      image_url:
-        type: string
-      text:
-        type: string
-      video_url:
-        type: string
-    type: object
-  handlers.EmbeddingsRequest:
-    properties:
-      dimensions:
-        type: integer
-      input:
-        $ref: '#/definitions/handlers.EmbeddingsInput'
-      model:
-        type: string
-      provider:
-        type: string
-      type:
-        type: string
-    type: object
-  handlers.EmbeddingsResponse:
-    properties:
-      dimensions:
-        type: integer
-      embedding:
-        items:
-          type: number
-        type: array
-      message:
-        type: string
-      model:
-        type: string
-      provider:
-        type: string
-      type:
-        type: string
-      usage:
-        $ref: '#/definitions/handlers.EmbeddingsUsage'
-    type: object
-  handlers.EmbeddingsUsage:
-    properties:
-      duration:
-        type: integer
-      image_tokens:
-        type: integer
-      input_tokens:
-        type: integer
-    type: object
   handlers.ErrorResponse:
     properties:
       message:
@@ -864,7 +841,7 @@ definitions:
     properties:
       entries:
         items:
-          $ref: '#/definitions/handlers.FSFileInfo'
+          $ref: '#/definitions/github_com_memohai_memoh_internal_fs.FileInfo'
         type: array
       path:
         type: string
@@ -1015,6 +992,19 @@ definitions:
       status:
         type: string
     type: object
+  handlers.ProbeResponse:
+    properties:
+      auth_required:
+        type: boolean
+      error:
+        type: string
+      status:
+        type: string
+      tools:
+        items:
+          $ref: '#/definitions/mcp.ToolDescriptor'
+        type: array
+    type: object
   handlers.RefreshResponse:
     properties:
       access_token:
@@ -1133,7 +1123,7 @@ definitions:
         type: string
       messages:
         items:
-          $ref: '#/definitions/memory.Message'
+          $ref: '#/definitions/provider.Message'
         type: array
       metadata:
         additionalProperties: {}
@@ -1176,6 +1166,16 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  handlers.oauthAuthorizeRequest:
+    properties:
+      client_id:
+        type: string
+    type: object
+  handlers.oauthDiscoverRequest:
+    properties:
+      url:
+        type: string
     type: object
   handlers.skillsOpResponse:
     properties:
@@ -1272,6 +1272,30 @@ definitions:
       source:
         type: string
     type: object
+  mcp.AuthorizeResult:
+    properties:
+      authorization_url:
+        type: string
+    type: object
+  mcp.DiscoveryResult:
+    properties:
+      authorization_endpoint:
+        type: string
+      authorization_server_url:
+        type: string
+      registration_endpoint:
+        type: string
+      resource_metadata_url:
+        type: string
+      resource_uri:
+        type: string
+      scopes_supported:
+        items:
+          type: string
+        type: array
+      token_endpoint:
+        type: string
+    type: object
   mcp.ExportResponse:
     properties:
       mcpServers:
@@ -1316,12 +1340,39 @@ definitions:
       url:
         type: string
     type: object
+  mcp.OAuthStatus:
+    properties:
+      auth_server:
+        type: string
+      configured:
+        type: boolean
+      expired:
+        type: boolean
+      expires_at:
+        type: string
+      has_token:
+        type: boolean
+      scopes:
+        type: string
+    type: object
+  mcp.ToolDescriptor:
+    properties:
+      description:
+        type: string
+      inputSchema:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+    type: object
   mcp.UpsertRequest:
     properties:
       args:
         items:
           type: string
         type: array
+      auth_type:
+        type: string
       command:
         type: string
       cwd:
@@ -1342,113 +1393,6 @@ definitions:
         type: string
       url:
         type: string
-    type: object
-  memory.CDFPoint:
-    properties:
-      cumulative:
-        description: cumulative weight fraction [0.0, 1.0]
-        type: number
-      k:
-        description: rank position (1-based, sorted by value desc)
-        type: integer
-    type: object
-  memory.CompactResult:
-    properties:
-      after_count:
-        type: integer
-      before_count:
-        type: integer
-      ratio:
-        type: number
-      results:
-        items:
-          $ref: '#/definitions/memory.MemoryItem'
-        type: array
-    type: object
-  memory.DeleteResponse:
-    properties:
-      message:
-        type: string
-    type: object
-  memory.MemoryItem:
-    properties:
-      agent_id:
-        type: string
-      bot_id:
-        type: string
-      cdf_curve:
-        items:
-          $ref: '#/definitions/memory.CDFPoint'
-        type: array
-      created_at:
-        type: string
-      hash:
-        type: string
-      id:
-        type: string
-      memory:
-        type: string
-      metadata:
-        additionalProperties: {}
-        type: object
-      run_id:
-        type: string
-      score:
-        type: number
-      top_k_buckets:
-        items:
-          $ref: '#/definitions/memory.TopKBucket'
-        type: array
-      updated_at:
-        type: string
-    type: object
-  memory.Message:
-    properties:
-      content:
-        type: string
-      role:
-        type: string
-    type: object
-  memory.RebuildResult:
-    properties:
-      fs_count:
-        type: integer
-      missing_count:
-        type: integer
-      qdrant_count:
-        type: integer
-      restored_count:
-        type: integer
-    type: object
-  memory.SearchResponse:
-    properties:
-      relations:
-        items: {}
-        type: array
-      results:
-        items:
-          $ref: '#/definitions/memory.MemoryItem'
-        type: array
-    type: object
-  memory.TopKBucket:
-    properties:
-      index:
-        description: sparse dimension index (term hash)
-        type: integer
-      value:
-        description: weight (term frequency)
-        type: number
-    type: object
-  memory.UsageResponse:
-    properties:
-      avg_text_bytes:
-        type: integer
-      count:
-        type: integer
-      estimated_storage_bytes:
-        type: integer
-      total_text_bytes:
-        type: integer
     type: object
   message.Message:
     properties:
@@ -1625,6 +1569,183 @@ definitions:
       type:
         $ref: '#/definitions/models.ModelType'
     type: object
+  provider.CDFPoint:
+    properties:
+      cumulative:
+        description: cumulative weight fraction [0.0, 1.0]
+        type: number
+      k:
+        description: rank position (1-based, sorted by value desc)
+        type: integer
+    type: object
+  provider.CompactResult:
+    properties:
+      after_count:
+        type: integer
+      before_count:
+        type: integer
+      ratio:
+        type: number
+      results:
+        items:
+          $ref: '#/definitions/provider.MemoryItem'
+        type: array
+    type: object
+  provider.DeleteResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  provider.MemoryItem:
+    properties:
+      agent_id:
+        type: string
+      bot_id:
+        type: string
+      cdf_curve:
+        items:
+          $ref: '#/definitions/provider.CDFPoint'
+        type: array
+      created_at:
+        type: string
+      hash:
+        type: string
+      id:
+        type: string
+      memory:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      run_id:
+        type: string
+      score:
+        type: number
+      top_k_buckets:
+        items:
+          $ref: '#/definitions/provider.TopKBucket'
+        type: array
+      updated_at:
+        type: string
+    type: object
+  provider.Message:
+    properties:
+      content:
+        type: string
+      role:
+        type: string
+    type: object
+  provider.ProviderConfigSchema:
+    properties:
+      fields:
+        additionalProperties:
+          $ref: '#/definitions/provider.ProviderFieldSchema'
+        type: object
+    type: object
+  provider.ProviderCreateRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+      provider:
+        $ref: '#/definitions/provider.ProviderType'
+    type: object
+  provider.ProviderFieldSchema:
+    properties:
+      description:
+        type: string
+      example: {}
+      required:
+        type: boolean
+      title:
+        type: string
+      type:
+        type: string
+    type: object
+  provider.ProviderGetResponse:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      created_at:
+        type: string
+      id:
+        type: string
+      is_default:
+        type: boolean
+      name:
+        type: string
+      provider:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  provider.ProviderMeta:
+    properties:
+      config_schema:
+        $ref: '#/definitions/provider.ProviderConfigSchema'
+      display_name:
+        type: string
+      provider:
+        type: string
+    type: object
+  provider.ProviderType:
+    enum:
+    - builtin
+    type: string
+    x-enum-varnames:
+    - ProviderBuiltin
+  provider.ProviderUpdateRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+    type: object
+  provider.RebuildResult:
+    properties:
+      fs_count:
+        type: integer
+      missing_count:
+        type: integer
+      qdrant_count:
+        type: integer
+      restored_count:
+        type: integer
+    type: object
+  provider.SearchResponse:
+    properties:
+      relations:
+        items: {}
+        type: array
+      results:
+        items:
+          $ref: '#/definitions/provider.MemoryItem'
+        type: array
+    type: object
+  provider.TopKBucket:
+    properties:
+      index:
+        description: sparse dimension index (term hash)
+        type: integer
+      value:
+        description: weight (term frequency)
+        type: number
+    type: object
+  provider.UsageResponse:
+    properties:
+      avg_text_bytes:
+        type: integer
+      count:
+        type: integer
+      estimated_storage_bytes:
+        type: integer
+      total_text_bytes:
+        type: integer
+    type: object
   providers.CountResponse:
     properties:
       count:
@@ -1663,6 +1784,22 @@ definitions:
         type: string
       updated_at:
         type: string
+    type: object
+  providers.ImportModelsRequest:
+    properties:
+      client_type:
+        type: string
+    type: object
+  providers.ImportModelsResponse:
+    properties:
+      created:
+        type: integer
+      models:
+        items:
+          type: string
+        type: array
+      skipped:
+        type: integer
     type: object
   providers.TestResponse:
     properties:
@@ -1856,8 +1993,6 @@ definitions:
         type: boolean
       chat_model_id:
         type: string
-      embedding_model_id:
-        type: string
       heartbeat_enabled:
         type: boolean
       heartbeat_interval:
@@ -1872,7 +2007,7 @@ definitions:
         type: integer
       max_inbox_items:
         type: integer
-      memory_model_id:
+      memory_provider_id:
         type: string
       reasoning_effort:
         type: string
@@ -1887,8 +2022,6 @@ definitions:
         type: boolean
       chat_model_id:
         type: string
-      embedding_model_id:
-        type: string
       heartbeat_enabled:
         type: boolean
       heartbeat_interval:
@@ -1903,7 +2036,7 @@ definitions:
         type: integer
       max_inbox_items:
         type: integer
-      memory_model_id:
+      memory_provider_id:
         type: string
       reasoning_effort:
         type: string
@@ -2030,6 +2163,32 @@ info:
   title: Memoh API
   version: 1.0.0
 paths:
+  /api/oauth/mcp/callback:
+    get:
+      description: Handles the OAuth authorization callback, exchanges code for tokens
+      parameters:
+      - description: Authorization code
+        in: query
+        name: code
+        required: true
+        type: string
+      - description: State parameter
+        in: query
+        name: state
+        required: true
+        type: string
+      responses:
+        "200":
+          description: HTML page that closes the popup
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: OAuth callback handler
+      tags:
+      - mcp
   /auth/login:
     post:
       description: Validate user credentials and issue a JWT
@@ -3506,6 +3665,144 @@ paths:
       summary: Update MCP connection
       tags:
       - mcp
+  /bots/{bot_id}/mcp/{id}/oauth/authorize:
+    post:
+      description: Generate PKCE and return authorization URL for the user to authorize
+      parameters:
+      - description: MCP connection ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Optional client_id
+        in: body
+        name: payload
+        schema:
+          $ref: '#/definitions/handlers.oauthAuthorizeRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/mcp.AuthorizeResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Start OAuth authorization flow
+      tags:
+      - mcp
+  /bots/{bot_id}/mcp/{id}/oauth/discover:
+    post:
+      description: Probe MCP server URL for OAuth requirements and discover authorization
+        server metadata
+      parameters:
+      - description: MCP connection ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Optional URL override
+        in: body
+        name: payload
+        schema:
+          $ref: '#/definitions/handlers.oauthDiscoverRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/mcp.DiscoveryResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Discover OAuth configuration for MCP server
+      tags:
+      - mcp
+  /bots/{bot_id}/mcp/{id}/oauth/status:
+    get:
+      description: Returns the current OAuth status including whether tokens are available
+      parameters:
+      - description: MCP connection ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/mcp.OAuthStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get OAuth status for MCP connection
+      tags:
+      - mcp
+  /bots/{bot_id}/mcp/{id}/oauth/token:
+    delete:
+      description: Clears stored OAuth tokens
+      parameters:
+      - description: MCP connection ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Revoke OAuth tokens for MCP connection
+      tags:
+      - mcp
+  /bots/{bot_id}/mcp/{id}/probe:
+    post:
+      description: Probe a MCP connection to discover tools and verify connectivity
+      parameters:
+      - description: MCP connection ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ProbeResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Probe MCP connection
+      tags:
+      - mcp
   /bots/{bot_id}/mcp/export:
     get:
       description: Export all MCP connections for a bot in standard mcpServers format.
@@ -3585,7 +3882,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.DeleteResponse'
+            $ref: '#/definitions/provider.DeleteResponse'
         "400":
           description: Bad Request
           schema:
@@ -3613,8 +3910,7 @@ paths:
         name: bot_id
         required: true
         type: string
-      - description: Skip sparse vector stats (top_k_buckets, cdf_curve) to reduce
-          overhead
+      - description: Skip optional stats in memory search response
         in: query
         name: no_stats
         type: boolean
@@ -3624,7 +3920,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.SearchResponse'
+            $ref: '#/definitions/provider.SearchResponse'
         "400":
           description: Bad Request
           schema:
@@ -3666,7 +3962,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.SearchResponse'
+            $ref: '#/definitions/provider.SearchResponse'
         "400":
           description: Bad Request
           schema:
@@ -3706,7 +4002,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.DeleteResponse'
+            $ref: '#/definitions/provider.DeleteResponse'
         "400":
           description: Bad Request
           schema:
@@ -3757,7 +4053,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.CompactResult'
+            $ref: '#/definitions/provider.CompactResult'
         "400":
           description: Bad Request
           schema:
@@ -3780,7 +4076,7 @@ paths:
   /bots/{bot_id}/memory/rebuild:
     post:
       description: Read memory files from the container filesystem (source of truth)
-        and restore missing entries to Qdrant
+        and restore missing entries to memory storage
       parameters:
       - description: Bot ID
         in: path
@@ -3793,7 +4089,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.RebuildResult'
+            $ref: '#/definitions/provider.RebuildResult'
         "400":
           description: Bad Request
           schema:
@@ -3836,7 +4132,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.SearchResponse'
+            $ref: '#/definitions/provider.SearchResponse'
         "400":
           description: Bad Request
           schema:
@@ -3875,7 +4171,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/memory.UsageResponse'
+            $ref: '#/definitions/provider.UsageResponse'
         "400":
           description: Bad Request
           schema:
@@ -5363,21 +5659,43 @@ paths:
       summary: Mailgun inbound email webhook
       tags:
       - email-webhook
-  /embeddings:
-    post:
-      description: Create text or multimodal embeddings
-      parameters:
-      - description: Embeddings request
-        in: body
-        name: payload
-        required: true
-        schema:
-          $ref: '#/definitions/handlers.EmbeddingsRequest'
+  /memory-providers:
+    get:
+      description: List configured memory providers
+      produces:
+      - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/handlers.EmbeddingsResponse'
+            items:
+              $ref: '#/definitions/provider.ProviderGetResponse'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List memory providers
+      tags:
+      - memory-providers
+    post:
+      consumes:
+      - application/json
+      description: Create a memory provider configuration
+      parameters:
+      - description: Memory provider configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/provider.ProviderCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/provider.ProviderGetResponse'
         "400":
           description: Bad Request
           schema:
@@ -5386,13 +5704,105 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
-        "501":
-          description: Not Implemented
-          schema:
-            $ref: '#/definitions/handlers.EmbeddingsResponse'
-      summary: Create embeddings
+      summary: Create a memory provider
       tags:
-      - embeddings
+      - memory-providers
+  /memory-providers/{id}:
+    delete:
+      description: Delete memory provider by ID
+      parameters:
+      - description: Provider ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Delete a memory provider
+      tags:
+      - memory-providers
+    get:
+      description: Get memory provider by ID
+      parameters:
+      - description: Provider ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/provider.ProviderGetResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get a memory provider
+      tags:
+      - memory-providers
+    put:
+      consumes:
+      - application/json
+      description: Update memory provider by ID
+      parameters:
+      - description: Provider ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/provider.ProviderUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/provider.ProviderGetResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Update a memory provider
+      tags:
+      - memory-providers
+  /memory-providers/meta:
+    get:
+      description: List available memory provider types and config schemas
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/provider.ProviderMeta'
+            type: array
+      summary: List memory provider metadata
+      tags:
+      - memory-providers
   /models:
     get:
       description: Get a list of all configured models, optionally filtered by type
@@ -5845,6 +6255,45 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Update provider
+      tags:
+      - providers
+  /providers/{id}/import-models:
+    post:
+      consumes:
+      - application/json
+      description: Fetch models from provider's /v1/models endpoint and import them
+      parameters:
+      - description: Provider ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Import configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/providers.ImportModelsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.ImportModelsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Import models from provider
       tags:
       - providers
   /providers/{id}/models:

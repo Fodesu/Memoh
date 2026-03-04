@@ -68,6 +68,14 @@ const routes = [
         },
       },
       {
+        name: 'memory-providers',
+        path: '/memory-providers',
+        component: () => import('@/pages/memory-providers/index.vue'),
+        meta: {
+          breadcrumb: i18nRef('sidebar.memoryProvider'),
+        },
+      },
+      {
         name: 'email-providers',
         path: '/email-providers',
         component: () => import('@/pages/email-providers/index.vue'),
@@ -106,6 +114,11 @@ const routes = [
     path: '/login',
     component: () => import('@/pages/login/index.vue'),
   },
+  {
+    name: 'oauth-mcp-callback',
+    path: '/oauth/mcp/callback',
+    component: () => import('@/pages/oauth/mcp-callback.vue'),
+  },
 ]
 
 const router = createRouter({
@@ -115,11 +128,13 @@ const router = createRouter({
 router.beforeEach((to) => {
   const token = localStorage.getItem('token')
 
-  if (to.fullPath !== '/login') {
-    return token ? true : { name: 'Login' }
-  } else {
+  if (to.fullPath === '/login') {
     return token ? { path: '/chat' } : true
   }
+  if (to.path.startsWith('/oauth/')) {
+    return true
+  }
+  return token ? true : { name: 'Login' }
 })
 
 export default router

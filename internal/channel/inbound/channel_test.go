@@ -387,7 +387,7 @@ func TestBuildInboundQueryAttachmentFallback(t *testing.T) {
 			{Type: channel.AttachmentImage},
 		},
 	}
-	if got := buildInboundQuery(one); got != "[User sent 1 attachment]" {
+	if got := buildInboundQuery(one, nil); got != "[User sent 1 attachment]" {
 		t.Fatalf("unexpected single attachment fallback: %q", got)
 	}
 
@@ -397,8 +397,31 @@ func TestBuildInboundQueryAttachmentFallback(t *testing.T) {
 			{Type: channel.AttachmentImage},
 		},
 	}
-	if got := buildInboundQuery(two); got != "[User sent 2 attachments]" {
+	if got := buildInboundQuery(two, nil); got != "[User sent 2 attachments]" {
 		t.Fatalf("unexpected multiple attachment fallback: %q", got)
+	}
+}
+
+func TestBuildInboundQueryAttachmentFallbackWithContainerRefs(t *testing.T) {
+	t.Parallel()
+
+	msg := channel.Message{
+		Attachments: []channel.Attachment{
+			{Type: channel.AttachmentImage},
+			{Type: channel.AttachmentImage},
+		},
+	}
+	atts := []conversation.ChatAttachment{
+		{Path: "/data/media/ab/first.png"},
+		{Path: "/data/media/cd/second.png"},
+		{Path: "/data/media/ab/first.png"},
+	}
+	want := "[User sent 2 attachments]\n" +
+		"[Attachment refs: container paths]\n" +
+		"- /data/media/ab/first.png\n" +
+		"- /data/media/cd/second.png"
+	if got := buildInboundQuery(msg, atts); got != want {
+		t.Fatalf("unexpected attachment refs fallback:\nwant:\n%s\n\ngot:\n%s", want, got)
 	}
 }
 
