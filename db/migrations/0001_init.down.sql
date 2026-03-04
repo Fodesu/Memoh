@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS bot_channel_configs;
 DROP TABLE IF EXISTS mcp_connections;
 DROP TABLE IF EXISTS bot_members;
 DROP TABLE IF EXISTS bots;
+DROP TABLE IF EXISTS memory_providers;
 DROP TABLE IF EXISTS model_variants;
 DROP TABLE IF EXISTS models;
 DROP TABLE IF EXISTS search_providers;
