@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ChunkerMode selects the text chunking strategy.
@@ -15,6 +17,8 @@ const (
 	ChunkerModeText     ChunkerMode = "text"
 	ChunkerModeMarkdown ChunkerMode = "markdown"
 )
+
+const streamFinalFirstChunkTimeout = 3 * time.Second
 
 // OutboundOrder controls the delivery order of text and media messages.
 type OutboundOrder string
@@ -518,6 +522,16 @@ func (s *managerReplySender) OpenStream(ctx context.Context, target string, opts
 		manager:     s.manager,
 		stream:      stream,
 		channelType: s.channelType,
+		send: func(ctx context.Context, msg OutboundMessage) error {
+			msg.Target = target
+			return s.Send(ctx, msg)
+		},
+		reopen: func(ctx context.Context) (OutboundStream, error) {
+			return s.streamSender.OpenStream(ctx, s.config, target, StreamOptions{
+				SourceMessageID: opts.SourceMessageID,
+				Metadata:        opts.Metadata,
+			})
+		},
 	}, nil
 }
 
@@ -525,6 +539,11 @@ type managerOutboundStream struct {
 	manager     *Manager
 	stream      OutboundStream
 	channelType ChannelType
+	send        func(ctx context.Context, msg OutboundMessage) error
+	reopen      func(ctx context.Context) (OutboundStream, error)
+	deltaRunes  int
+	deltaText   strings.Builder
+	splitCount  int
 }
 
 func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) error {
@@ -534,7 +553,295 @@ func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) err
 	if err := validateStreamEvent(s.manager.registry, s.channelType, event); err != nil {
 		return err
 	}
+
+	if event.Type == StreamEventDelta && event.Delta != "" && event.Phase != StreamPhaseReasoning {
+		return s.pushDelta(ctx, event)
+	}
+
+	if event.Type == StreamEventFinal && event.Final != nil && s.send != nil {
+		if s.splitCount > 0 {
+			return s.pushFinalAfterSplit(ctx, event)
+		}
+		return s.pushFinalWithChunking(ctx, event)
+	}
 	return s.stream.Push(ctx, event)
+}
+
+// streamSplitSoftRatio controls the soft-limit window. The soft limit is
+// hardLimit - hardLimit/streamSplitSoftRatio (75% of hard limit). Between
+// soft and hard the manager watches for natural break points to split
+// gracefully; if none is found it force-splits at the hard limit.
+const streamSplitSoftRatio = 4
+
+// pushDelta forwards a text delta and splits the stream into a new message
+// when accumulated text approaches the platform's TextChunkLimit. Between
+// the soft and hard limits it looks for natural break points (sentence ends,
+// line breaks) so messages don't get cut mid-sentence.
+func (s *managerOutboundStream) pushDelta(ctx context.Context, event StreamEvent) error {
+	policy := s.manager.resolveOutboundPolicy(s.channelType)
+	if policy.TextChunkLimit <= 0 || s.reopen == nil {
+		s.deltaRunes += runeLen(event.Delta)
+		return s.stream.Push(ctx, event)
+	}
+
+	newRunes := runeLen(event.Delta)
+	afterRunes := s.deltaRunes + newRunes
+	hardLimit := policy.TextChunkLimit
+	softLimit := hardLimit - hardLimit/streamSplitSoftRatio
+
+	if afterRunes <= softLimit {
+		s.deltaRunes = afterRunes
+		s.deltaText.WriteString(event.Delta)
+		return s.stream.Push(ctx, event)
+	}
+
+	if afterRunes <= hardLimit {
+		s.deltaRunes = afterRunes
+		s.deltaText.WriteString(event.Delta)
+		if err := s.stream.Push(ctx, event); err != nil {
+			return err
+		}
+		if isNaturalBreakPoint(s.deltaText.String()) {
+			s.deltaRunes = 0
+			s.deltaText.Reset()
+			return s.splitStream(ctx)
+		}
+		return nil
+	}
+
+	if err := s.splitStream(ctx); err != nil {
+		return err
+	}
+	s.deltaRunes = newRunes
+	s.deltaText.Reset()
+	s.deltaText.WriteString(event.Delta)
+	return s.stream.Push(ctx, event)
+}
+
+// splitStream finalizes the current adapter stream, opens a continuation
+// stream, and sends Status(Started) so the adapter creates a new platform
+// message before the first delta arrives.
+func (s *managerOutboundStream) splitStream(ctx context.Context) error {
+	if err := s.stream.Push(ctx, StreamEvent{
+		Type:  StreamEventFinal,
+		Final: &StreamFinalizePayload{},
+	}); err != nil {
+		return err
+	}
+	if err := s.stream.Close(ctx); err != nil {
+		return err
+	}
+
+	newStream, err := s.reopen(ctx)
+	if err != nil {
+		return err
+	}
+	s.stream = newStream
+	s.splitCount++
+
+	return s.stream.Push(ctx, StreamEvent{
+		Type:   StreamEventStatus,
+		Status: StreamStatusStarted,
+	})
+}
+
+const sentenceTerminators = ".。!！?？…⋯;；"
+
+// isNaturalBreakPoint reports whether text ends at a position suitable for
+// splitting a message — a line break or sentence-ending punctuation.
+func isNaturalBreakPoint(text string) bool {
+	if strings.HasSuffix(text, "\n") {
+		return true
+	}
+	trimmed := strings.TrimRightFunc(text, unicode.IsSpace)
+	if trimmed == "" {
+		return false
+	}
+	last, _ := utf8.DecodeLastRuneInString(trimmed)
+	return strings.ContainsRune(sentenceTerminators, last)
+}
+
+// pushFinalAfterSplit handles StreamEventFinal when the adapter has already
+// sent earlier portions of the response during streaming. It passes an
+// empty-text Final so the adapter finalizes its internal buffer, then
+// delivers any remaining attachments / actions via the non-streaming path.
+func (s *managerOutboundStream) pushFinalAfterSplit(ctx context.Context, event StreamEvent) error {
+	bufferFinal := StreamEvent{
+		Type:     StreamEventFinal,
+		Final:    &StreamFinalizePayload{},
+		Metadata: event.Metadata,
+	}
+	if err := s.stream.Push(ctx, bufferFinal); err != nil {
+		return err
+	}
+
+	if event.Final == nil {
+		return nil
+	}
+	msg := event.Final.Message
+
+	if len(msg.Attachments) > 0 {
+		if err := s.send(ctx, OutboundMessage{
+			Message: Message{
+				Attachments: msg.Attachments,
+				Thread:      msg.Thread,
+				Actions:     msg.Actions,
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *managerOutboundStream) pushFinalWithChunking(ctx context.Context, event StreamEvent) error {
+	policy := s.manager.resolveOutboundPolicy(s.channelType)
+	if policy.TextChunkLimit <= 0 {
+		if s.manager.logger != nil {
+			s.manager.logger.Debug("stream final chunking skipped: non-positive chunk limit",
+				slog.String("channel", s.channelType.String()),
+				slog.Int("chunk_limit", policy.TextChunkLimit),
+			)
+		}
+		return s.stream.Push(ctx, event)
+	}
+	msg := normalizeOutboundMessage(event.Final.Message)
+	text := strings.TrimSpace(msg.PlainText())
+	textRunes := runeLen(text)
+	if s.manager.logger != nil {
+		s.manager.logger.Debug("stream final chunking evaluate",
+			slog.String("channel", s.channelType.String()),
+			slog.Int("chunk_limit", policy.TextChunkLimit),
+			slog.Int("text_runes", textRunes),
+			slog.Int("attachments", len(msg.Attachments)),
+			slog.String("format", string(msg.Format)),
+		)
+	}
+	if text == "" || runeLen(text) <= policy.TextChunkLimit {
+		if s.manager.logger != nil {
+			s.manager.logger.Debug("stream final chunking skipped: text within limit",
+				slog.String("channel", s.channelType.String()),
+				slog.Int("text_runes", textRunes),
+				slog.Int("chunk_limit", policy.TextChunkLimit),
+			)
+		}
+		return s.stream.Push(ctx, event)
+	}
+
+	chunker := policy.Chunker
+	if msg.Format == MessageFormatMarkdown {
+		chunker = ChunkMarkdownText
+	}
+	chunks := chunker(text, policy.TextChunkLimit)
+	if len(chunks) <= 1 {
+		if s.manager.logger != nil {
+			s.manager.logger.Debug("stream final chunking skipped: chunker returned single chunk",
+				slog.String("channel", s.channelType.String()),
+				slog.Int("chunks", len(chunks)),
+			)
+		}
+		return s.stream.Push(ctx, event)
+	}
+
+	hasAttachments := len(msg.Attachments) > 0
+	if s.manager.logger != nil {
+		s.manager.logger.Info("stream final chunking applied",
+			slog.String("channel", s.channelType.String()),
+			slog.Int("chunks", len(chunks)),
+			slog.Bool("has_attachments", hasAttachments),
+		)
+	}
+
+	firstMsg := msg
+	firstMsg.Text = chunks[0]
+	firstMsg.Parts = nil
+	firstMsg.Attachments = nil
+	firstMsg.Actions = nil
+	firstChunkEvent := StreamEvent{
+		Type:     StreamEventFinal,
+		Final:    &StreamFinalizePayload{Message: firstMsg},
+		Metadata: event.Metadata,
+	}
+	firstChunkCtx, cancelFirstChunk := context.WithTimeout(ctx, streamFinalFirstChunkTimeout)
+	defer cancelFirstChunk()
+	if err := s.stream.Push(firstChunkCtx, firstChunkEvent); err != nil {
+		if s.manager.logger != nil {
+			s.manager.logger.Warn("stream final first chunk push failed, fallback to direct sends",
+				slog.String("channel", s.channelType.String()),
+				slog.Duration("timeout", streamFinalFirstChunkTimeout),
+				slog.Any("error", err),
+			)
+		}
+		return s.sendChunkedFinal(ctx, msg, chunks, 0, hasAttachments)
+	}
+	return s.sendChunkedFinal(ctx, msg, chunks, 1, hasAttachments)
+}
+
+func (s *managerOutboundStream) sendChunkedFinal(ctx context.Context, msg Message, chunks []string, startIndex int, hasAttachments bool) error {
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	for idx := startIndex; idx < len(chunks); idx++ {
+		chunk := chunks[idx]
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		isLast := idx == len(chunks)-1
+		var actions []Action
+		if isLast && !hasAttachments {
+			actions = msg.Actions
+		}
+		if err := s.send(ctx, OutboundMessage{
+			Message: Message{
+				Format:   msg.Format,
+				Text:     chunk,
+				Thread:   msg.Thread,
+				Reply:    msg.Reply,
+				Metadata: msg.Metadata,
+				Actions:  actions,
+			},
+		}); err != nil {
+			if s.manager.logger != nil {
+				s.manager.logger.Error("stream final overflow chunk send failed",
+					slog.String("channel", s.channelType.String()),
+					slog.Int("chunk_index", idx+1),
+					slog.Int("total_chunks", len(chunks)),
+					slog.Any("error", err),
+				)
+			}
+			return err
+		}
+	}
+
+	if hasAttachments {
+		if err := s.send(ctx, OutboundMessage{
+			Message: Message{
+				Attachments: msg.Attachments,
+				Thread:      msg.Thread,
+				Reply:       msg.Reply,
+				Metadata:    msg.Metadata,
+				Actions:     msg.Actions,
+			},
+		}); err != nil {
+			if s.manager.logger != nil {
+				s.manager.logger.Error("stream final attachments send failed",
+					slog.String("channel", s.channelType.String()),
+					slog.Int("attachments", len(msg.Attachments)),
+					slog.Any("error", err),
+				)
+			}
+			return err
+		}
+	}
+	if s.manager.logger != nil {
+		s.manager.logger.Info("stream final chunking completed",
+			slog.String("channel", s.channelType.String()),
+			slog.Int("chunks", len(chunks)),
+			slog.Bool("has_attachments", hasAttachments),
+		)
+	}
+	return nil
 }
 
 func (s *managerOutboundStream) Close(ctx context.Context) error {

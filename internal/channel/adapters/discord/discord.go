@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/memohai/memoh/internal/channel"
@@ -18,7 +19,10 @@ import (
 	"github.com/memohai/memoh/internal/media"
 )
 
-const inboundDedupTTL = time.Minute
+const (
+	inboundDedupTTL  = time.Minute
+	discordMaxLength = 2000
+)
 
 // assetOpener reads stored asset bytes by content hash.
 type assetOpener interface {
@@ -306,11 +310,11 @@ func (a *DiscordAdapter) sendDiscordMessage(ctx context.Context, session *discor
 }
 
 func truncateDiscordText(text string) string {
-	const discordMaxLength = 2000
-	if len(text) > discordMaxLength {
-		text = text[:discordMaxLength-3] + "..."
+	if utf8.RuneCountInString(text) <= discordMaxLength {
+		return text
 	}
-	return text
+	runes := []rune(text)
+	return string(runes[:discordMaxLength-3]) + "..."
 }
 
 // discordAttachmentToFile converts a channel attachment to discordgo.File
