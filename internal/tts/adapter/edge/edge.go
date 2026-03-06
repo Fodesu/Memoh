@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/memohai/memoh/internal/tts"
 )
@@ -30,11 +31,11 @@ func NewEdgeAdapterWithClient(log *slog.Logger, client *EdgeWsClient) *EdgeAdapt
 	}
 }
 
-func (a *EdgeAdapter) Type() tts.TtsType {
+func (*EdgeAdapter) Type() tts.TtsType {
 	return TtsTypeEdge
 }
 
-func (a *EdgeAdapter) Meta() tts.TtsMeta {
+func (*EdgeAdapter) Meta() tts.TtsMeta {
 	return tts.TtsMeta{
 		Provider:    "Microsoft Edge",
 		Description: "Microsoft Edge TTS",
@@ -55,16 +56,18 @@ var edgeSpeedConstraint = &tts.ParamConstraint{
 }
 
 var edgePitchConstraint = &tts.ParamConstraint{
-    Min: -100,
-    Max: 100,
+	Min:     -100,
+	Max:     100,
 	Default: 0,
 }
 
-func (a *EdgeAdapter) Capabilities() tts.Capabilities {
+func (*EdgeAdapter) Capabilities() tts.Capabilities {
 	var voices []tts.VoiceInfo
-	for lang, ids := range EDGE_TTS_VOICES {
+	for lang, ids := range EdgeTTSVoices {
 		for _, id := range ids {
-			voices = append(voices, tts.VoiceInfo{ID: id, Lang: lang, Name: id})
+			name := strings.TrimPrefix(id, lang+"-")
+			name = strings.TrimSuffix(name, "Neural")
+			voices = append(voices, tts.VoiceInfo{ID: id, Lang: lang, Name: name})
 		}
 	}
 	return tts.Capabilities{

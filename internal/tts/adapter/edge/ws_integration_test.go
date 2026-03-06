@@ -24,7 +24,7 @@ func TestRealEdgeTTS_Synthesize(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	config := tts.AudioConfig{Voice: "en-US-JennyNeural", Speed: 1.0}
+	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}, Speed: 1.0}
 	audio, err := client.Synthesize(ctx, "Hello, this is a real Edge TTS test.", config)
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -40,7 +40,7 @@ func TestRealEdgeTTS_Stream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	config := tts.AudioConfig{Voice: "zh-CN-XiaoxiaoNeural"}
+	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "zh-CN-XiaoxiaoNeural", Lang: "zh-CN"}}
 	ch, errCh := client.Stream(ctx, "你好，这是流式测试。", config)
 	var total int
 	for b := range ch {
@@ -66,11 +66,11 @@ func TestRealEdgeTTS_SaveAudio(t *testing.T) {
 	cases := []struct {
 		name  string
 		text  string
-		voice string
+		voice tts.VoiceConfig
 		file  string
 	}{
-		{"en", "Hello, this is an Edge TTS audio save test.", "en-US-JennyNeural", "test_en.mp3"},
-		{"zh", "你好，这是一段中文语音合成测试。", "zh-CN-XiaoxiaoNeural", "test_zh.mp3"},
+		{"en", "Hello, this is an Edge TTS audio save test.", tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}, "test_en.mp3"},
+		{"zh", "你好，这是一段中文语音合成测试。", tts.VoiceConfig{ID: "zh-CN-XiaoxiaoNeural", Lang: "zh-CN"}, "test_zh.mp3"},
 	}
 
 	outDir := filepath.Join(os.TempDir(), "edge_tts_test")
@@ -80,7 +80,7 @@ func TestRealEdgeTTS_SaveAudio(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			config := tts.AudioConfig{Voice: tc.voice, Speed: 1.0}
+			config := tts.AudioConfig{Voice: tc.voice, Speed: 1.0, Pitch: -10.0}
 			audio, err := client.Synthesize(ctx, tc.text, config)
 			if err != nil {
 				t.Fatalf("Synthesize: %v", err)

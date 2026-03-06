@@ -3,17 +3,19 @@ package edge
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/memohai/memoh/internal/tts"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(_ *http.Request) bool { return true },
 }
 
 // mockEdgeTTSHandler mock Edge TTS server: receive speech.config and ssml, replay turn.start, response, binary audio, turn.end.
@@ -24,7 +26,7 @@ func mockEdgeTTSHandler(t *testing.T) http.HandlerFunc {
 			t.Logf("mock edge tts upgrade: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// 1) expect the first message to be speech.config
 		_, data, err := conn.ReadMessage()
@@ -64,7 +66,11 @@ func mockEdgeTTSHandler(t *testing.T) http.HandlerFunc {
 		header := []byte("Path: audio\r\nX-RequestId: mock\r\nContent-Type: audio/webm; codec=opus\r\n\r\n")
 		audioPayload := []byte("fake-webm-audio-data")
 		buf := make([]byte, 2+len(header)+len(audioPayload))
-		binary.BigEndian.PutUint16(buf[:2], uint16(len(header)))
+		if len(header) > math.MaxUint16 {
+			t.Logf("header too large: %d > %d", len(header), math.MaxUint16)
+			return
+		}
+		binary.BigEndian.PutUint16(buf[:2], uint16(len(header))) //nolint:gosec // Bounded by MaxUint16 check above.
 		copy(buf[2:], header)
 		copy(buf[2+len(header):], audioPayload)
 		if err := conn.WriteMessage(websocket.BinaryMessage, buf); err != nil {
@@ -89,7 +95,7 @@ func TestEdgeWsClient_ConnectAndSynthesize(t *testing.T) {
 	client := NewEdgeWsClient()
 	client.BaseURL = wsURL
 
-	config := tts.AudioConfig{Voice: "en-US-JennyNeural", Speed: 1.0}
+	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}, Speed: 1.0}
 	audio, err := client.Synthesize(t.Context(), "Hello world", config)
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -108,7 +114,7 @@ func TestEdgeWsClient_Stream(t *testing.T) {
 	client := NewEdgeWsClient()
 	client.BaseURL = wsURL
 
-	config := tts.AudioConfig{Voice: "en-US-JennyNeural"}
+	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}}
 	ch, errCh := client.Stream(t.Context(), "Hi", config)
 	var chunks [][]byte
 	for b := range ch {
@@ -152,7 +158,11 @@ func TestParseAudioChunk(t *testing.T) {
 	header := []byte("Path: audio\r\n\r\n")
 	audio := []byte("xyz")
 	buf := make([]byte, 2+len(header)+len(audio))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(header)))
+	if len(header) > math.MaxUint16 {
+		t.Logf("header too large: %d > %d", len(header), math.MaxUint16)
+		return
+	}
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(header))) //nolint:gosec // Bounded by MaxUint16 check above.
 	copy(buf[2:], header)
 	copy(buf[2+len(header):], audio)
 
@@ -187,7 +197,7 @@ func TestParseAudioChunk_EmptyOrShort(t *testing.T) {
 
 func TestBuildSSML(t *testing.T) {
 	t.Parallel()
-	ssml := buildSSML("Hello", "zh-CN-XiaoxiaoNeural", 1.0, 0)
+	ssml := buildSSML("Hello", tts.VoiceConfig{ID: "zh-CN-XiaoxiaoNeural", Lang: "zh-CN"}, 1.0, 0)
 	if !strings.Contains(ssml, "zh-CN-XiaoxiaoNeural") {
 		t.Errorf("ssml should contain voice: %s", ssml)
 	}

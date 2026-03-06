@@ -37,7 +37,7 @@ func TestEdgeAdapter_Synthesize_WithMockServer(t *testing.T) {
 	adapter := NewEdgeAdapterWithClient(slog.Default(), client)
 
 	ctx := context.Background()
-	config := tts.AudioConfig{Voice: "en-US-JennyNeural"}
+	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}}
 	audio, err := adapter.Synthesize(ctx, "Hello", config)
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -61,7 +61,7 @@ func TestEdgeAdapter_Stream_WithMockServer(t *testing.T) {
 	adapter := NewEdgeAdapterWithClient(slog.Default(), client)
 
 	ctx := context.Background()
-	config := tts.AudioConfig{Voice: "en-US-JennyNeural"}
+	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}}
 	ch, errCh := adapter.Stream(ctx, "Hi", config)
 	var chunks [][]byte
 	for b := range ch {

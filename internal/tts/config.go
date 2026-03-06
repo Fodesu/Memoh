@@ -4,13 +4,19 @@ import "github.com/go-playground/validator/v10"
 
 var validate = validator.New()
 
+// VoiceConfig identifies a TTS voice and its language.
+type VoiceConfig struct {
+	ID   string `json:"id"   validate:"required"`
+	Lang string `json:"lang" validate:"required"`
+}
+
 // AudioConfig is the user-facing configuration for a TTS request.
 type AudioConfig struct {
-	Format     string  `json:"format"      validate:"omitempty"`
-	SampleRate int     `json:"sample_rate"  validate:"omitempty,oneof=16000 24000 48000"`
-	Speed      float64 `json:"speed"        validate:"omitempty"`
-	Pitch      float64 `json:"pitch"        validate:"omitempty"`
-	Voice      string  `json:"voice"        validate:"required"`
+	Format     string      `json:"format"      validate:"omitempty"`
+	SampleRate int         `json:"sample_rate"  validate:"omitempty,oneof=16000 24000 48000"`
+	Speed      float64     `json:"speed"        validate:"omitempty"`
+	Pitch      float64     `json:"pitch"        validate:"omitempty"`
+	Voice      VoiceConfig `json:"voice"`
 }
 
 func (c AudioConfig) Validate() error {

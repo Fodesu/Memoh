@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+
 	"github.com/memohai/memoh/internal/tts"
 )
 
@@ -61,7 +63,7 @@ func NewEdgeWsClient() *EdgeWsClient {
 	}
 }
 
-// Generate Sec-MS-GEC 
+// Generate Sec-MS-GEC
 // @see https://github.com/readest/readest/blob/main/apps/readest-app/src/libs/edgeTTS.ts#L208
 func generateSecMSGec() string {
 	ticks := time.Now().Unix() + WIN_EPOCH_OFFSET
@@ -72,7 +74,7 @@ func generateSecMSGec() string {
 	return strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
-// generateMuid  MUID，for Cookie
+// generateMuid  MUID，for Cookie.
 func generateMuid() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
@@ -121,8 +123,8 @@ func (c *EdgeWsClient) Connect(ctx context.Context) error {
 	c.connID = strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"http/1.1"},
+		// InsecureSkipVerify: true,
+		NextProtos: []string{"http/1.1"},
 	}
 	d := websocket.Dialer{
 		Proxy:            http.ProxyFromEnvironment,
@@ -135,7 +137,7 @@ func (c *EdgeWsClient) Connect(ctx context.Context) error {
 	if err != nil {
 		if resp != nil {
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return fmt.Errorf("edge tts ws dial: %w (status=%s body=%s)", err, resp.Status, string(bytes.TrimSpace(body)))
 		}
 		return fmt.Errorf("edge tts ws dial: %w", err)
@@ -181,12 +183,16 @@ func (c *EdgeWsClient) sendFrame(path, contentType, body string, extraHeaders ma
 	return c.conn.WriteMessage(websocket.TextMessage, []byte(b.String()))
 }
 
-// Configure send speech.config configuration (output format, voice, etc.).
+// Configure sends the speech.config message (output format, etc.).
 func (c *EdgeWsClient) Configure(ctx context.Context, config tts.AudioConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {
-		return fmt.Errorf("edge tts: not connected")
+		return errors.New("edge tts: not connected")
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = c.conn.SetWriteDeadline(deadline)
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
 	}
 	format := c.outputFormat
 	if config.Format != "" {
@@ -200,33 +206,28 @@ func (c *EdgeWsClient) Configure(ctx context.Context, config tts.AudioConfig) er
 	return c.sendFrame("speech.config", "application/json; charset=utf-8", body, extra)
 }
 
-// inferLangFromVoice extract the language tag (e.g. "en-US") from a voice name like "en-US-JennyNeural".
-func inferLangFromVoice(voice string) string {
-	parts := strings.SplitN(voice, "-", 3)
-	if len(parts) >= 2 {
-		return parts[0] + "-" + parts[1]
+// buildSSML builds SSML with rate and pitch for Edge TTS prosody.
+func buildSSML(text string, voice tts.VoiceConfig, speed, pitch float64) string {
+	voiceID := voice.ID
+	if voiceID == "" {
+		voiceID = DEFAULT_VOICE
 	}
-	return "en-US"
-}
-
-// buildSSML build SSML according to text and config like readest.
-func buildSSML(text, voice string, speed, pitch float64) string {
-	voiceAttr := DEFAULT_VOICE
-	if voice != "" {
-		voiceAttr = voice
+	lang := voice.Lang
+	if lang == "" {
+		lang = "en-US"
 	}
-	lang := inferLangFromVoice(voiceAttr)
 
 	rate := 0
 	if speed > 0 {
 		rate = int((speed - 1) * 100)
 	}
 	rateStr := fmt.Sprintf("%+d%%", rate)
+	pitchStr := fmt.Sprintf("%+dHz", int(pitch))
 
 	return fmt.Sprintf(
 		`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="%s">`+
-			`<voice name="%s"><prosody rate="%s">%s</prosody></voice></speak>`,
-		lang, voiceAttr, rateStr, escapeSSML(text))
+			`<voice name="%s"><prosody rate="%s" pitch="%s">%s</prosody></voice></speak>`,
+		lang, voiceID, rateStr, pitchStr, escapeSSML(text))
 }
 
 func escapeSSML(s string) string {
@@ -253,7 +254,7 @@ func (c *EdgeWsClient) Synthesize(ctx context.Context, text string, config tts.A
 	connID := c.connID
 	c.mu.Unlock()
 	if conn == nil {
-		return nil, fmt.Errorf("edge tts: not connected")
+		return nil, errors.New("edge tts: not connected")
 	}
 
 	ssml := buildSSML(text, config.Voice, config.Speed, config.Pitch)
@@ -280,7 +281,7 @@ func (c *EdgeWsClient) Synthesize(ctx context.Context, text string, config tts.A
 		case websocket.TextMessage:
 			if parsePath(data) == "turn.end" {
 				c.mu.Lock()
-				c.resetLocked()
+				_ = c.resetLocked()
 				c.mu.Unlock()
 				return out, nil
 			}
@@ -347,7 +348,7 @@ func (c *EdgeWsClient) Stream(ctx context.Context, text string, config tts.Audio
 		connID := c.connID
 		c.mu.Unlock()
 		if conn == nil {
-			errCh <- fmt.Errorf("edge tts: not connected")
+			errCh <- errors.New("edge tts: not connected")
 			return
 		}
 
@@ -377,7 +378,7 @@ func (c *EdgeWsClient) Stream(ctx context.Context, text string, config tts.Audio
 			case websocket.TextMessage:
 				if parsePath(data) == "turn.end" {
 					c.mu.Lock()
-					c.resetLocked()
+					_ = c.resetLocked()
 					c.mu.Unlock()
 					return
 				}
