@@ -1,0 +1,187 @@
+import { Elysia } from 'elysia'
+import z from 'zod'
+import { createAgent, ModelConfig } from '@memoh/agent'
+import { createAuthFetcher, getBaseUrl } from '../index'
+import { bearerMiddleware } from '../middlewares/bearer'
+import { AgentSkillModel, AttachmentModel, HeartbeatModel, IdentityContextModel, InboxItemModel, LoopDetectionModel, MCPConnectionModel, ModelConfigModel, ScheduleModel } from '../models'
+import { sseChunked } from '../utils/sse'
+
+const AgentModel = z.object({
+  model: ModelConfigModel,
+  activeContextTime: z.number(),
+  channels: z.array(z.string()),
+  currentChannel: z.string(),
+  messages: z.array(z.any()),
+  usableSkills: z.array(AgentSkillModel).optional().default([]),
+  skills: z.array(z.string()),
+  identity: IdentityContextModel,
+  attachments: z.array(AttachmentModel).optional().default([]),
+  mcpConnections: z.array(MCPConnectionModel).optional().default([]),
+  inbox: z.array(InboxItemModel).optional().default([]),
+  loopDetection: LoopDetectionModel,
+})
+
+export const chatModule = new Elysia({ prefix: '/chat' })
+  .use(bearerMiddleware)
+  .post('/', async ({ body, bearer }) => {
+    console.log('chat', body)
+    const auth = {
+      bearer: bearer!,
+      baseUrl: getBaseUrl(),
+    }
+    const authFetcher = createAuthFetcher(auth)
+    const { ask } = createAgent({
+      model: body.model as ModelConfig,
+      activeContextTime: body.activeContextTime,
+      channels: body.channels,
+      currentChannel: body.currentChannel,
+      identity: body.identity,
+      auth,
+      skills: body.usableSkills,
+      mcpConnections: body.mcpConnections,
+      inbox: body.inbox,
+      loopDetection: body.loopDetection,
+    }, authFetcher)
+    return ask({
+      query: body.query,
+      messages: body.messages,
+      skills: body.skills,
+      attachments: body.attachments,
+    })
+  }, {
+    body: AgentModel.extend({
+      query: z.string().optional().default(''),
+    }),
+  })
+  .post('/stream', async function* ({ body, bearer }) {
+    console.log('stream', body)
+    try {
+      const auth = {
+        bearer: bearer!,
+        baseUrl: getBaseUrl(),
+      }
+      const authFetcher = createAuthFetcher(auth)
+      const { stream } = createAgent({
+        model: body.model as ModelConfig,
+        activeContextTime: body.activeContextTime,
+        channels: body.channels,
+        currentChannel: body.currentChannel,
+        identity: body.identity,
+        auth,
+        skills: body.usableSkills,
+        mcpConnections: body.mcpConnections,
+        inbox: body.inbox,
+        loopDetection: body.loopDetection,
+      }, authFetcher)
+      for await (const action of stream({
+        query: body.query,
+        messages: body.messages,
+        skills: body.skills,
+        attachments: body.attachments,
+      })) {
+        yield sseChunked(JSON.stringify(action))
+      }
+    } catch (error) {
+      console.error(error)
+      const message = error instanceof Error && error.message.trim()
+        ? error.message
+        : 'Internal server error'
+      yield sseChunked(JSON.stringify({
+        type: 'error',
+        message,
+      }))
+    }
+  }, {
+    body: AgentModel.extend({
+      query: z.string().optional().default(''),
+    }),
+  })
+  .post('/trigger-schedule', async ({ body, bearer }) => {
+    console.log('trigger-schedule', body)
+    const auth = {
+      bearer: bearer!,
+      baseUrl: getBaseUrl(),
+    }
+    const authFetcher = createAuthFetcher(auth)
+    const { triggerSchedule } = createAgent({
+      model: body.model as ModelConfig,
+      activeContextTime: body.activeContextTime,
+      channels: body.channels,
+      currentChannel: body.currentChannel,
+      identity: body.identity,
+      auth,
+      skills: body.usableSkills,
+      mcpConnections: body.mcpConnections,
+      inbox: body.inbox,
+      loopDetection: body.loopDetection,
+    }, authFetcher)
+    return triggerSchedule({
+      schedule: body.schedule,
+      messages: body.messages,
+      skills: body.skills,
+    })
+  }, {
+    body: AgentModel.extend({
+      schedule: ScheduleModel,
+    }),
+  })
+  .post('/trigger-heartbeat', async ({ body, bearer }) => {
+    console.log('trigger-heartbeat', body)
+    const auth = {
+      bearer: bearer!,
+      baseUrl: getBaseUrl(),
+    }
+    const authFetcher = createAuthFetcher(auth)
+    const { triggerHeartbeat } = createAgent({
+      model: body.model as ModelConfig,
+      activeContextTime: body.activeContextTime,
+      channels: body.channels,
+      currentChannel: body.currentChannel,
+      identity: body.identity,
+      auth,
+      skills: body.usableSkills,
+      mcpConnections: body.mcpConnections,
+      inbox: body.inbox,
+      loopDetection: body.loopDetection,
+    }, authFetcher)
+    return triggerHeartbeat({
+      heartbeat: body.heartbeat,
+      messages: body.messages,
+      skills: body.skills,
+    })
+  }, {
+    body: AgentModel.extend({
+      heartbeat: HeartbeatModel,
+    }),
+  })
+  .post('/subagent', async ({ body, bearer }) => {
+    console.log('subagent', body)
+    const auth = {
+      bearer: bearer!,
+      baseUrl: getBaseUrl(),
+    }
+    const authFetcher = createAuthFetcher(auth)
+    const { askAsSubagent } = createAgent({
+      model: body.model as ModelConfig,
+      identity: body.identity,
+      auth,
+      isSubagent: true,
+      loopDetection: body.loopDetection,
+    }, authFetcher)
+    return askAsSubagent({
+      messages: body.messages,
+      input: body.query,
+      name: body.name,
+      description: body.description,
+    })
+  }, {
+    body: z.object({
+      model: ModelConfigModel,
+      identity: IdentityContextModel,
+      messages: z.array(z.any()).optional().default([]),
+      query: z.string(),
+      name: z.string(),
+      description: z.string(),
+      loopDetection: LoopDetectionModel,
+    }),
+  })

@@ -1495,10 +1495,11 @@ func (p *ChannelInboundProcessor) ingestInboundAttachments(
 		item.Mime = finalMime
 		maxBytes := media.MaxAssetBytes
 		asset, err := p.mediaService.Ingest(ctx, media.IngestInput{
-			BotID:    botID,
-			Mime:     strings.TrimSpace(item.Mime),
-			Reader:   preparedReader,
-			MaxBytes: maxBytes,
+			BotID:       botID,
+			Mime:        strings.TrimSpace(item.Mime),
+			Reader:      preparedReader,
+			MaxBytes:    maxBytes,
+			OriginalExt: filepath.Ext(strings.TrimSpace(item.Name)),
 		})
 		if payload.reader != nil {
 			_ = payload.reader.Close()

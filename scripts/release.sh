@@ -115,7 +115,7 @@ prepare_assets() {
 
   log "building web assets"
   pnpm --dir "$ROOT_DIR" web:build
-  cp -R "$ROOT_DIR/packages/web/dist/." "$WEB_DIR/"
+  cp -R "$ROOT_DIR/apps/web/dist/." "$WEB_DIR/"
   gzip_embedded_web_assets "$WEB_DIR"
 
   local target_key="${TARGET_OS}-${TARGET_ARCH}"
@@ -133,7 +133,7 @@ prepare_assets() {
   patch_jsdom_style_loader_for_compile
   trap 'restore_jsdom_style_loader_patch' RETURN
   (
-    cd "$ROOT_DIR/agent"
+    cd "$ROOT_DIR/apps/agent"
     bun build src/index.ts --compile --target "$bun_compile_target" --outfile "$AGENT_DIR/$agent_bin_name"
   )
   restore_jsdom_style_loader_patch
@@ -151,9 +151,9 @@ JSDOM_XHR_IMPL_BACKUP=""
 
 patch_jsdom_style_loader_for_compile() {
   local css_path css_json
-  JSDOM_STYLE_RULES_FILE="$(node -e "try{process.stdout.write(require.resolve('jsdom/lib/jsdom/living/helpers/style-rules.js',{paths:['$ROOT_DIR/agent']}))}catch{process.exit(1)}" 2>/dev/null || true)"
-  css_path="$(node -e "try{process.stdout.write(require.resolve('jsdom/lib/jsdom/browser/default-stylesheet.css',{paths:['$ROOT_DIR/agent']}))}catch{process.exit(1)}" 2>/dev/null || true)"
-  JSDOM_XHR_IMPL_FILE="$(node -e "try{process.stdout.write(require.resolve('jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js',{paths:['$ROOT_DIR/agent']}))}catch{process.exit(1)}" 2>/dev/null || true)"
+  JSDOM_STYLE_RULES_FILE="$(node -e "try{process.stdout.write(require.resolve('jsdom/lib/jsdom/living/helpers/style-rules.js',{paths:['$ROOT_DIR/apps/agent']}))}catch{process.exit(1)}" 2>/dev/null || true)"
+  css_path="$(node -e "try{process.stdout.write(require.resolve('jsdom/lib/jsdom/browser/default-stylesheet.css',{paths:['$ROOT_DIR/apps/agent']}))}catch{process.exit(1)}" 2>/dev/null || true)"
+  JSDOM_XHR_IMPL_FILE="$(node -e "try{process.stdout.write(require.resolve('jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js',{paths:['$ROOT_DIR/apps/agent']}))}catch{process.exit(1)}" 2>/dev/null || true)"
 
   if [[ -z "$JSDOM_STYLE_RULES_FILE" || -z "$css_path" || -z "$JSDOM_XHR_IMPL_FILE" ]]; then
     log "skip jsdom patch (jsdom sources not resolved)"

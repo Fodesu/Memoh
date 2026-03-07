@@ -193,8 +193,15 @@ func (p *Executor) callSend(ctx context.Context, session mcpgw.ToolSessionContex
 
 	// Resolve top-level attachments parameter.
 	if rawAttachments, ok := arguments["attachments"]; ok && rawAttachments != nil {
-		if arr, ok := rawAttachments.([]any); ok && len(arr) > 0 {
-			resolved := p.resolveAttachments(ctx, botID, arr)
+		items := normalizeAttachmentInputs(rawAttachments)
+		if items == nil {
+			return mcpgw.BuildToolErrorResult("attachments must be a string, object, or array"), nil
+		}
+		if len(items) > 0 {
+			resolved := p.resolveAttachments(ctx, botID, items)
+			if len(resolved) == 0 {
+				return mcpgw.BuildToolErrorResult("attachments could not be resolved"), nil
+			}
 			outboundMessage.Attachments = append(outboundMessage.Attachments, resolved...)
 		}
 	}
@@ -350,6 +357,28 @@ func (p *Executor) resolveAttachments(ctx context.Context, botID string, items [
 		}
 	}
 	return result
+}
+
+func normalizeAttachmentInputs(raw any) []any {
+	switch v := raw.(type) {
+	case nil:
+		return nil
+	case []any:
+		if v == nil {
+			return []any{}
+		}
+		return v
+	case []string:
+		items := make([]any, 0, len(v))
+		for _, item := range v {
+			items = append(items, item)
+		}
+		return items
+	case string, map[string]any:
+		return []any{v}
+	default:
+		return nil
+	}
 }
 
 // resolveAttachmentRef resolves a single path or URL to a channel.Attachment.

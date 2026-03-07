@@ -14,7 +14,6 @@ import {
   AgentParams,
   AgentSkill,
   AgentStreamAction,
-  allActions,
   Heartbeat,
   MCPConnection,
   Schedule,
@@ -30,9 +29,9 @@ import {
   dedupeAttachments,
   AttachmentsStreamExtractor,
 } from './utils/attachments'
+import { createImagePartFromAttachment } from './utils/image-parts'
 import type { GatewayInputAttachment } from './types/attachment'
 import { getMCPTools } from './tools/mcp'
-import { getTools } from './tools'
 import { buildIdentityHeaders } from './utils/headers'
 import { createFS } from './utils'
 import { createTextLoopGuard, createTextLoopProbeBuffer } from './sential'
@@ -82,12 +81,8 @@ const buildStepUsages = (
 
 export const buildNativeImageParts = (attachments: GatewayInputAttachment[]): ImagePart[] => {
   return attachments
-    .filter((attachment) =>
-      attachment.type === 'image' &&
-      (attachment.transport === 'inline_data_url' || attachment.transport === 'public_url') &&
-      Boolean(attachment.payload),
-    )
-    .map((attachment): ImagePart => ({ type: 'image', image: attachment.payload }))
+    .map((attachment) => createImagePartFromAttachment(attachment))
+    .filter((attachment): attachment is ImagePart => attachment != null)
 }
 
 export const createAgent = (
@@ -95,7 +90,6 @@ export const createAgent = (
     model: modelConfig,
     activeContextTime = 24 * 60,
     language = 'Same as the user input',
-    allowedActions = allActions,
     channels = [],
     skills = [],
     mcpConnections = [],
@@ -109,6 +103,7 @@ export const createAgent = (
     auth,
     inbox = [],
     loopDetection = { enabled: false },
+    isSubagent = false,
   }: AgentParams,
   fetch: AuthFetcher,
 ) => {
@@ -179,7 +174,7 @@ export const createAgent = (
         close: async () => {},
       }
     }
-    const headers = buildIdentityHeaders(identity, auth)
+    const headers = buildIdentityHeaders(identity, auth, { isSubagent })
     const builtins: MCPConnection[] = [
       {
         type: 'http',
@@ -196,15 +191,8 @@ export const createAgent = (
         botId,
       },
     )
-    const tools = getTools(allowedActions, {
-      fetch,
-      model: modelConfig,
-      identity,
-      auth,
-      enableSkill,
-    })
     return {
-      tools: { ...mcpTools, ...tools } as ToolSet,
+      tools: mcpTools as ToolSet,
       close: closeMCP,
     }
   }
@@ -282,16 +270,27 @@ export const createAgent = (
         ...(providerOptions && { providerOptions }),
         stopWhen: stepCountIs(Infinity),
         prepareStep,
-        ...(loopDetectionEnabled && {
-          onStepFinish: ({ text }: { text: string }) => {
+        onStepFinish: ({ text, toolResults }: { text: string; toolResults: Array<{ toolName: string; result: unknown }> }) => {
+          if (loopDetectionEnabled) {
             if (shouldAbortForToolLoop) {
               throw new Error(TOOL_LOOP_DETECTED_ABORT_MESSAGE)
             }
             if (inspectTextLoop) {
               inspectTextLoop(text)
             }
-          },
-        }),
+          }
+          if (toolResults) {
+            for (const tr of toolResults) {
+              if (tr.toolName === 'use_skill') {
+                const result = tr.result as Record<string, unknown> | undefined
+                const skillName = typeof result?.skillName === 'string' ? result.skillName : ''
+                if (skillName) {
+                  enableSkill(skillName)
+                }
+              }
+            }
+          }
+        },
         tools: guardedTools,
       })
     } catch (error) {
@@ -660,6 +659,11 @@ export const createAgent = (
               input: chunk.input,
               result: chunk.output,
               metadata: chunk,
+            }
+            if (chunk.toolName === 'use_skill') {
+              const res = chunk.output as Record<string, unknown> | undefined
+              const sn = typeof res?.skillName === 'string' ? res.skillName : ''
+              if (sn) enableSkill(sn)
             }
             if (shouldAbortForToolLoop) {
               throw new Error(TOOL_LOOP_DETECTED_ABORT_MESSAGE)

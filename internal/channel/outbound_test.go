@@ -291,6 +291,40 @@ func TestPushFinalWithChunking_AttachmentsSeparated(t *testing.T) {
 	}
 }
 
+func TestBuildOutboundMessages_InlineTextWithMediaMovesTextToCaption(t *testing.T) {
+	t.Parallel()
+
+	msgs, err := buildOutboundMessages(OutboundMessage{
+		Target: "chat-1",
+		Message: Message{
+			Text: "test.jpg from QQ",
+			Attachments: []Attachment{{
+				Type: AttachmentImage,
+				URL:  "https://example.com/test.jpg",
+			}},
+		},
+	}, OutboundPolicy{
+		TextChunkLimit:      100,
+		MediaOrder:          OutboundOrderTextFirst,
+		InlineTextWithMedia: true,
+	})
+	if err != nil {
+		t.Fatalf("buildOutboundMessages failed: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 outbound message, got %d", len(msgs))
+	}
+	if got := strings.TrimSpace(msgs[0].Message.Text); got != "" {
+		t.Fatalf("expected inline caption to suppress standalone text, got %q", got)
+	}
+	if len(msgs[0].Message.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(msgs[0].Message.Attachments))
+	}
+	if got := msgs[0].Message.Attachments[0].Caption; got != "test.jpg from QQ" {
+		t.Fatalf("unexpected attachment caption: %q", got)
+	}
+}
+
 func TestPushFinalWithChunking_NonFinalPassthrough(t *testing.T) {
 	t.Parallel()
 	stream, rec, sent := newChunkingTestStream(t, 100)

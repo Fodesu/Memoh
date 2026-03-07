@@ -64,7 +64,8 @@ devenv/     — Dev environment (docker-compose, dev Dockerfiles, app.dev.toml, 
 docker/     — Production Docker build & runtime (Dockerfiles, entrypoints)
 cmd/        — Go application entry points
 internal/   — Go backend core code
-agent/      — Agent Gateway (Bun/Elysia)
+apps/       — Application services (Agent Gateway, etc.)
+  agent/    — Agent Gateway (Bun/Elysia)
 packages/   — Frontend monorepo (web, ui, sdk, cli, config)
 db/         — Database migrations and queries
 scripts/    — Utility scripts

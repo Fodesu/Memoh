@@ -10,6 +10,11 @@ const baseModelConfig: ModelConfig = {
   input: [ModelInput.Image],
 }
 
+const createToolOptions = (toolCallId: string) => ({
+  toolCallId,
+  messages: [],
+})
+
 describe('read_media runtime', () => {
   it('caches image and injects it into messages', async () => {
     const fs = {
@@ -23,10 +28,10 @@ describe('read_media runtime', () => {
       fs,
       systemPrompt: 'sys',
     })
-    const readMedia = tools.read_media
-    const output = await readMedia.execute(
+    const executeReadMedia = tools.read_media.execute!
+    const output = await executeReadMedia(
       { path: '/data/media/a.png' },
-      { toolCallId: 'call-1' },
+      createToolOptions('call-1'),
     )
     expect((output as { ok?: boolean }).ok).toBe(true)
     const prepared = await prepareStep({
@@ -38,9 +43,11 @@ describe('read_media runtime', () => {
     })
     const injected = prepared.messages?.[1]
     expect(injected?.role).toBe('user')
-    const content = injected?.content as Array<{ type?: string; image?: string }>
+    const content = injected?.content as Array<{ type?: string; image?: Uint8Array; mediaType?: string }>
     expect(content?.[0]?.type).toBe('image')
-    expect(content?.[0]?.image?.startsWith('data:image/png;base64,')).toBe(true)
+    expect(content?.[0]?.image).toBeInstanceOf(Uint8Array)
+    expect(Array.from(content?.[0]?.image ?? [])).toEqual([1, 2, 3])
+    expect(content?.[0]?.mediaType).toBe('image/png')
   })
 
   it('returns error result on download failure', async () => {
@@ -54,10 +61,10 @@ describe('read_media runtime', () => {
       fs,
       systemPrompt: 'sys',
     })
-    const readMedia = tools.read_media
-    const output = await readMedia.execute(
+    const executeReadMedia = tools.read_media.execute!
+    const output = await executeReadMedia(
       { path: '/data/media/a.png' },
-      { toolCallId: 'call-2' },
+      createToolOptions('call-2'),
     )
     expect((output as { isError?: boolean }).isError).toBe(true)
     const prepared = await prepareStep({
@@ -84,14 +91,14 @@ describe('read_media runtime', () => {
       fs,
       systemPrompt: 'sys',
     })
-    const readMedia = tools.read_media
-    const first = readMedia.execute(
+    const executeReadMedia = tools.read_media.execute!
+    const first = executeReadMedia(
       { path: '/data/media/a.png' },
-      { toolCallId: 'call-1' },
+      createToolOptions('call-1'),
     )
-    const second = readMedia.execute(
+    const second = executeReadMedia(
       { path: '/data/media/b.png' },
-      { toolCallId: 'call-2' },
+      createToolOptions('call-2'),
     )
     await Promise.all([first, second])
     const prepared = await prepareStep({
@@ -102,8 +109,10 @@ describe('read_media runtime', () => {
       experimental_context: undefined,
     })
     const injected = prepared.messages?.[1]
-    const content = injected?.content as Array<{ type?: string; image?: string }>
-    expect(content?.[0]?.image?.includes('AQ==')).toBe(true)
-    expect(content?.[1]?.image?.includes('Ag==')).toBe(true)
+    const content = injected?.content as Array<{ type?: string; image?: Uint8Array; mediaType?: string }>
+    expect(Array.from(content?.[0]?.image ?? [])).toEqual([1])
+    expect(Array.from(content?.[1]?.image ?? [])).toEqual([2])
+    expect(content?.[0]?.mediaType).toBe('image/png')
+    expect(content?.[1]?.mediaType).toBe('image/png')
   })
 })

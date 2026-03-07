@@ -18,23 +18,6 @@ export interface AgentAuthContext {
   baseUrl: string
 }
 
-export enum AgentAction {
-  Web = 'web',
-  Message = 'message',
-  Contact = 'contact',
-  Subagent = 'subagent',
-  Schedule = 'schedule',
-  Skill = 'skill',
-  Memory = 'memory',
-  TTS = 'tts',
-}
-
-export const allActionValues = Object.values(AgentAction) as [AgentAction, ...AgentAction[]]
-
-export const allActions = allActionValues.filter(
-  (a) => a !== AgentAction.TTS,
-) as AgentAction[]
-
 export interface InboxItem {
   id: string
   source: string
@@ -51,7 +34,6 @@ export interface AgentParams {
   model: ModelConfig
   language?: string
   activeContextTime?: number
-  allowedActions?: AgentAction[]
   mcpConnections?: MCPConnection[]
   channels?: string[]
   currentChannel?: string
@@ -60,6 +42,7 @@ export interface AgentParams {
   skills?: AgentSkill[]
   inbox?: InboxItem[]
   loopDetection?: LoopDetectionConfig
+  isSubagent?: boolean
 }
 
 export interface AgentInput {

@@ -35,6 +35,9 @@ func NormalizeMime(raw string) string {
 	if idx := strings.Index(mime, ";"); idx >= 0 {
 		mime = strings.TrimSpace(mime[:idx])
 	}
+	if !strings.Contains(mime, "/") {
+		return ""
+	}
 	return mime
 }
 

@@ -34,12 +34,13 @@ type Chunker func(text string, limit int) []string
 
 // OutboundPolicy configures how outbound messages are chunked, ordered, and retried.
 type OutboundPolicy struct {
-	TextChunkLimit int           `json:"text_chunk_limit,omitempty"`
-	ChunkerMode    ChunkerMode   `json:"chunker_mode,omitempty"`
-	Chunker        Chunker       `json:"-"`
-	MediaOrder     OutboundOrder `json:"media_order,omitempty"`
-	RetryMax       int           `json:"retry_max,omitempty"`
-	RetryBackoffMs int           `json:"retry_backoff_ms,omitempty"`
+	TextChunkLimit      int           `json:"text_chunk_limit,omitempty"`
+	ChunkerMode         ChunkerMode   `json:"chunker_mode,omitempty"`
+	Chunker             Chunker       `json:"-"`
+	MediaOrder          OutboundOrder `json:"media_order,omitempty"`
+	InlineTextWithMedia bool          `json:"inline_text_with_media,omitempty"`
+	RetryMax            int           `json:"retry_max,omitempty"`
+	RetryBackoffMs      int           `json:"retry_backoff_ms,omitempty"`
 }
 
 // NormalizeOutboundPolicy fills zero-value fields with sensible defaults.
@@ -199,11 +200,16 @@ func buildOutboundMessages(msg OutboundMessage, policy OutboundPolicy) ([]Outbou
 		return nil, errors.New("message is required")
 	}
 	normalized := normalizeOutboundMessage(msg.Message)
+	attachments := append([]Attachment(nil), normalized.Attachments...)
 	chunker := policy.Chunker
 	if normalized.Format == MessageFormatMarkdown {
 		chunker = ChunkMarkdownText
 	}
 	base := normalized
+	if shouldInlineTextWithMedia(policy, base, attachments) {
+		attachments[0].Caption = strings.TrimSpace(base.Text)
+		base.Text = ""
+	}
 	base.Attachments = nil
 	textMessages := make([]OutboundMessage, 0)
 	shouldChunk := policy.TextChunkLimit > 0 && strings.TrimSpace(base.Text) != "" && len(base.Parts) == 0
@@ -238,7 +244,6 @@ func buildOutboundMessages(msg OutboundMessage, policy OutboundPolicy) ([]Outbou
 		textMessages = append(textMessages, OutboundMessage{Target: msg.Target, Message: base})
 	}
 
-	attachments := normalized.Attachments
 	attachmentMessages := make([]OutboundMessage, 0)
 	if len(attachments) > 0 {
 		media := normalized
@@ -257,6 +262,24 @@ func buildOutboundMessages(msg OutboundMessage, policy OutboundPolicy) ([]Outbou
 		return append(textMessages, attachmentMessages...), nil
 	}
 	return append(attachmentMessages, textMessages...), nil
+}
+
+func shouldInlineTextWithMedia(policy OutboundPolicy, msg Message, attachments []Attachment) bool {
+	if !policy.InlineTextWithMedia {
+		return false
+	}
+	if strings.TrimSpace(msg.Text) == "" || len(msg.Parts) > 0 || len(attachments) == 0 {
+		return false
+	}
+	if strings.TrimSpace(attachments[0].Caption) != "" {
+		return false
+	}
+	switch attachments[0].Type {
+	case AttachmentImage, AttachmentGIF, AttachmentVideo, AttachmentAudio, AttachmentVoice:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeOutboundMessage(msg Message) Message {

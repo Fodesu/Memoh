@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -224,15 +225,54 @@ func (*fakeMediaIngestor) AccessPath(asset media.Asset) string {
 	return "/data/media/" + asset.StorageKey
 }
 
-type fakeAttachmentResolverAdapter struct{}
+type fakeStorageProvider struct {
+	objects map[string][]byte
+}
 
-func (*fakeAttachmentResolverAdapter) Type() channel.ChannelType {
+func (f *fakeStorageProvider) Put(_ context.Context, key string, reader io.Reader) error {
+	if f.objects == nil {
+		f.objects = make(map[string][]byte)
+	}
+	payload, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
+	f.objects[key] = payload
+	return nil
+}
+
+func (f *fakeStorageProvider) Open(_ context.Context, key string) (io.ReadCloser, error) {
+	payload, ok := f.objects[key]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return io.NopCloser(bytes.NewReader(payload)), nil
+}
+
+func (f *fakeStorageProvider) Delete(_ context.Context, key string) error {
+	delete(f.objects, key)
+	return nil
+}
+
+func (*fakeStorageProvider) AccessPath(key string) string {
+	return "/data/media/" + key
+}
+
+type fakeAttachmentResolverAdapter struct {
+	typ     channel.ChannelType
+	payload channel.AttachmentPayload
+}
+
+func (f *fakeAttachmentResolverAdapter) Type() channel.ChannelType {
+	if f != nil && strings.TrimSpace(f.typ.String()) != "" {
+		return f.typ
+	}
 	return channel.ChannelType("resolver-test")
 }
 
-func (*fakeAttachmentResolverAdapter) Descriptor() channel.Descriptor {
+func (f *fakeAttachmentResolverAdapter) Descriptor() channel.Descriptor {
 	return channel.Descriptor{
-		Type:        channel.ChannelType("resolver-test"),
+		Type:        f.Type(),
 		DisplayName: "ResolverTest",
 		Capabilities: channel.ChannelCapabilities{
 			Text:        true,
@@ -241,7 +281,10 @@ func (*fakeAttachmentResolverAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
-func (*fakeAttachmentResolverAdapter) ResolveAttachment(_ context.Context, _ channel.ChannelConfig, _ channel.Attachment) (channel.AttachmentPayload, error) {
+func (f *fakeAttachmentResolverAdapter) ResolveAttachment(_ context.Context, _ channel.ChannelConfig, _ channel.Attachment) (channel.AttachmentPayload, error) {
+	if f != nil && f.payload.Reader != nil {
+		return f.payload, nil
+	}
 	return channel.AttachmentPayload{
 		Reader: io.NopCloser(strings.NewReader("resolver-bytes")),
 		Mime:   "application/octet-stream",
@@ -591,6 +634,57 @@ func TestChannelInboundProcessorGroupMentionTriggersReply(t *testing.T) {
 	}
 }
 
+type failingOpenStreamSender struct {
+	err error
+}
+
+func (*failingOpenStreamSender) Send(_ context.Context, _ channel.OutboundMessage) error {
+	return nil
+}
+
+func (s *failingOpenStreamSender) OpenStream(_ context.Context, _ string, _ channel.StreamOptions) (channel.OutboundStream, error) {
+	if s != nil && s.err != nil {
+		return nil, s.err
+	}
+	return nil, errors.New("open stream failed")
+}
+
+func TestChannelInboundProcessorPersistsActiveChatBeforeOpenStream(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-openstream"}}
+	memberSvc := &fakeMemberService{isMember: true}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{ChatID: "chat-openstream", RouteID: "route-openstream"}}
+	gateway := &fakeChatGateway{}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, memberSvc, nil, nil, nil, "", 0)
+	sender := &failingOpenStreamSender{err: errors.New("stream unavailable")}
+
+	cfg := channel.ChannelConfig{ID: "cfg-openstream", BotID: "bot-1", ChannelType: channel.ChannelType("qq")}
+	msg := channel.InboundMessage{
+		BotID:       "bot-1",
+		Channel:     channel.ChannelType("qq"),
+		Message:     channel.Message{ID: "msg-openstream-1", Text: "hello"},
+		ReplyTarget: "c2c:user-openid",
+		Sender:      channel.Identity{SubjectID: "user-1"},
+		Conversation: channel.Conversation{
+			ID:   "conv-openstream",
+			Type: "p2p",
+		},
+	}
+
+	err := processor.HandleInbound(context.Background(), cfg, msg, sender)
+	if err == nil || err.Error() != "stream unavailable" {
+		t.Fatalf("expected open stream error, got: %v", err)
+	}
+	if len(chatSvc.persistedIn) != 1 {
+		t.Fatalf("expected active-chat user turn to be persisted before stream open, got %d", len(chatSvc.persistedIn))
+	}
+	if got := chatSvc.persistedIn[0].ExternalMessageID; got != "msg-openstream-1" {
+		t.Fatalf("unexpected persisted external_message_id: %q", got)
+	}
+	if gateway.gotReq.Query != "" {
+		t.Fatalf("runner should not be called when stream open fails")
+	}
+}
+
 func TestChannelInboundProcessorPersistsAttachmentAssetRefs(t *testing.T) {
 	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-asset"}}
 	memberSvc := &fakeMemberService{isMember: true}
@@ -782,6 +876,71 @@ func TestChannelInboundProcessorIngestsBase64Attachment(t *testing.T) {
 	}
 	if got := chatSvc.persistedIn[0].Assets[0].ContentHash; got != "asset-base64-1" {
 		t.Fatalf("expected persisted content_hash asset-base64-1, got %q", got)
+	}
+}
+
+func TestChannelInboundProcessorIngestsQQFileAttachmentKeepsOriginalExtWhenMimeGeneric(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-qq-file"}}
+	memberSvc := &fakeMemberService{isMember: true}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{ChatID: "chat-qq-file", RouteID: "route-qq-file"}}
+	gateway := &fakeChatGateway{
+		resp: conversation.ChatResponse{
+			Messages: []conversation.ModelMessage{
+				{Role: "assistant", Content: conversation.NewTextContent("ok")},
+			},
+		},
+	}
+	registry := channel.NewRegistry()
+	registry.MustRegister(&fakeAttachmentResolverAdapter{
+		typ: channel.ChannelType("qq"),
+		payload: channel.AttachmentPayload{
+			Reader: io.NopCloser(bytes.NewReader([]byte{0x00, 0x01, 0x02, 0x03, 0x04})),
+			Mime:   "application/octet-stream",
+			Size:   5,
+		},
+	})
+	processor := NewChannelInboundProcessor(slog.Default(), registry, chatSvc, chatSvc, gateway, channelIdentitySvc, memberSvc, nil, nil, nil, "", 0)
+	storage := &fakeStorageProvider{}
+	mediaSvc := media.NewService(slog.Default(), storage)
+	processor.SetMediaService(mediaSvc)
+	sender := &fakeReplySender{}
+
+	cfg := channel.ChannelConfig{ID: "cfg-qq-file", BotID: "bot-1", ChannelType: channel.ChannelType("qq")}
+	msg := channel.InboundMessage{
+		BotID:   "bot-1",
+		Channel: channel.ChannelType("qq"),
+		Message: channel.Message{
+			ID:   "msg-qq-file-1",
+			Text: "[User sent 1 attachment]",
+			Attachments: []channel.Attachment{
+				{
+					Type:        channel.AttachmentFile,
+					PlatformKey: "qq-file-1",
+					Name:        "test.md",
+					Mime:        "file",
+				},
+			},
+		},
+		ReplyTarget: "c2c:user-openid",
+		Sender:      channel.Identity{SubjectID: "qq-user"},
+		Conversation: channel.Conversation{
+			ID:   "qq-user",
+			Type: "direct",
+		},
+	}
+
+	if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gateway.gotReq.Attachments) != 1 {
+		t.Fatalf("expected one attachment in gateway request, got %d", len(gateway.gotReq.Attachments))
+	}
+	storageKey, _ := gateway.gotReq.Attachments[0].Metadata["storage_key"].(string)
+	if !strings.HasSuffix(storageKey, ".md") {
+		t.Fatalf("expected storage key to keep .md extension, got %q", storageKey)
+	}
+	if strings.HasSuffix(storageKey, ".bin") {
+		t.Fatalf("expected storage key to avoid .bin fallback, got %q", storageKey)
 	}
 }
 

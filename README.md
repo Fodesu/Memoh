@@ -48,11 +48,16 @@ cd Memoh
 sudo docker compose up -d
 ```
 
-> If you experience slow image pulls, use the CN override:
-```bash
-sudo docker compose -f docker-compose.yml -f docker/docker-compose.cn.yml up -d
-```
-
+> **Install a specific version:**
+> ```bash
+> MEMOH_VERSION=v1.0.0 curl -fsSL https://memoh.sh | sudo sh
+> ```
+>
+> **Use CN mirror for slow image pulls:**
+> ```bash
+> USE_CN_MIRROR=true curl -fsSL https://memoh.sh | sudo sh
+> ```
+>
 > On macOS or if your user is in the `docker` group, `sudo` is not required.
 
 Visit <http://localhost:8082> after startup. Default login: `admin` / `admin123`
@@ -78,6 +83,7 @@ Memoh Bot can distinguish and remember requests from multiple humans and bots, w
 - 🔧 **MCP (Model Context Protocol)**: Full MCP support (HTTP / SSE / Stdio). Built-in tools for container operations, memory search, web search, scheduling, messaging, and more. Connect external MCP servers for extensibility.
 - 🧩 **Subagents**: Create specialized sub-agents per bot with independent context and skills, enabling multi-agent collaboration.
 - 🎭 **Skills & Identity**: Define bot personality via IDENTITY.md, SOUL.md, and modular skill files that bots can enable/disable at runtime.
+- 🌐 **Browser**: Each bot can have its own headless Chromium browser (via Playwright). Navigate pages, click elements, fill forms, take screenshots (with annotated element labels), read accessibility trees, manage tabs, and more — enabling real web automation and AI-driven browsing.
 - 🔍 **Web Search**: 12 built-in search providers — Brave, Bing, Google, Tavily, DuckDuckGo, SearXNG, Serper, Sogou, Jina, Exa, Bocha, and Yandex — for web search and URL content fetching.
 - ⏰ **Scheduled Tasks**: Cron-based scheduling with max-call limits. Bots can autonomously run commands or tools at specified intervals.
 - 💓 **Heartbeat**: Periodic autonomous tasks — bots can perform routine operations (e.g., check-ins, summaries, monitoring) at configurable intervals with execution logging.
@@ -118,6 +124,7 @@ Memoh Bot can distinguish and remember requests from multiple humans and bots, w
 |-------|-------|
 | Backend | Go, Echo, sqlc, Uber FX, pgx/v5, containerd v2 |
 | Agent Gateway | Bun, Elysia |
+| Browser Gateway | Bun, Elysia, Playwright (Chromium) |
 | Frontend | Vue 3, Vite, Pinia, Tailwind CSS, Reka UI |
 | Storage | PostgreSQL, Qdrant |
 | Infra | Docker, containerd, CNI |
@@ -137,12 +144,12 @@ Memoh Bot can distinguish and remember requests from multiple humans and bots, w
 │  Auth · Bots · Channels · Memory · Containers · MCP      │
 └──────────────────────┬───────────────────────────────────┘
                        │
-           ┌───────────┼───────────┐
-           ▼           ▼           ▼
-     ┌──────────┐ ┌─────────┐ ┌──────────────────┐
-     │ PostgreSQL│ │ Qdrant  │ │ Agent Gateway     │
-     │          │ │ (Vector)│ │ (Bun/Elysia :8081)│
-     └──────────┘ └─────────┘ └────────┬──────────┘
+           ┌───────────┼───────────┬───────────┐
+           ▼           ▼           ▼           ▼
+     ┌──────────┐ ┌─────────┐ ┌──────────────────┐ ┌───────────────────┐
+     │ PostgreSQL│ │ Qdrant  │ │ Agent Gateway     │ │ Browser Gateway    │
+     │          │ │ (Vector)│ │ (Bun/Elysia :8081)│ │ (Playwright :8083) │
+     └──────────┘ └─────────┘ └────────┬──────────┘ └───────────────────┘
                                        │
                                ┌───────┼───────┐
                                ▼       ▼       ▼

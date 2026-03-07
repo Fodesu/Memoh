@@ -133,6 +133,14 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		}
 		ttsProviderUUID = providerID
 	}
+	browserContextUUID := pgtype.UUID{}
+	if value := strings.TrimSpace(req.BrowserContextID); value != "" {
+		ctxID, err := db.ParseUUID(value)
+		if err != nil {
+			return Settings{}, err
+		}
+		browserContextUUID = ctxID
+	}
 	if current.MaxContextLoadTime < math.MinInt32 || current.MaxContextLoadTime > math.MaxInt32 ||
 		current.MaxContextTokens < math.MinInt32 || current.MaxContextTokens > math.MaxInt32 ||
 		current.MaxInboxItems < math.MinInt32 || current.MaxInboxItems > math.MaxInt32 ||
@@ -157,6 +165,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		SearchProviderID:   searchProviderUUID,
 		MemoryProviderID:   memoryProviderUUID,
 		TtsProviderID:      ttsProviderUUID,
+		BrowserContextID:   browserContextUUID,
 	})
 	if err != nil {
 		return Settings{}, err
@@ -233,6 +242,7 @@ func normalizeBotSettingsReadRow(row sqlc.GetSettingsByBotIDRow) Settings {
 		row.SearchProviderID,
 		row.MemoryProviderID,
 		row.TtsProviderID,
+		row.BrowserContextID,
 	)
 }
 
@@ -252,6 +262,7 @@ func normalizeBotSettingsWriteRow(row sqlc.UpsertBotSettingsRow) Settings {
 		row.SearchProviderID,
 		row.MemoryProviderID,
 		row.TtsProviderID,
+		row.BrowserContextID,
 	)
 }
 
@@ -270,6 +281,7 @@ func normalizeBotSettingsFields(
 	searchProviderID pgtype.UUID,
 	memoryProviderID pgtype.UUID,
 	ttsProviderID pgtype.UUID,
+	browserContextID pgtype.UUID,
 ) Settings {
 	settings := normalizeBotSetting(maxContextLoadTime, maxContextTokens, maxInboxItems, language, allowGuest, reasoningEnabled, reasoningEffort, heartbeatEnabled, heartbeatInterval)
 	if chatModelID.Valid {
@@ -286,6 +298,9 @@ func normalizeBotSettingsFields(
 	}
 	if ttsProviderID.Valid {
 		settings.TtsProviderID = uuid.UUID(ttsProviderID.Bytes).String()
+	}
+	if browserContextID.Valid {
+		settings.BrowserContextID = uuid.UUID(browserContextID.Bytes).String()
 	}
 	return settings
 }

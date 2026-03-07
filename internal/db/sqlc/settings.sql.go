@@ -28,6 +28,7 @@ SET max_context_load_time = 1440,
     search_provider_id = NULL,
     memory_provider_id = NULL,
     tts_provider_id = NULL,
+    browser_context_id = NULL,
     updated_at = now()
 WHERE id = $1
 `
@@ -54,13 +55,15 @@ SELECT
   heartbeat_models.id AS heartbeat_model_id,
   search_providers.id AS search_provider_id,
   memory_providers.id AS memory_provider_id,
-  tts_providers.id AS tts_provider_id
+  tts_providers.id AS tts_provider_id,
+  browser_contexts.id AS browser_context_id
 FROM bots
 LEFT JOIN models AS chat_models ON chat_models.id = bots.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = bots.heartbeat_model_id
 LEFT JOIN search_providers ON search_providers.id = bots.search_provider_id
 LEFT JOIN memory_providers ON memory_providers.id = bots.memory_provider_id
 LEFT JOIN tts_providers ON tts_providers.id = bots.tts_provider_id
+LEFT JOIN browser_contexts ON browser_contexts.id = bots.browser_context_id
 WHERE bots.id = $1
 `
 
@@ -81,6 +84,7 @@ type GetSettingsByBotIDRow struct {
 	SearchProviderID   pgtype.UUID `json:"search_provider_id"`
 	MemoryProviderID   pgtype.UUID `json:"memory_provider_id"`
 	TtsProviderID      pgtype.UUID `json:"tts_provider_id"`
+	BrowserContextID   pgtype.UUID `json:"browser_context_id"`
 }
 
 func (q *Queries) GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (GetSettingsByBotIDRow, error) {
@@ -103,6 +107,7 @@ func (q *Queries) GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (GetSe
 		&i.SearchProviderID,
 		&i.MemoryProviderID,
 		&i.TtsProviderID,
+		&i.BrowserContextID,
 	)
 	return i, err
 }
@@ -125,9 +130,10 @@ WITH updated AS (
       search_provider_id = COALESCE($13::uuid, bots.search_provider_id),
       memory_provider_id = COALESCE($14::uuid, bots.memory_provider_id),
       tts_provider_id = COALESCE($15::uuid, bots.tts_provider_id),
+      browser_context_id = COALESCE($16::uuid, bots.browser_context_id),
       updated_at = now()
-  WHERE bots.id = $16
-  RETURNING bots.id, bots.max_context_load_time, bots.max_context_tokens, bots.max_inbox_items, bots.language, bots.allow_guest, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.chat_model_id, bots.heartbeat_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_provider_id
+  WHERE bots.id = $17
+  RETURNING bots.id, bots.max_context_load_time, bots.max_context_tokens, bots.max_inbox_items, bots.language, bots.allow_guest, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.chat_model_id, bots.heartbeat_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_provider_id, bots.browser_context_id
 )
 SELECT
   updated.id AS bot_id,
@@ -145,13 +151,15 @@ SELECT
   heartbeat_models.id AS heartbeat_model_id,
   search_providers.id AS search_provider_id,
   memory_providers.id AS memory_provider_id,
-  tts_providers.id AS tts_provider_id
+  tts_providers.id AS tts_provider_id,
+  browser_contexts.id AS browser_context_id
 FROM updated
 LEFT JOIN models AS chat_models ON chat_models.id = updated.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = updated.heartbeat_model_id
 LEFT JOIN search_providers ON search_providers.id = updated.search_provider_id
 LEFT JOIN memory_providers ON memory_providers.id = updated.memory_provider_id
 LEFT JOIN tts_providers ON tts_providers.id = updated.tts_provider_id
+LEFT JOIN browser_contexts ON browser_contexts.id = updated.browser_context_id
 `
 
 type UpsertBotSettingsParams struct {
@@ -170,6 +178,7 @@ type UpsertBotSettingsParams struct {
 	SearchProviderID   pgtype.UUID `json:"search_provider_id"`
 	MemoryProviderID   pgtype.UUID `json:"memory_provider_id"`
 	TtsProviderID      pgtype.UUID `json:"tts_provider_id"`
+	BrowserContextID   pgtype.UUID `json:"browser_context_id"`
 	ID                 pgtype.UUID `json:"id"`
 }
 
@@ -190,6 +199,7 @@ type UpsertBotSettingsRow struct {
 	SearchProviderID   pgtype.UUID `json:"search_provider_id"`
 	MemoryProviderID   pgtype.UUID `json:"memory_provider_id"`
 	TtsProviderID      pgtype.UUID `json:"tts_provider_id"`
+	BrowserContextID   pgtype.UUID `json:"browser_context_id"`
 }
 
 func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsParams) (UpsertBotSettingsRow, error) {
@@ -209,6 +219,7 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 		arg.SearchProviderID,
 		arg.MemoryProviderID,
 		arg.TtsProviderID,
+		arg.BrowserContextID,
 		arg.ID,
 	)
 	var i UpsertBotSettingsRow
@@ -229,6 +240,7 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 		&i.SearchProviderID,
 		&i.MemoryProviderID,
 		&i.TtsProviderID,
+		&i.BrowserContextID,
 	)
 	return i, err
 }

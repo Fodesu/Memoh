@@ -131,6 +131,14 @@ CREATE TABLE IF NOT EXISTS tts_providers (
   CONSTRAINT tts_providers_name_unique UNIQUE (name)
 );
 
+CREATE TABLE IF NOT EXISTS browser_contexts (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        TEXT NOT NULL DEFAULT '',
+  config      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS bots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -154,6 +162,7 @@ CREATE TABLE IF NOT EXISTS bots (
   heartbeat_prompt TEXT NOT NULL DEFAULT '',
   heartbeat_model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   tts_provider_id UUID REFERENCES tts_providers(id) ON DELETE SET NULL,
+  browser_context_id UUID REFERENCES browser_contexts(id) ON DELETE SET NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -341,6 +350,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   container_id TEXT NOT NULL REFERENCES containers(container_id) ON DELETE CASCADE,
   runtime_snapshot_name TEXT NOT NULL,
+  display_name TEXT,
   parent_runtime_snapshot_name TEXT,
   snapshotter TEXT NOT NULL,
   source TEXT NOT NULL,

@@ -196,6 +196,39 @@ definitions:
       user_id:
         type: string
     type: object
+  browsercontexts.BrowserContext:
+    properties:
+      config:
+        items:
+          type: integer
+        type: array
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  browsercontexts.CreateRequest:
+    properties:
+      config:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+    type: object
+  browsercontexts.UpdateRequest:
+    properties:
+      config:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+    type: object
   channel.Action:
     properties:
       label:
@@ -748,6 +781,8 @@ definitions:
     type: object
   handlers.CreateContainerRequest:
     properties:
+      restore_data:
+        type: boolean
       snapshotter:
         type: string
     type: object
@@ -755,6 +790,10 @@ definitions:
     properties:
       container_id:
         type: string
+      data_restored:
+        type: boolean
+      has_preserved_data:
+        type: boolean
       image:
         type: string
       snapshotter:
@@ -770,6 +809,10 @@ definitions:
   handlers.CreateSnapshotResponse:
     properties:
       container_id:
+        type: string
+      display_name:
+        type: string
+      runtime_snapshot_name:
         type: string
       snapshot_name:
         type: string
@@ -874,6 +917,8 @@ definitions:
         type: string
       created_at:
         type: string
+      has_preserved_data:
+        type: boolean
       image:
         type: string
       namespace:
@@ -997,6 +1042,11 @@ definitions:
       token_type:
         type: string
     type: object
+  handlers.RollbackRequest:
+    properties:
+      version:
+        type: integer
+    type: object
   handlers.SkillItem:
     properties:
       content:
@@ -1036,6 +1086,8 @@ definitions:
     properties:
       created_at:
         type: string
+      display_name:
+        type: string
       kind:
         type: string
       labels:
@@ -1047,6 +1099,8 @@ definitions:
       name:
         type: string
       parent:
+        type: string
+      runtime_snapshot_name:
         type: string
       snapshotter:
         type: string
@@ -1175,6 +1229,20 @@ definitions:
     properties:
       ok:
         type: boolean
+    type: object
+  handlers.synthesizeRequest:
+    properties:
+      text:
+        type: string
+    type: object
+  handlers.synthesizeResponse:
+    properties:
+      content_type:
+        type: string
+      size:
+        type: integer
+      temp_id:
+        type: string
     type: object
   heartbeat.ListLogsResponse:
     properties:
@@ -1986,6 +2054,8 @@ definitions:
     properties:
       allow_guest:
         type: boolean
+      browser_context_id:
+        type: string
       chat_model_id:
         type: string
       heartbeat_enabled:
@@ -2017,6 +2087,8 @@ definitions:
     properties:
       allow_guest:
         type: boolean
+      browser_context_id:
+        type: string
       chat_model_id:
         type: string
       heartbeat_enabled:
@@ -2444,6 +2516,10 @@ paths:
         name: bot_id
         required: true
         type: string
+      - description: Export /data before deletion
+        in: query
+        name: preserve_data
+        type: boolean
       responses:
         "204":
           description: No Content
@@ -2508,6 +2584,83 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Create and start MCP container for bot
+      tags:
+      - containerd
+  /bots/{bot_id}/container/data/export:
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      produces:
+      - application/gzip
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Export container /data as a tar.gz archive
+      tags:
+      - containerd
+  /bots/{bot_id}/container/data/import:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: tar.gz archive
+        in: formData
+        name: file
+        required: true
+        type: file
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Import a tar.gz archive into container /data
+      tags:
+      - containerd
+  /bots/{bot_id}/container/data/restore:
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Restore previously preserved data into container
       tags:
       - containerd
   /bots/{bot_id}/container/fs:
@@ -2991,6 +3144,36 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Create container snapshot for bot
+      tags:
+      - containerd
+  /bots/{bot_id}/container/snapshots/rollback:
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Rollback payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RollbackRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Rollback container to a previous snapshot version
       tags:
       - containerd
   /bots/{bot_id}/container/start:
@@ -4934,6 +5117,42 @@ paths:
       summary: Unified MCP tools gateway
       tags:
       - containerd
+  /bots/{bot_id}/tts/synthesize:
+    post:
+      consumes:
+      - application/json
+      description: Stream-synthesize text using the bot's configured TTS provider,
+        write to temp file
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Text to synthesize
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.synthesizeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.synthesizeResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Synthesize speech for a bot
+      tags:
+      - bots
   /bots/{bot_id}/web/messages:
     post:
       consumes:
@@ -5540,6 +5759,137 @@ paths:
       summary: Transfer bot owner (admin only)
       tags:
       - bots
+  /browser-contexts:
+    get:
+      description: List all browser context configurations
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/browsercontexts.BrowserContext'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List browser contexts
+      tags:
+      - browser-contexts
+    post:
+      consumes:
+      - application/json
+      description: Create a browser context configuration
+      parameters:
+      - description: Browser context configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/browsercontexts.CreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/browsercontexts.BrowserContext'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Create a browser context
+      tags:
+      - browser-contexts
+  /browser-contexts/{id}:
+    delete:
+      description: Delete browser context by ID
+      parameters:
+      - description: Browser Context ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Delete a browser context
+      tags:
+      - browser-contexts
+    get:
+      description: Get browser context by ID
+      parameters:
+      - description: Browser Context ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/browsercontexts.BrowserContext'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get a browser context
+      tags:
+      - browser-contexts
+    put:
+      consumes:
+      - application/json
+      description: Update browser context by ID
+      parameters:
+      - description: Browser Context ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/browsercontexts.UpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/browsercontexts.BrowserContext'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Update a browser context
+      tags:
+      - browser-contexts
   /channels:
     get:
       description: List channel meta information including capabilities and schemas

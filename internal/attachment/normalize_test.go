@@ -48,6 +48,9 @@ func TestNormalizeMime(t *testing.T) {
 	if got != "image/jpeg" {
 		t.Fatalf("NormalizeMime unexpected result: %q", got)
 	}
+	if got := NormalizeMime("file"); got != "" {
+		t.Fatalf("NormalizeMime should drop invalid mime token, got %q", got)
+	}
 }
 
 func TestMimeFromDataURL(t *testing.T) {
@@ -66,6 +69,9 @@ func TestResolveMime(t *testing.T) {
 	}
 	if got := ResolveMime(media.MediaTypeFile, "application/octet-stream", "application/pdf"); got != "application/pdf" {
 		t.Fatalf("ResolveMime file unexpected result: %q", got)
+	}
+	if got := ResolveMime(media.MediaTypeFile, "file", "text/plain"); got != "text/plain" {
+		t.Fatalf("ResolveMime should prefer sniffed mime for invalid source token, got %q", got)
 	}
 	if got := ResolveMime(media.MediaTypeImage, "", ""); got != "application/octet-stream" {
 		t.Fatalf("ResolveMime empty unexpected result: %q", got)

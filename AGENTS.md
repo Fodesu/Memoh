@@ -6,13 +6,14 @@ Memoh is a multi-member, structured long-memory, containerized AI agent system p
 
 ## Architecture Overview
 
-The system consists of three core services:
+The system consists of four core services:
 
 | Service | Tech Stack | Port | Description |
 |---------|-----------|------|-------------|
 | **Server** (Backend) | Go + Echo | 8080 | Main service: REST API, auth, database, container management |
 | **Agent Gateway** | Bun + Elysia | 8081 | AI chat gateway: handles chat requests, tool execution, and SSE streaming |
 | **Web** (Frontend) | Vue 3 + Vite | 8082 | Management UI: visual configuration for Bots, Models, Channels, etc. |
+| **Browser Gateway** | Bun + Elysia + Playwright | 8083 | Browser automation service: headless browser actions for bots |
 
 Infrastructure dependencies:
 - **PostgreSQL** — Relational data storage
@@ -59,7 +60,7 @@ Infrastructure dependencies:
 Memoh/
 ├── cmd/                        # Go application entry points
 │   ├── agent/                  #   Main backend server (main.go)
-│   ├── mcp/                    #   MCP server binary (stdio transport)
+│   ├── mcp/                    #   MCP server binary (stdio transport, template/, entrypoint.sh)
 │   └── memoh/                  #   Unified binary wrapper (Cobra CLI)
 ├── internal/                   # Go backend core code (domain packages)
 │   ├── accounts/               #   User account management (CRUD, password hashing)
@@ -68,6 +69,7 @@ Memoh/
 │   ├── bind/                   #   Channel identity-to-user binding code management
 │   ├── boot/                   #   Runtime configuration provider (container backend detection)
 │   ├── bots/                   #   Bot management (CRUD, lifecycle)
+│   ├── browsercontexts/        #   Browser context management (CRUD)
 │   ├── bun/                    #   Bun runtime manager (agent gateway process lifecycle)
 │   ├── channel/                #   Channel adapter system (Telegram, Discord, Feishu, Local, Email)
 │   ├── config/                 #   Configuration loading and parsing (TOML)
@@ -94,29 +96,42 @@ Memoh/
 │   ├── providers/              #   LLM provider management (OpenAI, Anthropic, etc.)
 │   ├── prune/                  #   Text pruning utilities (truncation with head/tail)
 │   ├── schedule/               #   Scheduled task service (cron)
+│   ├── searchengines/          #   Search engine abstraction (reserved)
 │   ├── searchproviders/        #   Search engine provider management (Brave, etc.)
 │   ├── server/                 #   HTTP server wrapper (Echo setup, middleware, shutdown)
 │   ├── settings/               #   Bot settings management
 │   ├── storage/                #   Storage provider interface (filesystem, container FS)
 │   ├── subagent/               #   Sub-agent management (CRUD)
 │   └── version/                #   Build-time version information
-├── agent/                      # Agent Gateway service (Bun/Elysia)
-│   └── src/
-│       ├── index.ts            #   Elysia server entry point
-│       ├── modules/            #   Route modules (chat, stream, trigger)
-│       ├── middlewares/         #   CORS, error handling, bearer auth
-│       ├── utils/              #   SSE utilities
-│       └── models.ts           #   Zod request schemas
-├── packages/                   # TypeScript monorepo
+├── apps/                       # Application services
+│   ├── agent/                  #   Agent Gateway (Bun/Elysia)
+│   │   └── src/
+│   │       ├── index.ts        #     Elysia server entry point
+│   │       ├── modules/        #     Route modules (chat, stream, trigger)
+│   │       ├── middlewares/     #     CORS, error handling, bearer auth
+│   │       ├── utils/          #     SSE utilities
+│   │       └── models.ts       #     Zod request schemas
+│   ├── browser/                #   Browser Gateway (Bun/Elysia/Playwright)
+│   │   └── src/
+│   │       ├── index.ts        #     Elysia server entry point
+│   │       ├── browser.ts      #     Playwright browser lifecycle
+│   │       ├── modules/        #     Route modules (action, context, devices)
+│   │       ├── middlewares/     #     CORS, error handling, bearer auth
+│   │       ├── types/          #     TypeScript type definitions
+│   │       ├── storage.ts      #     Browser context storage
+│   │       └── models.ts       #     Zod request schemas
+│   └── web/                    #   Main web app (@memoh/web, Vue 3)
+├── packages/                   # Shared TypeScript libraries
 │   ├── agent/                  #   Core agent library (@memoh/agent)
 │   │   └── src/
 │   │       ├── agent.ts        #     Agent creation and streaming logic
 │   │       ├── model.ts        #     Model configuration and creation
+│   │       ├── tool-loop.ts    #     Tool execution loop
+│   │       ├── sential.ts      #     Sential (sentinel) logic
 │   │       ├── tools/          #     Tool implementations (MCP, web, subagent, skill)
 │   │       ├── prompts/        #     System/heartbeat/schedule/subagent prompts
 │   │       ├── types/          #     TypeScript type definitions
 │   │       └── utils/          #     Attachments, headers, filesystem utilities
-│   ├── web/                    #   Main web app (@memoh/web, Vue 3)
 │   ├── ui/                     #   Shared UI component library (@memoh/ui)
 │   ├── sdk/                    #   TypeScript SDK (@memoh/sdk, auto-generated from OpenAPI)
 │   ├── cli/                    #   CLI tool (@memoh/cli, Commander.js)
@@ -125,9 +140,9 @@ Memoh/
 ├── db/                         # Database
 │   ├── migrations/             #   SQL migration files
 │   └── queries/                #   SQL query files (sqlc input)
-├── conf/                       # Configuration templates (app.example.toml, app.docker.toml)
-├── devenv/                     # Dev environment (docker-compose, dev Dockerfiles, app.dev.toml, mcp-build.sh)
-├── docker/                     # Production Docker build & runtime (Dockerfiles, entrypoints, nginx.conf)
+├── conf/                       # Configuration templates (app.example.toml, app.docker.toml, app.apple.toml, app.windows.toml)
+├── devenv/                     # Dev environment (docker-compose, dev Dockerfiles, app.dev.toml, mcp-build.sh, server-entrypoint.sh)
+├── docker/                     # Production Docker (Dockerfiles, entrypoints, nginx.conf, docker-compose.yml, docker-compose.cn.yml)
 ├── docs/                       # Documentation site
 ├── scripts/                    # Utility scripts (db, release, install)
 ├── docker-compose.yml          # Docker Compose orchestration (production)
@@ -213,7 +228,7 @@ Migrations live in `db/migrations/` and follow a dual-update convention:
 ### Agent Development
 
 - The core agent logic lives in `packages/agent/` (`@memoh/agent`), providing reusable agent streaming, tool execution, and prompt management.
-- The Agent Gateway (`agent/`) is a thin Elysia HTTP service that uses `@memoh/agent` for processing.
+- The Agent Gateway (`apps/agent/`) is a thin Elysia HTTP service that uses `@memoh/agent` for processing.
 - AI model providers (Anthropic, OpenAI, Google) are integrated via Vercel AI SDK.
 - Tools (MCP, web search, subagent, skill) are defined in `packages/agent/src/tools/`.
 - Prompt templates (system, heartbeat, schedule, subagent) are in `packages/agent/src/prompts/`.
@@ -258,6 +273,7 @@ Migrations live in `db/migrations/` and follow a dual-update convention:
 | `lifecycle_events` | Container lifecycle events |
 | `schedule` | Scheduled tasks (cron) |
 | `subagents` | Sub-agent definitions |
+| `browser_contexts` | Browser context configurations (Playwright) |
 | `storage_providers` | Pluggable object storage backends |
 | `bot_storage_bindings` | Per-bot storage backend selection |
 | `bot_inbox` | Per-bot inbox (notifications, triggers) |
@@ -279,15 +295,18 @@ The main configuration file is `config.toml` (copied from `conf/app.example.toml
 - `[postgres]` — PostgreSQL connection
 - `[qdrant]` — Qdrant vector database connection
 - `[agent_gateway]` — Agent Gateway address
+- `[browser_gateway]` — Browser Gateway address
 - `[web]` — Web frontend address
 
 Configuration templates available in `conf/`:
 - `app.example.toml` — Default template
-- `app.dev.toml` — Development (connects to devenv docker-compose)
 - `app.docker.toml` — Docker deployment
 - `app.apple.toml` — macOS (Apple Virtualization backend)
 - `app.windows.toml` — Windows
 
+Development configuration in `devenv/`:
+- `app.dev.toml` — Development (connects to devenv docker-compose)
+
 ## Web Design
 
-Please refer to `./packages/web/AGENTS.md`.
+Please refer to `./apps/web/AGENTS.md`.

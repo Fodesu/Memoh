@@ -3,6 +3,7 @@ package message
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/memohai/memoh/internal/channel"
@@ -39,6 +40,33 @@ func (f *fakeResolver) ParseChannelType(_ string) (channel.ChannelType, error) {
 		return "", f.err
 	}
 	return f.ct, nil
+}
+
+type fakeAssetResolver struct {
+	getAsset    AssetMeta
+	getErr      error
+	ingestAsset AssetMeta
+	ingestErr   error
+}
+
+func (f *fakeAssetResolver) GetByStorageKey(context.Context, string, string) (AssetMeta, error) {
+	if f.getErr != nil {
+		return AssetMeta{}, f.getErr
+	}
+	if strings.TrimSpace(f.getAsset.ContentHash) != "" {
+		return f.getAsset, nil
+	}
+	return AssetMeta{}, errors.New("not found")
+}
+
+func (f *fakeAssetResolver) IngestContainerFile(context.Context, string, string) (AssetMeta, error) {
+	if f.ingestErr != nil {
+		return AssetMeta{}, f.ingestErr
+	}
+	if strings.TrimSpace(f.ingestAsset.ContentHash) != "" {
+		return f.ingestAsset, nil
+	}
+	return AssetMeta{}, errors.New("ingest disabled")
 }
 
 // --- send tests ---
@@ -289,6 +317,102 @@ func TestExecutor_CallTool_NoReplyTo(t *testing.T) {
 	}
 	if sender.lastReq.Message.Reply != nil {
 		t.Error("expected Reply to be nil when reply_to is not provided")
+	}
+}
+
+func TestExecutor_CallTool_TopLevelAttachmentsArePreserved(t *testing.T) {
+	tests := []struct {
+		name        string
+		attachments any
+	}{
+		{name: "string array", attachments: []string{"https://example.com/test.jpg"}},
+		{name: "single string", attachments: "https://example.com/test.jpg"},
+		{name: "object", attachments: map[string]any{"url": "https://example.com/test.jpg"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sender := &fakeSender{}
+			resolver := &fakeResolver{ct: channel.ChannelType("qq")}
+			exec := NewExecutor(nil, sender, nil, resolver, &fakeAssetResolver{})
+			session := mcpgw.ToolSessionContext{BotID: "bot1", CurrentPlatform: "qq"}
+
+			result, err := exec.CallTool(context.Background(), session, toolSend, map[string]any{
+				"platform":    "qq",
+				"target":      "3fe2bad9-3eae-4f23-872c-b7a63662aa00",
+				"text":        "test.jpg from QQ",
+				"attachments": tt.attachments,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := mcpgw.PayloadError(result); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.lastReq.Message.Attachments) != 1 {
+				t.Fatalf("expected 1 attachment, got %d", len(sender.lastReq.Message.Attachments))
+			}
+			att := sender.lastReq.Message.Attachments[0]
+			if att.URL != "https://example.com/test.jpg" {
+				t.Fatalf("unexpected attachment url: %q", att.URL)
+			}
+			if att.Type != channel.AttachmentImage {
+				t.Fatalf("unexpected attachment type: %q", att.Type)
+			}
+		})
+	}
+}
+
+func TestExecutor_CallTool_AllowsEmptyTopLevelAttachmentsArray(t *testing.T) {
+	sender := &fakeSender{}
+	resolver := &fakeResolver{ct: channel.ChannelType("qq")}
+	exec := NewExecutor(nil, sender, nil, resolver, &fakeAssetResolver{})
+	session := mcpgw.ToolSessionContext{BotID: "bot1", CurrentPlatform: "qq"}
+
+	result, err := exec.CallTool(context.Background(), session, toolSend, map[string]any{
+		"platform":    "qq",
+		"target":      "3fe2bad9-3eae-4f23-872c-b7a63662aa00",
+		"text":        "hello",
+		"attachments": []any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mcpgw.PayloadError(result); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.lastReq.Message.Attachments) != 0 {
+		t.Fatalf("expected no attachments, got %d", len(sender.lastReq.Message.Attachments))
+	}
+}
+
+func TestExecutor_CallTool_DataAttachmentsFailWhenIngestFails(t *testing.T) {
+	sender := &fakeSender{}
+	resolver := &fakeResolver{ct: channel.ChannelType("qq")}
+	exec := NewExecutor(nil, sender, nil, resolver, &fakeAssetResolver{ingestErr: errors.New("ingest disabled")})
+	session := mcpgw.ToolSessionContext{BotID: "bot1", CurrentPlatform: "qq"}
+
+	result, err := exec.CallTool(context.Background(), session, toolSend, map[string]any{
+		"platform":    "qq",
+		"target":      "3fe2bad9-3eae-4f23-872c-b7a63662aa00",
+		"text":        "test.jpg from QQ",
+		"attachments": []string{"/data/test.jpg"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isErr, _ := result["isError"].(bool); !isErr {
+		t.Fatal("expected attachment resolution error")
+	}
+	payloadMsg := ""
+	if content, ok := result["content"].([]map[string]any); ok && len(content) > 0 {
+		payloadMsg, _ = content[0]["text"].(string)
+	}
+	if !strings.Contains(payloadMsg, "attachments could not be resolved") {
+		t.Fatalf("unexpected error: %v", payloadMsg)
+	}
+	if len(sender.lastReq.Message.Attachments) != 0 {
+		t.Fatalf("expected no outbound attachments, got %d", len(sender.lastReq.Message.Attachments))
 	}
 }
 
