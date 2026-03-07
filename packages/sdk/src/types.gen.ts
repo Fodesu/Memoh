@@ -130,6 +130,24 @@ export type BotsUpsertMemberRequest = {
     user_id?: string;
 };
 
+export type BrowsercontextsBrowserContext = {
+    config?: Array<number>;
+    created_at?: string;
+    id?: string;
+    name?: string;
+    updated_at?: string;
+};
+
+export type BrowsercontextsCreateRequest = {
+    config?: Array<number>;
+    name?: string;
+};
+
+export type BrowsercontextsUpdateRequest = {
+    config?: Array<number>;
+    name?: string;
+};
+
 export type ChannelAction = {
     label?: string;
     type?: string;
@@ -1217,6 +1235,7 @@ export type SearchprovidersUpdateRequest = {
 
 export type SettingsSettings = {
     allow_guest?: boolean;
+    browser_context_id?: string;
     chat_model_id?: string;
     heartbeat_enabled?: boolean;
     heartbeat_interval?: number;
@@ -1233,6 +1252,7 @@ export type SettingsSettings = {
 
 export type SettingsUpsertRequest = {
     allow_guest?: boolean;
+    browser_context_id?: string;
     chat_model_id?: string;
     heartbeat_enabled?: boolean;
     heartbeat_interval?: number;
@@ -5505,6 +5525,166 @@ export type PutBotsByIdOwnerResponses = {
 };
 
 export type PutBotsByIdOwnerResponse = PutBotsByIdOwnerResponses[keyof PutBotsByIdOwnerResponses];
+
+export type GetBrowserContextsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/browser-contexts';
+};
+
+export type GetBrowserContextsErrors = {
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBrowserContextsError = GetBrowserContextsErrors[keyof GetBrowserContextsErrors];
+
+export type GetBrowserContextsResponses = {
+    /**
+     * OK
+     */
+    200: Array<BrowsercontextsBrowserContext>;
+};
+
+export type GetBrowserContextsResponse = GetBrowserContextsResponses[keyof GetBrowserContextsResponses];
+
+export type PostBrowserContextsData = {
+    /**
+     * Browser context configuration
+     */
+    body: BrowsercontextsCreateRequest;
+    path?: never;
+    query?: never;
+    url: '/browser-contexts';
+};
+
+export type PostBrowserContextsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostBrowserContextsError = PostBrowserContextsErrors[keyof PostBrowserContextsErrors];
+
+export type PostBrowserContextsResponses = {
+    /**
+     * Created
+     */
+    201: BrowsercontextsBrowserContext;
+};
+
+export type PostBrowserContextsResponse = PostBrowserContextsResponses[keyof PostBrowserContextsResponses];
+
+export type DeleteBrowserContextsByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Browser Context ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/browser-contexts/{id}';
+};
+
+export type DeleteBrowserContextsByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type DeleteBrowserContextsByIdError = DeleteBrowserContextsByIdErrors[keyof DeleteBrowserContextsByIdErrors];
+
+export type DeleteBrowserContextsByIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type GetBrowserContextsByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Browser Context ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/browser-contexts/{id}';
+};
+
+export type GetBrowserContextsByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type GetBrowserContextsByIdError = GetBrowserContextsByIdErrors[keyof GetBrowserContextsByIdErrors];
+
+export type GetBrowserContextsByIdResponses = {
+    /**
+     * OK
+     */
+    200: BrowsercontextsBrowserContext;
+};
+
+export type GetBrowserContextsByIdResponse = GetBrowserContextsByIdResponses[keyof GetBrowserContextsByIdResponses];
+
+export type PutBrowserContextsByIdData = {
+    /**
+     * Updated configuration
+     */
+    body: BrowsercontextsUpdateRequest;
+    path: {
+        /**
+         * Browser Context ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/browser-contexts/{id}';
+};
+
+export type PutBrowserContextsByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PutBrowserContextsByIdError = PutBrowserContextsByIdErrors[keyof PutBrowserContextsByIdErrors];
+
+export type PutBrowserContextsByIdResponses = {
+    /**
+     * OK
+     */
+    200: BrowsercontextsBrowserContext;
+};
+
+export type PutBrowserContextsByIdResponse = PutBrowserContextsByIdResponses[keyof PutBrowserContextsByIdResponses];
 
 export type GetChannelsData = {
     body?: never;
