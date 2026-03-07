@@ -4,6 +4,7 @@ import { ToolSet } from 'ai'
 import { getWebTools } from './web'
 import { getSubagentTools } from './subagent'
 import { getSkillTools } from './skill'
+import { getTtsTools } from './tts'
 
 export interface ToolsParams {
   fetch: AuthFetcher
@@ -30,10 +31,15 @@ export const getTools = (
     const skillTools = getSkillTools({ useSkill: enableSkill })
     Object.assign(tools, skillTools)
   }
-    return tools
+  if (actions.includes(AgentAction.TTS)) {
+    const ttsTools = getTtsTools({ fetch, auth, identity })
+    Object.assign(tools, ttsTools)
+  }
+  return tools
 }
 
 export * from './web'
 export * from './subagent'
 export * from './skill'
+export * from './tts'
 export * from './mcp'

@@ -5,9 +5,10 @@ import "github.com/go-playground/validator/v10"
 var validate = validator.New()
 
 // VoiceConfig identifies a TTS voice and its language.
+// Both fields are optional; adapters fill in their own defaults when empty.
 type VoiceConfig struct {
-	ID   string `json:"id"   validate:"required"`
-	Lang string `json:"lang" validate:"required"`
+	ID   string `json:"id"   validate:"omitempty"`
+	Lang string `json:"lang" validate:"omitempty"`
 }
 
 // AudioConfig is the user-facing configuration for a TTS request.

@@ -26,9 +26,14 @@ export enum AgentAction {
   Schedule = 'schedule',
   Skill = 'skill',
   Memory = 'memory',
+  TTS = 'tts',
 }
 
-export const allActions = Object.values(AgentAction)
+export const allActionValues = Object.values(AgentAction) as [AgentAction, ...AgentAction[]]
+
+export const allActions = allActionValues.filter(
+  (a) => a !== AgentAction.TTS,
+) as AgentAction[]
 
 export interface InboxItem {
   id: string

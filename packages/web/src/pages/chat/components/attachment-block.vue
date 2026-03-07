@@ -28,6 +28,19 @@
         />
       </button>
 
+      <!-- Audio player -->
+      <div
+        v-else-if="isAudio(att) && getUrl(att)"
+        class="rounded-lg border bg-muted/30 px-3 py-2 min-w-[280px] max-w-[400px]"
+      >
+        <audio
+          controls
+          preload="metadata"
+          class="w-full"
+          :src="getUrl(att)"
+        />
+      </div>
+
       <!-- Downloadable file -->
       <a
         v-else-if="getUrl(att)"

@@ -169,6 +169,7 @@ func runServe() {
 			// tts infrastructure
 			provideTtsRegistry,
 			ttspkg.NewService,
+			provideTtsTempStore,
 
 			// email infrastructure
 			provideEmailRegistry,
@@ -223,6 +224,7 @@ func runServe() {
 			provideServerHandler(provideUsersHandler),
 			provideServerHandler(handlers.NewMemoryProvidersHandler),
 			provideServerHandler(handlers.NewTtsProvidersHandler),
+			provideServerHandler(handlers.NewBotTtsHandler),
 			provideServerHandler(handlers.NewEmailProvidersHandler),
 			provideServerHandler(handlers.NewEmailBindingsHandler),
 			provideServerHandler(handlers.NewEmailOutboxHandler),
@@ -244,6 +246,7 @@ func runServe() {
 			startChannelManager,
 			startEmailManager,
 			startContainerReconciliation,
+			startTtsTempStoreCleanup,
 			startServer,
 		),
 		fx.WithLogger(func(logger *slog.Logger) fxevent.Logger {
@@ -411,12 +414,14 @@ func provideChannelRouter(
 	bindService *bind.Service,
 	mediaService *media.Service,
 	inboxService *inbox.Service,
+	ttsTempStore *ttspkg.TempStore,
 	rc *boot.RuntimeConfig,
 ) *inbound.ChannelInboundProcessor {
 	processor := inbound.NewChannelInboundProcessor(log, registry, routeService, msgService, resolver, identityService, botService, policyService, preauthService, bindService, rc.JwtSecret, 5*time.Minute)
 	processor.SetMediaService(mediaService)
 	processor.SetStreamObserver(local.NewRouteHubBroadcaster(hub))
 	processor.SetInboxService(inboxService)
+	processor.SetTtsTempStore(ttsTempStore)
 	return processor
 }
 
@@ -529,6 +534,24 @@ func provideTtsRegistry(log *slog.Logger) *ttspkg.Registry {
 	reg := ttspkg.NewRegistry()
 	reg.Register(ttsedge.NewEdgeAdapter(log))
 	return reg
+}
+
+func provideTtsTempStore() (*ttspkg.TempStore, error) {
+	return ttspkg.NewTempStore(os.TempDir())
+}
+
+func startTtsTempStoreCleanup(lc fx.Lifecycle, store *ttspkg.TempStore) {
+	done := make(chan struct{})
+	lc.Append(fx.Hook{
+		OnStart: func(_ context.Context) error {
+			go store.StartCleanup(done)
+			return nil
+		},
+		OnStop: func(_ context.Context) error {
+			close(done)
+			return nil
+		},
+	})
 }
 
 func provideEmailRegistry(log *slog.Logger) *emailpkg.Registry {

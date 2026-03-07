@@ -108,6 +108,7 @@ func runServe() {
 			inbox.NewService,
 			provideTtsRegistry,
 			ttspkg.NewService,
+			provideTtsTempStore,
 			provideEmailRegistry,
 			emailpkg.NewService,
 			emailpkg.NewOutboxService,
@@ -147,6 +148,7 @@ func runServe() {
 			provideServerHandler(provideUsersHandler),
 			provideServerHandler(handlers.NewMemoryProvidersHandler),
 			provideServerHandler(handlers.NewTtsProvidersHandler),
+			provideServerHandler(handlers.NewBotTtsHandler),
 			provideServerHandler(handlers.NewEmailProvidersHandler),
 			provideServerHandler(handlers.NewEmailBindingsHandler),
 			provideServerHandler(handlers.NewEmailOutboxHandler),
@@ -167,6 +169,7 @@ func runServe() {
 			startEmailManager,
 			startContainerReconciliation,
 			startAgentRuntime,
+			startTtsTempStoreCleanup,
 			startServer,
 		),
 		fx.WithLogger(func(logger *slog.Logger) fxevent.Logger {
@@ -292,11 +295,12 @@ func provideChannelRegistry(log *slog.Logger, hub *local.RouteHub, mediaService 
 	return registry
 }
 
-func provideChannelRouter(log *slog.Logger, registry *channel.Registry, hub *local.RouteHub, routeService *route.DBService, msgService *message.DBService, resolver *flow.Resolver, identityService *identities.Service, botService *bots.Service, policyService *policy.Service, preauthService *preauth.Service, bindService *bind.Service, mediaService *media.Service, inboxService *inbox.Service, rc *boot.RuntimeConfig) *inbound.ChannelInboundProcessor {
+func provideChannelRouter(log *slog.Logger, registry *channel.Registry, hub *local.RouteHub, routeService *route.DBService, msgService *message.DBService, resolver *flow.Resolver, identityService *identities.Service, botService *bots.Service, policyService *policy.Service, preauthService *preauth.Service, bindService *bind.Service, mediaService *media.Service, inboxService *inbox.Service, ttsTempStore *ttspkg.TempStore, rc *boot.RuntimeConfig) *inbound.ChannelInboundProcessor {
 	processor := inbound.NewChannelInboundProcessor(log, registry, routeService, msgService, resolver, identityService, botService, policyService, preauthService, bindService, rc.JwtSecret, 5*time.Minute)
 	processor.SetMediaService(mediaService)
 	processor.SetStreamObserver(local.NewRouteHubBroadcaster(hub))
 	processor.SetInboxService(inboxService)
+	processor.SetTtsTempStore(ttsTempStore)
 	return processor
 }
 
@@ -618,6 +622,24 @@ func provideTtsRegistry(log *slog.Logger) *ttspkg.Registry {
 	reg := ttspkg.NewRegistry()
 	reg.Register(ttsedge.NewEdgeAdapter(log))
 	return reg
+}
+
+func provideTtsTempStore() (*ttspkg.TempStore, error) {
+	return ttspkg.NewTempStore(os.TempDir())
+}
+
+func startTtsTempStoreCleanup(lc fx.Lifecycle, store *ttspkg.TempStore) {
+	done := make(chan struct{})
+	lc.Append(fx.Hook{
+		OnStart: func(_ context.Context) error {
+			go store.StartCleanup(done)
+			return nil
+		},
+		OnStop: func(_ context.Context) error {
+			close(done)
+			return nil
+		},
+	})
 }
 
 func provideEmailRegistry(log *slog.Logger) *emailpkg.Registry {

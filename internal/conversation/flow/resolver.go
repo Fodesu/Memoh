@@ -444,6 +444,8 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		}
 	}
 
+	allowedActions := resolveAllowedActions(req.AllowedActions, botSettings)
+
 	payload := gatewayRequest{
 		Model: gatewayModelConfig{
 			ModelID:    chatModel.ModelID,
@@ -456,7 +458,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		ActiveContextTime: maxCtx,
 		Channels:          nonNilStrings(req.Channels),
 		CurrentChannel:    req.CurrentChannel,
-		AllowedActions:    req.AllowedActions,
+		AllowedActions:    allowedActions,
 		Messages:          nonNilModelMessages(messages),
 		Skills:            nonNilStrings(skills),
 		UsableSkills:      usableSkills,
@@ -1789,6 +1791,27 @@ func (r *Resolver) markInboxRead(ctx context.Context, botID string, ids []string
 	if err := r.inboxService.MarkRead(ctx, botID, ids); err != nil {
 		r.logger.Warn("failed to mark inbox items as read", slog.String("bot_id", botID), slog.Any("error", err))
 	}
+}
+
+// --- allowed actions ---
+
+// defaultActions mirrors the TypeScript AgentAction enum values (excluding TTS).
+var defaultActions = []string{"web", "message", "contact", "subagent", "schedule", "skill", "memory"}
+
+// resolveAllowedActions computes the final AllowedActions list based on the
+// request's explicit actions and the bot's capabilities.
+// When the request has no explicit actions (nil), the gateway defaults to the
+// standard set. If the bot has a TTS provider configured, "tts" is appended.
+func resolveAllowedActions(requestActions []string, botSettings settings.Settings) []string {
+	if strings.TrimSpace(botSettings.TtsProviderID) == "" {
+		return requestActions
+	}
+	base := requestActions
+	if len(base) == 0 {
+		base = make([]string, len(defaultActions))
+		copy(base, defaultActions)
+	}
+	return append(base, "tts")
 }
 
 // --- settings ---

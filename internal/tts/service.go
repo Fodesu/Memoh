@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 
@@ -208,6 +209,45 @@ func toFloat(v any) (float64, bool) {
 	}
 }
 
+// StreamToFile runs text-to-speech using Stream() and writes audio chunks
+// directly to the given writer, keeping peak memory low for large audio.
+func (s *Service) StreamToFile(ctx context.Context, providerID string, text string, w io.Writer) (string, error) {
+	resp, err := s.GetProvider(ctx, providerID)
+	if err != nil {
+		return "", fmt.Errorf("get tts provider: %w", err)
+	}
+	adapter, err := s.registry.Get(TtsType(resp.Provider))
+	if err != nil {
+		return "", fmt.Errorf("unsupported provider: %s", resp.Provider)
+	}
+
+	audioCfg := buildAudioConfig(resp.Config)
+	if err := audioCfg.Validate(); err != nil {
+		return "", fmt.Errorf("invalid audio config: %w", err)
+	}
+
+	dataCh, errCh := adapter.Stream(ctx, text, audioCfg)
+	if dataCh == nil {
+		select {
+		case streamErr := <-errCh:
+			return "", fmt.Errorf("stream: %w", streamErr)
+		default:
+			return "", fmt.Errorf("stream returned nil channels")
+		}
+	}
+
+	for chunk := range dataCh {
+		if _, writeErr := w.Write(chunk); writeErr != nil {
+			return "", fmt.Errorf("write chunk: %w", writeErr)
+		}
+	}
+	if streamErr, ok := <-errCh; ok && streamErr != nil {
+		return "", fmt.Errorf("stream: %w", streamErr)
+	}
+
+	return resolveContentType(audioCfg.Format), nil
+}
+
 func resolveContentType(format string) string {
 	switch {
 	case strings.Contains(format, "mp3"):
@@ -224,6 +264,7 @@ func resolveContentType(format string) string {
 		return "audio/mpeg"
 	}
 }
+
 
 func (s *Service) toProviderResponse(row sqlc.TtsProvider) ProviderResponse {
 	var cfg map[string]any
