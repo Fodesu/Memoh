@@ -118,7 +118,7 @@ func (h *TtsProvidersHandler) Get(c echo.Context) error {
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /tts-providers/{id} [put].
-func (h *TtsProvidersHandler)  Update(c echo.Context) error {
+func (h *TtsProvidersHandler) Update(c echo.Context) error {
 	id := strings.TrimSpace(c.Param("id"))
 	if id == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "id is required")

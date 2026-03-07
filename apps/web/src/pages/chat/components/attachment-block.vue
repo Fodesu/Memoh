@@ -102,6 +102,13 @@ function isVideo(att: Record<string, unknown>): boolean {
   return mime.startsWith('video/')
 }
 
+function isAudio(att: Record<string, unknown>): boolean {
+  const type = String(att.type ?? '').toLowerCase()
+  if (type === 'audio' || type === 'voice') return true
+  const mime = String(att.mime ?? '').toLowerCase()
+  return mime.startsWith('audio/')
+}
+
 function handleMediaClick(att: Record<string, unknown>) {
   const src = getUrl(att)
   if (src && props.onOpenMedia) {

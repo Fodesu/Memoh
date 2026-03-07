@@ -29,7 +29,7 @@ type TempStore struct {
 // NewTempStore creates a TempStore under the given base directory.
 func NewTempStore(baseDir string) (*TempStore, error) {
 	dir := filepath.Join(baseDir, tempDirName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create tts temp dir: %w", err)
 	}
 	return &TempStore{
@@ -43,7 +43,7 @@ func NewTempStore(baseDir string) (*TempStore, error) {
 func (s *TempStore) Create() (id string, f *os.File, err error) {
 	id = uuid.New().String()
 	path := filepath.Join(s.dir, id)
-	f, err = os.Create(path)
+	f, err = os.Create(path) //nolint:gosec // Path is generated from controlled base dir + UUID.
 	if err != nil {
 		return "", nil, fmt.Errorf("create temp file: %w", err)
 	}
@@ -75,7 +75,7 @@ func (s *TempStore) ReadAndDelete(id string) ([]byte, error) {
 	}
 
 	path := filepath.Join(s.dir, id)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Path is generated from controlled base dir + validated entry ID.
 	if err != nil {
 		return nil, fmt.Errorf("read temp file: %w", err)
 	}

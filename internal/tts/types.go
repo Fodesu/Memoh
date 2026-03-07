@@ -31,6 +31,6 @@ type ProviderMetaResponse struct {
 }
 
 type TestSynthesizeRequest struct {
-	Text       string         `json:"text"`
-	Config     map[string]any `json:"config,omitempty"`
+	Text   string         `json:"text"`
+	Config map[string]any `json:"config,omitempty"`
 }

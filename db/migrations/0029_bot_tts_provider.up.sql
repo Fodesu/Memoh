@@ -1,4 +1,4 @@
--- 0027_bot_tts_provider
+-- 0029_bot_tts_provider
 -- Add tts_provider_id FK to bots table for per-bot TTS configuration
 
 ALTER TABLE bots

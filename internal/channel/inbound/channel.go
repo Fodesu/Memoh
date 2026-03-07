@@ -1987,31 +1987,34 @@ func (p *ChannelInboundProcessor) extractTtsVoiceAttachment(event channel.Stream
 		ContentType string `json:"content_type"`
 		Size        int64  `json:"size"`
 	}
+
 	raw, err := json.Marshal(event.ToolCall.Result)
 	if err != nil || len(raw) == 0 {
 		return nil
 	}
+
+	// MCP ToolExecutor wraps the payload in structuredContent; unwrap if present.
+	var wrapper struct {
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	if json.Unmarshal(raw, &wrapper) == nil && len(wrapper.StructuredContent) > 0 {
+		raw = wrapper.StructuredContent
+	}
+
 	if err := json.Unmarshal(raw, &result); err != nil || result.TempID == "" {
-		if p.logger != nil {
-			p.logger.Warn("failed to parse text_to_speech result", slog.Any("error", err))
-		}
 		return nil
 	}
 
 	audioData, err := p.ttsTempStore.ReadAndDelete(result.TempID)
 	if err != nil {
-		if p.logger != nil {
-			p.logger.Warn("failed to read TTS temp audio", slog.String("temp_id", result.TempID), slog.Any("error", err))
-		}
 		return nil
 	}
-
 	dataURL := encodeDataURL(result.ContentType, audioData)
 	return &channel.Attachment{
-		Type:   channel.AttachmentVoice,
-		Base64: dataURL,
-		Mime:   result.ContentType,
-		Size:   int64(len(audioData)),
+		Type: channel.AttachmentVoice,
+		URL:  dataURL,
+		Mime: result.ContentType,
+		Size: int64(len(audioData)),
 	}
 }
 

@@ -1,4 +1,4 @@
--- 0026_tts_providers
+-- 0028_tts_providers
 -- Add tts_providers table for pluggable TTS service backends
 
 CREATE TABLE IF NOT EXISTS tts_providers (

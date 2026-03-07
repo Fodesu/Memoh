@@ -3,6 +3,7 @@ package tts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -232,7 +233,7 @@ func (s *Service) StreamToFile(ctx context.Context, providerID string, text stri
 		case streamErr := <-errCh:
 			return "", fmt.Errorf("stream: %w", streamErr)
 		default:
-			return "", fmt.Errorf("stream returned nil channels")
+			return "", errors.New("stream returned nil channels")
 		}
 	}
 
@@ -264,7 +265,6 @@ func resolveContentType(format string) string {
 		return "audio/mpeg"
 	}
 }
-
 
 func (s *Service) toProviderResponse(row sqlc.TtsProvider) ProviderResponse {
 	var cfg map[string]any
