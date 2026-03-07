@@ -115,7 +115,7 @@ prepare_assets() {
 
   log "building web assets"
   pnpm --dir "$ROOT_DIR" web:build
-  cp -R "$ROOT_DIR/packages/web/dist/." "$WEB_DIR/"
+  cp -R "$ROOT_DIR/apps/web/dist/." "$WEB_DIR/"
   gzip_embedded_web_assets "$WEB_DIR"
 
   local target_key="${TARGET_OS}-${TARGET_ARCH}"

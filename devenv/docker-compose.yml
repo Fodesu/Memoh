@@ -123,7 +123,7 @@ services:
       context: ..
       dockerfile: devenv/Dockerfile.web
     container_name: memoh-dev-web
-    working_dir: /workspace/packages/web
+    working_dir: /workspace/apps/web
     command: ["pnpm", "dev"]
     volumes:
       - ..:/workspace
