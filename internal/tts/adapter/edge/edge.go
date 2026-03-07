@@ -11,6 +11,8 @@ import (
 
 const TtsTypeEdge tts.TtsType = "edge"
 
+const edgeModelReadAloud = "edge-read-aloud"
+
 type EdgeAdapter struct {
 	logger *slog.Logger
 	client *EdgeWsClient
@@ -42,6 +44,10 @@ func (*EdgeAdapter) Meta() tts.TtsMeta {
 	}
 }
 
+func (*EdgeAdapter) DefaultModel() string {
+	return edgeModelReadAloud
+}
+
 var edgeFormats = []string{
 	"audio-24khz-48kbitrate-mono-mp3",
 	"audio-24khz-96kbitrate-mono-mp3",
@@ -59,7 +65,7 @@ var edgePitchConstraint = &tts.ParamConstraint{
 	Default: 0,
 }
 
-func (*EdgeAdapter) Capabilities() tts.Capabilities {
+func (*EdgeAdapter) Models() []tts.ModelInfo {
 	var voices []tts.VoiceInfo
 	for lang, ids := range EdgeTTSVoices {
 		for _, id := range ids {
@@ -68,22 +74,40 @@ func (*EdgeAdapter) Capabilities() tts.Capabilities {
 			voices = append(voices, tts.VoiceInfo{ID: id, Lang: lang, Name: name})
 		}
 	}
-	return tts.Capabilities{
-		Voices:  voices,
-		Formats: edgeFormats,
-		Speed:   edgeSpeedConstraint,
-		Pitch:   edgePitchConstraint,
+	return []tts.ModelInfo{
+		{
+			ID:          edgeModelReadAloud,
+			Name:        "Edge Read Aloud",
+			Description: "Built-in Edge Read Aloud speech model",
+			Capabilities: tts.ModelCapabilities{
+				Voices:  voices,
+				Formats: edgeFormats,
+				Speed:   edgeSpeedConstraint,
+				Pitch:   edgePitchConstraint,
+			},
+		},
 	}
 }
 
-func (a *EdgeAdapter) Synthesize(ctx context.Context, text string, config tts.AudioConfig) ([]byte, error) {
+func (*EdgeAdapter) ResolveModel(model string) (string, error) {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		return edgeModelReadAloud, nil
+	}
+	if !strings.EqualFold(trimmed, edgeModelReadAloud) {
+		return "", fmt.Errorf("edge tts: unsupported model: %s", model)
+	}
+	return edgeModelReadAloud, nil
+}
+
+func (a *EdgeAdapter) Synthesize(ctx context.Context, text string, _ string, config tts.AudioConfig) ([]byte, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("edge tts: invalid config: %w", err)
 	}
 	return a.client.Synthesize(ctx, text, config)
 }
 
-func (a *EdgeAdapter) Stream(ctx context.Context, text string, config tts.AudioConfig) (chan []byte, chan error) {
+func (a *EdgeAdapter) Stream(ctx context.Context, text string, _ string, config tts.AudioConfig) (chan []byte, chan error) {
 	if err := config.Validate(); err != nil {
 		errCh := make(chan error, 1)
 		errCh <- fmt.Errorf("edge tts: invalid config: %w", err)

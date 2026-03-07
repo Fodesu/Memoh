@@ -12,7 +12,9 @@ type TtsMeta struct {
 type TtsAdapter interface {
 	Type() TtsType
 	Meta() TtsMeta
-	Capabilities() Capabilities
-	Synthesize(ctx context.Context, text string, config AudioConfig) ([]byte, error)
-	Stream(ctx context.Context, text string, config AudioConfig) (chan []byte, chan error)
+	DefaultModel() string
+	Models() []ModelInfo
+	ResolveModel(model string) (string, error)
+	Synthesize(ctx context.Context, text string, model string, config AudioConfig) ([]byte, error)
+	Stream(ctx context.Context, text string, model string, config AudioConfig) (chan []byte, chan error)
 }

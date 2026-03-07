@@ -38,7 +38,7 @@ func TestEdgeAdapter_Synthesize_WithMockServer(t *testing.T) {
 
 	ctx := context.Background()
 	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}}
-	audio, err := adapter.Synthesize(ctx, "Hello", config)
+	audio, err := adapter.Synthesize(ctx, "Hello", edgeModelReadAloud, config)
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestEdgeAdapter_Stream_WithMockServer(t *testing.T) {
 
 	ctx := context.Background()
 	config := tts.AudioConfig{Voice: tts.VoiceConfig{ID: "en-US-JennyNeural", Lang: "en-US"}}
-	ch, errCh := adapter.Stream(ctx, "Hi", config)
+	ch, errCh := adapter.Stream(ctx, "Hi", edgeModelReadAloud, config)
 	var chunks [][]byte
 	for b := range ch {
 		chunks = append(chunks, b)
@@ -86,8 +86,33 @@ func TestEdgeAdapter_Synthesize_NotConnected(t *testing.T) {
 	adapter := NewEdgeAdapterWithClient(slog.Default(), client)
 
 	ctx := context.Background()
-	_, err := adapter.Synthesize(ctx, "x", tts.AudioConfig{})
+	_, err := adapter.Synthesize(ctx, "x", edgeModelReadAloud, tts.AudioConfig{})
 	if err == nil {
 		t.Fatal("expected error when connection fails")
+	}
+}
+
+func TestEdgeAdapter_ResolveModel(t *testing.T) {
+	t.Parallel()
+	adapter := NewEdgeAdapter(slog.Default())
+
+	got, err := adapter.ResolveModel("")
+	if err != nil {
+		t.Fatalf("ResolveModel default: %v", err)
+	}
+	if got != edgeModelReadAloud {
+		t.Fatalf("ResolveModel default got %q, want %q", got, edgeModelReadAloud)
+	}
+
+	got, err = adapter.ResolveModel("EDGE-READ-ALOUD")
+	if err != nil {
+		t.Fatalf("ResolveModel case-insensitive: %v", err)
+	}
+	if got != edgeModelReadAloud {
+		t.Fatalf("ResolveModel normalized got %q, want %q", got, edgeModelReadAloud)
+	}
+
+	if _, err := adapter.ResolveModel("unsupported"); err == nil {
+		t.Fatal("expected unsupported model error")
 	}
 }

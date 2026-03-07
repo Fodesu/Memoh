@@ -34,13 +34,21 @@ type ParamConstraint struct {
 	Default float64   `json:"default"`
 }
 
-// Capabilities describes what a TTS backend supports.
+// ModelCapabilities describes what a specific TTS model supports.
 // nil pointer means the parameter is not supported; frontend should hide it.
-type Capabilities struct {
+type ModelCapabilities struct {
 	Voices  []VoiceInfo      `json:"voices"`
 	Formats []string         `json:"formats"`
 	Speed   *ParamConstraint `json:"speed,omitempty"`
 	Pitch   *ParamConstraint `json:"pitch,omitempty"`
+}
+
+// ModelInfo describes a single model exposed by a TTS adapter.
+type ModelInfo struct {
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description,omitempty"`
+	Capabilities ModelCapabilities `json:"capabilities"`
 }
 
 type VoiceInfo struct {

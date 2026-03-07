@@ -12,7 +12,7 @@ type Settings struct {
 	ChatModelID        string `json:"chat_model_id"`
 	SearchProviderID   string `json:"search_provider_id"`
 	MemoryProviderID   string `json:"memory_provider_id"`
-	TtsProviderID      string `json:"tts_provider_id"`
+	TtsModelID         string `json:"tts_model_id"`
 	BrowserContextID   string `json:"browser_context_id"`
 	MaxContextLoadTime int    `json:"max_context_load_time"`
 	MaxContextTokens   int    `json:"max_context_tokens"`
@@ -30,7 +30,7 @@ type UpsertRequest struct {
 	ChatModelID        string  `json:"chat_model_id,omitempty"`
 	SearchProviderID   string  `json:"search_provider_id,omitempty"`
 	MemoryProviderID   string  `json:"memory_provider_id,omitempty"`
-	TtsProviderID      string  `json:"tts_provider_id,omitempty"`
+	TtsModelID         string  `json:"tts_model_id,omitempty"`
 	BrowserContextID   string  `json:"browser_context_id,omitempty"`
 	MaxContextLoadTime *int    `json:"max_context_load_time,omitempty"`
 	MaxContextTokens   *int    `json:"max_context_tokens,omitempty"`

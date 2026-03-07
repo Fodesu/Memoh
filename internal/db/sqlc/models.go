@@ -30,7 +30,7 @@ type Bot struct {
 	HeartbeatInterval  int32              `json:"heartbeat_interval"`
 	HeartbeatPrompt    string             `json:"heartbeat_prompt"`
 	HeartbeatModelID   pgtype.UUID        `json:"heartbeat_model_id"`
-	TtsProviderID      pgtype.UUID        `json:"tts_provider_id"`
+	TtsModelID         pgtype.UUID        `json:"tts_model_id"`
 	BrowserContextID   pgtype.UUID        `json:"browser_context_id"`
 	Metadata           []byte             `json:"metadata"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
@@ -401,6 +401,16 @@ type Subagent struct {
 	Metadata    []byte             `json:"metadata"`
 	Skills      []byte             `json:"skills"`
 	Usage       []byte             `json:"usage"`
+}
+
+type TtsModel struct {
+	ID            pgtype.UUID        `json:"id"`
+	ModelID       string             `json:"model_id"`
+	Name          pgtype.Text        `json:"name"`
+	TtsProviderID pgtype.UUID        `json:"tts_provider_id"`
+	Config        []byte             `json:"config"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type TtsProvider struct {

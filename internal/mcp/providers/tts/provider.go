@@ -46,7 +46,7 @@ func (e *Executor) ListTools(ctx context.Context, session mcpgw.ToolSessionConte
 	if err != nil {
 		return nil, nil
 	}
-	if strings.TrimSpace(botSettings.TtsProviderID) == "" {
+	if strings.TrimSpace(botSettings.TtsModelID) == "" {
 		return nil, nil
 	}
 	return []mcpgw.ToolDescriptor{
@@ -90,8 +90,8 @@ func (e *Executor) CallTool(ctx context.Context, session mcpgw.ToolSessionContex
 		e.logger.Error("failed to load bot settings", slog.String("bot_id", botID), slog.Any("error", err))
 		return mcpgw.BuildToolErrorResult("failed to load bot settings"), nil
 	}
-	if botSettings.TtsProviderID == "" {
-		return mcpgw.BuildToolErrorResult("bot has no TTS provider configured"), nil
+	if botSettings.TtsModelID == "" {
+		return mcpgw.BuildToolErrorResult("bot has no TTS model configured"), nil
 	}
 
 	tempID, f, err := e.tempStore.Create()
@@ -100,7 +100,7 @@ func (e *Executor) CallTool(ctx context.Context, session mcpgw.ToolSessionContex
 		return mcpgw.BuildToolErrorResult("failed to create temp file"), nil
 	}
 
-	contentType, streamErr := e.tts.StreamToFile(ctx, botSettings.TtsProviderID, text, f)
+	contentType, streamErr := e.tts.StreamToFile(ctx, botSettings.TtsModelID, text, f)
 	closeErr := f.Close()
 	if streamErr != nil {
 		e.logger.Error("tts synthesis failed", slog.String("bot_id", botID), slog.Any("error", streamErr))

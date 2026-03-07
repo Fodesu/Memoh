@@ -44,7 +44,7 @@ type synthesizeResponse struct {
 
 // Synthesize godoc
 // @Summary Synthesize speech for a bot
-// @Description Stream-synthesize text using the bot's configured TTS provider, write to temp file
+// @Description Stream-synthesize text using the bot's configured TTS model, write to temp file
 // @Tags bots
 // @Accept json
 // @Produce json
@@ -78,8 +78,8 @@ func (h *BotTtsHandler) Synthesize(c echo.Context) error {
 		h.logger.Error("failed to load bot settings", slog.String("bot_id", botID), slog.Any("error", err))
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load bot settings")
 	}
-	if botSettings.TtsProviderID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "bot has no TTS provider configured")
+	if botSettings.TtsModelID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "bot has no TTS model configured")
 	}
 
 	tempID, f, err := h.tempStore.Create()
@@ -88,10 +88,10 @@ func (h *BotTtsHandler) Synthesize(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create temp file")
 	}
 
-	contentType, streamErr := h.ttsService.StreamToFile(c.Request().Context(), botSettings.TtsProviderID, text, f)
+	contentType, streamErr := h.ttsService.StreamToFile(c.Request().Context(), botSettings.TtsModelID, text, f)
 	closeErr := f.Close()
 	if streamErr != nil {
-		h.logger.Error("tts synthesis failed", slog.String("bot_id", botID), slog.String("provider_id", botSettings.TtsProviderID), slog.Any("error", streamErr))
+		h.logger.Error("tts synthesis failed", slog.String("bot_id", botID), slog.String("model_id", botSettings.TtsModelID), slog.Any("error", streamErr))
 		h.tempStore.Delete(tempID)
 		return echo.NewHTTPError(http.StatusInternalServerError, streamErr.Error())
 	}

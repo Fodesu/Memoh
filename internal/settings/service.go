@@ -125,13 +125,13 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		}
 		memoryProviderUUID = providerID
 	}
-	ttsProviderUUID := pgtype.UUID{}
-	if value := strings.TrimSpace(req.TtsProviderID); value != "" {
-		providerID, err := db.ParseUUID(value)
+	ttsModelUUID := pgtype.UUID{}
+	if value := strings.TrimSpace(req.TtsModelID); value != "" {
+		modelID, err := db.ParseUUID(value)
 		if err != nil {
 			return Settings{}, err
 		}
-		ttsProviderUUID = providerID
+		ttsModelUUID = modelID
 	}
 	browserContextUUID := pgtype.UUID{}
 	if value := strings.TrimSpace(req.BrowserContextID); value != "" {
@@ -164,7 +164,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		HeartbeatModelID:   heartbeatModelUUID,
 		SearchProviderID:   searchProviderUUID,
 		MemoryProviderID:   memoryProviderUUID,
-		TtsProviderID:      ttsProviderUUID,
+		TtsModelID:         ttsModelUUID,
 		BrowserContextID:   browserContextUUID,
 	})
 	if err != nil {
@@ -241,7 +241,7 @@ func normalizeBotSettingsReadRow(row sqlc.GetSettingsByBotIDRow) Settings {
 		row.HeartbeatModelID,
 		row.SearchProviderID,
 		row.MemoryProviderID,
-		row.TtsProviderID,
+		row.TtsModelID,
 		row.BrowserContextID,
 	)
 }
@@ -261,7 +261,7 @@ func normalizeBotSettingsWriteRow(row sqlc.UpsertBotSettingsRow) Settings {
 		row.HeartbeatModelID,
 		row.SearchProviderID,
 		row.MemoryProviderID,
-		row.TtsProviderID,
+		row.TtsModelID,
 		row.BrowserContextID,
 	)
 }
@@ -280,7 +280,7 @@ func normalizeBotSettingsFields(
 	heartbeatModelID pgtype.UUID,
 	searchProviderID pgtype.UUID,
 	memoryProviderID pgtype.UUID,
-	ttsProviderID pgtype.UUID,
+	ttsModelID pgtype.UUID,
 	browserContextID pgtype.UUID,
 ) Settings {
 	settings := normalizeBotSetting(maxContextLoadTime, maxContextTokens, maxInboxItems, language, allowGuest, reasoningEnabled, reasoningEffort, heartbeatEnabled, heartbeatInterval)
@@ -296,8 +296,8 @@ func normalizeBotSettingsFields(
 	if memoryProviderID.Valid {
 		settings.MemoryProviderID = uuid.UUID(memoryProviderID.Bytes).String()
 	}
-	if ttsProviderID.Valid {
-		settings.TtsProviderID = uuid.UUID(ttsProviderID.Bytes).String()
+	if ttsModelID.Valid {
+		settings.TtsModelID = uuid.UUID(ttsModelID.Bytes).String()
 	}
 	if browserContextID.Valid {
 		settings.BrowserContextID = uuid.UUID(browserContextID.Bytes).String()

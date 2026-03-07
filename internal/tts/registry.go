@@ -40,7 +40,8 @@ func (r *Registry) ListMeta() []ProviderMetaResponse {
 			Provider:     string(a.Type()),
 			DisplayName:  meta.Provider,
 			Description:  meta.Description,
-			Capabilities: a.Capabilities(),
+			DefaultModel: a.DefaultModel(),
+			Models:       a.Models(),
 		})
 	}
 	return metas
