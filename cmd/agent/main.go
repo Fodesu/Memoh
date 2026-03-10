@@ -967,4 +967,3 @@ func (a *gatewayAssetLoaderAdapter) OpenForGateway(ctx context.Context, botID, c
 	}
 	return reader, strings.TrimSpace(asset.Mime), nil
 }
-

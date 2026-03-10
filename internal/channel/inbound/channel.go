@@ -853,7 +853,6 @@ func buildChannelMessage(output conversation.AssistantOutput, capabilities chann
 	return msg
 }
 
-
 func contentPartHasValue(part conversation.ContentPart) bool {
 	if strings.TrimSpace(part.Text) != "" {
 		return true
