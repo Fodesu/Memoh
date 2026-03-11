@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	stdpath "path"
 	"strings"
 	"time"
 
@@ -30,9 +31,11 @@ import (
 	"github.com/memohai/memoh/internal/channel/adapters/local"
 	"github.com/memohai/memoh/internal/channel/adapters/qq"
 	"github.com/memohai/memoh/internal/channel/adapters/telegram"
+	"github.com/memohai/memoh/internal/channel/adapters/wecom"
 	"github.com/memohai/memoh/internal/channel/identities"
 	"github.com/memohai/memoh/internal/channel/inbound"
 	"github.com/memohai/memoh/internal/channel/route"
+	"github.com/memohai/memoh/internal/command"
 	"github.com/memohai/memoh/internal/config"
 	ctr "github.com/memohai/memoh/internal/containerd"
 	"github.com/memohai/memoh/internal/conversation"
@@ -413,6 +416,7 @@ func provideChannelRegistry(log *slog.Logger, hub *local.RouteHub, mediaService 
 	feishuAdapter := feishu.NewFeishuAdapter(log)
 	feishuAdapter.SetAssetOpener(mediaService)
 	registry.MustRegister(feishuAdapter)
+	registry.MustRegister(wecom.NewWeComAdapter(log))
 	registry.MustRegister(local.NewCLIAdapter(hub))
 	registry.MustRegister(local.NewWebAdapter(hub))
 	return registry
@@ -433,6 +437,21 @@ func provideChannelRouter(
 	mediaService *media.Service,
 	inboxService *inbox.Service,
 	ttsTempStore *ttspkg.TempStore,
+	subagentService *subagent.Service,
+	scheduleService *schedule.Service,
+	settingsService *settings.Service,
+	mcpConnService *mcp.ConnectionService,
+	modelsService *models.Service,
+	providersService *providers.Service,
+	memProvService *memprovider.Service,
+	searchProvService *searchproviders.Service,
+	browserCtxService *browsercontexts.Service,
+	emailService *emailpkg.Service,
+	emailOutboxService *emailpkg.OutboxService,
+	heartbeatService *heartbeat.Service,
+	queries *dbsqlc.Queries,
+	containerdHandler *handlers.ContainerdHandler,
+	manager *mcp.Manager,
 	rc *boot.RuntimeConfig,
 ) *inbound.ChannelInboundProcessor {
 	adapter, ok := registry.Get(qq.Type)
@@ -451,6 +470,26 @@ func provideChannelRouter(
 	processor.SetStreamObserver(local.NewRouteHubBroadcaster(hub))
 	processor.SetInboxService(inboxService)
 	processor.SetTtsTempStore(ttsTempStore)
+	processor.SetCommandHandler(command.NewHandler(
+		log,
+		&command.BotMemberRoleAdapter{BotService: botService},
+		subagentService,
+		scheduleService,
+		settingsService,
+		mcpConnService,
+		inboxService,
+		modelsService,
+		providersService,
+		memProvService,
+		searchProvService,
+		browserCtxService,
+		emailService,
+		emailOutboxService,
+		heartbeatService,
+		queries,
+		&commandSkillLoaderAdapter{handler: containerdHandler},
+		&commandContainerFSAdapter{manager: manager},
+	))
 	return processor
 }
 
@@ -459,6 +498,7 @@ func provideChannelManager(log *slog.Logger, registry *channel.Registry, channel
 	if mw := channelRouter.IdentityMiddleware(); mw != nil {
 		mgr.Use(mw)
 	}
+	channelRouter.SetReactor(mgr)
 	return mgr
 }
 
@@ -966,4 +1006,55 @@ func (a *gatewayAssetLoaderAdapter) OpenForGateway(ctx context.Context, botID, c
 		return nil, "", err
 	}
 	return reader, strings.TrimSpace(asset.Mime), nil
+}
+
+// commandSkillLoaderAdapter bridges handlers.ContainerdHandler to command.SkillLoader.
+type commandSkillLoaderAdapter struct {
+	handler *handlers.ContainerdHandler
+}
+
+func (a *commandSkillLoaderAdapter) LoadSkills(ctx context.Context, botID string) ([]command.Skill, error) {
+	items, err := a.handler.LoadSkills(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	skills := make([]command.Skill, len(items))
+	for i, item := range items {
+		skills[i] = command.Skill{Name: item.Name, Description: item.Description}
+	}
+	return skills, nil
+}
+
+// commandContainerFSAdapter bridges mcp.Manager to command.ContainerFS.
+type commandContainerFSAdapter struct {
+	manager *mcp.Manager
+}
+
+func (a *commandContainerFSAdapter) ListDir(ctx context.Context, botID, dirPath string) ([]command.FSEntry, error) {
+	client, err := a.manager.MCPClient(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := client.ListDir(ctx, dirPath, false)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]command.FSEntry, len(entries))
+	for i, e := range entries {
+		name := stdpath.Base(e.GetPath())
+		result[i] = command.FSEntry{Name: name, IsDir: e.GetIsDir(), Size: e.GetSize()}
+	}
+	return result, nil
+}
+
+func (a *commandContainerFSAdapter) ReadFile(ctx context.Context, botID, filePath string) (string, error) {
+	client, err := a.manager.MCPClient(ctx, botID)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.ReadFile(ctx, filePath, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	return resp.GetContent(), nil
 }
