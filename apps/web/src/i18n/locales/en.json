@@ -1025,6 +1025,7 @@
         "weixin": "WeChat",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
+        "slack": "Slack",
         "web": "Web",
         "cli": "CLI",
         "local": "Local"
@@ -1038,6 +1039,7 @@
         "weixin": "WX",
         "wecom": "WC",
         "dingtalk": "DT",
+        "slack": "SK",
         "web": "Web",
         "cli": "CLI",
         "local": "LC"
