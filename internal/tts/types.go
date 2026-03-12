@@ -42,6 +42,13 @@ type ModelResponse struct {
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
 
+type CreateModelRequest struct {
+	ModelID       string         `json:"model_id"`
+	Name          string         `json:"name"`
+	TtsProviderID string         `json:"tts_provider_id"`
+	Config        map[string]any `json:"config,omitempty"`
+}
+
 type UpdateModelRequest struct {
 	Name   *string        `json:"name,omitempty"`
 	Config map[string]any `json:"config,omitempty"`

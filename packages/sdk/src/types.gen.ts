@@ -1368,6 +1368,15 @@ export type SubagentUpdateSkillsRequest = {
     skills?: Array<string>;
 };
 
+export type TtsCreateModelRequest = {
+    config?: {
+        [key: string]: unknown;
+    };
+    model_id?: string;
+    name?: string;
+    tts_provider_id?: string;
+};
+
 export type TtsCreateProviderRequest = {
     name?: string;
     provider?: string;
@@ -7494,6 +7503,38 @@ export type GetTtsModelsResponses = {
 };
 
 export type GetTtsModelsResponse = GetTtsModelsResponses[keyof GetTtsModelsResponses];
+
+export type PostTtsModelsData = {
+    /**
+     * TTS model configuration
+     */
+    body: TtsCreateModelRequest;
+    path?: never;
+    query?: never;
+    url: '/tts-models';
+};
+
+export type PostTtsModelsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostTtsModelsError = PostTtsModelsErrors[keyof PostTtsModelsErrors];
+
+export type PostTtsModelsResponses = {
+    /**
+     * Created
+     */
+    201: TtsModelResponse;
+};
+
+export type PostTtsModelsResponse = PostTtsModelsResponses[keyof PostTtsModelsResponses];
 
 export type DeleteTtsModelsByIdData = {
     body?: never;

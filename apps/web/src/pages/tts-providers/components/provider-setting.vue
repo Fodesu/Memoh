@@ -49,19 +49,25 @@
             <h3 class="text-sm font-medium">
               {{ $t('ttsProvider.models') }}
             </h3>
-            <LoadingButton
-              type="button"
-              variant="outline"
-              size="sm"
-              :loading="importLoading"
-              @click="handleImportModels"
+            <div
+              v-if="curProviderId"
+              class="flex items-center gap-2 ml-auto"
             >
-              <FontAwesomeIcon
-                :icon="['fas', 'rotate']"
-                class="mr-1.5"
+              <LoadingButton
+                type="button"
+                variant="outline"
+                class="flex items-center gap-2"
+                :loading="importLoading"
+                @click="handleImportModels"
+              >
+                <FontAwesomeIcon :icon="['fas', 'file-import']" />
+                {{ $t('ttsProvider.importModels') }}
+              </LoadingButton>
+              <AddTtsModel
+                :provider-id="curProviderId"
+                @created="refreshModels"
               />
-              {{ $t('ttsProvider.importModels') }}
-            </LoadingButton>
+            </div>
           </div>
 
           <div
@@ -150,6 +156,7 @@ import {
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import LoadingButton from '@/components/loading-button/index.vue'
 import ModelConfigEditor from './model-config-editor.vue'
+import AddTtsModel from './add-tts-model.vue'
 import { computed, inject, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { useI18n } from 'vue-i18n'

@@ -35,6 +35,7 @@ func (h *TtsProvidersHandler) Register(e *echo.Echo) {
 	g.POST("/:id/import-models", h.ImportModels)
 
 	mg := e.Group("/tts-models")
+	mg.POST("", h.CreateModel)
 	mg.GET("", h.ListAllModels)
 	mg.GET("/:id", h.GetModel)
 	mg.PUT("/:id", h.UpdateModel)
@@ -202,6 +203,35 @@ func (h *TtsProvidersHandler) ImportModels(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(http.StatusOK, items)
+}
+
+// CreateModel godoc
+// @Summary Create a TTS model
+// @Description Manually create a TTS model under a specific provider
+// @Tags tts-models
+// @Accept json
+// @Produce json
+// @Param request body tts.CreateModelRequest true "TTS model configuration"
+// @Success 201 {object} tts.ModelResponse
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /tts-models [post].
+func (h *TtsProvidersHandler) CreateModel(c echo.Context) error {
+	var req tts.CreateModelRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if strings.TrimSpace(req.ModelID) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "model_id is required")
+	}
+	if strings.TrimSpace(req.TtsProviderID) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "tts_provider_id is required")
+	}
+	resp, err := h.service.CreateModel(c.Request().Context(), req)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusCreated, resp)
 }
 
 // ListAllModels godoc

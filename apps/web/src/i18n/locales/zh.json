@@ -274,7 +274,10 @@
     "importModels": "导入模型",
     "importSuccess": "模型导入成功",
     "importFailed": "模型导入失败",
-    "noModels": "暂无模型，点击\"导入模型\"以发现可用模型。",
+    "addModel": "新建模型",
+    "modelId": "模型 ID",
+    "modelIdPlaceholder": "输入模型标识符（如 custom-voice）",
+    "noModels": "暂无模型，点击\"导入模型\"发现可用模型，或点击\"新建模型\"手动创建。",
     "noCapabilities": "该模型暂无可用能力信息。",
     "fields": {
       "language": "语言",

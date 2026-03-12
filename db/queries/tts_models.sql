@@ -43,16 +43,8 @@ DELETE FROM tts_models WHERE id = sqlc.arg(id);
 -- name: DeleteTtsModelsByProviderID :exec
 DELETE FROM tts_models WHERE tts_provider_id = sqlc.arg(tts_provider_id);
 
--- name: UpsertTtsModel :one
-INSERT INTO tts_models (model_id, name, tts_provider_id, config)
-VALUES (
-  sqlc.arg(model_id),
-  sqlc.arg(name),
-  sqlc.arg(tts_provider_id),
-  sqlc.arg(config)
-)
-ON CONFLICT (tts_provider_id, model_id)
-DO UPDATE SET
-  name = EXCLUDED.name,
-  updated_at = now()
-RETURNING *;
+-- name: GetTtsModelByProviderAndModelID :one
+SELECT * FROM tts_models
+WHERE tts_provider_id = sqlc.arg(tts_provider_id)
+  AND model_id = sqlc.arg(model_id)
+LIMIT 1;

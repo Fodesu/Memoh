@@ -278,7 +278,10 @@
     "importModels": "Import Models",
     "importSuccess": "Models imported successfully",
     "importFailed": "Failed to import models",
-    "noModels": "No models found. Click \"Import Models\" to discover available models.",
+    "addModel": "Add Model",
+    "modelId": "Model ID",
+    "modelIdPlaceholder": "Enter model identifier (e.g. custom-voice)",
+    "noModels": "No models found. Click \"Import Models\" to discover available models or \"Add Model\" to create one manually.",
     "noCapabilities": "No capabilities available for this model.",
     "fields": {
       "language": "Language",

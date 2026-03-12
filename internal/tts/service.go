@@ -130,6 +130,42 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 // Model CRUD
 // ---------------------------------------------------------------------------
 
+func (s *Service) CreateModel(ctx context.Context, req CreateModelRequest) (ModelResponse, error) {
+	modelID := strings.TrimSpace(req.ModelID)
+	if modelID == "" {
+		return ModelResponse{}, fmt.Errorf("model_id is required")
+	}
+	providerPgID, err := db.ParseUUID(req.TtsProviderID)
+	if err != nil {
+		return ModelResponse{}, fmt.Errorf("invalid tts_provider_id: %w", err)
+	}
+	provider, err := s.queries.GetTtsProviderByID(ctx, providerPgID)
+	if err != nil {
+		return ModelResponse{}, fmt.Errorf("get tts provider: %w", err)
+	}
+	cfgJSON := []byte("{}")
+	if req.Config != nil {
+		cfgJSON, err = json.Marshal(req.Config)
+		if err != nil {
+			return ModelResponse{}, fmt.Errorf("marshal config: %w", err)
+		}
+	}
+	name := pgtype.Text{}
+	if n := strings.TrimSpace(req.Name); n != "" {
+		name = pgtype.Text{String: n, Valid: true}
+	}
+	row, err := s.queries.CreateTtsModel(ctx, sqlc.CreateTtsModelParams{
+		ModelID:       modelID,
+		Name:          name,
+		TtsProviderID: providerPgID,
+		Config:        cfgJSON,
+	})
+	if err != nil {
+		return ModelResponse{}, fmt.Errorf("create tts model: %w", err)
+	}
+	return s.toModelResponse(row, provider.Provider), nil
+}
+
 func (s *Service) ListModelsByProvider(ctx context.Context, providerID string) ([]ModelResponse, error) {
 	pgID, err := db.ParseUUID(providerID)
 	if err != nil {
@@ -249,14 +285,30 @@ func (s *Service) ImportModels(ctx context.Context, providerID string) ([]ModelR
 func (s *Service) importModelsForProvider(ctx context.Context, providerID pgtype.UUID, adapter TtsAdapter) error {
 	models := adapter.Models()
 	for _, m := range models {
-		_, err := s.queries.UpsertTtsModel(ctx, sqlc.UpsertTtsModelParams{
-			ModelID:       m.ID,
-			Name:          pgtype.Text{String: m.Name, Valid: m.Name != ""},
+		existing, err := s.queries.GetTtsModelByProviderAndModelID(ctx, sqlc.GetTtsModelByProviderAndModelIDParams{
 			TtsProviderID: providerID,
-			Config:        []byte("{}"),
+			ModelID:       m.ID,
 		})
-		if err != nil {
-			return fmt.Errorf("upsert tts model %s: %w", m.ID, err)
+		name := pgtype.Text{String: m.Name, Valid: m.Name != ""}
+		if err == nil {
+			_, updateErr := s.queries.UpdateTtsModel(ctx, sqlc.UpdateTtsModelParams{
+				ID:     existing.ID,
+				Name:   name,
+				Config: existing.Config,
+			})
+			if updateErr != nil {
+				return fmt.Errorf("update tts model %s: %w", m.ID, updateErr)
+			}
+		} else {
+			_, createErr := s.queries.CreateTtsModel(ctx, sqlc.CreateTtsModelParams{
+				ModelID:       m.ID,
+				Name:          name,
+				TtsProviderID: providerID,
+				Config:        []byte("{}"),
+			})
+			if createErr != nil {
+				return fmt.Errorf("create tts model %s: %w", m.ID, createErr)
+			}
 		}
 	}
 	return nil

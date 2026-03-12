@@ -139,8 +139,7 @@ CREATE TABLE IF NOT EXISTS tts_models (
   tts_provider_id UUID NOT NULL REFERENCES tts_providers(id) ON DELETE CASCADE,
   config JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT tts_models_provider_model_id_unique UNIQUE (tts_provider_id, model_id)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_tts_models_provider_id ON tts_models(tts_provider_id);

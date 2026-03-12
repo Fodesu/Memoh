@@ -2251,6 +2251,18 @@ definitions:
           type: string
         type: array
     type: object
+  tts.CreateModelRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      model_id:
+        type: string
+      name:
+        type: string
+      tts_provider_id:
+        type: string
+    type: object
   tts.CreateProviderRequest:
     properties:
       name:
@@ -7305,6 +7317,35 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: List all TTS models
+      tags:
+      - tts-models
+    post:
+      consumes:
+      - application/json
+      description: Manually create a TTS model under a specific provider
+      parameters:
+      - description: TTS model configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/tts.CreateModelRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/tts.ModelResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Create a TTS model
       tags:
       - tts-models
   /tts-models/{id}:

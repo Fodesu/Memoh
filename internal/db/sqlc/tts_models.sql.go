@@ -86,6 +86,33 @@ func (q *Queries) GetTtsModelByID(ctx context.Context, id pgtype.UUID) (TtsModel
 	return i, err
 }
 
+const getTtsModelByProviderAndModelID = `-- name: GetTtsModelByProviderAndModelID :one
+SELECT id, model_id, name, tts_provider_id, config, created_at, updated_at FROM tts_models
+WHERE tts_provider_id = $1
+  AND model_id = $2
+LIMIT 1
+`
+
+type GetTtsModelByProviderAndModelIDParams struct {
+	TtsProviderID pgtype.UUID `json:"tts_provider_id"`
+	ModelID       string      `json:"model_id"`
+}
+
+func (q *Queries) GetTtsModelByProviderAndModelID(ctx context.Context, arg GetTtsModelByProviderAndModelIDParams) (TtsModel, error) {
+	row := q.db.QueryRow(ctx, getTtsModelByProviderAndModelID, arg.TtsProviderID, arg.ModelID)
+	var i TtsModel
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.Name,
+		&i.TtsProviderID,
+		&i.Config,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getTtsModelWithProvider = `-- name: GetTtsModelWithProvider :one
 SELECT
   tm.id, tm.model_id, tm.name, tm.tts_provider_id, tm.config, tm.created_at, tm.updated_at,
@@ -207,48 +234,6 @@ type UpdateTtsModelParams struct {
 
 func (q *Queries) UpdateTtsModel(ctx context.Context, arg UpdateTtsModelParams) (TtsModel, error) {
 	row := q.db.QueryRow(ctx, updateTtsModel, arg.Name, arg.Config, arg.ID)
-	var i TtsModel
-	err := row.Scan(
-		&i.ID,
-		&i.ModelID,
-		&i.Name,
-		&i.TtsProviderID,
-		&i.Config,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertTtsModel = `-- name: UpsertTtsModel :one
-INSERT INTO tts_models (model_id, name, tts_provider_id, config)
-VALUES (
-  $1,
-  $2,
-  $3,
-  $4
-)
-ON CONFLICT (tts_provider_id, model_id)
-DO UPDATE SET
-  name = EXCLUDED.name,
-  updated_at = now()
-RETURNING id, model_id, name, tts_provider_id, config, created_at, updated_at
-`
-
-type UpsertTtsModelParams struct {
-	ModelID       string      `json:"model_id"`
-	Name          pgtype.Text `json:"name"`
-	TtsProviderID pgtype.UUID `json:"tts_provider_id"`
-	Config        []byte      `json:"config"`
-}
-
-func (q *Queries) UpsertTtsModel(ctx context.Context, arg UpsertTtsModelParams) (TtsModel, error) {
-	row := q.db.QueryRow(ctx, upsertTtsModel,
-		arg.ModelID,
-		arg.Name,
-		arg.TtsProviderID,
-		arg.Config,
-	)
 	var i TtsModel
 	err := row.Scan(
 		&i.ID,
