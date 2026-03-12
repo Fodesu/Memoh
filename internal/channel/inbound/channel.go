@@ -69,19 +69,19 @@ type ttsModelResolver interface {
 
 // ChannelInboundProcessor routes channel inbound messages to the chat gateway.
 type ChannelInboundProcessor struct {
-	runner         flow.Runner
-	routeResolver  RouteResolver
-	message        messagepkg.Writer
-	mediaService   mediaIngestor
-	reactor        channelReactor
-	inboxService   *inbox.Service
-	commandHandler *command.Handler
-	registry       *channel.Registry
-	logger         *slog.Logger
-	jwtSecret      string
-	tokenTTL       time.Duration
-	identity       *IdentityResolver
-	observer       channel.StreamObserver
+	runner           flow.Runner
+	routeResolver    RouteResolver
+	message          messagepkg.Writer
+	mediaService     mediaIngestor
+	reactor          channelReactor
+	inboxService     *inbox.Service
+	commandHandler   *command.Handler
+	registry         *channel.Registry
+	logger           *slog.Logger
+	jwtSecret        string
+	tokenTTL         time.Duration
+	identity         *IdentityResolver
+	observer         channel.StreamObserver
 	ttsService       ttsSynthesizer
 	ttsModelResolver ttsModelResolver
 }

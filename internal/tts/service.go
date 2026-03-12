@@ -133,7 +133,7 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 func (s *Service) CreateModel(ctx context.Context, req CreateModelRequest) (ModelResponse, error) {
 	modelID := strings.TrimSpace(req.ModelID)
 	if modelID == "" {
-		return ModelResponse{}, fmt.Errorf("model_id is required")
+		return ModelResponse{}, errors.New("model_id is required")
 	}
 	providerPgID, err := db.ParseUUID(req.TtsProviderID)
 	if err != nil {

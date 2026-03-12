@@ -3,6 +3,7 @@ package tts
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -192,7 +193,7 @@ func (e *Executor) resolvePlatform(arguments map[string]any, session mcpgw.ToolS
 		platform = strings.TrimSpace(session.CurrentPlatform)
 	}
 	if platform == "" {
-		return "", fmt.Errorf("platform is required")
+		return "", errors.New("platform is required")
 	}
 	return e.resolver.ParseChannelType(platform)
 }
