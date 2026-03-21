@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,9 +13,9 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db/sqlc"
-	"github.com/memohai/memoh/internal/inbox"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	messagepkg "github.com/memohai/memoh/internal/message"
+	messageevent "github.com/memohai/memoh/internal/message/event"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/settings"
 )
@@ -57,7 +56,8 @@ type Resolver struct {
 	conversationSvc ConversationSettingsReader
 	messageService  messagepkg.Service
 	settingsService *settings.Service
-	inboxService    *inbox.Service
+	sessionService  SessionService
+	eventPublisher  messageevent.Publisher
 	skillLoader     SkillLoader
 	assetLoader     gatewayAssetLoader
 	timeout         time.Duration
@@ -106,12 +106,6 @@ func (r *Resolver) SetGatewayAssetLoader(loader gatewayAssetLoader) {
 	r.assetLoader = loader
 }
 
-// SetInboxService configures inbox support for injecting unread items into the
-// system prompt and marking them as read after a response.
-func (r *Resolver) SetInboxService(service *inbox.Service) {
-	r.inboxService = service
-}
-
 type usageInfo struct {
 	InputTokens  *int `json:"inputTokens"`
 	OutputTokens *int `json:"outputTokens"`
@@ -120,11 +114,10 @@ type usageInfo struct {
 // --- resolved context (shared by Chat / StreamChat / TriggerSchedule) ---
 
 type resolvedContext struct {
-	runConfig    agentpkg.RunConfig
-	model        models.GetResponse
-	provider     sqlc.LlmProvider
-	inboxItemIDs []string
-	query        string // headerified query
+	runConfig agentpkg.RunConfig
+	model     models.GetResponse
+	provider  sqlc.LlmProvider
+	query     string // headerified query
 }
 
 func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {
@@ -200,7 +193,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 
 	var messages []conversation.ModelMessage
 	if !skipHistory && r.conversationSvc != nil {
-		loaded, loadErr := r.loadMessages(ctx, req.ChatID, maxCtx)
+		loaded, loadErr := r.loadMessages(ctx, req.ChatID, req.SessionID, maxCtx)
 		if loadErr != nil {
 			return resolvedContext{}, loadErr
 		}
@@ -219,7 +212,6 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	}
 	messages = append(messages, reqMessages...)
 	messages = sanitizeMessages(messages)
-	skills := dedup(req.Skills)
 	var agentSkills []agentpkg.SkillEntry
 	if r.skillLoader != nil {
 		entries, err := r.skillLoader.LoadSkills(ctx, req.BotID)
@@ -242,32 +234,6 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	}
 	if agentSkills == nil {
 		agentSkills = []agentpkg.SkillEntry{}
-	}
-
-	var agentInbox []agentpkg.InboxItem
-	var inboxItemIDs []string
-	if r.inboxService != nil {
-		maxInbox := botSettings.MaxInboxItems
-		if maxInbox <= 0 {
-			maxInbox = settings.DefaultMaxInboxItems
-		}
-		items, err := r.inboxService.ListUnread(ctx, req.BotID, maxInbox)
-		if err != nil {
-			r.logger.Warn("failed to load inbox items", slog.String("bot_id", req.BotID), slog.Any("error", err))
-		} else if len(items) > 0 {
-			agentInbox = make([]agentpkg.InboxItem, 0, len(items))
-			inboxItemIDs = make([]string, 0, len(items))
-			for _, item := range items {
-				agentInbox = append(agentInbox, agentpkg.InboxItem{
-					ID:        item.ID,
-					Source:    item.Source,
-					Header:    item.Header,
-					Content:   item.Content,
-					CreatedAt: item.CreatedAt.Format(time.RFC3339),
-				})
-				inboxItemIDs = append(inboxItemIDs, item.ID)
-			}
-		}
 	}
 
 	displayName := r.resolveDisplayName(ctx, req)
@@ -314,26 +280,19 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		Messages:           sdkMessages,
 		Query:              headerifiedQuery,
 		SupportsImageInput: chatModel.HasInputModality(models.ModelInputImage),
-		Channels:           nonNilStrings(req.Channels),
-		CurrentChannel:     req.CurrentChannel,
 		Identity: agentpkg.SessionContext{
 			BotID:             req.BotID,
 			ChatID:            req.ChatID,
 			ChannelIdentityID: strings.TrimSpace(req.SourceChannelIdentityID),
-			DisplayName:       displayName,
 			CurrentPlatform:   req.CurrentChannel,
 			ReplyTarget:       strings.TrimSpace(req.ReplyTarget),
-			ConversationType:  strings.TrimSpace(req.ConversationType),
 			SessionToken:      req.ChatToken,
 		},
-		Skills:            agentSkills,
-		EnabledSkillNames: nonNilStrings(skills),
-		Inbox:             agentInbox,
-		LoopDetection:     agentpkg.LoopDetectionConfig{Enabled: loopDetectionEnabled},
-		ActiveContextTime: maxCtx,
+		Skills:        agentSkills,
+		LoopDetection: agentpkg.LoopDetectionConfig{Enabled: loopDetectionEnabled},
 	}
 
-	return resolvedContext{runConfig: runCfg, model: chatModel, provider: provider, inboxItemIDs: inboxItemIDs, query: headerifiedQuery}, nil
+	return resolvedContext{runConfig: runCfg, model: chatModel, provider: provider, query: headerifiedQuery}, nil
 }
 
 // Chat sends a synchronous chat request and stores the result.
@@ -343,6 +302,8 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 		return conversation.ChatResponse{}, err
 	}
 	req.Query = rc.query
+
+	go r.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.Query)
 
 	cfg := rc.runConfig
 	cfg = r.prepareRunConfig(ctx, cfg)
@@ -354,14 +315,11 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 
 	outputMessages := sdkMessagesToModelMessages(result.Messages)
 	roundMessages := prependUserMessage(req.Query, outputMessages)
-	usageJSON, _ := json.Marshal(result.Usage)
-	if err := r.storeRound(ctx, req, roundMessages, usageJSON, nil, rc.model.ID); err != nil {
+	if err := r.storeRound(ctx, req, roundMessages, rc.model.ID); err != nil {
 		return conversation.ChatResponse{}, err
 	}
-	r.markInboxRead(ctx, req.BotID, rc.inboxItemIDs)
 	return conversation.ChatResponse{
 		Messages: outputMessages,
-		Skills:   result.Skills,
 		Model:    rc.model.ModelID,
 		Provider: string(rc.model.ClientType),
 	}, nil
@@ -370,22 +328,19 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 // prepareRunConfig generates the system prompt and appends the user message.
 func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	supportsImageInput := cfg.SupportsImageInput
-	// Build system prompt
 	var files []agentpkg.SystemFile
 	if r.agent != nil {
-		fs := agentpkg.NewFSClient(nil, cfg.Identity.BotID)
+		fs := agentpkg.NewFSClient(r.agent.BridgeProvider(), cfg.Identity.BotID)
 		files = fs.LoadSystemFiles(ctx)
 	}
 
 	cfg.System = agentpkg.GenerateSystemPrompt(agentpkg.SystemPromptParams{
+		SessionType:        cfg.SessionType,
 		Skills:             cfg.Skills,
-		EnabledSkills:      nil,
 		Files:              files,
-		Inbox:              cfg.Inbox,
 		SupportsImageInput: supportsImageInput,
 	})
 
-	// Add user message with the headerified query
 	if cfg.Query != "" {
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(cfg.Query))
 	}

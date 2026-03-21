@@ -15,7 +15,6 @@ const deleteSettingsByBotID = `-- name: DeleteSettingsByBotID :exec
 UPDATE bots
 SET max_context_load_time = 1440,
     max_context_tokens = 0,
-    max_inbox_items = 50,
     language = 'auto',
     reasoning_enabled = false,
     reasoning_effort = 'medium',
@@ -24,6 +23,7 @@ SET max_context_load_time = 1440,
     heartbeat_prompt = '',
     chat_model_id = NULL,
     heartbeat_model_id = NULL,
+    title_model_id = NULL,
     search_provider_id = NULL,
     memory_provider_id = NULL,
     tts_model_id = NULL,
@@ -42,7 +42,6 @@ SELECT
   bots.id AS bot_id,
   bots.max_context_load_time,
   bots.max_context_tokens,
-  bots.max_inbox_items,
   bots.language,
   bots.reasoning_enabled,
   bots.reasoning_effort,
@@ -51,6 +50,7 @@ SELECT
   bots.heartbeat_prompt,
   chat_models.id AS chat_model_id,
   heartbeat_models.id AS heartbeat_model_id,
+  title_models.id AS title_model_id,
   search_providers.id AS search_provider_id,
   memory_providers.id AS memory_provider_id,
   tts_models.id AS tts_model_id,
@@ -58,6 +58,7 @@ SELECT
 FROM bots
 LEFT JOIN models AS chat_models ON chat_models.id = bots.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = bots.heartbeat_model_id
+LEFT JOIN models AS title_models ON title_models.id = bots.title_model_id
 LEFT JOIN search_providers ON search_providers.id = bots.search_provider_id
 LEFT JOIN memory_providers ON memory_providers.id = bots.memory_provider_id
 LEFT JOIN tts_models ON tts_models.id = bots.tts_model_id
@@ -69,7 +70,6 @@ type GetSettingsByBotIDRow struct {
 	BotID              pgtype.UUID `json:"bot_id"`
 	MaxContextLoadTime int32       `json:"max_context_load_time"`
 	MaxContextTokens   int32       `json:"max_context_tokens"`
-	MaxInboxItems      int32       `json:"max_inbox_items"`
 	Language           string      `json:"language"`
 	ReasoningEnabled   bool        `json:"reasoning_enabled"`
 	ReasoningEffort    string      `json:"reasoning_effort"`
@@ -78,6 +78,7 @@ type GetSettingsByBotIDRow struct {
 	HeartbeatPrompt    string      `json:"heartbeat_prompt"`
 	ChatModelID        pgtype.UUID `json:"chat_model_id"`
 	HeartbeatModelID   pgtype.UUID `json:"heartbeat_model_id"`
+	TitleModelID       pgtype.UUID `json:"title_model_id"`
 	SearchProviderID   pgtype.UUID `json:"search_provider_id"`
 	MemoryProviderID   pgtype.UUID `json:"memory_provider_id"`
 	TtsModelID         pgtype.UUID `json:"tts_model_id"`
@@ -91,7 +92,6 @@ func (q *Queries) GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (GetSe
 		&i.BotID,
 		&i.MaxContextLoadTime,
 		&i.MaxContextTokens,
-		&i.MaxInboxItems,
 		&i.Language,
 		&i.ReasoningEnabled,
 		&i.ReasoningEffort,
@@ -100,6 +100,7 @@ func (q *Queries) GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (GetSe
 		&i.HeartbeatPrompt,
 		&i.ChatModelID,
 		&i.HeartbeatModelID,
+		&i.TitleModelID,
 		&i.SearchProviderID,
 		&i.MemoryProviderID,
 		&i.TtsModelID,
@@ -113,28 +114,27 @@ WITH updated AS (
   UPDATE bots
   SET max_context_load_time = $1,
       max_context_tokens = $2,
-      max_inbox_items = $3,
-      language = $4,
-      reasoning_enabled = $5,
-      reasoning_effort = $6,
-      heartbeat_enabled = $7,
-      heartbeat_interval = $8,
-      heartbeat_prompt = $9,
-      chat_model_id = COALESCE($10::uuid, bots.chat_model_id),
-      heartbeat_model_id = COALESCE($11::uuid, bots.heartbeat_model_id),
+      language = $3,
+      reasoning_enabled = $4,
+      reasoning_effort = $5,
+      heartbeat_enabled = $6,
+      heartbeat_interval = $7,
+      heartbeat_prompt = $8,
+      chat_model_id = COALESCE($9::uuid, bots.chat_model_id),
+      heartbeat_model_id = COALESCE($10::uuid, bots.heartbeat_model_id),
+      title_model_id = COALESCE($11::uuid, bots.title_model_id),
       search_provider_id = COALESCE($12::uuid, bots.search_provider_id),
       memory_provider_id = COALESCE($13::uuid, bots.memory_provider_id),
       tts_model_id = COALESCE($14::uuid, bots.tts_model_id),
       browser_context_id = COALESCE($15::uuid, bots.browser_context_id),
       updated_at = now()
   WHERE bots.id = $16
-  RETURNING bots.id, bots.max_context_load_time, bots.max_context_tokens, bots.max_inbox_items, bots.language, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.chat_model_id, bots.heartbeat_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_model_id, bots.browser_context_id
+  RETURNING bots.id, bots.max_context_load_time, bots.max_context_tokens, bots.language, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.chat_model_id, bots.heartbeat_model_id, bots.title_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_model_id, bots.browser_context_id
 )
 SELECT
   updated.id AS bot_id,
   updated.max_context_load_time,
   updated.max_context_tokens,
-  updated.max_inbox_items,
   updated.language,
   updated.reasoning_enabled,
   updated.reasoning_effort,
@@ -143,6 +143,7 @@ SELECT
   updated.heartbeat_prompt,
   chat_models.id AS chat_model_id,
   heartbeat_models.id AS heartbeat_model_id,
+  title_models.id AS title_model_id,
   search_providers.id AS search_provider_id,
   memory_providers.id AS memory_provider_id,
   tts_models.id AS tts_model_id,
@@ -150,6 +151,7 @@ SELECT
 FROM updated
 LEFT JOIN models AS chat_models ON chat_models.id = updated.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = updated.heartbeat_model_id
+LEFT JOIN models AS title_models ON title_models.id = updated.title_model_id
 LEFT JOIN search_providers ON search_providers.id = updated.search_provider_id
 LEFT JOIN memory_providers ON memory_providers.id = updated.memory_provider_id
 LEFT JOIN tts_models ON tts_models.id = updated.tts_model_id
@@ -159,7 +161,6 @@ LEFT JOIN browser_contexts ON browser_contexts.id = updated.browser_context_id
 type UpsertBotSettingsParams struct {
 	MaxContextLoadTime int32       `json:"max_context_load_time"`
 	MaxContextTokens   int32       `json:"max_context_tokens"`
-	MaxInboxItems      int32       `json:"max_inbox_items"`
 	Language           string      `json:"language"`
 	ReasoningEnabled   bool        `json:"reasoning_enabled"`
 	ReasoningEffort    string      `json:"reasoning_effort"`
@@ -168,6 +169,7 @@ type UpsertBotSettingsParams struct {
 	HeartbeatPrompt    string      `json:"heartbeat_prompt"`
 	ChatModelID        pgtype.UUID `json:"chat_model_id"`
 	HeartbeatModelID   pgtype.UUID `json:"heartbeat_model_id"`
+	TitleModelID       pgtype.UUID `json:"title_model_id"`
 	SearchProviderID   pgtype.UUID `json:"search_provider_id"`
 	MemoryProviderID   pgtype.UUID `json:"memory_provider_id"`
 	TtsModelID         pgtype.UUID `json:"tts_model_id"`
@@ -179,7 +181,6 @@ type UpsertBotSettingsRow struct {
 	BotID              pgtype.UUID `json:"bot_id"`
 	MaxContextLoadTime int32       `json:"max_context_load_time"`
 	MaxContextTokens   int32       `json:"max_context_tokens"`
-	MaxInboxItems      int32       `json:"max_inbox_items"`
 	Language           string      `json:"language"`
 	ReasoningEnabled   bool        `json:"reasoning_enabled"`
 	ReasoningEffort    string      `json:"reasoning_effort"`
@@ -188,6 +189,7 @@ type UpsertBotSettingsRow struct {
 	HeartbeatPrompt    string      `json:"heartbeat_prompt"`
 	ChatModelID        pgtype.UUID `json:"chat_model_id"`
 	HeartbeatModelID   pgtype.UUID `json:"heartbeat_model_id"`
+	TitleModelID       pgtype.UUID `json:"title_model_id"`
 	SearchProviderID   pgtype.UUID `json:"search_provider_id"`
 	MemoryProviderID   pgtype.UUID `json:"memory_provider_id"`
 	TtsModelID         pgtype.UUID `json:"tts_model_id"`
@@ -198,7 +200,6 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 	row := q.db.QueryRow(ctx, upsertBotSettings,
 		arg.MaxContextLoadTime,
 		arg.MaxContextTokens,
-		arg.MaxInboxItems,
 		arg.Language,
 		arg.ReasoningEnabled,
 		arg.ReasoningEffort,
@@ -207,6 +208,7 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 		arg.HeartbeatPrompt,
 		arg.ChatModelID,
 		arg.HeartbeatModelID,
+		arg.TitleModelID,
 		arg.SearchProviderID,
 		arg.MemoryProviderID,
 		arg.TtsModelID,
@@ -218,7 +220,6 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 		&i.BotID,
 		&i.MaxContextLoadTime,
 		&i.MaxContextTokens,
-		&i.MaxInboxItems,
 		&i.Language,
 		&i.ReasoningEnabled,
 		&i.ReasoningEffort,
@@ -227,6 +228,7 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 		&i.HeartbeatPrompt,
 		&i.ChatModelID,
 		&i.HeartbeatModelID,
+		&i.TitleModelID,
 		&i.SearchProviderID,
 		&i.MemoryProviderID,
 		&i.TtsModelID,
