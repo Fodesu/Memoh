@@ -289,6 +289,8 @@ if [ "$CLONED_FRESH" = true ]; then
   echo ""
   echo "${GREEN}Cleaning up clone directory...${NC}"
   cp docker-compose.yml config.toml .env "$WORKSPACE/"
+  mkdir -p "$WORKSPACE/conf"
+  cp -r conf/providers "$WORKSPACE/conf/"
   if [ "$USE_CN_MIRROR" = true ]; then
     mkdir -p "$WORKSPACE/docker"
     cp docker/docker-compose.cn.yml "$WORKSPACE/docker/"

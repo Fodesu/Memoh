@@ -41,6 +41,7 @@ services:
     pid: host
     volumes:
       - ${MEMOH_CONFIG:-./config.toml}:/app/config.toml:ro
+      - ./conf/providers:/app/conf/providers:ro
       - containerd_data:/var/lib/containerd
       - server_cni_state:/var/lib/cni
       - memoh_data:/opt/memoh/data
