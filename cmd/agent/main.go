@@ -363,7 +363,7 @@ func provideMemoryLLM(modelsService *models.Service, queries *dbsqlc.Queries, lo
 	return &lazyLLMClient{
 		modelsService: modelsService,
 		queries:       queries,
-		timeout:       30 * time.Second,
+		timeout:       models.DefaultProviderRequestTimeout,
 		logger:        log,
 	}
 }

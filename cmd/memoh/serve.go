@@ -259,7 +259,7 @@ func provideWorkspaceManager(log *slog.Logger, service ctr.Service, cfg config.C
 }
 
 func provideMemoryLLM(modelsService *models.Service, queries *dbsqlc.Queries, log *slog.Logger) memprovider.LLM {
-	return &lazyLLMClient{modelsService: modelsService, queries: queries, timeout: 30 * time.Second, logger: log}
+	return &lazyLLMClient{modelsService: modelsService, queries: queries, timeout: models.DefaultProviderRequestTimeout, logger: log}
 }
 
 func provideMemoryProviderRegistry(log *slog.Logger, llm memprovider.LLM, chatService *conversation.Service, accountService *accounts.Service, manager *workspace.Manager, queries *dbsqlc.Queries, cfg config.Config) *memprovider.Registry {

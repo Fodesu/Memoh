@@ -37,14 +37,16 @@ var (
 
 // NewSDKChatModel builds a Twilight AI SDK Model from the resolved model config.
 func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = NewProviderHTTPClient(0)
+	}
+
 	switch ClientType(cfg.ClientType) {
 	case ClientTypeOpenAICompletions:
 		opts := []openaicompletions.Option{
 			openaicompletions.WithAPIKey(cfg.APIKey),
 		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, openaicompletions.WithHTTPClient(cfg.HTTPClient))
-		}
+		opts = append(opts, openaicompletions.WithHTTPClient(cfg.HTTPClient))
 		if cfg.BaseURL != "" {
 			opts = append(opts, openaicompletions.WithBaseURL(cfg.BaseURL))
 		}
@@ -55,9 +57,7 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 		opts := []openairesponses.Option{
 			openairesponses.WithAPIKey(cfg.APIKey),
 		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, openairesponses.WithHTTPClient(cfg.HTTPClient))
-		}
+		opts = append(opts, openairesponses.WithHTTPClient(cfg.HTTPClient))
 		if cfg.BaseURL != "" {
 			opts = append(opts, openairesponses.WithBaseURL(cfg.BaseURL))
 		}
@@ -68,9 +68,7 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 		opts := []openaicodex.Option{
 			openaicodex.WithAccessToken(cfg.APIKey),
 		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, openaicodex.WithHTTPClient(cfg.HTTPClient))
-		}
+		opts = append(opts, openaicodex.WithHTTPClient(cfg.HTTPClient))
 		if cfg.CodexAccountID != "" {
 			opts = append(opts, openaicodex.WithAccountID(cfg.CodexAccountID))
 		}
@@ -80,9 +78,7 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 		opts := []anthropicmessages.Option{
 			anthropicmessages.WithAPIKey(cfg.APIKey),
 		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, anthropicmessages.WithHTTPClient(cfg.HTTPClient))
-		}
+		opts = append(opts, anthropicmessages.WithHTTPClient(cfg.HTTPClient))
 		if cfg.BaseURL != "" {
 			opts = append(opts, anthropicmessages.WithBaseURL(cfg.BaseURL))
 		}
@@ -100,9 +96,7 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 		opts := []googlegenerative.Option{
 			googlegenerative.WithAPIKey(cfg.APIKey),
 		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, googlegenerative.WithHTTPClient(cfg.HTTPClient))
-		}
+		opts = append(opts, googlegenerative.WithHTTPClient(cfg.HTTPClient))
 		if cfg.BaseURL != "" {
 			opts = append(opts, googlegenerative.WithBaseURL(cfg.BaseURL))
 		}
@@ -113,9 +107,7 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 		opts := []openaicompletions.Option{
 			openaicompletions.WithAPIKey(cfg.APIKey),
 		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, openaicompletions.WithHTTPClient(cfg.HTTPClient))
-		}
+		opts = append(opts, openaicompletions.WithHTTPClient(cfg.HTTPClient))
 		if cfg.BaseURL != "" {
 			opts = append(opts, openaicompletions.WithBaseURL(cfg.BaseURL))
 		}
