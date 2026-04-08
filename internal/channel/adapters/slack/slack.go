@@ -26,6 +26,7 @@ import (
 const (
 	inboundDedupTTL = time.Minute
 	slackMaxLength  = 40000
+	channelNameTTL  = 5 * time.Minute
 )
 
 // assetOpener reads stored asset bytes by content hash.
@@ -39,11 +40,17 @@ type slackConnection struct {
 	cancel context.CancelFunc
 }
 
+type cachedSlackChannelName struct {
+	name     string
+	cachedAt time.Time
+}
+
 type SlackAdapter struct {
 	logger       *slog.Logger
 	mu           sync.RWMutex
-	connections  map[string]*slackConnection // keyed by config ID
-	seenMessages map[string]time.Time        // keyed by configID:messageTS
+	connections  map[string]*slackConnection       // keyed by config ID
+	seenMessages map[string]time.Time              // keyed by configID:messageTS
+	channelNames map[string]cachedSlackChannelName // keyed by configID:channelID
 	assets       assetOpener
 }
 
@@ -55,6 +62,7 @@ func NewSlackAdapter(log *slog.Logger) *SlackAdapter {
 		logger:       log.With(slog.String("adapter", "slack")),
 		connections:  make(map[string]*slackConnection),
 		seenMessages: make(map[string]time.Time),
+		channelNames: make(map[string]cachedSlackChannelName),
 	}
 }
 
@@ -120,11 +128,12 @@ func (*SlackAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
-func (a *SlackAdapter) newAPIClient(cfg Config) *slack.Client {
-	return slack.New(
-		cfg.BotToken,
+func (a *SlackAdapter) newAPIClient(cfg Config, options ...slack.Option) *slack.Client {
+	opts := []slack.Option{
 		slack.OptionRetry(3),
-	)
+	}
+	opts = append(opts, options...)
+	return slack.New(cfg.BotToken, opts...)
 }
 
 func newSocketModeClient(cfg Config) (*slack.Client, *socketmode.Client) {
@@ -321,6 +330,7 @@ func (a *SlackAdapter) handleMessageEvent(
 	if ev.Message != nil && strings.TrimSpace(ev.Message.ThreadTimestamp) != "" {
 		threadID = strings.TrimSpace(ev.Message.ThreadTimestamp)
 	}
+	conversationName := a.lookupConversationName(ctx, conn.api, cfg.ID, ev.Channel)
 
 	msg := channel.InboundMessage{
 		Channel: Type,
@@ -335,19 +345,19 @@ func (a *SlackAdapter) handleMessageEvent(
 		Sender: channel.Identity{
 			SubjectID:   ev.User,
 			DisplayName: displayName,
-			Attributes: map[string]string{
-				"user_id": ev.User,
-			},
+			Attributes:  slackIdentityAttributes(ev.User, "", ev.ChannelType, ev.Channel),
 		},
 		Conversation: channel.Conversation{
 			ID:       ev.Channel,
 			Type:     chatType,
+			Name:     conversationName,
 			ThreadID: threadID,
 		},
 		ReceivedAt: time.Now().UTC(),
 		Source:     "slack",
 		Metadata: map[string]any{
 			"channel_type": ev.ChannelType,
+			"channel_name": conversationName,
 			"is_mentioned": isMentioned,
 			"thread_ts":    threadID,
 			"subtype":      ev.SubType,
@@ -393,6 +403,7 @@ func (a *SlackAdapter) handleAppMentionEvent(
 	displayName := a.resolveUserDisplayName(conn.api, ev.User)
 
 	threadID := ev.ThreadTimeStamp
+	conversationName := a.lookupConversationName(ctx, conn.api, cfg.ID, ev.Channel)
 
 	msg := channel.InboundMessage{
 		Channel: Type,
@@ -413,11 +424,13 @@ func (a *SlackAdapter) handleAppMentionEvent(
 		Conversation: channel.Conversation{
 			ID:       ev.Channel,
 			Type:     "channel",
+			Name:     conversationName,
 			ThreadID: threadID,
 		},
 		ReceivedAt: time.Now().UTC(),
 		Source:     "slack",
 		Metadata: map[string]any{
+			"channel_name": conversationName,
 			"is_mentioned": true,
 			"thread_ts":    threadID,
 		},
@@ -469,8 +482,11 @@ func (a *SlackAdapter) sendSlackMessage(ctx context.Context, api *slack.Client, 
 
 	if len(msg.Message.Attachments) > 0 {
 		for _, att := range msg.Message.Attachments {
-			if err := a.uploadAttachment(ctx, api, channelID, threadTS, att); err != nil && a.logger != nil {
-				a.logger.Error("upload attachment failed", slog.Any("error", err))
+			if err := a.uploadAttachment(ctx, api, channelID, threadTS, att); err != nil {
+				if a.logger != nil {
+					a.logger.Error("upload attachment failed", slog.Any("error", err))
+				}
+				return err
 			}
 		}
 	}
@@ -533,14 +549,16 @@ func (a *SlackAdapter) uploadAttachment(ctx context.Context, api *slack.Client, 
 			resp, doErr := http.DefaultClient.Do(req) //nolint:gosec
 			if doErr == nil {
 				defer func() { _ = resp.Body.Close() }()
-				data, _ := io.ReadAll(resp.Body)
-				reader = bytes.NewReader(data)
+				if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+					data, _ := io.ReadAll(resp.Body)
+					reader = bytes.NewReader(data)
+				}
 			}
 		}
 	}
 
 	if reader == nil {
-		return nil
+		return errors.New("slack attachment requires accessible content_hash, base64, or url")
 	}
 
 	fileSize := int(att.Size)
@@ -558,6 +576,61 @@ func (a *SlackAdapter) uploadAttachment(ctx context.Context, api *slack.Client, 
 		FileSize:        fileSize,
 	})
 	return err
+}
+
+func (a *SlackAdapter) ResolveAttachment(ctx context.Context, cfg channel.ChannelConfig, attachment channel.Attachment) (channel.AttachmentPayload, error) {
+	slackCfg, err := parseConfig(cfg.Credentials)
+	if err != nil {
+		return channel.AttachmentPayload{}, err
+	}
+
+	return a.resolveAttachmentWithClient(ctx, a.newAPIClient(slackCfg), attachment)
+}
+
+func (a *SlackAdapter) resolveAttachmentWithClient(ctx context.Context, api *slack.Client, attachment channel.Attachment) (channel.AttachmentPayload, error) {
+	downloadURL := strings.TrimSpace(attachment.URL)
+	if downloadURL == "" {
+		fileID := strings.TrimSpace(attachment.PlatformKey)
+		if fileID == "" {
+			return channel.AttachmentPayload{}, errors.New("slack attachment requires url or platform_key")
+		}
+		file, _, _, err := api.GetFileInfoContext(ctx, fileID, 0, 0)
+		if err != nil {
+			return channel.AttachmentPayload{}, fmt.Errorf("slack get file info: %w", err)
+		}
+		if file == nil {
+			return channel.AttachmentPayload{}, errors.New("slack file info response is empty")
+		}
+		downloadURL = strings.TrimSpace(file.URLPrivateDownload)
+		if downloadURL == "" {
+			downloadURL = strings.TrimSpace(file.URLPrivate)
+		}
+		if strings.TrimSpace(attachment.Name) == "" {
+			attachment.Name = strings.TrimSpace(file.Name)
+		}
+		if strings.TrimSpace(attachment.Mime) == "" {
+			attachment.Mime = strings.TrimSpace(file.Mimetype)
+		}
+		if attachment.Size <= 0 {
+			attachment.Size = int64(file.Size)
+		}
+	}
+
+	if downloadURL == "" {
+		return channel.AttachmentPayload{}, errors.New("slack attachment download URL is empty")
+	}
+
+	var buf bytes.Buffer
+	if err := api.GetFileContext(ctx, downloadURL, &buf); err != nil {
+		return channel.AttachmentPayload{}, fmt.Errorf("slack download file: %w", err)
+	}
+
+	return channel.AttachmentPayload{
+		Reader: io.NopCloser(bytes.NewReader(buf.Bytes())),
+		Mime:   strings.TrimSpace(attachment.Mime),
+		Name:   strings.TrimSpace(attachment.Name),
+		Size:   int64(buf.Len()),
+	}, nil
 }
 
 func truncateSlackText(text string) string {
@@ -802,4 +875,75 @@ func (a *SlackAdapter) collectAttachments(msg *slack.Msg) []channel.Attachment {
 	}
 
 	return attachments
+}
+
+func slackIdentityAttributes(userID, username, channelType, channelID string) map[string]string {
+	attrs := map[string]string{}
+	if value := strings.TrimSpace(userID); value != "" {
+		attrs["user_id"] = value
+	}
+	if value := strings.TrimSpace(username); value != "" {
+		attrs["username"] = value
+	}
+	if strings.TrimSpace(channelType) == "im" {
+		if value := strings.TrimSpace(channelID); value != "" {
+			attrs["channel_id"] = value
+		}
+	}
+	return attrs
+}
+
+func (a *SlackAdapter) lookupConversationName(ctx context.Context, api *slack.Client, configID, channelID string) string {
+	configID = strings.TrimSpace(configID)
+	channelID = strings.TrimSpace(channelID)
+	if api == nil || configID == "" || channelID == "" {
+		return ""
+	}
+
+	cacheKey := configID + ":" + channelID
+	expireBefore := time.Now().UTC().Add(-channelNameTTL)
+
+	a.mu.RLock()
+	cached, ok := a.channelNames[cacheKey]
+	a.mu.RUnlock()
+	if ok && cached.cachedAt.After(expireBefore) {
+		return cached.name
+	}
+
+	name, err := a.fetchConversationName(ctx, api, channelID)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Debug("resolve slack conversation name failed",
+				slog.String("channel_id", channelID),
+				slog.Any("error", err),
+			)
+		}
+		return ""
+	}
+	if name == "" {
+		return ""
+	}
+
+	a.mu.Lock()
+	a.channelNames[cacheKey] = cachedSlackChannelName{name: name, cachedAt: time.Now().UTC()}
+	a.mu.Unlock()
+	return name
+}
+
+func (a *SlackAdapter) fetchConversationName(ctx context.Context, api *slack.Client, channelID string) (string, error) {
+	info, err := api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+		ChannelID: channelID,
+	})
+	if err != nil {
+		return "", err
+	}
+	if info == nil {
+		return "", nil
+	}
+
+	name := strings.TrimSpace(info.Name)
+	if name == "" {
+		name = strings.TrimSpace(info.NameNormalized)
+	}
+	return name, nil
 }
