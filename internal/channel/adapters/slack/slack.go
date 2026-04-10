@@ -587,6 +587,17 @@ func (a *SlackAdapter) ResolveAttachment(ctx context.Context, cfg channel.Channe
 	return a.resolveAttachmentWithClient(ctx, a.newAPIClient(slackCfg), attachment)
 }
 
+func (*SlackAdapter) CanResolve(_ channel.ChannelConfig, attachment channel.Attachment) bool {
+	if strings.TrimSpace(attachment.PlatformKey) != "" {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(attachment.SourcePlatform), Type.String()) {
+		return true
+	}
+	rawURL := strings.ToLower(strings.TrimSpace(attachment.URL))
+	return strings.Contains(rawURL, "files.slack.com/") || strings.Contains(rawURL, "/files-pri/")
+}
+
 func (a *SlackAdapter) resolveAttachmentWithClient(ctx context.Context, api *slack.Client, attachment channel.Attachment) (channel.AttachmentPayload, error) {
 	downloadURL := strings.TrimSpace(attachment.URL)
 	if downloadURL == "" {
