@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -29,6 +30,11 @@ const (
 	defaultOverlapThreshold    = 0.75
 	defaultConsecutiveHits     = 10
 	defaultMinNewGramsPerChunk = 1
+)
+
+var (
+	ErrTextLoopDetected = errors.New(LoopDetectedAbortMessage)
+	ErrToolLoopDetected = errors.New(ToolLoopDetectedAbortMessage)
 )
 
 // --- Sential: n-gram overlap detector ---
