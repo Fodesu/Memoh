@@ -23,7 +23,7 @@ func TestAgentGenerateStopsOnToolLoopAbort(t *testing.T) {
 	t.Parallel()
 
 	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(_ int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
 			return &sdk.GenerateResult{
 				FinishReason: sdk.FinishReasonToolCalls,
 				ToolCalls: []sdk.ToolCall{{
@@ -41,7 +41,7 @@ func TestAgentGenerateStopsOnToolLoopAbort(t *testing.T) {
 			tools: []sdk.Tool{{
 				Name:       "loop_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"ok": true}, nil
 				},
 			}},
@@ -87,7 +87,7 @@ func TestAgentGenerateStopsOnTextLoopAbort(t *testing.T) {
 			tools: []sdk.Tool{{
 				Name:       "noop_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"ok": true}, nil
 				},
 			}},
@@ -140,7 +140,7 @@ func TestAgentGenerateStopsOnTerminalTextLoopAbort(t *testing.T) {
 			tools: []sdk.Tool{{
 				Name:       "noop_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"ok": true}, nil
 				},
 			}},
