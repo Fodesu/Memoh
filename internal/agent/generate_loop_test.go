@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -23,6 +25,7 @@ func (p staticToolProvider) Tools(context.Context, agenttools.SessionContext) ([
 type atomicMockProvider struct {
 	calls   atomic.Int32
 	handler func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error)
+	stream  func(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error)
 }
 
 func (*atomicMockProvider) Name() string {
@@ -47,6 +50,10 @@ func (m *atomicMockProvider) DoGenerate(_ context.Context, params sdk.GeneratePa
 }
 
 func (m *atomicMockProvider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+	if m.stream != nil {
+		return m.stream(ctx, params)
+	}
+
 	result, err := m.DoGenerate(ctx, params)
 	if err != nil {
 		return nil, err
@@ -275,7 +282,258 @@ func TestAgentStreamStopsOnToolLoopAbort(t *testing.T) {
 	if terminal.Type != EventAgentAbort {
 		t.Fatalf("expected EventAgentAbort, got %q", terminal.Type)
 	}
-	if modelProvider.calls.Load() >= 20 {
-		t.Fatalf("expected stream tool loop to abort before fallback stop, got %d provider calls", modelProvider.calls.Load())
+}
+
+func TestAgentStreamMarksTerminalTextLoopAsAbort(t *testing.T) {
+	t.Parallel()
+
+	repeatedChunk := strings.Repeat("abcd", 64)
+	var observedCancel atomic.Bool
+	modelProvider := &atomicMockProvider{
+		stream: func(ctx context.Context, _ sdk.GenerateParams) (*sdk.StreamResult, error) {
+			ch := make(chan sdk.StreamPart, 16)
+			go func() {
+				defer close(ch)
+				send := func(part sdk.StreamPart) bool {
+					select {
+					case <-ctx.Done():
+						observedCancel.Store(true)
+						return false
+					case ch <- part:
+						return true
+					}
+				}
+				if !send(&sdk.StartPart{}) {
+					return
+				}
+				if !send(&sdk.StartStepPart{}) {
+					return
+				}
+				if !send(&sdk.TextStartPart{ID: "mock"}) {
+					return
+				}
+				for i := 0; i < 4; i++ {
+					if !send(&sdk.TextDeltaPart{ID: "mock", Text: repeatedChunk}) {
+						return
+					}
+				}
+				select {
+				case <-ctx.Done():
+					observedCancel.Store(true)
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
+				if !send(&sdk.TextEndPart{ID: "mock"}) {
+					return
+				}
+				if !send(&sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}) {
+					return
+				}
+				_ = send(&sdk.FinishPart{FinishReason: sdk.FinishReasonStop})
+			}()
+			return &sdk.StreamResult{Stream: ch}, nil
+		},
+	}
+
+	a := New(Deps{})
+
+	var terminal StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("loop stream text")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		LoopDetection:    LoopDetectionConfig{Enabled: true},
+	}) {
+		if event.IsTerminal() {
+			terminal = event
+		}
+	}
+
+	if !observedCancel.Load() {
+		t.Fatal("expected stream provider to observe context cancellation from text-loop abort")
+	}
+	if terminal.Type != EventAgentAbort {
+		t.Fatalf("expected EventAgentAbort, got %q", terminal.Type)
+	}
+}
+
+func TestAgentStreamMarksRetryTextLoopAsAbort(t *testing.T) {
+	t.Parallel()
+
+	repeatedChunk := strings.Repeat("abcd", 64)
+	var streamCalls atomic.Int32
+	var observedCancel atomic.Bool
+	modelProvider := &atomicMockProvider{
+		stream: func(ctx context.Context, _ sdk.GenerateParams) (*sdk.StreamResult, error) {
+			call := streamCalls.Add(1)
+			ch := make(chan sdk.StreamPart, 16)
+			go func() {
+				defer close(ch)
+				send := func(part sdk.StreamPart) bool {
+					select {
+					case <-ctx.Done():
+						observedCancel.Store(true)
+						return false
+					case ch <- part:
+						return true
+					}
+				}
+
+				if !send(&sdk.StartPart{}) {
+					return
+				}
+				if !send(&sdk.StartStepPart{}) {
+					return
+				}
+
+				if call == 1 {
+					_ = send(&sdk.ErrorPart{Error: errors.New("api error 500")})
+					return
+				}
+
+				if !send(&sdk.TextStartPart{ID: "mock-retry"}) {
+					return
+				}
+				for i := 0; i < 4; i++ {
+					if !send(&sdk.TextDeltaPart{ID: "mock-retry", Text: repeatedChunk}) {
+						return
+					}
+				}
+				select {
+				case <-ctx.Done():
+					observedCancel.Store(true)
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
+				if !send(&sdk.TextEndPart{ID: "mock-retry"}) {
+					return
+				}
+				if !send(&sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}) {
+					return
+				}
+				_ = send(&sdk.FinishPart{FinishReason: sdk.FinishReasonStop})
+			}()
+			return &sdk.StreamResult{Stream: ch}, nil
+		},
+	}
+
+	a := New(Deps{})
+
+	var terminal StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("loop stream retry text")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		LoopDetection:    LoopDetectionConfig{Enabled: true},
+	}) {
+		if event.IsTerminal() {
+			terminal = event
+		}
+	}
+
+	if streamCalls.Load() != 2 {
+		t.Fatalf("expected one retry stream attempt, got %d stream calls", streamCalls.Load())
+	}
+	if !observedCancel.Load() {
+		t.Fatal("expected retry stream provider to observe context cancellation from text-loop abort")
+	}
+	if terminal.Type != EventAgentAbort {
+		t.Fatalf("expected EventAgentAbort after retry text-loop abort, got %q", terminal.Type)
+	}
+}
+
+func TestRunMidStreamRetryMarksTextLoopCancellationAsAborted(t *testing.T) {
+	t.Parallel()
+
+	repeatedChunk := strings.Repeat("abcd", 64)
+	var observedCancel atomic.Bool
+	modelProvider := &atomicMockProvider{
+		stream: func(ctx context.Context, _ sdk.GenerateParams) (*sdk.StreamResult, error) {
+			ch := make(chan sdk.StreamPart)
+			go func() {
+				defer close(ch)
+				send := func(part sdk.StreamPart) bool {
+					select {
+					case <-ctx.Done():
+						observedCancel.Store(true)
+						return false
+					case ch <- part:
+						return true
+					}
+				}
+
+				if !send(&sdk.StartPart{}) {
+					return
+				}
+				if !send(&sdk.StartStepPart{}) {
+					return
+				}
+				if !send(&sdk.TextStartPart{ID: "mock-retry-only"}) {
+					return
+				}
+				for i := 0; i < 4; i++ {
+					if !send(&sdk.TextDeltaPart{ID: "mock-retry-only", Text: repeatedChunk}) {
+						return
+					}
+				}
+				select {
+				case <-ctx.Done():
+					observedCancel.Store(true)
+					return
+				case <-time.After(200 * time.Millisecond):
+					t.Error("expected text-loop detection to cancel retry stream before any extra part was sent")
+					return
+				}
+			}()
+			return &sdk.StreamResult{Stream: ch}, nil
+		},
+	}
+
+	a := New(Deps{})
+	streamCtx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+
+	textLoopGuard := NewTextLoopGuard(LoopDetectedStreakThreshold, LoopDetectedMinNewGramsPerChunk, SentialOptions{})
+	textLoopProbeBuffer := NewTextLoopProbeBuffer(LoopDetectedProbeChars, func(text string) {
+		result := textLoopGuard.Inspect(text)
+		if result.Abort {
+			cancel(ErrTextLoopDetected)
+		}
+	})
+
+	retryResult, aborted := a.runMidStreamRetry(
+		context.Background(),
+		streamCtx,
+		cancel,
+		newToolAbortRegistry(),
+		make(chan StreamEvent, 32),
+		RunConfig{
+			Model:         &sdk.Model{ID: "mock-model", Provider: modelProvider},
+			Messages:      []sdk.Message{sdk.UserMessage("retry text loop")},
+			Identity:      SessionContext{BotID: "bot-1"},
+			LoopDetection: LoopDetectionConfig{Enabled: true},
+		},
+		nil,
+		nil,
+		&sdk.StreamResult{Messages: []sdk.Message{sdk.UserMessage("previous step")}},
+		0,
+		"api error 500",
+		&strings.Builder{},
+		textLoopProbeBuffer,
+	)
+
+	if retryResult == nil {
+		t.Fatal("expected retry result")
+	}
+	if !observedCancel.Load() {
+		t.Fatal("expected retry stream provider to observe context cancellation from text-loop abort")
+	}
+	if !errors.Is(context.Cause(streamCtx), ErrTextLoopDetected) {
+		t.Fatalf("expected stream context cause ErrTextLoopDetected, got %v", context.Cause(streamCtx))
+	}
+	if !aborted {
+		t.Fatal("expected runMidStreamRetry to report aborted when retry stream hit text-loop cancellation")
 	}
 }

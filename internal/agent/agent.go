@@ -99,6 +99,8 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 
+	aborted := false
+
 	// Loop detection setup
 	var textLoopGuard *TextLoopGuard
 	var textLoopProbeBuffer *TextLoopProbeBuffer
@@ -110,6 +112,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			result := textLoopGuard.Inspect(text)
 			if result.Abort {
 				a.logger.Warn("text loop detected, will abort")
+				aborted = true
 				cancel(ErrTextLoopDetected)
 			}
 		})
@@ -239,7 +242,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	sendEvent(ctx, ch, StreamEvent{Type: EventAgentStart})
 
 	var allText strings.Builder
-	aborted := false
 	stepNumber := 0
 
 	for part := range streamResult.Stream {
@@ -344,7 +346,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			}
 
 		case *sdk.StreamToolErrorPart:
-			shouldAbort := errors.Is(p.Error, ErrToolLoopDetected) || toolLoopAbortCallIDs.Take(p.ToolCallID)
+			// Take before errors.Is so registry IDs from the loop guard are always cleared.
+			tookLoopAbort := toolLoopAbortCallIDs.Take(p.ToolCallID)
+			shouldAbort := errors.Is(p.Error, ErrToolLoopDetected) || tookLoopAbort
 			if !sendEvent(ctx, ch, StreamEvent{
 				Type:       EventToolCallEnd,
 				ToolName:   p.ToolName,
@@ -991,7 +995,8 @@ func (a *Agent) runMidStreamRetry(
 					aborted = true
 				}
 			case *sdk.StreamToolErrorPart:
-				shouldAbort := errors.Is(rp.Error, ErrToolLoopDetected) || toolLoopAbortCallIDs.Take(rp.ToolCallID)
+				tookLoopAbort := toolLoopAbortCallIDs.Take(rp.ToolCallID)
+				shouldAbort := errors.Is(rp.Error, ErrToolLoopDetected) || tookLoopAbort
 				if !sendEvent(sendCtx, ch, StreamEvent{
 					Type:       EventToolCallEnd,
 					ToolName:   rp.ToolName,
@@ -1021,7 +1026,7 @@ func (a *Agent) runMidStreamRetry(
 			for range retryResult.Stream {
 			}
 		}
-		return retryResult, aborted
+		return retryResult, aborted || detectGenerateLoopAbort(streamCtx, streamCtx.Err()) != nil
 	}
 	// All retry attempts failed
 	return prevResult, true
