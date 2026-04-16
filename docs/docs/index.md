@@ -20,7 +20,3 @@ Memoh(/ˈmemoʊ/) is a multi-member, structured long-memory, containerized AI ag
 - **[MCP](/getting-started/mcp)** — Configure tool servers, OAuth, probing, import/export.
 - **[Memory](/getting-started/memory)** — Long-term memory providers and memory compaction.
 - **[Context Compaction](/getting-started/compaction)** — Reduce active session context size without changing stored memory.
-
-## Chinese Entry
-
-- **[简体中文入口](/zh/)** — Chinese landing page with translated concepts and links to key guides.
