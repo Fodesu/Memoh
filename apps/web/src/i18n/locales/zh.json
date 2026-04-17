@@ -1070,6 +1070,7 @@
         "wechatoa": "微信服务号",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
+        "slack": "Slack",
         "web": "Web",
         "cli": "本地 CLI",
         "local": "本地"
@@ -1085,6 +1086,7 @@
         "wechatoa": "OA",
         "wecom": "企微",
         "dingtalk": "钉",
+        "slack": "SK",
         "web": "Web",
         "cli": "CLI",
         "local": "本地"

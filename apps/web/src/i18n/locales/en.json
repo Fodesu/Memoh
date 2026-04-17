@@ -1074,6 +1074,7 @@
         "wechatoa": "WeChat Official Account",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
+        "slack": "Slack",
         "web": "Web",
         "cli": "CLI",
         "local": "Local"
@@ -1089,6 +1090,7 @@
         "wechatoa": "OA",
         "wecom": "WC",
         "dingtalk": "DT",
+        "slack": "SK",
         "web": "Web",
         "cli": "CLI",
         "local": "LC"
