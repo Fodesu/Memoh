@@ -37,6 +37,7 @@ type Bot struct {
 	TranscriptionModelID   pgtype.UUID        `json:"transcription_model_id"`
 	BrowserContextID       pgtype.UUID        `json:"browser_context_id"`
 	PersistFullToolResults bool               `json:"persist_full_tool_results"`
+	ShowToolCallsInIm      bool               `json:"show_tool_calls_in_im"`
 	Metadata               []byte             `json:"metadata"`
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`

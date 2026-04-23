@@ -1753,6 +1753,7 @@ export type SettingsSettings = {
     reasoning_effort?: string;
     reasoning_enabled?: boolean;
     search_provider_id?: string;
+    show_tool_calls_in_im?: boolean;
     timezone?: string;
     title_model_id?: string;
     transcription_model_id?: string;
@@ -1778,6 +1779,7 @@ export type SettingsUpsertRequest = {
     reasoning_effort?: string;
     reasoning_enabled?: boolean;
     search_provider_id?: string;
+    show_tool_calls_in_im?: boolean;
     timezone?: string;
     title_model_id?: string;
     transcription_model_id?: string;

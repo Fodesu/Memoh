@@ -21,7 +21,8 @@ SELECT
   tts_models.id AS tts_model_id,
   transcription_models.id AS transcription_model_id,
   browser_contexts.id AS browser_context_id,
-  bots.persist_full_tool_results
+  bots.persist_full_tool_results,
+  bots.show_tool_calls_in_im
 FROM bots
 LEFT JOIN models AS chat_models ON chat_models.id = bots.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = bots.heartbeat_model_id
@@ -59,9 +60,10 @@ WITH updated AS (
       transcription_model_id = COALESCE(sqlc.narg(transcription_model_id)::uuid, bots.transcription_model_id),
       browser_context_id = COALESCE(sqlc.narg(browser_context_id)::uuid, bots.browser_context_id),
       persist_full_tool_results = sqlc.arg(persist_full_tool_results),
+      show_tool_calls_in_im = sqlc.arg(show_tool_calls_in_im),
       updated_at = now()
   WHERE bots.id = sqlc.arg(id)
-  RETURNING bots.id, bots.language, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.compaction_enabled, bots.compaction_threshold, bots.compaction_ratio, bots.timezone, bots.chat_model_id, bots.heartbeat_model_id, bots.compaction_model_id, bots.title_model_id, bots.image_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_model_id, bots.transcription_model_id, bots.browser_context_id, bots.persist_full_tool_results
+  RETURNING bots.id, bots.language, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.compaction_enabled, bots.compaction_threshold, bots.compaction_ratio, bots.timezone, bots.chat_model_id, bots.heartbeat_model_id, bots.compaction_model_id, bots.title_model_id, bots.image_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_model_id, bots.transcription_model_id, bots.browser_context_id, bots.persist_full_tool_results, bots.show_tool_calls_in_im
 )
 SELECT
   updated.id AS bot_id,
@@ -85,7 +87,8 @@ SELECT
   tts_models.id AS tts_model_id,
   transcription_models.id AS transcription_model_id,
   browser_contexts.id AS browser_context_id,
-  updated.persist_full_tool_results
+  updated.persist_full_tool_results,
+  updated.show_tool_calls_in_im
 FROM updated
 LEFT JOIN models AS chat_models ON chat_models.id = updated.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = updated.heartbeat_model_id
@@ -120,5 +123,6 @@ SET language = 'auto',
     transcription_model_id = NULL,
     browser_context_id = NULL,
     persist_full_tool_results = false,
+    show_tool_calls_in_im = false,
     updated_at = now()
 WHERE id = $1;

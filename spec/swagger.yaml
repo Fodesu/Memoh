@@ -2947,6 +2947,8 @@ definitions:
         type: boolean
       search_provider_id:
         type: string
+      show_tool_calls_in_im:
+        type: boolean
       timezone:
         type: string
       title_model_id:
@@ -2994,6 +2996,8 @@ definitions:
         type: boolean
       search_provider_id:
         type: string
+      show_tool_calls_in_im:
+        type: boolean
       timezone:
         type: string
       title_model_id:

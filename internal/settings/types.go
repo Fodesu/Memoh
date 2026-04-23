@@ -29,6 +29,7 @@ type Settings struct {
 	CompactionModelID      string `json:"compaction_model_id,omitempty"`
 	DiscussProbeModelID    string `json:"discuss_probe_model_id,omitempty"`
 	PersistFullToolResults bool   `json:"persist_full_tool_results"`
+	ShowToolCallsInIM      bool   `json:"show_tool_calls_in_im"`
 }
 
 type UpsertRequest struct {
@@ -54,4 +55,5 @@ type UpsertRequest struct {
 	CompactionModelID      *string `json:"compaction_model_id,omitempty"`
 	DiscussProbeModelID    string  `json:"discuss_probe_model_id,omitempty"`
 	PersistFullToolResults *bool   `json:"persist_full_tool_results,omitempty"`
+	ShowToolCallsInIM      *bool   `json:"show_tool_calls_in_im,omitempty"`
 }

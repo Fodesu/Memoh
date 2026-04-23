@@ -13783,6 +13783,9 @@ const docTemplate = `{
                 "search_provider_id": {
                     "type": "string"
                 },
+                "show_tool_calls_in_im": {
+                    "type": "boolean"
+                },
                 "timezone": {
                     "type": "string"
                 },
@@ -13853,6 +13856,9 @@ const docTemplate = `{
                 },
                 "search_provider_id": {
                     "type": "string"
+                },
+                "show_tool_calls_in_im": {
+                    "type": "boolean"
                 },
                 "timezone": {
                     "type": "string"

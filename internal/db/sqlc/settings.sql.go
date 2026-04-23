@@ -33,6 +33,7 @@ SET language = 'auto',
     transcription_model_id = NULL,
     browser_context_id = NULL,
     persist_full_tool_results = false,
+    show_tool_calls_in_im = false,
     updated_at = now()
 WHERE id = $1
 `
@@ -65,7 +66,8 @@ SELECT
   tts_models.id AS tts_model_id,
   transcription_models.id AS transcription_model_id,
   browser_contexts.id AS browser_context_id,
-  bots.persist_full_tool_results
+  bots.persist_full_tool_results,
+  bots.show_tool_calls_in_im
 FROM bots
 LEFT JOIN models AS chat_models ON chat_models.id = bots.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = bots.heartbeat_model_id
@@ -103,6 +105,7 @@ type GetSettingsByBotIDRow struct {
 	TranscriptionModelID   pgtype.UUID `json:"transcription_model_id"`
 	BrowserContextID       pgtype.UUID `json:"browser_context_id"`
 	PersistFullToolResults bool        `json:"persist_full_tool_results"`
+	ShowToolCallsInIm      bool        `json:"show_tool_calls_in_im"`
 }
 
 func (q *Queries) GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (GetSettingsByBotIDRow, error) {
@@ -131,6 +134,7 @@ func (q *Queries) GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (GetSe
 		&i.TranscriptionModelID,
 		&i.BrowserContextID,
 		&i.PersistFullToolResults,
+		&i.ShowToolCallsInIm,
 	)
 	return i, err
 }
@@ -159,9 +163,10 @@ WITH updated AS (
       transcription_model_id = COALESCE($19::uuid, bots.transcription_model_id),
       browser_context_id = COALESCE($20::uuid, bots.browser_context_id),
       persist_full_tool_results = $21,
+      show_tool_calls_in_im = $22,
       updated_at = now()
-  WHERE bots.id = $22
-  RETURNING bots.id, bots.language, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.compaction_enabled, bots.compaction_threshold, bots.compaction_ratio, bots.timezone, bots.chat_model_id, bots.heartbeat_model_id, bots.compaction_model_id, bots.title_model_id, bots.image_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_model_id, bots.transcription_model_id, bots.browser_context_id, bots.persist_full_tool_results
+  WHERE bots.id = $23
+  RETURNING bots.id, bots.language, bots.reasoning_enabled, bots.reasoning_effort, bots.heartbeat_enabled, bots.heartbeat_interval, bots.heartbeat_prompt, bots.compaction_enabled, bots.compaction_threshold, bots.compaction_ratio, bots.timezone, bots.chat_model_id, bots.heartbeat_model_id, bots.compaction_model_id, bots.title_model_id, bots.image_model_id, bots.search_provider_id, bots.memory_provider_id, bots.tts_model_id, bots.transcription_model_id, bots.browser_context_id, bots.persist_full_tool_results, bots.show_tool_calls_in_im
 )
 SELECT
   updated.id AS bot_id,
@@ -185,7 +190,8 @@ SELECT
   tts_models.id AS tts_model_id,
   transcription_models.id AS transcription_model_id,
   browser_contexts.id AS browser_context_id,
-  updated.persist_full_tool_results
+  updated.persist_full_tool_results,
+  updated.show_tool_calls_in_im
 FROM updated
 LEFT JOIN models AS chat_models ON chat_models.id = updated.chat_model_id
 LEFT JOIN models AS heartbeat_models ON heartbeat_models.id = updated.heartbeat_model_id
@@ -221,6 +227,7 @@ type UpsertBotSettingsParams struct {
 	TranscriptionModelID   pgtype.UUID `json:"transcription_model_id"`
 	BrowserContextID       pgtype.UUID `json:"browser_context_id"`
 	PersistFullToolResults bool        `json:"persist_full_tool_results"`
+	ShowToolCallsInIm      bool        `json:"show_tool_calls_in_im"`
 	ID                     pgtype.UUID `json:"id"`
 }
 
@@ -247,6 +254,7 @@ type UpsertBotSettingsRow struct {
 	TranscriptionModelID   pgtype.UUID `json:"transcription_model_id"`
 	BrowserContextID       pgtype.UUID `json:"browser_context_id"`
 	PersistFullToolResults bool        `json:"persist_full_tool_results"`
+	ShowToolCallsInIm      bool        `json:"show_tool_calls_in_im"`
 }
 
 func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsParams) (UpsertBotSettingsRow, error) {
@@ -272,6 +280,7 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 		arg.TranscriptionModelID,
 		arg.BrowserContextID,
 		arg.PersistFullToolResults,
+		arg.ShowToolCallsInIm,
 		arg.ID,
 	)
 	var i UpsertBotSettingsRow
@@ -298,6 +307,7 @@ func (q *Queries) UpsertBotSettings(ctx context.Context, arg UpsertBotSettingsPa
 		&i.TranscriptionModelID,
 		&i.BrowserContextID,
 		&i.PersistFullToolResults,
+		&i.ShowToolCallsInIm,
 	)
 	return i, err
 }

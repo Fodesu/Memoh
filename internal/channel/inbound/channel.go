@@ -93,6 +93,15 @@ type SessionEnsurer interface {
 	CreateNewSession(ctx context.Context, botID, routeID, channelType, sessionType string) (SessionResult, error)
 }
 
+// IMDisplayOptionsReader exposes bot-level IM display preferences.
+// Implementations typically adapt the settings service.
+type IMDisplayOptionsReader interface {
+	// ShowToolCallsInIM reports whether tool_call lifecycle events should
+	// reach IM adapters for the given bot. Returns false by default when the
+	// bot or its settings cannot be resolved.
+	ShowToolCallsInIM(ctx context.Context, botID string) (bool, error)
+}
+
 // SessionResult carries the minimum fields needed from a session.
 type SessionResult struct {
 	ID   string
@@ -124,6 +133,7 @@ type ChannelInboundProcessor struct {
 	pipeline            *pipelinepkg.Pipeline
 	eventStore          *pipelinepkg.EventStore
 	discussDriver       *pipelinepkg.DiscussDriver
+	imDisplayOptions    IMDisplayOptionsReader
 
 	// activeStreams maps "botID:routeID" to a context.CancelFunc for the
 	// currently running agent stream. Used by /stop to abort generation
@@ -257,6 +267,42 @@ func (p *ChannelInboundProcessor) SetDispatcher(dispatcher *RouteDispatcher) {
 		return
 	}
 	p.dispatcher = dispatcher
+}
+
+// SetIMDisplayOptions configures the reader used to gate IM-facing stream
+// events (e.g. tool call lifecycle) on bot-level display preferences. When
+// nil, tool call events are always dropped before reaching IM adapters.
+func (p *ChannelInboundProcessor) SetIMDisplayOptions(reader IMDisplayOptionsReader) {
+	if p == nil {
+		return
+	}
+	p.imDisplayOptions = reader
+}
+
+// shouldShowToolCallsInIM reports whether tool_call_start / tool_call_end
+// events should reach the IM adapter for the given bot. Failures and missing
+// configuration default to false so tool calls remain hidden unless explicitly
+// enabled.
+func (p *ChannelInboundProcessor) shouldShowToolCallsInIM(ctx context.Context, botID string) bool {
+	if p == nil || p.imDisplayOptions == nil {
+		return false
+	}
+	botID = strings.TrimSpace(botID)
+	if botID == "" {
+		return false
+	}
+	show, err := p.imDisplayOptions.ShowToolCallsInIM(ctx, botID)
+	if err != nil {
+		if p.logger != nil {
+			p.logger.Debug(
+				"show_tool_calls_in_im lookup failed, defaulting to hidden",
+				slog.String("bot_id", botID),
+				slog.Any("error", err),
+			)
+		}
+		return false
+	}
+	return show
 }
 
 // HandleInbound processes an inbound channel message through identity resolution and chat gateway.
@@ -720,6 +766,14 @@ startStream:
 			}
 		}
 	}()
+
+	// For non-local channels (IM adapters), optionally drop tool_call events
+	// before they reach the adapter when the bot's show_tool_calls_in_im
+	// setting is off. The filter sits inside the TeeStream so WebUI
+	// observers still receive the full event stream.
+	if !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID) {
+		stream = channel.NewToolCallDroppingStream(stream)
+	}
 
 	// For non-local channels, wrap the stream so events are mirrored to the
 	// RouteHub (and thus to Web UI and other local subscribers).

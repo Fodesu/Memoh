@@ -22,18 +22,19 @@ const (
 )
 
 type slackOutboundStream struct {
-	adapter    *SlackAdapter
-	cfg        channel.ChannelConfig
-	target     string
-	reply      *channel.ReplyRef
-	api        *slackapi.Client
-	closed     atomic.Bool
-	mu         sync.Mutex
-	msgTS      string // Slack message timestamp (used as message ID)
-	buffer     strings.Builder
-	lastSent   string
-	lastUpdate time.Time
-	nextUpdate time.Time
+	adapter      *SlackAdapter
+	cfg          channel.ChannelConfig
+	target       string
+	reply        *channel.ReplyRef
+	api          *slackapi.Client
+	closed       atomic.Bool
+	mu           sync.Mutex
+	msgTS        string // Slack message timestamp (used as message ID)
+	buffer       strings.Builder
+	lastSent     string
+	lastUpdate   time.Time
+	nextUpdate   time.Time
+	toolMessages map[string]string
 }
 
 var _ channel.PreparedOutboundStream = (*slackOutboundStream)(nil)
@@ -122,11 +123,26 @@ func (s *slackOutboundStream) Push(ctx context.Context, event channel.PreparedSt
 		}
 		return nil
 
+	case channel.StreamEventToolCallStart:
+		s.mu.Lock()
+		bufText := strings.TrimSpace(s.buffer.String())
+		s.mu.Unlock()
+		if bufText != "" {
+			if err := s.finalizeMessage(ctx, bufText); err != nil {
+				return err
+			}
+		} else if err := s.clearPlaceholder(ctx); err != nil {
+			return err
+		}
+		s.resetStreamState()
+		return s.sendToolCallMessage(ctx, event.ToolCall, channel.BuildToolCallStart(event.ToolCall))
+	case channel.StreamEventToolCallEnd:
+		return s.sendToolCallMessage(ctx, event.ToolCall, channel.BuildToolCallEnd(event.ToolCall))
+
 	case channel.StreamEventAgentStart, channel.StreamEventAgentEnd,
 		channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd,
 		channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted,
 		channel.StreamEventProcessingFailed,
-		channel.StreamEventToolCallStart, channel.StreamEventToolCallEnd,
 		channel.StreamEventReaction, channel.StreamEventSpeech:
 		return nil
 
@@ -308,6 +324,80 @@ func (s *slackOutboundStream) sendAttachment(ctx context.Context, att channel.Pr
 		threadTS = s.reply.MessageID
 	}
 	return s.adapter.uploadPreparedAttachment(ctx, s.api, s.target, threadTS, att)
+}
+
+// sendToolCallMessage posts a message for tool_call_start and updates the same
+// message on tool_call_end via chat.update so the running → completed/failed
+// transition shares one visible post. If the edit fails (or no prior message
+// is tracked), it falls back to posting a new message.
+func (s *slackOutboundStream) sendToolCallMessage(
+	ctx context.Context,
+	tc *channel.StreamToolCall,
+	p channel.ToolCallPresentation,
+) error {
+	text := truncateSlackText(strings.TrimSpace(channel.RenderToolCallMessageMarkdown(p)))
+	if text == "" {
+		return nil
+	}
+	callID := ""
+	if tc != nil {
+		callID = strings.TrimSpace(tc.CallID)
+	}
+	if p.Status != channel.ToolCallStatusRunning && callID != "" {
+		if ts, ok := s.lookupToolCallMessage(callID); ok {
+			if err := s.updateMessageTextWithRetry(ctx, ts, text); err == nil {
+				s.forgetToolCallMessage(callID)
+				return nil
+			}
+			s.forgetToolCallMessage(callID)
+		}
+	}
+	ts, err := s.postMessageWithRetry(ctx, text)
+	if err != nil {
+		return err
+	}
+	if p.Status == channel.ToolCallStatusRunning && callID != "" && ts != "" {
+		s.storeToolCallMessage(callID, ts)
+	}
+	return nil
+}
+
+func (s *slackOutboundStream) lookupToolCallMessage(callID string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.toolMessages == nil {
+		return "", false
+	}
+	v, ok := s.toolMessages[callID]
+	return v, ok
+}
+
+func (s *slackOutboundStream) storeToolCallMessage(callID, ts string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.toolMessages == nil {
+		s.toolMessages = make(map[string]string)
+	}
+	s.toolMessages[callID] = ts
+}
+
+func (s *slackOutboundStream) forgetToolCallMessage(callID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.toolMessages == nil {
+		return
+	}
+	delete(s.toolMessages, callID)
+}
+
+func (s *slackOutboundStream) resetStreamState() {
+	s.mu.Lock()
+	s.msgTS = ""
+	s.buffer.Reset()
+	s.lastSent = ""
+	s.lastUpdate = time.Time{}
+	s.nextUpdate = time.Time{}
+	s.mu.Unlock()
 }
 
 func (s *slackOutboundStream) postMessageWithRetry(ctx context.Context, text string) (string, error) {

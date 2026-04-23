@@ -101,6 +101,9 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	if req.PersistFullToolResults != nil {
 		current.PersistFullToolResults = *req.PersistFullToolResults
 	}
+	if req.ShowToolCallsInIM != nil {
+		current.ShowToolCallsInIM = *req.ShowToolCallsInIM
+	}
 	timezoneValue := pgtype.Text{}
 	if req.Timezone != nil {
 		normalized, err := normalizeOptionalTimezone(*req.Timezone)
@@ -215,6 +218,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		TranscriptionModelID:   transcriptionModelUUID,
 		BrowserContextID:       browserContextUUID,
 		PersistFullToolResults: current.PersistFullToolResults,
+		ShowToolCallsInIm:      current.ShowToolCallsInIM,
 	})
 	if err != nil {
 		return Settings{}, err
@@ -310,6 +314,7 @@ func normalizeBotSettingsReadRow(row sqlc.GetSettingsByBotIDRow) Settings {
 		row.TranscriptionModelID,
 		row.BrowserContextID,
 		row.PersistFullToolResults,
+		row.ShowToolCallsInIm,
 	)
 }
 
@@ -335,6 +340,7 @@ func normalizeBotSettingsWriteRow(row sqlc.UpsertBotSettingsRow) Settings {
 		row.TranscriptionModelID,
 		row.BrowserContextID,
 		row.PersistFullToolResults,
+		row.ShowToolCallsInIm,
 	)
 }
 
@@ -359,6 +365,7 @@ func normalizeBotSettingsFields(
 	transcriptionModelID pgtype.UUID,
 	browserContextID pgtype.UUID,
 	persistFullToolResults bool,
+	showToolCallsInIM bool,
 ) Settings {
 	settings := normalizeBotSetting(language, "", reasoningEnabled, reasoningEffort, heartbeatEnabled, heartbeatInterval, compactionEnabled, compactionThreshold, compactionRatio)
 	if timezone.Valid {
@@ -395,6 +402,7 @@ func normalizeBotSettingsFields(
 		settings.BrowserContextID = uuid.UUID(browserContextID.Bytes).String()
 	}
 	settings.PersistFullToolResults = persistFullToolResults
+	settings.ShowToolCallsInIM = showToolCallsInIM
 	return settings
 }
 

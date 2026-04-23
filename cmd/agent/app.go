@@ -374,6 +374,7 @@ func provideChannelRouter(
 	processor.SetDispatcher(inbound.NewRouteDispatcher(log))
 	processor.SetSpeechService(audioService, &settingsSpeechModelResolver{settings: settingsService})
 	processor.SetTranscriptionService(&settingsTranscriptionAdapter{audio: audioService}, &settingsTranscriptionModelResolver{settings: settingsService})
+	processor.SetIMDisplayOptions(&settingsIMDisplayOptions{settings: settingsService})
 	cmdHandler := command.NewHandler(
 		log,
 		&command.BotMemberRoleAdapter{BotService: botService},
@@ -595,6 +596,18 @@ func (r *settingsSpeechModelResolver) ResolveSpeechModelID(ctx context.Context, 
 		return "", err
 	}
 	return s.TtsModelID, nil
+}
+
+type settingsIMDisplayOptions struct {
+	settings *settings.Service
+}
+
+func (r *settingsIMDisplayOptions) ShowToolCallsInIM(ctx context.Context, botID string) (bool, error) {
+	s, err := r.settings.GetBot(ctx, botID)
+	if err != nil {
+		return false, err
+	}
+	return s.ShowToolCallsInIM, nil
 }
 
 type settingsTranscriptionModelResolver struct {
