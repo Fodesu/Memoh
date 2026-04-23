@@ -230,6 +230,25 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 
 	trs := d.loadTurnResponses(ctx, cfg.SessionID)
 
+	// Cold-start / post-idle initialisation: if we haven't processed anything
+	// in this goroutine's lifetime yet, anchor `lastProcessedMs` to the most
+	// recent TR's requested_at. Any RC segment strictly older than that has
+	// already been "seen" by a prior LLM call (whose response is in the TR
+	// stream), so it should not retrigger a reply. Without this anchor, every
+	// idle-timeout restart would treat the entire session history as brand
+	// new external traffic and re-answer it.
+	if sess.lastProcessedMs == 0 {
+		sess.lastProcessedMs = anchorFromTRs(trs)
+	}
+
+	// Re-evaluate the trigger condition now that lastProcessedMs is anchored.
+	// The outer loop used lastProcessedMs=0 to allow first-time dispatch into
+	// this function; after initialisation, we must verify there's actually a
+	// new external event past the anchor before spending an LLM call.
+	if LatestExternalEventMs(rc, sess.lastProcessedMs) == 0 {
+		return
+	}
+
 	composed := ComposeContext(rc, trs, "")
 	if composed == nil {
 		return
@@ -285,8 +304,6 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		}
 	}
 
-	now := time.Now()
-
 	if d.deps.Resolver != nil && len(finalMessages) > 0 {
 		var sdkMsgs []sdk.Message
 		if json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
@@ -299,7 +316,39 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		}
 	}
 
-	sess.lastProcessedMs = now.UnixMilli()
+	// Advance the cursor to the latest RC segment actually consumed in this
+	// turn (not wall-clock time). Messages that arrive DURING LLM generation
+	// will land in a newer RC with ReceivedAtMs > this cursor and correctly
+	// trigger another round; wall-clock would wrongly mark them processed.
+	consumedMs := latestRCReceivedAtMs(rc)
+	if consumedMs > sess.lastProcessedMs {
+		sess.lastProcessedMs = consumedMs
+	}
+}
+
+// latestRCReceivedAtMs returns the maximum ReceivedAtMs across all segments
+// in the given RC, or 0 if the RC is empty.
+func latestRCReceivedAtMs(rc RenderedContext) int64 {
+	var latest int64
+	for _, seg := range rc {
+		if seg.ReceivedAtMs > latest {
+			latest = seg.ReceivedAtMs
+		}
+	}
+	return latest
+}
+
+// anchorFromTRs returns the maximum RequestedAtMs across a TR slice. Used
+// by the cold-start initialisation of `lastProcessedMs` so that RC segments
+// older than the latest persisted bot response are not re-answered.
+func anchorFromTRs(trs []TurnResponseEntry) int64 {
+	var latest int64
+	for _, tr := range trs {
+		if tr.RequestedAtMs > latest {
+			latest = tr.RequestedAtMs
+		}
+	}
+	return latest
 }
 
 // broadcastDiscussEvent forwards an agent stream event to the RouteHub so the
@@ -352,13 +401,20 @@ func agentEventToChannelEvent(e agentpkg.StreamEvent) (channel.StreamEvent, bool
 	}
 }
 
+// loadTurnResponses loads every assistant/tool message ever persisted for
+// this session and decodes them into TR entries. There is no time-based cut
+// off on purpose: truncating TRs while RC is replayed in full from the events
+// table creates an asymmetric context (user messages visible, the bot's own
+// earlier replies missing) that confuses both the LLM and loop-detection.
+// Any size-bound trimming should happen later via compaction, not here.
 func (d *DiscussDriver) loadTurnResponses(ctx context.Context, sessionID string) []TurnResponseEntry {
 	if d.deps.MessageService == nil {
 		return nil
 	}
 
-	since := time.Now().UTC().Add(-24 * time.Hour)
-	msgs, err := d.deps.MessageService.ListActiveSinceBySession(ctx, sessionID, since)
+	// time.Unix(0, 0) is the Unix epoch; the underlying query uses
+	// `created_at >= $1`, so this effectively loads every session message.
+	msgs, err := d.deps.MessageService.ListActiveSinceBySession(ctx, sessionID, time.Unix(0, 0).UTC())
 	if err != nil {
 		d.logger.Warn("load TRs failed", slog.String("session_id", sessionID), slog.Any("error", err))
 		return nil

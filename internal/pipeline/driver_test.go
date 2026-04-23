@@ -208,6 +208,109 @@ func TestHandleReplyWithAgent_NoInlineWhenNoVision(t *testing.T) {
 	}
 }
 
+func TestAnchorFromTRs(t *testing.T) {
+	t.Parallel()
+
+	if got := anchorFromTRs(nil); got != 0 {
+		t.Fatalf("empty TRs anchor = %d, want 0", got)
+	}
+	got := anchorFromTRs([]TurnResponseEntry{
+		{RequestedAtMs: 100},
+		{RequestedAtMs: 500},
+		{RequestedAtMs: 300},
+	})
+	if got != 500 {
+		t.Fatalf("anchor = %d, want 500", got)
+	}
+}
+
+func TestLatestRCReceivedAtMs(t *testing.T) {
+	t.Parallel()
+
+	if got := latestRCReceivedAtMs(nil); got != 0 {
+		t.Fatalf("empty RC = %d, want 0", got)
+	}
+	got := latestRCReceivedAtMs(RenderedContext{
+		{ReceivedAtMs: 100},
+		{ReceivedAtMs: 900},
+		{ReceivedAtMs: 500, IsMyself: true},
+	})
+	if got != 900 {
+		t.Fatalf("latest = %d, want 900", got)
+	}
+}
+
+// TestHandleReplyWithAgent_ColdStartAnchoredByTR simulates idle-timeout
+// restart: the session's in-memory lastProcessedMs is 0, but RC replay has
+// brought back old user messages that were already answered in prior
+// LLM rounds (represented by TRs). The driver MUST NOT re-answer them.
+func TestHandleReplyWithAgent_ColdStartAnchoredByTR(t *testing.T) {
+	rc := RenderedContext{
+		{
+			ReceivedAtMs: 100,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="old">task 1</message>`}},
+		},
+	}
+
+	fakeAgent := &fakeDiscussStreamer{}
+	resolver := &fakeRunConfigResolver{}
+
+	driver := NewDiscussDriver(DiscussDriverDeps{
+		Pipeline:       NewPipeline(RenderParams{}),
+		Resolver:       resolver,
+		MessageService: nil,
+	})
+
+	sess := &discussSession{
+		config:          DiscussSessionConfig{BotID: "b", SessionID: "s"},
+		lastProcessedMs: 0,
+	}
+
+	// Simulate a previously answered round by pre-stuffing a TR newer than
+	// the RC segment's ReceivedAtMs. Since we cannot inject MessageService
+	// easily, we instead pre-set lastProcessedMs as the anchor would.
+	sess.lastProcessedMs = 200 // mimic anchorFromTRs result
+
+	driver.handleReplyWithAgent(context.Background(), sess, rc, driver.logger, fakeAgent)
+
+	if fakeAgent.lastConfig != nil {
+		t.Fatal("agent must not be invoked when all RC segments predate lastProcessedMs")
+	}
+}
+
+// TestHandleReplyWithAgent_CursorAdvancesToRCNotWallClock ensures that after
+// a turn we set lastProcessedMs to the max ReceivedAtMs actually consumed in
+// the RC snapshot, not time.Now(). This matters for messages that arrive
+// mid-turn: they end up in a fresher RC with ReceivedAtMs > cursor, which
+// correctly triggers the next round.
+func TestHandleReplyWithAgent_CursorAdvancesToRCNotWallClock(t *testing.T) {
+	rc := RenderedContext{
+		{
+			ReceivedAtMs: 777,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="x">hello</message>`}},
+		},
+	}
+	fakeAgent := &fakeDiscussStreamer{}
+	resolver := &fakeRunConfigResolver{}
+	driver := NewDiscussDriver(DiscussDriverDeps{
+		Pipeline: NewPipeline(RenderParams{}),
+		Resolver: resolver,
+	})
+	sess := &discussSession{
+		config:          DiscussSessionConfig{BotID: "b", SessionID: "s"},
+		lastProcessedMs: 0,
+	}
+
+	driver.handleReplyWithAgent(context.Background(), sess, rc, driver.logger, fakeAgent)
+
+	if fakeAgent.lastConfig == nil {
+		t.Fatal("expected agent to be invoked")
+	}
+	if sess.lastProcessedMs != 777 {
+		t.Fatalf("lastProcessedMs = %d, want 777 (max RC ReceivedAtMs)", sess.lastProcessedMs)
+	}
+}
+
 // --- Test helpers ---
 
 type fakeDiscussStreamer struct {
