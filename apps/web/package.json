@@ -3,6 +3,17 @@
   "private": true,
   "version": "0.7.1",
   "type": "module",
+  "exports": {
+    ".": "./src/main.ts",
+    "./main": "./src/main.ts",
+    "./App.vue": "./src/App.vue",
+    "./router": "./src/router.ts",
+    "./i18n": "./src/i18n.ts",
+    "./api-client": "./src/lib/api-client.ts",
+    "./lib/desktop-shell": "./src/lib/desktop-shell.ts",
+    "./style.css": "./src/style.css",
+    "./*": "./src/*"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -50,9 +61,6 @@
     "vue-router": "^4.6.4",
     "vue-sonner": "^2.0.9",
     "zod": "^4.3.5"
-  },
-  "optionalDependencies": {
-    "@tauri-apps/api": "^2"
   },
   "devDependencies": {
     "@memohai/config": "workspace:*",

@@ -1,15 +1,22 @@
+// Chat-window renderer entry. Owns its bootstrap chain so desktop can layer
+// on Electron-specific plugins / stores / providers without touching
+// @memohai/web. Pairs with `src/renderer/index.html`.
+
 import { createApp } from 'vue'
-import './style.css'
-import App from './App.vue'
-import router from './router'
-import { setupApiClient } from './lib/api-client'
-import 'animate.css'
 import { createPinia } from 'pinia'
-import i18n from './i18n'
 import { PiniaColada } from '@pinia/colada'
 import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
+
+import i18n from '@memohai/web/i18n'
+import { setupApiClient } from '@memohai/web/api-client'
+
+import '@memohai/web/style.css'
+import 'animate.css'
 import 'markstream-vue/index.css'
 import 'katex/dist/katex.min.css'
+
+import App from './chat/App.vue'
+import router from './chat/router'
 
 setupApiClient({
   onUnauthorized: () => router.replace({ name: 'Login' }),
