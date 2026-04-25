@@ -11,6 +11,7 @@ import (
 	stdpath "path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -76,6 +77,7 @@ import (
 	"github.com/memohai/memoh/internal/message/event"
 	"github.com/memohai/memoh/internal/messaging"
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/orchestration"
 	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 	"github.com/memohai/memoh/internal/policy"
 	"github.com/memohai/memoh/internal/providers"
@@ -782,6 +784,43 @@ func startHeartbeatService(lc fx.Lifecycle, heartbeatService *heartbeat.Service)
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			return heartbeatService.Bootstrap(ctx)
+		},
+	})
+}
+
+func startOrchestrationRuntime(lc fx.Lifecycle, orchestrationService *orchestration.Service) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	lc.Append(fx.Hook{
+		OnStart: func(_ context.Context) error {
+			wg.Add(3)
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunPlannerLoop(ctx)
+			}()
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunSchedulerLoop(ctx)
+			}()
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunRecoveryLoop(ctx)
+			}()
+			return nil
+		},
+		OnStop: func(stopCtx context.Context) error {
+			cancel()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				wg.Wait()
+			}()
+			select {
+			case <-stopCtx.Done():
+				return stopCtx.Err()
+			case <-done:
+				return nil
+			}
 		},
 	})
 }
