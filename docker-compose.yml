@@ -65,6 +65,7 @@ services:
     environment:
       MEMOH_DISPLAY_WEBRTC_UDP_PORT_MIN: "${MEMOH_DISPLAY_WEBRTC_UDP_PORT_MIN:-30000}"
       MEMOH_DISPLAY_WEBRTC_UDP_PORT_MAX: "${MEMOH_DISPLAY_WEBRTC_UDP_PORT_MAX:-30100}"
+      MEMOH_ORCHESTRATION_BUILTIN_VERIFYD: "false"
     volumes:
       - ${MEMOH_CONFIG:-./config.toml}:/app/config.toml:ro
       - ./conf/providers:/app/conf/providers:ro
@@ -86,6 +87,24 @@ services:
     networks:
       - memoh-network
 
+  verifyd:
+    image: memohai/server:latest
+    container_name: memoh-verifyd
+    entrypoint: ["/app/verifyd"]
+    healthcheck:
+      disable: true
+    environment:
+      CONFIG_PATH: /app/config.toml
+    volumes:
+      - ${MEMOH_CONFIG:-./config.toml}:/app/config.toml:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - memoh-network
+
   web:
     image: memohai/web:latest
     container_name: memoh-web
@@ -93,6 +112,7 @@ services:
       - "8082:8082"
     depends_on:
       - server
+      - verifyd
     restart: unless-stopped
     networks:
       - memoh-network
