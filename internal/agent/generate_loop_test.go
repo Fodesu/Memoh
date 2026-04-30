@@ -18,8 +18,27 @@ type staticToolProvider struct {
 	tools []sdk.Tool
 }
 
+type testToolCallObserver struct {
+	onStart  func(context.Context, ToolCallObservation) error
+	onFinish func(context.Context, ToolCallObservation) error
+}
+
 func (p staticToolProvider) Tools(context.Context, agenttools.SessionContext) ([]sdk.Tool, error) {
 	return p.tools, nil
+}
+
+func (o testToolCallObserver) OnToolCallStart(ctx context.Context, observation ToolCallObservation) error {
+	if o.onStart == nil {
+		return nil
+	}
+	return o.onStart(ctx, observation)
+}
+
+func (o testToolCallObserver) OnToolCallFinish(ctx context.Context, observation ToolCallObservation) error {
+	if o.onFinish == nil {
+		return nil
+	}
+	return o.onFinish(ctx, observation)
 }
 
 type atomicMockProvider struct {
@@ -175,6 +194,71 @@ func TestAgentGenerateStopsOnTextLoopAbort(t *testing.T) {
 	}
 	if modelProvider.calls.Load() >= 10 {
 		t.Fatalf("expected text loop to stop generation, got %d provider calls", modelProvider.calls.Load())
+	}
+}
+
+func TestWrapToolsWithObserverSeesExecutedToolCalls(t *testing.T) {
+	t.Parallel()
+
+	type observedCall struct {
+		toolCallID string
+		toolName   string
+		status     string
+	}
+	var observed []observedCall
+	observer := testToolCallObserver{
+		onStart: func(_ context.Context, observation ToolCallObservation) error {
+			observed = append(observed, observedCall{
+				toolCallID: observation.ToolCallID,
+				toolName:   observation.ToolName,
+				status:     "start",
+			})
+			return nil
+		},
+		onFinish: func(_ context.Context, observation ToolCallObservation) error {
+			status := "completed"
+			if observation.Err != nil {
+				status = "failed"
+			}
+			observed = append(observed, observedCall{
+				toolCallID: observation.ToolCallID,
+				toolName:   observation.ToolName,
+				status:     status,
+			})
+			return nil
+		},
+	}
+
+	wrapped := wrapToolsWithObserver([]sdk.Tool{{
+		Name:       "observe_tool",
+		Parameters: &jsonschema.Schema{Type: "object"},
+		Execute: func(_ *sdk.ToolExecContext, input any) (any, error) {
+			args, _ := input.(map[string]any)
+			return map[string]any{"echo": args["value"]}, nil
+		},
+	}}, observer)
+
+	result, err := wrapped[0].Execute(&sdk.ToolExecContext{
+		Context:    context.Background(),
+		ToolCallID: "call-observed",
+		ToolName:   "observe_tool",
+	}, map[string]any{"value": 31})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	got, ok := result.(map[string]any)
+	if !ok || got["echo"] != 31 {
+		t.Fatalf("Execute() result = %#v, want echo 31", result)
+	}
+
+	if len(observed) != 2 {
+		t.Fatalf("observed count = %d, want 2", len(observed))
+	}
+	if observed[0].status != "start" || observed[1].status != "completed" {
+		t.Fatalf("observed statuses = %#v, want start then completed", observed)
+	}
+	if observed[0].toolCallID != "call-observed" || observed[1].toolCallID != "call-observed" {
+		t.Fatalf("observed tool call ids = %#v, want call-observed", observed)
 	}
 }
 
