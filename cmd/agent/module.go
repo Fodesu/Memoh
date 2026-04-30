@@ -49,6 +49,7 @@ func options() fx.Option {
 			provideDBConn,
 			provideSQLiteConn,
 			providePostgresStore,
+			providePostgresSQLC,
 			provideSQLiteStore,
 			provideDBQueries,
 			provideAccountStore,
@@ -149,6 +150,7 @@ func options() fx.Option {
 		),
 		fx.Invoke(
 			injectToolProviders,
+			configureOrchestrationStartRunPlanner,
 			startRegistrySync,
 			startAudioProviderBootstrap,
 			startMemoryProviderBootstrap,
