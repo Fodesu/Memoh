@@ -19,6 +19,7 @@ import (
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
+	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/oauthctx"
 	"github.com/memohai/memoh/internal/orchestration"
@@ -35,6 +36,7 @@ const (
 type Runtime struct {
 	logger          *slog.Logger
 	queries         *sqlc.Queries
+	storeQueries    dbstore.Queries
 	settingsService *settings.Service
 	modelsService   *models.Service
 	agent           *agentpkg.Agent
@@ -71,6 +73,7 @@ func NewRuntime(
 	return &Runtime{
 		logger:          log.With(slog.String("component", "orchestration_llm_runtime")),
 		queries:         queries,
+		storeQueries:    postgresstore.NewQueries(queries),
 		settingsService: settingsService,
 		modelsService:   modelsService,
 		agent:           agent,

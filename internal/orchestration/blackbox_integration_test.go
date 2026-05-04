@@ -1534,6 +1534,7 @@ func setupBlackboxHarness(t *testing.T, opts blackboxHarnessOptions) *blackboxHa
 	}
 	queries := sqlc.New(appPool)
 	storeQueries := postgresstore.NewQueries(queries)
+	accountStore := postgresstore.NewWithPool(appPool, queries)
 	createBlackboxAdminUser(t, queries, "admin", "admin123", "test@memoh.local")
 
 	logger := slog.New(slog.DiscardHandler)
@@ -2209,6 +2210,10 @@ func (h *blackboxHarness) createLLMBot(t *testing.T, providerBaseURL string) str
 		TranscriptionModelID:   pgtype.UUID{},
 		PersistFullToolResults: false,
 		ShowToolCallsInIm:      false,
+		ToolApprovalConfig:     mustMarshalJSON(t, settings.DefaultToolApprovalConfig()),
+		OverlayProvider:        "",
+		OverlayEnabled:         false,
+		OverlayConfig:          []byte("{}"),
 		ID:                     bot.ID,
 	}); err != nil {
 		t.Fatalf("UpsertBotSettings() error = %v", err)
@@ -2279,7 +2284,7 @@ func postgresConfigFromTestDSN() (config.PostgresConfig, error) {
 }
 
 func migrateBlackboxDatabase(dbCfg config.PostgresConfig) error {
-	sub, err := fs.Sub(dbembed.MigrationsFS, "migrations")
+	sub, err := fs.Sub(dbembed.MigrationsFS, "postgres/migrations")
 	if err != nil {
 		return err
 	}
@@ -2360,6 +2365,9 @@ jwt_secret = %q
 jwt_expires_in = "24h"
 
 timezone = "Asia/Shanghai"
+
+[container]
+backend = "docker"
 
 [postgres]
 host = %q
