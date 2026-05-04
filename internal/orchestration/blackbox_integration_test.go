@@ -38,6 +38,7 @@ import (
 	"github.com/memohai/memoh/internal/config"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
 	"github.com/memohai/memoh/internal/handlers"
 	"github.com/memohai/memoh/internal/models"
 	orch "github.com/memohai/memoh/internal/orchestration"
@@ -1508,7 +1509,7 @@ func setupBlackboxHarness(t *testing.T, opts blackboxHarnessOptions) *blackboxHa
 	dbName := "memoh_orch_blackbox_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	adminCfg := dbCfg
 	adminCfg.Database = "postgres"
-	adminPool, err := db.Open(context.Background(), adminCfg)
+	adminPool, err := db.OpenPostgres(context.Background(), adminCfg)
 	if err != nil {
 		t.Skipf("skip blackbox test: open admin db: %v", err)
 	}
@@ -1525,23 +1526,24 @@ func setupBlackboxHarness(t *testing.T, opts blackboxHarnessOptions) *blackboxHa
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	appPool, err := db.Open(ctx, dbCfg)
+	appPool, err := db.OpenPostgres(ctx, dbCfg)
 	if err != nil {
 		cancel()
 		dropBlackboxDatabase(t, adminCfg, dbName)
 		t.Fatalf("open app db: %v", err)
 	}
 	queries := sqlc.New(appPool)
+	storeQueries := postgresstore.NewQueries(queries)
 	createBlackboxAdminUser(t, queries, "admin", "admin123", "test@memoh.local")
 
 	logger := slog.New(slog.DiscardHandler)
 	service := orch.NewService(logger, appPool, queries)
-	botService := bots.NewService(logger, queries)
+	botService := bots.NewService(logger, storeQueries)
 	plannerRuntime := orchestrationexec.NewRuntime(
 		logger,
 		queries,
-		settings.NewService(logger, queries, nil),
-		models.NewService(logger, queries),
+		settings.NewService(logger, storeQueries, nil, nil),
+		models.NewService(logger, storeQueries),
 		agentpkg.New(agentpkg.Deps{Logger: logger}),
 		time.UTC,
 	)
@@ -1565,7 +1567,7 @@ func setupBlackboxHarness(t *testing.T, opts blackboxHarnessOptions) *blackboxHa
 		return path == "/auth/login" || path == "/ping"
 	}))
 	e.GET("/ping", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
-	handlers.NewAuthHandler(logger, accounts.NewService(logger, queries), blackboxJWTSecret, 24*time.Hour).Register(e)
+	handlers.NewAuthHandler(logger, accounts.NewService(logger, postgresstore.NewWithQueries(queries)), blackboxJWTSecret, 24*time.Hour).Register(e)
 	handlers.NewOrchestrationHandler(logger, service, botService).Register(e)
 
 	serverErrCh := make(chan error, 1)
@@ -2205,7 +2207,6 @@ func (h *blackboxHarness) createLLMBot(t *testing.T, providerBaseURL string) str
 		ImageModelID:           pgtype.UUID{},
 		TtsModelID:             pgtype.UUID{},
 		TranscriptionModelID:   pgtype.UUID{},
-		BrowserContextID:       pgtype.UUID{},
 		PersistFullToolResults: false,
 		ShowToolCallsInIm:      false,
 		ID:                     bot.ID,
@@ -2324,7 +2325,7 @@ func createBlackboxAdminUser(t *testing.T, queries *sqlc.Queries, username, pass
 
 func dropBlackboxDatabase(t *testing.T, adminCfg config.PostgresConfig, dbName string) {
 	t.Helper()
-	pool, err := db.Open(context.Background(), adminCfg)
+	pool, err := db.OpenPostgres(context.Background(), adminCfg)
 	if err != nil {
 		t.Fatalf("open admin db for cleanup: %v", err)
 	}

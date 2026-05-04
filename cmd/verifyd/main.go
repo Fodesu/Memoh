@@ -20,9 +20,10 @@ import (
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
 	"github.com/memohai/memoh/internal/boot"
 	"github.com/memohai/memoh/internal/config"
-	ctr "github.com/memohai/memoh/internal/containerd"
+	ctr "github.com/memohai/memoh/internal/container/provider"
 	"github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
+	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
 	"github.com/memohai/memoh/internal/logger"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/orchestration"
@@ -54,7 +55,7 @@ func run() error {
 	logger.Init(cfg.Log.Level, cfg.Log.Format)
 	log := logger.L.With(slog.String("component", "verifyd"))
 
-	pool, err := db.Open(ctx, cfg.Postgres)
+	pool, err := db.OpenPostgres(ctx, cfg.Postgres)
 	if err != nil {
 		return fmt.Errorf("db connect: %w", err)
 	}
@@ -322,7 +323,8 @@ func buildLLMRuntime(
 	if err != nil {
 		return nil, nil, err
 	}
-	manager := workspace.NewManager(log, containerSvc, cfg.Workspace, cfg.Containerd.Namespace, pool)
+	manager := workspace.NewManager(log, containerSvc, nil, cfg.Workspace, cfg.Containerd.Namespace, pool)
+	storeQueries := postgresstore.NewQueries(queries)
 	a := agentpkg.New(agentpkg.Deps{
 		BridgeProvider: manager,
 		Logger:         log,
@@ -333,8 +335,8 @@ func buildLLMRuntime(
 	return orchestrationexec.NewRuntime(
 		log,
 		queries,
-		settings.NewService(log, queries, nil),
-		models.NewService(log, queries),
+		settings.NewService(log, storeQueries, nil, nil),
+		models.NewService(log, storeQueries),
 		a,
 		rc.TimezoneLocation,
 	), cleanup, nil

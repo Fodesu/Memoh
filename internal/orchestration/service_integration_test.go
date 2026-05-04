@@ -57,7 +57,7 @@ func setupOrchestrationIntegrationTest(t *testing.T) (*Service, *pgxpool.Pool, f
 	dbName := "memoh_orch_integration_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	adminCfg := dbCfg
 	adminCfg.Database = "postgres"
-	adminPool, err := db.Open(ctx, adminCfg)
+	adminPool, err := db.OpenPostgres(ctx, adminCfg)
 	if err != nil {
 		t.Skipf("skip integration test: open admin database: %v", err)
 	}
@@ -73,7 +73,7 @@ func setupOrchestrationIntegrationTest(t *testing.T) (*Service, *pgxpool.Pool, f
 		t.Fatalf("migrate orchestration integration database: %v", err)
 	}
 
-	pool, err := db.Open(ctx, dbCfg)
+	pool, err := db.OpenPostgres(ctx, dbCfg)
 	if err != nil {
 		dropOrchestrationIntegrationDatabase(t, adminCfg, dbName)
 		t.Fatalf("open orchestration integration database: %v", err)
@@ -117,7 +117,7 @@ func migrateOrchestrationIntegrationDatabase(dbCfg config.PostgresConfig) error 
 func dropOrchestrationIntegrationDatabase(t *testing.T, adminCfg config.PostgresConfig, dbName string) {
 	t.Helper()
 
-	pool, err := db.Open(context.Background(), adminCfg)
+	pool, err := db.OpenPostgres(context.Background(), adminCfg)
 	if err != nil {
 		t.Fatalf("open admin database for cleanup: %v", err)
 	}

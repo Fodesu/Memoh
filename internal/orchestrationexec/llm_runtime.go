@@ -18,6 +18,7 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/oauthctx"
 	"github.com/memohai/memoh/internal/orchestration"
@@ -760,7 +761,7 @@ func (r *Runtime) buildBotRunConfig(ctx context.Context, botID, ownerSubject str
 		reasoningConfig = &models.ReasoningConfig{Enabled: true, Effort: reasoningEffort}
 	}
 
-	credentialsResolver := providers.NewService(nil, r.queries, "")
+	credentialsResolver := providers.NewService(nil, postgresstore.NewQueries(r.queries), "")
 	authCtx := oauthctx.WithUserID(ctx, ownerSubject)
 	creds, err := credentialsResolver.ResolveModelCredentials(authCtx, provider)
 	if err != nil {
@@ -810,7 +811,7 @@ resolved:
 	if model.Type != models.ModelTypeChat {
 		return models.GetResponse{}, sqlc.Provider{}, errors.New("configured bot chat model is not a chat model")
 	}
-	provider, err := models.FetchProviderByID(ctx, r.queries, model.ProviderID)
+	provider, err := models.FetchProviderByID(ctx, postgresstore.NewQueries(r.queries), model.ProviderID)
 	if err != nil {
 		return models.GetResponse{}, sqlc.Provider{}, fmt.Errorf("load provider: %w", err)
 	}
