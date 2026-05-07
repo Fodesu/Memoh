@@ -367,10 +367,12 @@ func TestRunReturnsErrorOnServerClose(t *testing.T) {
 	}
 }
 
-// TestRunHandshakeFailure verifies that a non-101 upgrade response is parsed
-// into a typed lark error so callers can branch on terminal vs recoverable
-// failures.
-func TestRunHandshakeFailure(t *testing.T) {
+// TestRunHandshakeExceedConnLimitIsTransient verifies that
+// AuthFailed+ExceedConnLimit surfaces as *larkws.ServerError so the
+// caller's reconnect loop keeps trying. Stale Feishu conns expire on
+// the server side and free up slots, so giving up here would leave
+// the channel disconnected until manual intervention.
+func TestRunHandshakeExceedConnLimitIsTransient(t *testing.T) {
 	t.Parallel()
 	gw := newMockGateway(t)
 	gw.handshakeStatus = larkws.AuthFailed
@@ -386,9 +388,37 @@ func TestRunHandshakeFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected handshake error, got nil")
 	}
+	var se *larkws.ServerError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *larkws.ServerError so reconnect retries, got %T (%v)", err, err)
+	}
+	if se.Code != larkws.AuthFailed {
+		t.Errorf("ServerError code = %d, want %d", se.Code, larkws.AuthFailed)
+	}
+}
+
+// TestRunHandshakeAuthFailedIsTerminal verifies that a real auth
+// failure (no ExceedConnLimit subcode) surfaces as *larkws.ClientError
+// so the caller stops retrying instead of hammering the API.
+func TestRunHandshakeAuthFailedIsTerminal(t *testing.T) {
+	t.Parallel()
+	gw := newMockGateway(t)
+	gw.handshakeStatus = larkws.AuthFailed
+	gw.handshakeAuthCode = 0
+	gw.handshakeStatusMsg = "bad credentials"
+
+	disp := &fakeDispatcher{}
+	client := newTestClient(gw.domain())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := client.Run(ctx, disp)
+	if err == nil {
+		t.Fatal("expected handshake error, got nil")
+	}
 	var ce *larkws.ClientError
 	if !errors.As(err, &ce) {
-		t.Fatalf("expected *larkws.ClientError, got %T (%v)", err, err)
+		t.Fatalf("expected *larkws.ClientError so reconnect stops, got %T (%v)", err, err)
 	}
 	if ce.Code != larkws.AuthFailed {
 		t.Errorf("ClientError code = %d, want %d", ce.Code, larkws.AuthFailed)
@@ -772,4 +802,136 @@ func TestFragmentCacheTTLEviction(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("expired fragment was not evicted")
+}
+
+// TestRunWaitsForInFlightDispatch verifies that when ctx is cancelled
+// mid-dispatch, Run waits for the goroutine to finish before returning.
+// Otherwise a follow-up Connect would race the live handler.
+func TestRunWaitsForInFlightDispatch(t *testing.T) {
+	t.Parallel()
+	gw := newMockGateway(t)
+
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	disp := &fakeDispatcher{
+		respFn: func([]byte) (interface{}, error) {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+			<-finished
+			return nil, nil
+		},
+	}
+
+	gw.upgradeHook = func(conn *websocket.Conn) {
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			_ = gw.pushEvent(conn, "msg-1", `{"hello":"world"}`)
+		}()
+	}
+
+	client := newTestClient(gw.domain(), func(c *Config) {
+		c.PingInterval = 1 * time.Hour
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx, disp) }()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		cancel()
+		close(finished)
+		t.Fatalf("dispatcher was never invoked")
+	}
+
+	cancel()
+
+	// Run should stay blocked while the dispatch goroutine is
+	// still inside respFn.
+	select {
+	case err := <-runDone:
+		close(finished)
+		t.Fatalf("Run returned (err=%v) before dispatcher finished", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(finished)
+
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after dispatcher unblocked")
+	}
+}
+
+// TestSpawnDispatchRecoversPanic verifies that a panicking dispatcher
+// does not crash the process: the bad frame is dropped (no ack) and a
+// subsequent good frame still flows through.
+func TestSpawnDispatchRecoversPanic(t *testing.T) {
+	t.Parallel()
+	gw := newMockGateway(t)
+
+	var dispatchCount atomic.Int64
+	disp := &fakeDispatcher{
+		respFn: func([]byte) (interface{}, error) {
+			if dispatchCount.Add(1) == 1 {
+				panic("synthetic dispatcher boom")
+			}
+			return nil, nil
+		},
+	}
+
+	goodAck := make(chan string, 1)
+	gw.upgradeHook = func(conn *websocket.Conn) {
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			_ = gw.pushEvent(conn, "msg-bad", `{}`)
+			time.Sleep(50 * time.Millisecond)
+			_ = gw.pushEvent(conn, "msg-good", `{}`)
+
+			for i := 0; i < 3; i++ {
+				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				frame, err := gw.readResponseFrame(conn)
+				if err != nil {
+					return
+				}
+				id := larkws.Headers(frame.Headers).GetString(larkws.HeaderMessageID)
+				if id == "msg-good" {
+					select {
+					case goodAck <- id:
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+
+	client := newTestClient(gw.domain(), func(c *Config) {
+		c.PingInterval = 1 * time.Hour
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx, disp) }()
+
+	select {
+	case <-goodAck:
+	case <-time.After(3 * time.Second):
+		cancel()
+		<-runDone
+		t.Fatal("good ack never arrived; recover may have failed to keep the session alive")
+	}
+
+	cancel()
+	<-runDone
+
+	if got := dispatchCount.Load(); got < 2 {
+		t.Errorf("dispatchCount = %d, want >= 2 (both frames reached the dispatcher)", got)
+	}
 }

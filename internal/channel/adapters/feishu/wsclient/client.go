@@ -26,8 +26,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -147,9 +149,9 @@ func (c *Client) Run(ctx context.Context, dispatcher EventDispatcher) error {
 		dispatcher:    dispatcher,
 		serviceID:     serviceID,
 		connID:        connID,
-		pingInterval:  pingInterval,
 		fragmentCache: newFragmentCache(5 * time.Second),
 	}
+	session.pingIntervalNs.Store(int64(pingInterval))
 	defer session.fragmentCache.stop()
 	return session.run(ctx)
 }
@@ -164,10 +166,18 @@ type session struct {
 	serviceID string
 	connID    string
 
-	writeMu      sync.Mutex
-	pingInterval time.Duration
+	writeMu sync.Mutex
+	// pingIntervalNs holds the active ping cadence in nanoseconds.
+	// Atomic because handleControl (readLoop goroutine) writes and
+	// pingLoop reads.
+	pingIntervalNs atomic.Int64
 
 	fragmentCache *fragmentCache
+
+	// dispatchWG counts live handleData goroutines. run waits on it
+	// before returning so a follow-up Connect can't race a handler
+	// still using the old conn.
+	dispatchWG sync.WaitGroup
 
 	closeOnce sync.Once
 }
@@ -197,11 +207,13 @@ func (s *session) run(ctx context.Context) error {
 
 	readErr := s.readLoop(sessionCtx)
 
-	// Drain pingLoop and the close goroutine so run never returns
-	// with helpers still in flight.
+	// Wait for pingLoop, the close goroutine, and dispatch workers
+	// before returning. Otherwise the feishu adapter's Stop unblocks
+	// while a handler is still running on the old conn.
 	cancelSession()
 	<-pingDone
 	<-closeDone
+	s.dispatchWG.Wait()
 
 	if ctx.Err() != nil {
 		// Caller canceled; treat any read-side error as the expected
@@ -250,7 +262,7 @@ func (s *session) readLoop(ctx context.Context) error {
 }
 
 func (s *session) pingLoop(ctx context.Context) {
-	ticker := time.NewTicker(s.pingInterval)
+	ticker := time.NewTicker(s.pingInterval())
 	defer ticker.Stop()
 	for {
 		select {
@@ -265,6 +277,10 @@ func (s *session) pingLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (s *session) pingInterval() time.Duration {
+	return time.Duration(s.pingIntervalNs.Load())
 }
 
 func (s *session) sendPing() error {
@@ -294,13 +310,35 @@ func (s *session) handleFrame(ctx context.Context, raw []byte) {
 	case larkws.FrameTypeControl:
 		s.handleControl(frame)
 	case larkws.FrameTypeData:
-		// dispatcher.Do can run slow HTTP enrichment in the user
-		// handler; off-loading keeps it from stalling the next read
-		// and the server's pong.
-		go s.handleData(ctx, frame)
+		s.spawnDispatch(ctx, frame)
 	default:
 		s.client.logger.Debug("unknown frame method", slog.Int("method", int(frame.Method)))
 	}
+}
+
+// spawnDispatch runs handleData in a goroutine with panic recovery.
+// readLoop returns immediately so the next frame can be read while
+// dispatcher.Do is still running.
+func (s *session) spawnDispatch(ctx context.Context, frame larkws.Frame) {
+	s.dispatchWG.Add(1)
+	go func(f larkws.Frame) {
+		defer s.dispatchWG.Done()
+		// Recover panics from dispatcher.Do or user-registered
+		// event callbacks. Without this, a single bad payload or
+		// buggy callback crashes the whole process; we'd rather
+		// drop one ack and keep the channel alive.
+		defer func() {
+			if r := recover(); r != nil {
+				msgID := larkws.Headers(f.Headers).GetString(larkws.HeaderMessageID)
+				s.client.logger.Error("dispatch panic recovered",
+					slog.String("message_id", msgID),
+					slog.Any("panic", r),
+					slog.String("stack", string(debug.Stack())),
+				)
+			}
+		}()
+		s.handleData(ctx, f)
+	}(frame)
 }
 
 func (s *session) handleControl(frame larkws.Frame) {
@@ -319,15 +357,15 @@ func (s *session) handleControl(frame larkws.Frame) {
 	}
 	if cfg.PingInterval > 0 {
 		next := time.Duration(cfg.PingInterval) * time.Second
-		if next != s.pingInterval {
+		// Swap returns the previous value, which lets us log the
+		// transition without a separate read. The running ticker
+		// keeps the old cadence until the next reconnect; re-arming
+		// mid-flight isn't worth the extra plumbing.
+		if prev := time.Duration(s.pingIntervalNs.Swap(int64(next))); prev != next {
 			s.client.logger.Debug("server adjusted ping interval",
-				slog.Duration("old", s.pingInterval),
+				slog.Duration("old", prev),
 				slog.Duration("new", next),
 			)
-			s.pingInterval = next
-			// The running ticker keeps the old cadence until the
-			// next reconnect; re-arming mid-flight isn't worth the
-			// extra plumbing.
 		}
 	}
 }
@@ -470,9 +508,13 @@ func parseHandshakeError(resp *http.Response) error {
 		authStr := resp.Header.Get(larkws.HeaderHandshakeAuthErrCode)
 		authCode, _ := strconv.Atoi(authStr)
 		if authCode == larkws.ExceedConnLimit {
-			return larkws.NewClientError(code, msg)
+			// ExceedConnLimit is transient: stale conns expire on
+			// the server side and free up slots, so let the
+			// reconnect loop keep trying instead of giving up.
+			return larkws.NewServerError(code, msg)
 		}
-		return larkws.NewServerError(code, msg)
+		// Real auth failure (bad creds, expired secret) is terminal.
+		return larkws.NewClientError(code, msg)
 	case larkws.Forbidden:
 		return larkws.NewClientError(code, msg)
 	default:

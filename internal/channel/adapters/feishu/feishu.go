@@ -15,6 +15,7 @@ import (
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/channel/adapters/feishu/wsclient"
@@ -402,12 +403,25 @@ func (a *FeishuAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 			if connCtx.Err() != nil {
 				return
 			}
-			if a.logger != nil {
-				if err != nil {
-					a.logger.Error("websocket client exited", slog.String("config_id", cfg.ID), slog.Any("error", err))
-				} else {
-					a.logger.Warn("websocket client exited without error; reconnecting", slog.String("config_id", cfg.ID))
+			if err != nil {
+				// Client-side errors (auth failed, forbidden) are
+				// terminal. Retrying just hammers the API.
+				var ce *larkws.ClientError
+				if errors.As(err, &ce) {
+					if a.logger != nil {
+						a.logger.Error("websocket client error; not reconnecting",
+							slog.String("config_id", cfg.ID),
+							slog.Int("code", ce.Code),
+							slog.Any("error", err),
+						)
+					}
+					return
 				}
+				if a.logger != nil {
+					a.logger.Error("websocket client exited", slog.String("config_id", cfg.ID), slog.Any("error", err))
+				}
+			} else if a.logger != nil {
+				a.logger.Warn("websocket client exited without error; reconnecting", slog.String("config_id", cfg.ID))
 			}
 			timer := time.NewTimer(reconnectDelay)
 			select {
