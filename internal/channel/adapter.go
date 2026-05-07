@@ -209,6 +209,15 @@ func (c *BaseConnection) Stop(ctx context.Context) error {
 	return nil
 }
 
+// MarkStopped flags the connection as no longer running without
+// invoking its stop function. Adapters call this from internal
+// goroutines that have given up (terminal protocol error etc.) so
+// the manager's Running() check reflects reality and reconciliation
+// can act on it.
+func (c *BaseConnection) MarkStopped() {
+	c.running.Store(false)
+}
+
 // Running reports whether the connection is still active.
 func (c *BaseConnection) Running() bool {
 	return c.running.Load()

@@ -381,11 +381,30 @@ func (a *FeishuAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 	feishuCfg.registerIMErrorSecrets()
 	eventDispatcher := a.buildEventDispatcher(connCtx, cfg, feishuCfg, botOpenID, handler)
 
-	// done closes after the reconnect goroutine returns, which only
-	// happens once the in-flight wsclient.Run has torn down its
-	// websocket. Stop blocks on it so a follow-up Connect can't race a
-	// stale conn.
+	// done closes when the reconnect goroutine exits, which only
+	// happens after wsclient.Run tears down its websocket. Stop
+	// waits on it so a follow-up Connect can't race a stale conn.
 	done := make(chan struct{})
+
+	stop := func(stopCtx context.Context) error {
+		cancel()
+		select {
+		case <-done:
+			return nil
+		case <-stopCtx.Done():
+			// Return the error so Manager.ensureConnection won't
+			// start a replacement while the old goroutine may
+			// still hold a websocket.
+			if a.logger != nil {
+				a.logger.Warn("stop timed out waiting for goroutine to exit",
+					slog.String("config_id", cfg.ID),
+					slog.Any("error", stopCtx.Err()),
+				)
+			}
+			return stopCtx.Err()
+		}
+	}
+	conn := channel.NewConnection(cfg, stop)
 	go func() {
 		defer close(done)
 		const reconnectDelay = 3 * time.Second
@@ -405,7 +424,9 @@ func (a *FeishuAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 			}
 			if err != nil {
 				// Client-side errors (auth failed, forbidden) are
-				// terminal. Retrying just hammers the API.
+				// terminal. Retrying just hammers the API; flip
+				// running to false so Manager.refresh sees the
+				// channel as down instead of silently healthy.
 				var ce *larkws.ClientError
 				if errors.As(err, &ce) {
 					if a.logger != nil {
@@ -415,6 +436,7 @@ func (a *FeishuAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 							slog.Any("error", err),
 						)
 					}
+					conn.MarkStopped()
 					return
 				}
 				if a.logger != nil {
@@ -432,26 +454,7 @@ func (a *FeishuAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 			}
 		}
 	}()
-
-	stop := func(stopCtx context.Context) error {
-		cancel()
-		select {
-		case <-done:
-			return nil
-		case <-stopCtx.Done():
-			// Returning the error makes Manager.ensureConnection refuse
-			// to start a replacement while the old goroutine may still
-			// hold a websocket.
-			if a.logger != nil {
-				a.logger.Warn("stop timed out waiting for goroutine to exit",
-					slog.String("config_id", cfg.ID),
-					slog.Any("error", stopCtx.Err()),
-				)
-			}
-			return stopCtx.Err()
-		}
-	}
-	return channel.NewConnection(cfg, stop), nil
+	return conn, nil
 }
 
 // buildEventDispatcher returns the lark SDK dispatcher that decodes

@@ -249,6 +249,32 @@ func (*mockGateway) readResponseFrame(conn *websocket.Conn) (*larkws.Frame, erro
 	return frame, nil
 }
 
+// writeServerPong sends a pong frame from the server side carrying an
+// optional ClientConfig payload. The client treats the embedded
+// PingInterval as a cadence update via handleControl.
+func writeServerPong(conn *websocket.Conn, cfg *larkws.ClientConfig) error {
+	headers := larkws.Headers{}
+	headers.Add(larkws.HeaderType, string(larkws.MessageTypePong))
+	var payload []byte
+	if cfg != nil {
+		bs, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		payload = bs
+	}
+	frame := &larkws.Frame{
+		Method:  int32(larkws.FrameTypeControl),
+		Headers: headers,
+		Payload: payload,
+	}
+	bs, err := frame.Marshal()
+	if err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.BinaryMessage, bs)
+}
+
 func newTestClient(domain string, overrides ...func(*Config)) *Client {
 	cfg := Config{
 		AppID:            "app",
@@ -781,27 +807,110 @@ func TestRunDispatchesEventsConcurrently(t *testing.T) {
 	}
 }
 
-// TestFragmentCacheTTLEviction confirms incomplete fragments are not
-// retained forever.
-func TestFragmentCacheTTLEviction(t *testing.T) {
+// TestRunReadDeadlineFiresOnSilentServer verifies that a server which
+// upgrades and then sends nothing trips ReadIdleTimeout instead of
+// hanging on OS keepalive.
+func TestRunReadDeadlineFiresOnSilentServer(t *testing.T) {
 	t.Parallel()
-	c := newFragmentCache(20 * time.Millisecond)
-	defer c.stop()
-	if got := c.add("k", 2, 0, []byte("foo")); got != nil {
-		t.Errorf("expected nil while incomplete, got %q", got)
+	gw := newMockGateway(t)
+
+	// No upgradeHook: the server accepts the upgrade and then goes
+	// silent. PingInterval=1h keeps ping traffic out of the picture
+	// so the read deadline is what's being tested.
+	client := newTestClient(gw.domain(), func(c *Config) {
+		c.PingInterval = 1 * time.Hour
+		c.ReadIdleTimeout = 80 * time.Millisecond
+	})
+
+	disp := &fakeDispatcher{}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx, disp) }()
+
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatalf("Run returned nil; expected read deadline error")
+		}
+		if !strings.Contains(err.Error(), "ws read") {
+			t.Fatalf("expected ws read error, got: %v", err)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatalf("Run did not return within ReadIdleTimeout budget")
 	}
-	// Wait for the janitor to evict.
-	deadline := time.Now().Add(500 * time.Millisecond)
+}
+
+// TestSpawnDispatchCapsConcurrency verifies that a blocking dispatcher
+// never runs more than dispatchConcurrency goroutines at once, even
+// when the server floods frames.
+func TestSpawnDispatchCapsConcurrency(t *testing.T) {
+	t.Parallel()
+	gw := newMockGateway(t)
+
+	var inflight, peak int64
+	release := make(chan struct{})
+	disp := &fakeDispatcher{
+		respFn: func([]byte) (interface{}, error) {
+			cur := atomic.AddInt64(&inflight, 1)
+			for {
+				old := atomic.LoadInt64(&peak)
+				if cur <= old || atomic.CompareAndSwapInt64(&peak, old, cur) {
+					break
+				}
+			}
+			<-release
+			atomic.AddInt64(&inflight, -1)
+			return nil, nil
+		},
+	}
+
+	const totalFrames = dispatchConcurrency * 4
+	gw.upgradeHook = func(conn *websocket.Conn) {
+		go func() {
+			for i := 0; i < totalFrames; i++ {
+				_ = gw.pushEvent(conn, fmt.Sprintf("m-%d", i), `{}`)
+			}
+		}()
+	}
+
+	client := newTestClient(gw.domain(), func(c *Config) {
+		c.PingInterval = 1 * time.Hour
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx, disp) }()
+
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		c.mu.Lock()
-		_, exists := c.items["k"]
-		c.mu.Unlock()
-		if !exists {
-			return
+		if atomic.LoadInt64(&inflight) >= int64(dispatchConcurrency) {
+			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("expired fragment was not evicted")
+	if got := atomic.LoadInt64(&inflight); got != int64(dispatchConcurrency) {
+		close(release)
+		cancel()
+		<-runDone
+		t.Fatalf("inflight=%d did not reach cap=%d", got, dispatchConcurrency)
+	}
+
+	// Give readLoop time to over-spawn if the cap were missing.
+	time.Sleep(100 * time.Millisecond)
+	if got := atomic.LoadInt64(&peak); got > int64(dispatchConcurrency) {
+		close(release)
+		cancel()
+		<-runDone
+		t.Fatalf("peak=%d exceeds cap=%d", got, dispatchConcurrency)
+	}
+
+	close(release)
+	cancel()
+	if err := <-runDone; err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
 }
 
 // TestRunWaitsForInFlightDispatch verifies that when ctx is cancelled
@@ -865,6 +974,129 @@ func TestRunWaitsForInFlightDispatch(t *testing.T) {
 	case <-runDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after dispatcher unblocked")
+	}
+}
+
+// TestFetchEndpointHonorsTimeout verifies that a hung HTTP endpoint
+// trips EndpointTimeout instead of stalling on the caller's longer
+// ctx, so the reconnect loop keeps moving.
+func TestFetchEndpointHonorsTimeout(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Hijack so the test owns the conn; otherwise srv.Close
+		// blocks on idle keep-alive teardown after the client
+		// times out.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "no hijacker", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		// Block until the client closes its half once
+		// EndpointTimeout fires. The 5s ceiling guards a hung test.
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		buf := make([]byte, 64)
+		_, _ = conn.Read(buf)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(srv.URL, func(c *Config) {
+		c.EndpointTimeout = 100 * time.Millisecond
+	})
+
+	disp := &fakeDispatcher{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx, disp) }()
+
+	select {
+	case err := <-runDone:
+		elapsed := time.Since(start)
+		if err == nil {
+			t.Fatalf("expected error from EndpointTimeout, got nil")
+		}
+		if elapsed > 1*time.Second {
+			t.Fatalf("Run took %v, expected ~EndpointTimeout=100ms", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Run did not return within EndpointTimeout budget")
+	}
+}
+
+// TestRunReArmsPingTickerOnServerCadenceChange verifies that pingLoop
+// picks up cadence updates from the server's pong. Without ticker
+// re-arming, the gateway would see ~10 pings per 2s at the original
+// 200ms cadence; once re-armed to the server's 1s cadence it should
+// see at most a handful.
+func TestRunReArmsPingTickerOnServerCadenceChange(t *testing.T) {
+	t.Parallel()
+	gw := newMockGateway(t)
+
+	var pingCount atomic.Int64
+	pongSent := make(chan struct{})
+	gw.upgradeHook = func(conn *websocket.Conn) {
+		go func() {
+			var pongOnce sync.Once
+			for {
+				mt, raw, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				if mt != websocket.BinaryMessage {
+					continue
+				}
+				frame := &larkws.Frame{}
+				if err := frame.Unmarshal(raw); err != nil {
+					continue
+				}
+				if larkws.MessageType(larkws.Headers(frame.Headers).GetString(larkws.HeaderType)) != larkws.MessageTypePing {
+					continue
+				}
+				pingCount.Add(1)
+				pongOnce.Do(func() {
+					_ = writeServerPong(conn, &larkws.ClientConfig{PingInterval: 1})
+					close(pongSent)
+				})
+			}
+		}()
+	}
+
+	disp := &fakeDispatcher{}
+	client := newTestClient(gw.domain(), func(c *Config) {
+		c.PingInterval = 200 * time.Millisecond
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx, disp) }()
+
+	select {
+	case <-pongSent:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-runDone
+		t.Fatal("server never received the first ping within 2s")
+	}
+
+	// Wait long enough to expose a stuck ticker: 2s at the old 200ms
+	// cadence would be ~10 pings; re-armed to 1s it should be ~3
+	// (the original ping plus one or two at the new cadence).
+	time.Sleep(2 * time.Second)
+	cancel()
+	<-runDone
+
+	if got := pingCount.Load(); got > 5 {
+		t.Errorf("ping count = %d, expected <= 5 after server cadence change to 1s", got)
 	}
 }
 
@@ -934,4 +1166,57 @@ func TestSpawnDispatchRecoversPanic(t *testing.T) {
 	if got := dispatchCount.Load(); got < 2 {
 		t.Errorf("dispatchCount = %d, want >= 2 (both frames reached the dispatcher)", got)
 	}
+}
+
+// TestReadDeadlineFollowsPingInterval verifies that the per-read
+// deadline tracks the active pingInterval so a server-driven cadence
+// change keeps things in step. A user-supplied ReadIdleTimeout still
+// wins over the derived value.
+func TestReadDeadlineFollowsPingInterval(t *testing.T) {
+	t.Parallel()
+	s := &session{}
+
+	cases := []struct {
+		ping time.Duration
+		want time.Duration
+	}{
+		{2 * time.Second, 2*time.Second*2 + 5*time.Second},
+		{500 * time.Millisecond, 500*time.Millisecond*2 + 5*time.Second},
+		{10 * time.Second, 10*time.Second*2 + 5*time.Second},
+	}
+	for _, tc := range cases {
+		s.pingIntervalNs.Store(int64(tc.ping))
+		if got := s.readDeadline(); got != tc.want {
+			t.Errorf("ping=%v: readDeadline=%v, want %v", tc.ping, got, tc.want)
+		}
+	}
+
+	s.readIdleTimeout = 99 * time.Second
+	s.pingIntervalNs.Store(int64(2 * time.Second))
+	if got := s.readDeadline(); got != 99*time.Second {
+		t.Errorf("override: readDeadline=%v, want 99s", got)
+	}
+}
+
+// TestFragmentCacheTTLEviction confirms incomplete fragments are not
+// retained forever.
+func TestFragmentCacheTTLEviction(t *testing.T) {
+	t.Parallel()
+	c := newFragmentCache(20 * time.Millisecond)
+	defer c.stop()
+	if got := c.add("k", 2, 0, []byte("foo")); got != nil {
+		t.Errorf("expected nil while incomplete, got %q", got)
+	}
+	// Wait for the janitor to evict.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		_, exists := c.items["k"]
+		c.mu.Unlock()
+		if !exists {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("expired fragment was not evicted")
 }

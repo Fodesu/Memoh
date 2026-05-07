@@ -89,12 +89,12 @@ func (c *fragmentCache) janitor() {
 		case <-c.stopCh:
 			return
 		case now := <-ticker.C:
-			c.evictLocked(now)
+			c.evictExpired(now)
 		}
 	}
 }
 
-func (c *fragmentCache) evictLocked(now time.Time) {
+func (c *fragmentCache) evictExpired(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for k, v := range c.items {

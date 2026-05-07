@@ -36,6 +36,20 @@ import (
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
 
+const (
+	// dispatchConcurrency caps in-flight handleData goroutines.
+	// readLoop blocks on send once the cap is full, so server
+	// pressure stays in the TCP buffer instead of spawning more
+	// HTTP work.
+	dispatchConcurrency = 32
+	// pingFailuresUntilAbort is the consecutive sendPing failures
+	// that trigger a session cancel so the caller reconnects.
+	pingFailuresUntilAbort = 2
+	// defaultEndpointTimeout caps the HTTP call that fetches the
+	// websocket URL, independent of the caller's ctx.
+	defaultEndpointTimeout = 15 * time.Second
+)
+
 // EventDispatcher is the subset of dispatcher.EventDispatcher we use.
 // The SDK type satisfies it directly.
 type EventDispatcher interface {
@@ -61,6 +75,13 @@ type Config struct {
 	// graceful close frame before forcing the underlying TCP connection
 	// shut. Default: 2s.
 	CloseGracePeriod time.Duration
+	// EndpointTimeout caps the HTTP call that fetches the websocket
+	// URL. Default: 15s.
+	EndpointTimeout time.Duration
+	// ReadIdleTimeout is the per-read deadline. If no frame (event
+	// or pong) arrives within this duration, the session closes and
+	// the caller reconnects. Default: PingInterval*2 + 5s.
+	ReadIdleTimeout time.Duration
 }
 
 // Client is a single-shot Feishu websocket transport.
@@ -92,6 +113,9 @@ func New(cfg Config) *Client {
 	}
 	if cfg.CloseGracePeriod <= 0 {
 		cfg.CloseGracePeriod = 2 * time.Second
+	}
+	if cfg.EndpointTimeout <= 0 {
+		cfg.EndpointTimeout = defaultEndpointTimeout
 	}
 	return &Client{cfg: cfg, logger: logger.With(slog.String("component", "feishu_ws"))}
 }
@@ -144,12 +168,14 @@ func (c *Client) Run(ctx context.Context, dispatcher EventDispatcher) error {
 	)
 
 	session := &session{
-		client:        c,
-		conn:          conn,
-		dispatcher:    dispatcher,
-		serviceID:     serviceID,
-		connID:        connID,
-		fragmentCache: newFragmentCache(5 * time.Second),
+		client:          c,
+		conn:            conn,
+		dispatcher:      dispatcher,
+		serviceID:       serviceID,
+		connID:          connID,
+		readIdleTimeout: c.cfg.ReadIdleTimeout,
+		fragmentCache:   newFragmentCache(5 * time.Second),
+		dispatchSem:     make(chan struct{}, dispatchConcurrency),
 	}
 	session.pingIntervalNs.Store(int64(pingInterval))
 	defer session.fragmentCache.stop()
@@ -171,9 +197,16 @@ type session struct {
 	// Atomic because handleControl (readLoop goroutine) writes and
 	// pingLoop reads.
 	pingIntervalNs atomic.Int64
+	// readIdleTimeout is the user-configured read deadline. Zero
+	// means "derive from current pingInterval"; readDeadline() picks
+	// the right value.
+	readIdleTimeout time.Duration
 
 	fragmentCache *fragmentCache
 
+	// dispatchSem bounds concurrent handleData goroutines. spawnDispatch
+	// blocks on it, so a slow handler can't fan out more HTTP work.
+	dispatchSem chan struct{}
 	// dispatchWG counts live handleData goroutines. run waits on it
 	// before returning so a follow-up Connect can't race a handler
 	// still using the old conn.
@@ -202,7 +235,7 @@ func (s *session) run(ctx context.Context) error {
 	pingDone := make(chan struct{})
 	go func() {
 		defer close(pingDone)
-		s.pingLoop(sessionCtx)
+		s.pingLoop(sessionCtx, cancelSession)
 	}()
 
 	readErr := s.readLoop(sessionCtx)
@@ -246,6 +279,11 @@ func (s *session) gracefulClose() {
 
 func (s *session) readLoop(ctx context.Context) error {
 	for {
+		// Reset the read deadline before each read. Any inbound
+		// frame resets it; once the server is silent past the
+		// derived deadline, ReadMessage returns timeout and we
+		// reconnect instead of waiting on OS keepalive.
+		_ = s.conn.SetReadDeadline(time.Now().Add(s.readDeadline()))
 		mt, msg, err := s.conn.ReadMessage()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -261,19 +299,42 @@ func (s *session) readLoop(ctx context.Context) error {
 	}
 }
 
-func (s *session) pingLoop(ctx context.Context) {
-	ticker := time.NewTicker(s.pingInterval())
+func (s *session) pingLoop(ctx context.Context, abort context.CancelFunc) {
+	interval := s.pingInterval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.sendPing(); err != nil {
-				if ctx.Err() != nil {
+			err := s.sendPing()
+			switch {
+			case err == nil:
+				failures = 0
+			case ctx.Err() != nil:
+				return
+			default:
+				failures++
+				s.client.logger.Warn("ping failed",
+					slog.Int("consecutive", failures),
+					slog.Any("error", err),
+				)
+				if failures >= pingFailuresUntilAbort {
+					s.client.logger.Error("aborting session: ping persistently failing",
+						slog.Int("consecutive", failures),
+					)
+					abort()
 					return
 				}
-				s.client.logger.Warn("ping failed", slog.Any("error", err))
+			}
+			// Pick up cadence updates from handleControl. Without
+			// the reset, the ticker keeps the old cadence and
+			// drifts away from what the server expects.
+			if next := s.pingInterval(); next != interval {
+				ticker.Reset(next)
+				interval = next
 			}
 		}
 	}
@@ -281,6 +342,17 @@ func (s *session) pingLoop(ctx context.Context) {
 
 func (s *session) pingInterval() time.Duration {
 	return time.Duration(s.pingIntervalNs.Load())
+}
+
+// readDeadline returns the per-read budget. Honor the user override
+// when set; otherwise track the live pingInterval so a server-driven
+// cadence change keeps the deadline in step (a quiet but healthy
+// link wouldn't reconnect for nothing).
+func (s *session) readDeadline() time.Duration {
+	if s.readIdleTimeout > 0 {
+		return s.readIdleTimeout
+	}
+	return s.pingInterval()*2 + 5*time.Second
 }
 
 func (s *session) sendPing() error {
@@ -316,13 +388,19 @@ func (s *session) handleFrame(ctx context.Context, raw []byte) {
 	}
 }
 
-// spawnDispatch runs handleData in a goroutine with panic recovery.
-// readLoop returns immediately so the next frame can be read while
-// dispatcher.Do is still running.
+// spawnDispatch runs handleData in a goroutine, bounded by dispatchSem.
+// readLoop blocks here when the cap is full, so it never sits inside
+// dispatcher.Do.
 func (s *session) spawnDispatch(ctx context.Context, frame larkws.Frame) {
+	select {
+	case s.dispatchSem <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
 	s.dispatchWG.Add(1)
 	go func(f larkws.Frame) {
 		defer s.dispatchWG.Done()
+		defer func() { <-s.dispatchSem }()
 		// Recover panics from dispatcher.Do or user-registered
 		// event callbacks. Without this, a single bad payload or
 		// buggy callback crashes the whole process; we'd rather
@@ -358,9 +436,8 @@ func (s *session) handleControl(frame larkws.Frame) {
 	if cfg.PingInterval > 0 {
 		next := time.Duration(cfg.PingInterval) * time.Second
 		// Swap returns the previous value, which lets us log the
-		// transition without a separate read. The running ticker
-		// keeps the old cadence until the next reconnect; re-arming
-		// mid-flight isn't worth the extra plumbing.
+		// transition without a separate read. pingLoop picks the new
+		// value up on its next tick and resets the ticker.
 		if prev := time.Duration(s.pingIntervalNs.Swap(int64(next))); prev != next {
 			s.client.logger.Debug("server adjusted ping interval",
 				slog.Duration("old", prev),
@@ -386,12 +463,9 @@ func (s *session) handleData(ctx context.Context, frame larkws.Frame) {
 		}
 	}
 
-	switch larkws.MessageType(msgType) {
-	case larkws.MessageTypeEvent:
-	case larkws.MessageTypeCard:
-		// Card callbacks aren't wired up.
-		return
-	default:
+	if larkws.MessageType(msgType) != larkws.MessageTypeEvent {
+		// Only event payloads go through the dispatcher; card
+		// callbacks and unknown types are dropped.
 		return
 	}
 
@@ -423,7 +497,15 @@ func (s *session) handleData(ctx context.Context, frame larkws.Frame) {
 		}
 	}
 
-	encoded, _ := json.Marshal(resp)
+	encoded, encErr := json.Marshal(resp)
+	if encErr != nil {
+		s.client.logger.Error("marshal ack response failed",
+			slog.String("message_id", msgID),
+			slog.String("trace_id", traceID),
+			slog.Any("error", encErr),
+		)
+		return
+	}
 	frame.Payload = encoded
 	frame.Headers = headers
 	bs, marshalErr := frame.Marshal()
@@ -447,6 +529,11 @@ func (s *session) handleData(ctx context.Context, frame larkws.Frame) {
 // websocket endpoint URL plus an optional ClientConfig (ping/reconnect
 // hints).
 func (c *Client) fetchEndpoint(ctx context.Context) (*larkws.Endpoint, *larkws.ClientConfig, error) {
+	// Sub-timeout independent of the caller's long-lived ctx, so a
+	// hung Feishu API doesn't stall the reconnect loop.
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.EndpointTimeout)
+	defer cancel()
+
 	body, err := json.Marshal(map[string]string{
 		"AppID":     c.cfg.AppID,
 		"AppSecret": c.cfg.AppSecret,
