@@ -122,6 +122,7 @@ func (o *actionLedgerObserver) OnToolCallStart(ctx context.Context, observation 
 			AttemptID:    o.subject.attemptID,
 			ActionKind:   "tool_call",
 			Status:       "running",
+			EffectClass:  classifyToolEffect(observation.ToolName),
 			ToolName:     strings.TrimSpace(observation.ToolName),
 			ToolCallID:   strings.TrimSpace(observation.ToolCallID),
 			InputPayload: inputPayload,
@@ -138,6 +139,7 @@ func (o *actionLedgerObserver) OnToolCallStart(ctx context.Context, observation 
 		VerificationID: o.subject.verificationID,
 		ActionKind:     "tool_call",
 		Status:         "running",
+		EffectClass:    classifyToolEffect(observation.ToolName),
 		ToolName:       strings.TrimSpace(observation.ToolName),
 		ToolCallID:     strings.TrimSpace(observation.ToolCallID),
 		InputPayload:   inputPayload,
@@ -191,6 +193,21 @@ func (o *actionLedgerObserver) OnToolCallFinish(ctx context.Context, observation
 		return fmt.Errorf("complete verification action record: %w", err)
 	}
 	return nil
+}
+
+func classifyToolEffect(toolName string) string {
+	switch strings.TrimSpace(toolName) {
+	case "read", "list", "bg_status":
+		return "env_local_read"
+	case "write", "edit", "exec":
+		return "env_local_mutation"
+	case "web_search", "web_fetch", "browser_observe", "list_email", "read_email", "list_schedule", "get_schedule", "get_contacts", "search_messages", "list_sessions", "list_email_accounts":
+		return "external_read"
+	case "send", "react", "send_email", "browser_action", "browser_remote_session", "create_schedule", "update_schedule", "delete_schedule", "generate_image", "speak":
+		return "external_write"
+	default:
+		return ""
+	}
 }
 
 func marshalJSONValue(value any) ([]byte, error) {

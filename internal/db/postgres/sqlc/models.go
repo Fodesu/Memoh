@@ -395,23 +395,28 @@ type ModelVariant struct {
 }
 
 type OrchestrationActionLedger struct {
-	ID             pgtype.UUID        `json:"id"`
-	RunID          pgtype.UUID        `json:"run_id"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	AttemptID      pgtype.UUID        `json:"attempt_id"`
-	VerificationID pgtype.UUID        `json:"verification_id"`
-	ActionKind     string             `json:"action_kind"`
-	Status         string             `json:"status"`
-	ToolName       string             `json:"tool_name"`
-	ToolCallID     string             `json:"tool_call_id"`
-	InputPayload   []byte             `json:"input_payload"`
-	OutputPayload  []byte             `json:"output_payload"`
-	ErrorPayload   []byte             `json:"error_payload"`
-	Summary        string             `json:"summary"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	RunID               pgtype.UUID        `json:"run_id"`
+	TaskID              pgtype.UUID        `json:"task_id"`
+	AttemptID           pgtype.UUID        `json:"attempt_id"`
+	VerificationID      pgtype.UUID        `json:"verification_id"`
+	ActionKind          string             `json:"action_kind"`
+	Status              string             `json:"status"`
+	EffectClass         string             `json:"effect_class"`
+	EnvSessionID        pgtype.UUID        `json:"env_session_id"`
+	EnvBindingID        pgtype.UUID        `json:"env_binding_id"`
+	BeforeEnvSnapshotID pgtype.UUID        `json:"before_env_snapshot_id"`
+	AfterEnvSnapshotID  pgtype.UUID        `json:"after_env_snapshot_id"`
+	ToolName            string             `json:"tool_name"`
+	ToolCallID          string             `json:"tool_call_id"`
+	InputPayload        []byte             `json:"input_payload"`
+	OutputPayload       []byte             `json:"output_payload"`
+	ErrorPayload        []byte             `json:"error_payload"`
+	Summary             string             `json:"summary"`
+	StartedAt           pgtype.Timestamptz `json:"started_at"`
+	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type OrchestrationArtifact struct {

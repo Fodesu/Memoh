@@ -995,8 +995,17 @@ CREATE TABLE IF NOT EXISTS orchestration_action_ledger (
   task_id UUID NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
   attempt_id UUID,
   verification_id UUID,
-  action_kind TEXT NOT NULL DEFAULT 'tool_call' CHECK (action_kind IN ('tool_call')),
+  action_kind TEXT NOT NULL DEFAULT 'tool_call' CHECK (
+    action_kind IN ('tool_call', 'env_acquire', 'env_release', 'env_hold', 'env_snapshot')
+  ),
   status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+  effect_class TEXT NOT NULL DEFAULT '' CHECK (
+    effect_class IN ('', 'env_local_read', 'env_local_mutation', 'external_read', 'external_write', 'external_irreversible')
+  ),
+  env_session_id UUID,
+  env_binding_id UUID,
+  before_env_snapshot_id UUID,
+  after_env_snapshot_id UUID,
   tool_name TEXT NOT NULL DEFAULT '',
   tool_call_id TEXT NOT NULL DEFAULT '',
   input_payload JSONB NOT NULL DEFAULT 'null'::jsonb,
@@ -1017,8 +1026,10 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_run_started_at ON orc
 CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_task_started_at ON orchestration_action_ledger(task_id, started_at, id);
 CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_attempt_started_at ON orchestration_action_ledger(attempt_id, started_at, id) WHERE attempt_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_verification_started_at ON orchestration_action_ledger(verification_id, started_at, id) WHERE verification_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_attempt_tool_call_unique ON orchestration_action_ledger(attempt_id, tool_call_id) WHERE attempt_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_verification_tool_call_unique ON orchestration_action_ledger(verification_id, tool_call_id) WHERE verification_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_attempt_tool_call_unique ON orchestration_action_ledger(attempt_id, tool_call_id) WHERE attempt_id IS NOT NULL AND action_kind = 'tool_call';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_verification_tool_call_unique ON orchestration_action_ledger(verification_id, tool_call_id) WHERE verification_id IS NOT NULL AND action_kind = 'tool_call';
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_env_session ON orchestration_action_ledger(env_session_id, started_at, id) WHERE env_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_effect ON orchestration_action_ledger(run_id, effect_class, started_at, id) WHERE effect_class <> '';
 
 -- orchestration_env_resources: leasable env templates (container image,
 -- browser context, etc.) tenant-scoped with capacity and config.
@@ -1258,6 +1269,42 @@ BEGIN
     ALTER TABLE orchestration_action_ledger
       ADD CONSTRAINT orchestration_action_ledger_verification_fk
       FOREIGN KEY (verification_id, run_id, task_id) REFERENCES orchestration_task_verifications(id, run_id, task_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_env_session_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_env_session_fk
+      FOREIGN KEY (env_session_id) REFERENCES orchestration_env_sessions(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_env_binding_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_env_binding_fk
+      FOREIGN KEY (env_binding_id) REFERENCES orchestration_env_bindings(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_before_env_snapshot_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_before_env_snapshot_fk
+      FOREIGN KEY (before_env_snapshot_id) REFERENCES orchestration_env_snapshots(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_after_env_snapshot_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_after_env_snapshot_fk
+      FOREIGN KEY (after_env_snapshot_id) REFERENCES orchestration_env_snapshots(id) ON DELETE SET NULL;
   END IF;
 END $$;
 

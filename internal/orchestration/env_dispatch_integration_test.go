@@ -23,6 +23,7 @@ type fakeEnvManager struct {
 	getResourceCalls  []string
 	acquireCalls      []EnvAcquireRequest
 	createBindingArgs []EnvCreateBindingRequest
+	snapshotCalls     []EnvCaptureSnapshotRequest
 	releaseBinding    []EnvReleaseBindingRequest
 	holdBinding       []EnvHoldBindingRequest
 	releaseSession    []EnvReleaseSessionRequest
@@ -62,6 +63,13 @@ func (f *fakeEnvManager) CreateEnvBinding(_ context.Context, req EnvCreateBindin
 	defer f.mu.Unlock()
 	f.createBindingArgs = append(f.createBindingArgs, req)
 	return EnvBindingHandle{BindingID: f.nextBindingID}, nil
+}
+
+func (f *fakeEnvManager) CaptureEnvSnapshot(_ context.Context, req EnvCaptureSnapshotRequest) (EnvSnapshotRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshotCalls = append(f.snapshotCalls, req)
+	return EnvSnapshotRef{SnapshotID: "snapshot-" + uuid.NewString()}, nil
 }
 
 func (f *fakeEnvManager) ReleaseEnvBinding(_ context.Context, req EnvReleaseBindingRequest) error {
@@ -209,6 +217,15 @@ func TestIntegrationDispatchAcquiresEnvAndReleasesAfterCompletion(t *testing.T) 
 	if got := stringFrom(captured, "binding_id"); got != envManager.nextBindingID {
 		t.Fatalf("captured_env_preconditions.binding_id = %q, want %q", got, envManager.nextBindingID)
 	}
+	if got := len(envManager.snapshotCalls); got != 1 {
+		t.Fatalf("CaptureEnvSnapshot call count after dispatch = %d, want 1", got)
+	}
+	if kind := envManager.snapshotCalls[0].Kind; kind != "pre_action" {
+		t.Fatalf("first snapshot kind = %q, want pre_action", kind)
+	}
+	if got := stringFrom(captured, "before_snapshot_id"); got == "" {
+		t.Fatalf("captured_env_preconditions.before_snapshot_id is empty; payload=%v", captured)
+	}
 
 	// Drive the attempt to a successful terminal state and verify the
 	// env manager observes a release for both the binding and the session.
@@ -248,6 +265,24 @@ func TestIntegrationDispatchAcquiresEnvAndReleasesAfterCompletion(t *testing.T) 
 	}
 	if got := envManager.releaseSession[0].SessionID; got != envManager.nextSessionID {
 		t.Fatalf("release session id = %q, want %q", got, envManager.nextSessionID)
+	}
+	if got := len(envManager.snapshotCalls); got != 2 {
+		t.Fatalf("CaptureEnvSnapshot call count after completion = %d, want 2", got)
+	}
+	if kind := envManager.snapshotCalls[1].Kind; kind != "post_action" {
+		t.Fatalf("second snapshot kind = %q, want post_action", kind)
+	}
+
+	records, err := svc.queries.ListCurrentOrchestrationActionRecordsByRun(ctx, mustParsePGUUID(t, handle.RunID))
+	if err != nil {
+		t.Fatalf("ListCurrentOrchestrationActionRecordsByRun() error = %v", err)
+	}
+	kinds := make(map[string]bool, len(records))
+	for _, record := range records {
+		kinds[record.ActionKind] = true
+	}
+	if !kinds["env_acquire"] || !kinds["env_release"] {
+		t.Fatalf("action ledger kinds = %v, want env_acquire and env_release", kinds)
 	}
 }
 

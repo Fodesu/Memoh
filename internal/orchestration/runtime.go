@@ -1475,6 +1475,7 @@ func (s *Service) dispatchNextReadyTask(ctx context.Context, workerProfileSet ma
 		s.releaseEnvForAttemptCommitFailure(ctx, createdAttempt)
 		return false, fmt.Errorf("commit scheduler tx: %w", err)
 	}
+	s.recordEnvDispatchCommitted(ctx, createdAttempt)
 	if err := s.attemptAssignments.PublishAttemptAssignment(ctx, toTaskAttempt(createdAttempt)); err != nil {
 		s.logger.Warn("publish attempt assignment failed", slog.String("attempt_id", createdAttempt.ID.String()), slog.Any("error", err))
 	}
@@ -2078,7 +2079,7 @@ func (s *Service) CompleteAttempt(ctx context.Context, input AttemptCompletion) 
 			if err := tx.Commit(ctx); err != nil {
 				return nil, fmt.Errorf("commit attempt completion cancellation tx: %w", err)
 			}
-			s.releaseEnvForAttempt(ctx, lostAttempt.InputManifestID, "run_cancelled")
+			s.releaseEnvForAttempt(ctx, lostAttempt, "run_cancelled")
 			attempt := toTaskAttempt(lostAttempt)
 			return &attempt, nil
 		}
@@ -2270,7 +2271,7 @@ func (s *Service) CompleteAttempt(ctx context.Context, input AttemptCompletion) 
 		return nil, fmt.Errorf("commit complete attempt tx: %w", err)
 	}
 	s.publishTaskCompletionToBlackboard(ctx, finalAttempt, completionStatus, input)
-	s.releaseEnvForAttempt(ctx, finalAttempt.InputManifestID, "attempt_"+completionStatus)
+	s.releaseEnvForAttempt(ctx, finalAttempt, "attempt_"+completionStatus)
 	attempt := toTaskAttempt(finalAttempt)
 	return &attempt, nil
 }

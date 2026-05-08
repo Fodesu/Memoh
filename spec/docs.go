@@ -14948,10 +14948,25 @@ const docTemplate = `{
                 "action_kind": {
                     "type": "string"
                 },
+                "after_env_snapshot_id": {
+                    "type": "string"
+                },
                 "attempt_id": {
                     "type": "string"
                 },
+                "before_env_snapshot_id": {
+                    "type": "string"
+                },
                 "created_at": {
+                    "type": "string"
+                },
+                "effect_class": {
+                    "type": "string"
+                },
+                "env_binding_id": {
+                    "type": "string"
+                },
+                "env_session_id": {
                     "type": "string"
                 },
                 "error_payload": {},

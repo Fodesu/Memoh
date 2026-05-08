@@ -1635,8 +1635,13 @@ export type ModelsUpdateRequest = {
 
 export type OrchestrationActionRecord = {
     action_kind?: string;
+    after_env_snapshot_id?: string;
     attempt_id?: string;
+    before_env_snapshot_id?: string;
     created_at?: string;
+    effect_class?: string;
+    env_binding_id?: string;
+    env_session_id?: string;
     error_payload?: unknown;
     finished_at?: string;
     id?: string;

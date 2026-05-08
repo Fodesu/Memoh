@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
 
@@ -19,17 +20,19 @@ import (
 // verifier replay or a delayed release can reconstruct the lease without
 // re-resolving the planner-supplied resource_name.
 type envCapture struct {
-	Kind          string
-	ResourceID    string
-	ResourceName  string
-	SessionID     string
-	LeaseToken    string
-	LeaseEpoch    int64
-	BindingID     string
-	RuntimeHandle map[string]any
-	Mode          string
-	EffectClass   string
-	Metadata      map[string]any
+	Kind             string
+	ResourceID       string
+	ResourceName     string
+	SessionID        string
+	LeaseToken       string
+	LeaseEpoch       int64
+	BindingID        string
+	BeforeSnapshotID string
+	AfterSnapshotID  string
+	RuntimeHandle    map[string]any
+	Mode             string
+	EffectClass      string
+	Metadata         map[string]any
 }
 
 // acquireEnvForDispatch reserves a session and resolves the planner-supplied
@@ -234,6 +237,12 @@ func marshalCapturedEnvPreconditions(capture *envCapture, pre EnvPreconditions) 
 	if capture.BindingID != "" {
 		envelope["binding_id"] = capture.BindingID
 	}
+	if capture.BeforeSnapshotID != "" {
+		envelope["before_snapshot_id"] = capture.BeforeSnapshotID
+	}
+	if capture.AfterSnapshotID != "" {
+		envelope["after_snapshot_id"] = capture.AfterSnapshotID
+	}
 	if capture.Mode != "" {
 		envelope["mode"] = capture.Mode
 	}
@@ -272,14 +281,16 @@ func decodeCapturedEnvPreconditions(data []byte) (*envCapture, bool) {
 		return nil, false
 	}
 	capture := &envCapture{
-		Kind:         stringFrom(raw, "kind"),
-		ResourceID:   stringFrom(raw, "resource_id"),
-		ResourceName: stringFrom(raw, "resource_name"),
-		SessionID:    sessionID,
-		LeaseToken:   leaseToken,
-		BindingID:    stringFrom(raw, "binding_id"),
-		Mode:         stringFrom(raw, "mode"),
-		EffectClass:  stringFrom(raw, "effect_class"),
+		Kind:             stringFrom(raw, "kind"),
+		ResourceID:       stringFrom(raw, "resource_id"),
+		ResourceName:     stringFrom(raw, "resource_name"),
+		SessionID:        sessionID,
+		LeaseToken:       leaseToken,
+		BindingID:        stringFrom(raw, "binding_id"),
+		BeforeSnapshotID: stringFrom(raw, "before_snapshot_id"),
+		AfterSnapshotID:  stringFrom(raw, "after_snapshot_id"),
+		Mode:             stringFrom(raw, "mode"),
+		EffectClass:      stringFrom(raw, "effect_class"),
 	}
 	if epoch, ok := raw["lease_epoch"].(float64); ok {
 		capture.LeaseEpoch = int64(epoch)
@@ -306,11 +317,11 @@ func stringFrom(m map[string]any, key string) string {
 // binding and the underlying session. HITL paths that move a task to
 // waiting_human go through holdEnvForAttempt instead so the session stays
 // warm for resume.
-func (s *Service) releaseEnvForAttempt(ctx context.Context, manifestID pgtype.UUID, reason string) {
+func (s *Service) recordEnvDispatchCommitted(ctx context.Context, attempt sqlc.OrchestrationTaskAttempt) {
 	if s.envManager == nil {
 		return
 	}
-	manifestRow, err := s.queries.GetOrchestrationInputManifestByID(ctx, manifestID)
+	manifestRow, err := s.queries.GetOrchestrationInputManifestByID(ctx, attempt.InputManifestID)
 	if err != nil {
 		return
 	}
@@ -318,5 +329,165 @@ func (s *Service) releaseEnvForAttempt(ctx context.Context, manifestID pgtype.UU
 	if !ok {
 		return
 	}
+	beforeSnapshotID := s.captureEnvSnapshotForAttempt(ctx, attempt, capture, "pre_action")
+	if beforeSnapshotID != "" {
+		capture.BeforeSnapshotID = beforeSnapshotID
+		if err := s.queries.UpdateOrchestrationInputManifestEnvCapture(ctx, sqlc.UpdateOrchestrationInputManifestEnvCaptureParams{
+			ID:                       manifestRow.ID,
+			CapturedEnvPreconditions: marshalCapturedEnvPreconditions(capture, EnvPreconditions{Required: true}),
+		}); err != nil {
+			s.logger.Warn("persist env pre-action snapshot failed",
+				slog.String("attempt_id", attempt.ID.String()),
+				slog.Any("error", err),
+			)
+		}
+	}
+	s.recordCompletedAttemptEnvAction(ctx, attempt, "env_acquire", capture, "", beforeSnapshotID, map[string]any{
+		"reason": "dispatch_committed",
+	}, envActionPayload(capture), "leased env session for attempt")
+}
+
+func (s *Service) releaseEnvForAttempt(ctx context.Context, attempt sqlc.OrchestrationTaskAttempt, reason string) {
+	if s.envManager == nil {
+		return
+	}
+	manifestRow, err := s.queries.GetOrchestrationInputManifestByID(ctx, attempt.InputManifestID)
+	if err != nil {
+		return
+	}
+	capture, ok := decodeCapturedEnvPreconditions(manifestRow.CapturedEnvPreconditions)
+	if !ok {
+		return
+	}
+	afterSnapshotID := s.captureEnvSnapshotForAttempt(ctx, attempt, capture, "post_action")
+	if afterSnapshotID != "" {
+		capture.AfterSnapshotID = afterSnapshotID
+		if err := s.queries.UpdateOrchestrationInputManifestEnvCapture(ctx, sqlc.UpdateOrchestrationInputManifestEnvCaptureParams{
+			ID:                       manifestRow.ID,
+			CapturedEnvPreconditions: marshalCapturedEnvPreconditions(capture, EnvPreconditions{Required: true}),
+		}); err != nil {
+			s.logger.Warn("persist env post-action snapshot failed",
+				slog.String("attempt_id", attempt.ID.String()),
+				slog.Any("error", err),
+			)
+		}
+	}
+	s.recordCompletedAttemptEnvAction(ctx, attempt, "env_release", capture, capture.BeforeSnapshotID, afterSnapshotID, map[string]any{
+		"reason": reason,
+	}, envActionPayload(capture), "released env session for attempt")
 	s.releaseEnvAfterFailedDispatch(ctx, capture, reason)
+}
+
+func (s *Service) captureEnvSnapshotForAttempt(ctx context.Context, attempt sqlc.OrchestrationTaskAttempt, capture *envCapture, kind string) string {
+	if capture == nil || s.envManager == nil {
+		return ""
+	}
+	ref, err := s.envManager.CaptureEnvSnapshot(ctx, EnvCaptureSnapshotRequest{
+		SessionID:   capture.SessionID,
+		LeaseToken:  capture.LeaseToken,
+		LeaseEpoch:  capture.LeaseEpoch,
+		Kind:        kind,
+		EffectClass: normalizeEnvLedgerEffectClass(capture),
+		RunID:       attempt.RunID.String(),
+		TaskID:      attempt.TaskID.String(),
+		AttemptID:   attempt.ID.String(),
+		Metadata: map[string]any{
+			"binding_id": capture.BindingID,
+			"mode":       capture.Mode,
+		},
+	})
+	if err != nil {
+		s.logger.Warn("capture env snapshot failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("session_id", capture.SessionID),
+			slog.String("kind", kind),
+			slog.Any("error", err),
+		)
+		return ""
+	}
+	_ = ref.Digest
+	return ref.SnapshotID
+}
+
+func (s *Service) recordCompletedAttemptEnvAction(ctx context.Context, attempt sqlc.OrchestrationTaskAttempt, actionKind string, capture *envCapture, beforeSnapshotID, afterSnapshotID string, inputPayload, outputPayload map[string]any, summary string) {
+	if capture == nil {
+		return
+	}
+	inputJSON, err := json.Marshal(inputPayload)
+	if err != nil {
+		inputJSON = []byte("null")
+	}
+	outputJSON, err := json.Marshal(outputPayload)
+	if err != nil {
+		outputJSON = []byte("null")
+	}
+	_, recordID, err := newPGUUID()
+	if err != nil {
+		s.logger.Warn("allocate env action id failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("action_kind", actionKind),
+			slog.Any("error", err),
+		)
+		return
+	}
+	_, err = s.queries.CreateCompletedOrchestrationAttemptActionRecord(ctx, sqlc.CreateCompletedOrchestrationAttemptActionRecordParams{
+		ID:                  recordID,
+		RunID:               attempt.RunID,
+		TaskID:              attempt.TaskID,
+		AttemptID:           attempt.ID,
+		ActionKind:          actionKind,
+		EffectClass:         normalizeEnvLedgerEffectClass(capture),
+		EnvSessionID:        db.ParseUUIDOrEmpty(capture.SessionID),
+		EnvBindingID:        db.ParseUUIDOrEmpty(capture.BindingID),
+		BeforeEnvSnapshotID: db.ParseUUIDOrEmpty(beforeSnapshotID),
+		AfterEnvSnapshotID:  db.ParseUUIDOrEmpty(afterSnapshotID),
+		InputPayload:        inputJSON,
+		OutputPayload:       outputJSON,
+		Summary:             summary,
+	})
+	if err != nil {
+		s.logger.Warn("record env action failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("action_kind", actionKind),
+			slog.Any("error", err),
+		)
+	}
+}
+
+func envActionPayload(capture *envCapture) map[string]any {
+	if capture == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"kind":            capture.Kind,
+		"resource_id":     capture.ResourceID,
+		"resource_name":   capture.ResourceName,
+		"session_id":      capture.SessionID,
+		"binding_id":      capture.BindingID,
+		"lease_epoch":     capture.LeaseEpoch,
+		"mode":            capture.Mode,
+		"effect_class":    normalizeEnvLedgerEffectClass(capture),
+		"runtime_handle":  capture.RuntimeHandle,
+		"before_snapshot": capture.BeforeSnapshotID,
+		"after_snapshot":  capture.AfterSnapshotID,
+	}
+}
+
+func normalizeEnvLedgerEffectClass(capture *envCapture) string {
+	if capture == nil {
+		return ""
+	}
+	switch strings.TrimSpace(capture.EffectClass) {
+	case "env_local_read", "env_local_mutation", "external_read", "external_write", "external_irreversible":
+		return strings.TrimSpace(capture.EffectClass)
+	case EnvPreconditionsEffectExternalIdempotent:
+		return "external_write"
+	case EnvPreconditionsEffectInternal:
+		if strings.EqualFold(capture.Mode, "read") || strings.EqualFold(capture.Mode, "readonly") {
+			return "env_local_read"
+		}
+		return "env_local_mutation"
+	default:
+		return "env_local_mutation"
+	}
 }
