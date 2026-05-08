@@ -138,6 +138,9 @@ CREATE TABLE IF NOT EXISTS orchestration_human_checkpoints (
 
 CREATE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_run_created_at ON orchestration_human_checkpoints(run_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_run_status ON orchestration_human_checkpoints(run_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_open_timeout
+  ON orchestration_human_checkpoints(timeout_at, created_at, id)
+  WHERE status = 'open' AND timeout_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS orchestration_planning_intents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

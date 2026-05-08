@@ -10172,7 +10172,7 @@ func TestIntegrationCreateHumanCheckpointRejectsUnsupportedTaskState(t *testing.
 	}
 }
 
-func TestIntegrationCreateHumanCheckpointRejectsTimeoutUntilSupported(t *testing.T) {
+func TestIntegrationTimedOutHumanCheckpointUsesDefaultActionAndResumesTask(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
 
@@ -10183,7 +10183,7 @@ func TestIntegrationCreateHumanCheckpointRejectsTimeoutUntilSupported(t *testing
 	}
 
 	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
-		Goal:           "checkpoint timeout should be rejected until runtime support exists",
+		Goal:           "checkpoint timeout should use default action and resume",
 		IdempotencyKey: "start-" + uuid.NewString(),
 	})
 	if err != nil {
@@ -10193,7 +10193,7 @@ func TestIntegrationCreateHumanCheckpointRejectsTimeoutUntilSupported(t *testing
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	_, err = svc.CreateHumanCheckpoint(ctx, caller, CreateHumanCheckpointRequest{
+	result, err := svc.CreateHumanCheckpoint(ctx, caller, CreateHumanCheckpointRequest{
 		RunID:          handle.RunID,
 		TaskID:         handle.RootTaskID,
 		Question:       "pause with timeout?",
@@ -10205,10 +10205,80 @@ func TestIntegrationCreateHumanCheckpointRejectsTimeoutUntilSupported(t *testing
 			Mode:     CheckpointResolutionModeSelectOption,
 			OptionID: "ok",
 		},
-		TimeoutAt: time.Now().Add(time.Minute).UTC(),
+		TimeoutAt: time.Now().Add(-time.Second).UTC(),
 	})
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("CreateHumanCheckpoint(timeout_at) error = %v, want %v", err, ErrInvalidArgument)
+	if err != nil {
+		t.Fatalf("CreateHumanCheckpoint() error = %v", err)
+	}
+
+	recovered, err := svc.RecoverTimedOutHumanCheckpoints(ctx)
+	if err != nil {
+		t.Fatalf("RecoverTimedOutHumanCheckpoints() error = %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("RecoverTimedOutHumanCheckpoints() = %d, want 1", recovered)
+	}
+	recovered, err = svc.RecoverTimedOutHumanCheckpoints(ctx)
+	if err != nil {
+		t.Fatalf("RecoverTimedOutHumanCheckpoints(second) error = %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("RecoverTimedOutHumanCheckpoints(second) = %d, want 0", recovered)
+	}
+
+	checkpointRow, err := svc.queries.GetOrchestrationHumanCheckpointByID(ctx, mustParsePGUUID(t, result.Checkpoint.ID))
+	if err != nil {
+		t.Fatalf("GetOrchestrationHumanCheckpointByID() error = %v", err)
+	}
+	if checkpointRow.Status != CheckpointStatusTimedOut {
+		t.Fatalf("checkpoint status = %q, want %q", checkpointRow.Status, CheckpointStatusTimedOut)
+	}
+	if checkpointRow.ResolvedBy != "system" {
+		t.Fatalf("checkpoint resolved_by = %q, want system", checkpointRow.ResolvedBy)
+	}
+	if checkpointRow.ResolvedMode != CheckpointResolutionModeSelectOption || checkpointRow.ResolvedOptionID != "ok" {
+		t.Fatalf("checkpoint resolution = (%q, %q), want (%q, ok)", checkpointRow.ResolvedMode, checkpointRow.ResolvedOptionID, CheckpointResolutionModeSelectOption)
+	}
+
+	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	if err != nil {
+		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("ProcessNextPlanningIntent() = false, want true")
+	}
+
+	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListRunTasks() error = %v", err)
+	}
+	if len(taskPage.Items) != 1 {
+		t.Fatalf("ListRunTasks() len = %d, want 1", len(taskPage.Items))
+	}
+	if taskPage.Items[0].Status != TaskStatusReady {
+		t.Fatalf("task status = %q, want %q", taskPage.Items[0].Status, TaskStatusReady)
+	}
+	if taskPage.Items[0].WaitingCheckpointID != "" || taskPage.Items[0].WaitingScope != "" {
+		t.Fatalf("task waiting fields = (%q, %q), want empty", taskPage.Items[0].WaitingCheckpointID, taskPage.Items[0].WaitingScope)
+	}
+
+	eventPage, err := svc.ListRunEvents(ctx, caller, handle.RunID, ListRunEventsRequest{Limit: 100})
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	var foundTimedOut bool
+	for _, event := range eventPage.Items {
+		if event.Type != "run.event.hitl.timed_out" {
+			continue
+		}
+		if checkpointID, _ := event.Payload["checkpoint_id"].(string); checkpointID != result.Checkpoint.ID {
+			continue
+		}
+		foundTimedOut = true
+		break
+	}
+	if !foundTimedOut {
+		t.Fatal("ListRunEvents() missing run.event.hitl.timed_out")
 	}
 }
 

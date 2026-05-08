@@ -1260,6 +1260,15 @@ FROM orchestration_human_checkpoints
 WHERE run_id = sqlc.arg(run_id)
 ORDER BY created_at ASC, id ASC;
 
+-- name: ListTimedOutOpenOrchestrationHumanCheckpoints :many
+SELECT *
+FROM orchestration_human_checkpoints
+WHERE status = 'open'
+  AND timeout_at IS NOT NULL
+  AND timeout_at <= clock_timestamp()
+ORDER BY timeout_at ASC, created_at ASC, id ASC
+LIMIT sqlc.arg(limit_count);
+
 -- name: MarkOrchestrationTaskDependencySuperseded :one
 UPDATE orchestration_task_dependencies
 SET superseded_by_planner_epoch = sqlc.arg(superseded_by_planner_epoch),
@@ -1280,6 +1289,25 @@ SET status = 'resolved',
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
+
+-- name: MarkOrchestrationHumanCheckpointTimedOut :one
+UPDATE orchestration_human_checkpoints
+SET status = 'timed_out',
+    status_version = status_version + 1,
+    resolved_by = sqlc.arg(resolved_by),
+    resolved_mode = sqlc.arg(resolved_mode),
+    resolved_option_id = sqlc.arg(resolved_option_id),
+    resolved_freeform_input = sqlc.arg(resolved_freeform_input),
+    resolved_at = now(),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND status = 'open'
+  AND timeout_at IS NOT NULL
+  AND timeout_at <= clock_timestamp()
+RETURNING *;
+
+-- name: NotifyOrchestrationVerificationReady :exec
+SELECT pg_notify('orchestration_verification_ready', '');
 
 -- name: MarkOrchestrationHumanCheckpointCancelled :one
 UPDATE orchestration_human_checkpoints

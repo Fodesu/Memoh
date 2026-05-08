@@ -1,6 +1,7 @@
 -- 0077_add_orchestration_kernel (down)
 -- Drop the final orchestration kernel tables.
 
+DROP INDEX IF EXISTS idx_orchestration_human_checkpoints_open_timeout;
 DROP TABLE IF EXISTS orchestration_workers;
 DROP TABLE IF EXISTS orchestration_idempotency_records;
 DROP TABLE IF EXISTS orchestration_projection_snapshots;
