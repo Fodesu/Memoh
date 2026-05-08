@@ -4338,6 +4338,32 @@ func defaultEnvPreconditionsJSON() []byte {
 	return []byte(`{"required":false}`)
 }
 
+// marshalEnvPreconditions encodes a planner-emitted EnvPreconditions value
+// for the env_preconditions JSONB column. Required=false short-circuits to
+// the same sentinel defaultEnvPreconditionsJSON returns, which keeps the
+// stored bytes byte-identical for purely-LLM tasks regardless of whether the
+// planner emitted a full struct or relied on the default.
+func marshalEnvPreconditions(value EnvPreconditions) []byte {
+	if !value.Required {
+		return defaultEnvPreconditionsJSON()
+	}
+	return marshalJSON(value)
+}
+
+// decodeEnvPreconditions reads the env_preconditions JSONB column back into
+// the domain struct. Empty or invalid bytes fall back to a "not required"
+// envelope so callers never have to special-case missing data.
+func decodeEnvPreconditions(data []byte) EnvPreconditions {
+	value := EnvPreconditions{}
+	if len(data) == 0 {
+		return value
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return EnvPreconditions{}
+	}
+	return value
+}
+
 func marshalJSON(value any) []byte {
 	payload, err := json.Marshal(value)
 	if err != nil {
@@ -4526,6 +4552,7 @@ func toTask(row sqlc.OrchestrationTask) Task {
 		Priority:                 int(row.Priority),
 		RetryPolicy:              decodeJSONObject(row.RetryPolicy),
 		VerificationPolicy:       decodeJSONObject(row.VerificationPolicy),
+		EnvPreconditions:         decodeEnvPreconditions(row.EnvPreconditions),
 		Status:                   row.Status,
 		StatusVersion:            mustUint64FromInt64(row.StatusVersion, "task.status_version"),
 		WaitingCheckpointID:      row.WaitingCheckpointID.String(),
