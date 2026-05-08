@@ -86,6 +86,7 @@ import (
 	"github.com/memohai/memoh/internal/orchestration"
 	"github.com/memohai/memoh/internal/orchestrationbus"
 	"github.com/memohai/memoh/internal/orchestrationexec"
+	"github.com/memohai/memoh/internal/orchestrationfacts"
 	"github.com/memohai/memoh/internal/orchestrationoutbox"
 	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 	"github.com/memohai/memoh/internal/policy"
@@ -415,6 +416,49 @@ func startOrchestrationOutbox(lc fx.Lifecycle, log *slog.Logger, dispatcher *orc
 				return nil
 			case <-stopCtx.Done():
 				log.Warn("orchestration outbox did not stop in time", slog.Any("error", stopCtx.Err()))
+				return stopCtx.Err()
+			}
+		},
+	})
+}
+
+// provideOrchestrationFactConsumer wires the kernel's fact consumer. It
+// subscribes to every attempt / verification envelope on the bus and checks
+// it against Postgres. Returns nil when queries or the bus are missing so
+// the rest of the FX graph still wires up.
+func provideOrchestrationFactConsumer(log *slog.Logger, queries *dbsqlc.Queries, bus orchestrationbus.Bus) *orchestrationfacts.Consumer {
+	if queries == nil || bus == nil {
+		return nil
+	}
+	return orchestrationfacts.New(log, queries, bus)
+}
+
+// startOrchestrationFactConsumer runs the fact consumer for the process
+// lifetime. Loop errors are logged and dropped; Postgres still owns the
+// state, so a dead consumer does not break the kernel.
+func startOrchestrationFactConsumer(lc fx.Lifecycle, log *slog.Logger, consumer *orchestrationfacts.Consumer) {
+	if consumer == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	lc.Append(fx.Hook{
+		OnStart: func(_ context.Context) error {
+			go func() {
+				defer close(done)
+				if err := consumer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					log.Warn("orchestration fact consumer exited", slog.Any("error", err))
+				}
+			}()
+			return nil
+		},
+		OnStop: func(stopCtx context.Context) error {
+			cancel()
+			select {
+			case <-done:
+				return nil
+			case <-stopCtx.Done():
+				log.Warn("orchestration fact consumer did not stop in time", slog.Any("error", stopCtx.Err()))
 				return stopCtx.Err()
 			}
 		},
