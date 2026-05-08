@@ -86,6 +86,10 @@ timeout_seconds = 10
 [sparse]
 base_url = "http://sparse:8085"
 
+## NATS JetStream — enabled when the docker-compose nats service is running.
+[nats]
+url = "nats://nats:4222"
+
 ## Browser Gateway
 [browser_gateway]
 host = "browser"

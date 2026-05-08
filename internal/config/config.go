@@ -57,6 +57,7 @@ type Config struct {
 	SQLite         SQLiteConfig         `toml:"sqlite"`
 	Qdrant         QdrantConfig         `toml:"qdrant"`
 	Sparse         SparseConfig         `toml:"sparse"`
+	NATS           NATSConfig           `toml:"nats"`
 	BrowserGateway BrowserGatewayConfig `toml:"browser_gateway"`
 	Registry       RegistryConfig       `toml:"registry"`
 	Supermarket    SupermarketConfig    `toml:"supermarket"`
@@ -270,6 +271,31 @@ type QdrantConfig struct {
 
 type SparseConfig struct {
 	BaseURL string `toml:"base_url"`
+}
+
+// NATSConfig configures the orchestration event bus client. URL is empty by
+// default; orchestration falls back to the in-process bus when no URL is set.
+type NATSConfig struct {
+	URL             string `toml:"url"`
+	Token           string `toml:"token" json:"-"`
+	User            string `toml:"user"`
+	Password        string `toml:"password" json:"-"`
+	CredentialsFile string `toml:"credentials_file"`
+	StreamReplicas  int    `toml:"stream_replicas"`
+}
+
+// Enabled reports whether a JetStream backend should be wired up.
+func (c NATSConfig) Enabled() bool {
+	return strings.TrimSpace(c.URL) != ""
+}
+
+// EffectiveStreamReplicas returns the configured stream replica count or 1 as
+// default. Zero replicas would be invalid for JetStream.
+func (c NATSConfig) EffectiveStreamReplicas() int {
+	if c.StreamReplicas > 0 {
+		return c.StreamReplicas
+	}
+	return 1
 }
 
 const DefaultProvidersDir = "conf/providers"
