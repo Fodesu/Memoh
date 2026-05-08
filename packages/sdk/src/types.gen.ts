@@ -1806,6 +1806,13 @@ export type OrchestrationInspectorWorkerLease = {
     updated_at?: string;
 };
 
+export type OrchestrationRebuildBlackboardResult = {
+    blackboard_configured?: boolean;
+    run_context_written?: number;
+    task_results_written?: number;
+    write_errors?: number;
+};
+
 export type OrchestrationResolveCheckpointResult = {
     checkpoint_id?: string;
     snapshot_seq?: number;
@@ -8672,6 +8679,48 @@ export type GetOrchestrationRunsByRunIdArtifactsResponses = {
 };
 
 export type GetOrchestrationRunsByRunIdArtifactsResponse = GetOrchestrationRunsByRunIdArtifactsResponses[keyof GetOrchestrationRunsByRunIdArtifactsResponses];
+
+export type PostOrchestrationRunsByRunIdBlackboardRebuildData = {
+    body?: never;
+    path: {
+        /**
+         * Run ID
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/orchestration/runs/{run_id}/blackboard/rebuild';
+};
+
+export type PostOrchestrationRunsByRunIdBlackboardRebuildErrors = {
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostOrchestrationRunsByRunIdBlackboardRebuildError = PostOrchestrationRunsByRunIdBlackboardRebuildErrors[keyof PostOrchestrationRunsByRunIdBlackboardRebuildErrors];
+
+export type PostOrchestrationRunsByRunIdBlackboardRebuildResponses = {
+    /**
+     * OK
+     */
+    200: OrchestrationRebuildBlackboardResult;
+};
+
+export type PostOrchestrationRunsByRunIdBlackboardRebuildResponse = PostOrchestrationRunsByRunIdBlackboardRebuildResponses[keyof PostOrchestrationRunsByRunIdBlackboardRebuildResponses];
 
 export type PostOrchestrationRunsByRunIdCancelData = {
     /**

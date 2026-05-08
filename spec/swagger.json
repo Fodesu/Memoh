@@ -7670,6 +7670,61 @@
                 }
             }
         },
+        "/orchestration/runs/{run_id}/blackboard/rebuild": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Recovery primitive that repopulates the run's blackboard\n(run-scope context + committed task results) from the\nauthoritative Postgres copy. Use this after a JetStream KV\nbucket loss or before bringing a partial deployment back\nonline. The rebuild is idempotent.",
+                "tags": [
+                    "orchestration"
+                ],
+                "summary": "Rebuild the blackboard runtime view from Postgres",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/orchestration.RebuildBlackboardResult"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/orchestration/runs/{run_id}/cancel": {
             "post": {
                 "security": [
@@ -15261,6 +15316,23 @@
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "orchestration.RebuildBlackboardResult": {
+            "type": "object",
+            "properties": {
+                "blackboard_configured": {
+                    "type": "boolean"
+                },
+                "run_context_written": {
+                    "type": "integer"
+                },
+                "task_results_written": {
+                    "type": "integer"
+                },
+                "write_errors": {
+                    "type": "integer"
                 }
             }
         },
