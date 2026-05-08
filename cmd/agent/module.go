@@ -78,6 +78,9 @@ func options() fx.Option {
 			provideOrchestrationBlackboard,
 			provideOrchestrationOutbox,
 			provideOrchestrationFactConsumer,
+			provideOrchestrationEnvBackends,
+			provideOrchestrationEnvManager,
+			provideOrchestrationEnvKernelAdapter,
 			orchestration.NewService,
 			emailpkg.NewDBOAuthTokenStore,
 			provideEmailRegistry,
@@ -172,6 +175,8 @@ func options() fx.Option {
 			startOrchestrationOutbox,
 			startOrchestrationFactConsumer,
 			wireOrchestrationBlackboard,
+			wireOrchestrationEnvManager,
+			startOrchestrationEnvReclaim,
 		),
 		fx.WithLogger(func(logger *slog.Logger) fxevent.Logger {
 			return &fxevent.SlogLogger{Logger: logger.With(slog.String("component", "fx"))}
