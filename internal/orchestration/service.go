@@ -2378,6 +2378,19 @@ func (s *Service) CreateHumanCheckpoint(ctx context.Context, caller ControlIdent
 		return nil, err
 	}
 
+	if normalizedResumePolicy != nil && normalizedResumePolicy.ResumeMode == CheckpointResumeModeResumeHeldEnv {
+		attempts, err := qtx.ListCurrentOrchestrationTaskAttemptsByRun(ctx, pgRunID)
+		if err != nil {
+			return nil, fmt.Errorf("list attempts for held env checkpoint: %w", err)
+		}
+		for _, attempt := range attempts {
+			if attempt.TaskID != lockedTask.ID || isTerminalAttemptStatus(attempt.Status) {
+				continue
+			}
+			s.holdEnvForAttemptCheckpoint(ctx, qtx, attempt, checkpointUUID)
+		}
+	}
+
 	if req.BlocksRun && lockedRun.LifecycleStatus != LifecycleStatusWaitingHuman {
 		siblingTasks, err := qtx.ListCurrentOrchestrationTasksByRun(ctx, pgRunID)
 		if err != nil {
@@ -3792,7 +3805,7 @@ func normalizeCheckpointResumePolicy(input *CheckpointResumePolicy) (*Checkpoint
 	case CheckpointResumeModeNewAttempt:
 		return normalized, nil
 	case CheckpointResumeModeResumeHeldEnv:
-		return nil, fmt.Errorf("%w: resume_policy.resume_mode %q is not supported in current runtime", ErrInvalidArgument, normalized.ResumeMode)
+		return normalized, nil
 	case "":
 		return nil, fmt.Errorf("%w: resume_policy.resume_mode is required", ErrInvalidArgument)
 	default:

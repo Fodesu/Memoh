@@ -930,8 +930,12 @@ func TestNormalizeCheckpointResumePolicy(t *testing.T) {
 	if _, err := normalizeCheckpointResumePolicy(&CheckpointResumePolicy{}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("normalizeCheckpointResumePolicy(empty) error = %v, want %v", err, ErrInvalidArgument)
 	}
-	if _, err := normalizeCheckpointResumePolicy(&CheckpointResumePolicy{ResumeMode: CheckpointResumeModeResumeHeldEnv}); !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("normalizeCheckpointResumePolicy(resume_held_env) error = %v, want %v", err, ErrInvalidArgument)
+	heldPolicy, err := normalizeCheckpointResumePolicy(&CheckpointResumePolicy{ResumeMode: CheckpointResumeModeResumeHeldEnv})
+	if err != nil {
+		t.Fatalf("normalizeCheckpointResumePolicy(resume_held_env) error = %v", err)
+	}
+	if heldPolicy == nil || heldPolicy.ResumeMode != CheckpointResumeModeResumeHeldEnv {
+		t.Fatalf("normalizeCheckpointResumePolicy(resume_held_env) = %+v, want %q", heldPolicy, CheckpointResumeModeResumeHeldEnv)
 	}
 	if _, err := normalizeCheckpointResumePolicy(&CheckpointResumePolicy{ResumeMode: "resume_later"}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("normalizeCheckpointResumePolicy(unsupported) error = %v, want %v", err, ErrInvalidArgument)

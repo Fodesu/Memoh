@@ -42,6 +42,19 @@ func (a *KernelAdapter) GetEnvResourceByName(ctx context.Context, tenantID, name
 	}, nil
 }
 
+// GetHeldEnvBindingForTask locates a task's held env binding, if any.
+func (a *KernelAdapter) GetHeldEnvBindingForTask(ctx context.Context, runID, taskID string) (orchestration.EnvHeldBindingRef, bool, error) {
+	binding, ok, err := a.manager.GetHeldBindingForTask(ctx, runID, taskID)
+	if err != nil || !ok {
+		return orchestration.EnvHeldBindingRef{}, ok, err
+	}
+	return orchestration.EnvHeldBindingRef{
+		BindingID:           binding.ID,
+		SessionID:           binding.SessionID,
+		HeldForCheckpointID: binding.HeldForCheckpointID,
+	}, true, nil
+}
+
 // AcquireEnvSession reserves capacity, asks the backend to allocate the
 // runtime, and returns the lease tuple the kernel needs to fence subsequent
 // writes. The returned RuntimeHandle is opaque to the kernel; the worker
@@ -62,6 +75,34 @@ func (a *KernelAdapter) AcquireEnvSession(ctx context.Context, req orchestration
 		return orchestration.EnvSessionLease{}, err
 	}
 	return orchestration.EnvSessionLease{
+		SessionID:      session.ID,
+		ResourceID:     session.ResourceID,
+		LeaseToken:     session.LeaseToken,
+		LeaseEpoch:     session.LeaseEpoch,
+		LeaseExpiresAt: session.LeaseExpiresAt,
+		RuntimeHandle:  session.RuntimeHandle,
+	}, nil
+}
+
+// ResumeEnvBinding re-attaches a held binding to a new attempt and returns
+// the rotated lease tuple.
+func (a *KernelAdapter) ResumeEnvBinding(ctx context.Context, req orchestration.EnvResumeBindingRequest) (orchestration.EnvResumedBinding, error) {
+	binding, err := a.manager.ResumeBinding(ctx, ResumeBindingRequest{
+		BindingID:        req.BindingID,
+		NewAttemptID:     req.NewAttemptID,
+		NewLeaseHolderID: req.NewLeaseHolderID,
+		LeaseTTL:         req.LeaseTTL,
+		Metadata:         req.Metadata,
+	})
+	if err != nil {
+		return orchestration.EnvResumedBinding{}, err
+	}
+	session, err := a.manager.GetSession(ctx, binding.SessionID)
+	if err != nil {
+		return orchestration.EnvResumedBinding{}, err
+	}
+	return orchestration.EnvResumedBinding{
+		BindingID:      binding.ID,
 		SessionID:      session.ID,
 		ResourceID:     session.ResourceID,
 		LeaseToken:     session.LeaseToken,

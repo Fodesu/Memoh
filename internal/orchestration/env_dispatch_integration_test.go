@@ -22,6 +22,7 @@ type fakeEnvManager struct {
 	resource          EnvResourceRef
 	getResourceCalls  []string
 	acquireCalls      []EnvAcquireRequest
+	resumeCalls       []EnvResumeBindingRequest
 	createBindingArgs []EnvCreateBindingRequest
 	snapshotCalls     []EnvCaptureSnapshotRequest
 	releaseBinding    []EnvReleaseBindingRequest
@@ -31,6 +32,7 @@ type fakeEnvManager struct {
 	nextLeaseToken    string
 	nextLeaseEpoch    int64
 	nextBindingID     string
+	heldBinding       *EnvHeldBindingRef
 }
 
 func (f *fakeEnvManager) GetEnvResourceByName(_ context.Context, _, name string) (EnvResourceRef, error) {
@@ -41,6 +43,15 @@ func (f *fakeEnvManager) GetEnvResourceByName(_ context.Context, _, name string)
 		return EnvResourceRef{}, errors.New("fake env: resource not found: " + name)
 	}
 	return f.resource, nil
+}
+
+func (f *fakeEnvManager) GetHeldEnvBindingForTask(_ context.Context, _, _ string) (EnvHeldBindingRef, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.heldBinding == nil {
+		return EnvHeldBindingRef{}, false, nil
+	}
+	return *f.heldBinding, true, nil
 }
 
 func (f *fakeEnvManager) AcquireEnvSession(_ context.Context, req EnvAcquireRequest) (EnvSessionLease, error) {
@@ -54,6 +65,20 @@ func (f *fakeEnvManager) AcquireEnvSession(_ context.Context, req EnvAcquireRequ
 		ResourceName:  f.resource.Name,
 		LeaseToken:    f.nextLeaseToken,
 		LeaseEpoch:    f.nextLeaseEpoch,
+		RuntimeHandle: map[string]any{"socket": "/run/memoh/" + f.nextSessionID + ".sock"},
+	}, nil
+}
+
+func (f *fakeEnvManager) ResumeEnvBinding(_ context.Context, req EnvResumeBindingRequest) (EnvResumedBinding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeCalls = append(f.resumeCalls, req)
+	return EnvResumedBinding{
+		BindingID:     req.BindingID,
+		SessionID:     f.nextSessionID,
+		ResourceID:    f.resource.ID,
+		LeaseToken:    "resumed-" + f.nextLeaseToken,
+		LeaseEpoch:    f.nextLeaseEpoch + 1,
 		RuntimeHandle: map[string]any{"socket": "/run/memoh/" + f.nextSessionID + ".sock"},
 	}, nil
 }
@@ -334,6 +359,83 @@ func TestIntegrationDispatchSkipsEnvManagerWhenPreconditionsNotRequired(t *testi
 	captured := decodeManifestEnvPayload(t, loadInputManifestEnvPayload(t, ctx, svc, handle.RunID))
 	if required, _ := captured["required"].(bool); required {
 		t.Fatalf("captured_env_preconditions.required = true, want false; payload=%v", captured)
+	}
+}
+
+func TestIntegrationDispatchResumesHeldEnvBinding(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	envManager := newFakeEnvManager("held-shell", "env-resource-"+uuid.NewString(), EnvPreconditionsKindContainer)
+	envManager.heldBinding = &EnvHeldBindingRef{
+		BindingID:           envManager.nextBindingID,
+		SessionID:           envManager.nextSessionID,
+		HeldForCheckpointID: "checkpoint-" + uuid.NewString(),
+	}
+	svc.SetEnvManager(envManager)
+
+	svc.SetStartRunPlanner(fixedStartRunPlanner{
+		result: &StartRunPlanningResult{
+			ChildTasks: []PlannedTaskSpec{
+				{
+					Alias:         "resume",
+					Kind:          "step",
+					Goal:          "resume held shell",
+					WorkerProfile: DefaultRootWorkerProfile,
+					EnvPreconditions: EnvPreconditions{
+						Required:     true,
+						Kind:         EnvPreconditionsKindContainer,
+						ResourceName: "held-shell",
+						Mode:         "read_write",
+						EffectClass:  EnvPreconditionsEffectInternal,
+					},
+				},
+			},
+		},
+	})
+
+	ctx := context.Background()
+	caller := ControlIdentity{
+		TenantID: "tenant-env-resume-" + uuid.NewString(),
+		Subject:  "subject-env-resume-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "resume held env",
+		BotID:          "bot-" + uuid.NewString(),
+		IdempotencyKey: "start-env-resume-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	processRunPlanningIntent(t, ctx, svc)
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	dispatched, err := dispatchNextReadyTaskForTest(ctx, svc)
+	if err != nil {
+		t.Fatalf("DispatchNextReadyTask() error = %v", err)
+	}
+	if !dispatched {
+		t.Fatal("DispatchNextReadyTask() = false, want true")
+	}
+	if got := len(envManager.acquireCalls); got != 0 {
+		t.Fatalf("AcquireEnvSession call count = %d, want 0", got)
+	}
+	if got := len(envManager.createBindingArgs); got != 0 {
+		t.Fatalf("CreateEnvBinding call count = %d, want 0", got)
+	}
+	if got := len(envManager.resumeCalls); got != 1 {
+		t.Fatalf("ResumeEnvBinding call count = %d, want 1", got)
+	}
+	if got := envManager.resumeCalls[0].BindingID; got != envManager.nextBindingID {
+		t.Fatalf("ResumeEnvBinding binding_id = %q, want %q", got, envManager.nextBindingID)
+	}
+	captured := decodeManifestEnvPayload(t, loadInputManifestEnvPayload(t, ctx, svc, handle.RunID))
+	if got := stringFrom(captured, "binding_id"); got != envManager.nextBindingID {
+		t.Fatalf("captured_env_preconditions.binding_id = %q, want %q", got, envManager.nextBindingID)
+	}
+	if got := stringFrom(captured, "lease_token"); !strings.HasPrefix(got, "resumed-") {
+		t.Fatalf("captured_env_preconditions.lease_token = %q, want resumed-*", got)
 	}
 }
 

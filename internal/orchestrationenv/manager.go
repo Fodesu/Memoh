@@ -477,6 +477,29 @@ func (m *Manager) CreateBinding(ctx context.Context, req CreateBindingRequest) (
 	return &binding, nil
 }
 
+// GetHeldBindingForTask returns the held primary binding for a task, if any.
+func (m *Manager) GetHeldBindingForTask(ctx context.Context, runID, taskID string) (*Binding, bool, error) {
+	runUUID, err := db.ParseUUID(runID)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, false, fmt.Errorf("%w: task_id is required", ErrInvalidArgument)
+	}
+	rows, err := m.queries.ListActiveOrchestrationEnvBindingsByRun(ctx, runUUID)
+	if err != nil {
+		return nil, false, fmt.Errorf("env: list active bindings: %w", err)
+	}
+	for _, row := range rows {
+		binding := projectBinding(row)
+		if binding.TaskID == taskID && binding.Status == BindingStatusHeld {
+			return &binding, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 // HoldBinding marks an active binding as held for HITL resume and
 // transitions the underlying session to 'held' so capacity accounting
 // keeps it counted.
