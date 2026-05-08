@@ -84,6 +84,7 @@ import (
 	"github.com/memohai/memoh/internal/network/kubeapi"
 	netoverlay "github.com/memohai/memoh/internal/network/overlay"
 	"github.com/memohai/memoh/internal/orchestration"
+	"github.com/memohai/memoh/internal/orchestrationblackboard"
 	"github.com/memohai/memoh/internal/orchestrationbus"
 	"github.com/memohai/memoh/internal/orchestrationexec"
 	"github.com/memohai/memoh/internal/orchestrationfacts"
@@ -378,6 +379,42 @@ func provideOrchestrationBus(lc fx.Lifecycle, log *slog.Logger, cfg config.Confi
 		},
 	})
 	return bus, nil
+}
+
+// provideOrchestrationBlackboard wires the Stage 2 blackboard runtime view.
+// When NATS is configured the JetStream KV bucket backs it; otherwise an
+// in-memory store is used so single-process deployments and tests stay
+// functional. Postgres remains authoritative; the blackboard never gates a
+// kernel commit.
+func provideOrchestrationBlackboard(lc fx.Lifecycle, log *slog.Logger, cfg config.Config) (orchestrationblackboard.Store, error) {
+	store, err := orchestrationblackboard.New(context.Background(), log, orchestrationblackboard.FactoryConfig{
+		URL:             cfg.NATS.URL,
+		Token:           cfg.NATS.Token,
+		User:            cfg.NATS.User,
+		Password:        cfg.NATS.Password,
+		CredentialsFile: cfg.NATS.CredentialsFile,
+		Replicas:        cfg.NATS.EffectiveStreamReplicas(),
+		ConnectionName:  "memoh-orchestration-blackboard",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("orchestration blackboard: %w", err)
+	}
+	lc.Append(fx.Hook{
+		OnStop: func(_ context.Context) error {
+			return store.Close()
+		},
+	})
+	return store, nil
+}
+
+// wireOrchestrationBlackboard hands the kernel the runtime store. We leave
+// the wiring as an Invoke so absence of a blackboard never breaks the rest
+// of the FX graph.
+func wireOrchestrationBlackboard(orchestrationService *orchestration.Service, store orchestrationblackboard.Store) {
+	if orchestrationService == nil || store == nil {
+		return
+	}
+	orchestrationService.SetBlackboardStore(store)
 }
 
 // provideOrchestrationOutbox wires the run-event outbox dispatcher. It runs

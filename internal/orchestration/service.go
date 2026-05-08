@@ -23,6 +23,7 @@ import (
 
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	"github.com/memohai/memoh/internal/orchestrationblackboard"
 	"github.com/memohai/memoh/internal/orchestrationbus"
 )
 
@@ -35,6 +36,8 @@ type Service struct {
 	replanner          Replanner
 	eventCommittedHook func()
 	eventBus           orchestrationbus.Bus
+	bbStore            orchestrationblackboard.Store
+	bbWriter           *orchestrationblackboard.Writer
 }
 
 type StartRunPlanner interface {
@@ -80,6 +83,34 @@ func (s *Service) SetEventCommittedHook(fn func()) {
 // latency per event.
 func (s *Service) SetEventBus(bus orchestrationbus.Bus) {
 	s.eventBus = bus
+}
+
+// SetBlackboardStore wires the Stage 2 blackboard runtime view. When the
+// store is non-nil the kernel publishes task completion summaries to
+// bb.task.{task_id}.result.summary and snapshots predecessor result
+// revisions into every dispatched InputManifest. Postgres remains
+// authoritative; loss of the blackboard backend only delays the runtime
+// view, never changes committed truth.
+func (s *Service) SetBlackboardStore(store orchestrationblackboard.Store) {
+	s.bbStore = store
+	if store == nil {
+		s.bbWriter = nil
+		return
+	}
+	writer, err := orchestrationblackboard.NewWriter(
+		orchestrationblackboard.WriterIdentity{
+			Type:     orchestrationblackboard.WriterOrchestrator,
+			WriterID: "orchestration-kernel",
+		},
+		store,
+		nil,
+	)
+	if err != nil {
+		s.logger.Warn("init blackboard writer failed", slog.Any("error", err))
+		s.bbWriter = nil
+		return
+	}
+	s.bbWriter = writer
 }
 
 // notifyEventCommitted is wired from kernel commit paths in a follow-up

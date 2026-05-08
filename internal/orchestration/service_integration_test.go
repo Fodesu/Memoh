@@ -21,6 +21,7 @@ import (
 	"github.com/memohai/memoh/internal/config"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	"github.com/memohai/memoh/internal/orchestrationblackboard"
 	"github.com/memohai/memoh/internal/orchestrationbus"
 	"github.com/memohai/memoh/internal/orchestrationoutbox"
 )
@@ -12191,5 +12192,206 @@ func TestIntegrationRetryTaskRejectsSiblingActiveAttempt(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTaskRetryUnsupported) {
 		t.Fatalf("RetryTask(sibling active attempt) error = %v, want %v", err, ErrTaskRetryUnsupported)
+	}
+}
+
+// TestIntegrationBlackboardCaptureAndPublish covers the Stage 2.3 contract:
+// when a kernel-attached blackboard store is wired in, the kernel publishes
+// task completion summaries to bb.task.{task_id}.result.summary, and
+// downstream task dispatches snapshot the live revisions into
+// orchestration_input_manifests.captured_blackboard_revisions so verifier
+// replay can later reconstruct the same view.
+func TestIntegrationBlackboardCaptureAndPublish(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	store := orchestrationblackboard.NewInMemoryStore()
+	t.Cleanup(func() { _ = store.Close() })
+	svc.SetBlackboardStore(store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	caller := ControlIdentity{
+		TenantID: "tenant-bb-" + uuid.NewString(),
+		Subject:  "subject-bb-" + uuid.NewString(),
+	}
+
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "blackboard capture round trip",
+		IdempotencyKey: "blackboard-capture-" + uuid.NewString(),
+		Input: map[string]any{
+			"builtin_workerd": map[string]any{
+				"request_replan": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	processRunPlanningIntent(t, ctx, svc)
+
+	rootAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
+		WorkerID:        "worker-bb-root",
+		ExecutorID:      DefaultWorkerExecutorID,
+		WorkerProfiles:  []string{DefaultRootWorkerProfile},
+		LeaseTTLSeconds: 30,
+	}, 2)
+	rootRunning, err := svc.StartAttempt(ctx, rootAttempt.ID, rootAttempt.ClaimToken)
+	if err != nil {
+		t.Fatalf("StartAttempt(root) error = %v", err)
+	}
+	if _, err := svc.CompleteAttempt(ctx, AttemptCompletion{
+		AttemptID:     rootRunning.ID,
+		ClaimToken:    rootRunning.ClaimToken,
+		Status:        TaskAttemptStatusCompleted,
+		Summary:       "root planned producer + consumer",
+		RequestReplan: true,
+		StructuredOutput: map[string]any{
+			"child_tasks": []map[string]any{
+				{
+					"alias":          "producer",
+					"kind":           "child",
+					"goal":           "producer emits a shared fact",
+					"worker_profile": DefaultRootWorkerProfile,
+					"inputs": map[string]any{
+						"builtin_workerd": map[string]any{
+							"summary": "producer complete",
+						},
+					},
+				},
+				{
+					"alias":          "consumer",
+					"kind":           "child",
+					"goal":           "consumer reads producer result",
+					"worker_profile": DefaultRootWorkerProfile,
+					"depends_on":     []string{"producer"},
+					"inputs": map[string]any{
+						"builtin_workerd": map[string]any{
+							"summary": "consumer complete",
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CompleteAttempt(root) error = %v", err)
+	}
+
+	rootResultKey := orchestrationblackboard.TaskKey(
+		rootAttempt.TaskID,
+		orchestrationblackboard.NamespaceResult,
+		"summary",
+	)
+	rootEntry, err := store.Get(ctx, rootResultKey)
+	if err != nil {
+		t.Fatalf("blackboard Get(root result) error = %v", err)
+	}
+	if rootEntry.Revision == 0 {
+		t.Fatalf("root result revision = 0, want > 0")
+	}
+	if rootEntry.Value.WriterType != orchestrationblackboard.WriterOrchestrator {
+		t.Fatalf("root result writer_type = %q, want %q", rootEntry.Value.WriterType, orchestrationblackboard.WriterOrchestrator)
+	}
+	if rootEntry.Value.PersistenceClass != orchestrationblackboard.PersistenceFromPostgres {
+		t.Fatalf("root result persistence_class = %q, want %q", rootEntry.Value.PersistenceClass, orchestrationblackboard.PersistenceFromPostgres)
+	}
+
+	drainRunPlanningIntents(t, ctx, svc)
+
+	producerAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
+		WorkerID:        "worker-bb-producer",
+		ExecutorID:      DefaultWorkerExecutorID,
+		WorkerProfiles:  []string{DefaultRootWorkerProfile},
+		LeaseTTLSeconds: 30,
+	}, 4)
+	producerRunning, err := svc.StartAttempt(ctx, producerAttempt.ID, producerAttempt.ClaimToken)
+	if err != nil {
+		t.Fatalf("StartAttempt(producer) error = %v", err)
+	}
+	if _, err := svc.CompleteAttempt(ctx, AttemptCompletion{
+		AttemptID:        producerRunning.ID,
+		ClaimToken:       producerRunning.ClaimToken,
+		Status:           TaskAttemptStatusCompleted,
+		Summary:          "producer emitted shared fact",
+		StructuredOutput: map[string]any{"shared_fact": "alpha"},
+	}); err != nil {
+		t.Fatalf("CompleteAttempt(producer) error = %v", err)
+	}
+
+	producerResultKey := orchestrationblackboard.TaskKey(
+		producerAttempt.TaskID,
+		orchestrationblackboard.NamespaceResult,
+		"summary",
+	)
+	producerEntry, err := store.Get(ctx, producerResultKey)
+	if err != nil {
+		t.Fatalf("blackboard Get(producer result) error = %v", err)
+	}
+
+	drainRunPlanningIntents(t, ctx, svc)
+
+	consumerAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
+		WorkerID:        "worker-bb-consumer",
+		ExecutorID:      DefaultWorkerExecutorID,
+		WorkerProfiles:  []string{DefaultRootWorkerProfile},
+		LeaseTTLSeconds: 30,
+	}, 4)
+	if consumerAttempt.InputManifestID == "" {
+		t.Fatalf("consumer attempt has no input manifest id")
+	}
+	manifestUUID, err := db.ParseUUID(consumerAttempt.InputManifestID)
+	if err != nil {
+		t.Fatalf("parse manifest id: %v", err)
+	}
+	manifestRow, err := svc.queries.GetOrchestrationInputManifestByID(ctx, manifestUUID)
+	if err != nil {
+		t.Fatalf("GetOrchestrationInputManifestByID() error = %v", err)
+	}
+	revisions := decodeJSONArrayObjects(manifestRow.CapturedBlackboardRevisions)
+	producerKeyStr := producerResultKey.String()
+	var matched bool
+	for _, entry := range revisions {
+		if entry["key"] != producerKeyStr {
+			continue
+		}
+		matched = true
+		raw, ok := entry["revision"]
+		if !ok {
+			t.Fatalf("captured revision entry missing 'revision' field: %#v", entry)
+		}
+		gotRevision, parseErr := jsonNumberToUint64(raw)
+		if parseErr != nil {
+			t.Fatalf("decode captured revision: %v (raw=%#v)", parseErr, raw)
+		}
+		if gotRevision != uint64(producerEntry.Revision) {
+			t.Fatalf("captured revision = %d, want %d", gotRevision, producerEntry.Revision)
+		}
+	}
+	if !matched {
+		t.Fatalf("consumer manifest captured_blackboard_revisions missing producer result key %q; got %#v", producerKeyStr, revisions)
+	}
+}
+
+func jsonNumberToUint64(raw any) (uint64, error) {
+	switch v := raw.(type) {
+	case uint64:
+		return v, nil
+	case int64:
+		if v < 0 {
+			return 0, fmt.Errorf("negative revision %d", v)
+		}
+		return uint64(v), nil
+	case float64:
+		if v < 0 {
+			return 0, fmt.Errorf("negative revision %v", v)
+		}
+		return uint64(v), nil
+	case string:
+		return strconv.ParseUint(v, 10, 64)
+	default:
+		return 0, fmt.Errorf("unsupported revision type %T", raw)
 	}
 }
