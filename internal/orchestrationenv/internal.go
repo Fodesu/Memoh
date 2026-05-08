@@ -57,6 +57,27 @@ func validateRegisterResource(req *RegisterResourceRequest) error {
 	return nil
 }
 
+// validateUpdateResource normalizes admin edits before they reach SQL.
+func validateUpdateResource(req *UpdateResourceRequest) error {
+	if req == nil {
+		return fmt.Errorf("%w: request is nil", ErrInvalidArgument)
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		return fmt.Errorf("%w: id is required", ErrInvalidArgument)
+	}
+	if req.Capacity <= 0 {
+		req.Capacity = 1
+	}
+	if req.Status == "" {
+		req.Status = ResourceStatusActive
+	}
+	if !validResourceStatus(req.Status) {
+		return fmt.Errorf("%w: status %q is invalid", ErrInvalidArgument, req.Status)
+	}
+	return nil
+}
+
 func validateAcquireSession(req *AcquireSessionRequest) error {
 	if req == nil {
 		return fmt.Errorf("%w: request is nil", ErrInvalidArgument)

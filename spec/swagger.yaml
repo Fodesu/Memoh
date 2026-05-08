@@ -1576,6 +1576,73 @@ definitions:
       reasoning_tokens:
         type: integer
     type: object
+  handlers.EnvResourceCreateRequest:
+    properties:
+      capacity:
+        type: integer
+      config:
+        additionalProperties: {}
+        type: object
+      kind:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+      status:
+        type: string
+    required:
+    - kind
+    - name
+    type: object
+  handlers.EnvResourceListPage:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/handlers.EnvResourceView'
+        type: array
+    type: object
+  handlers.EnvResourceUpdateRequest:
+    properties:
+      capacity:
+        type: integer
+      config:
+        additionalProperties: {}
+        type: object
+      metadata:
+        additionalProperties: {}
+        type: object
+      status:
+        type: string
+    type: object
+  handlers.EnvResourceView:
+    properties:
+      capacity:
+        type: integer
+      config:
+        additionalProperties: {}
+        type: object
+      created_at:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+      owner_subject:
+        type: string
+      status:
+        type: string
+      tenant_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
   handlers.ErrorResponse:
     properties:
       message:
@@ -2826,6 +2893,22 @@ definitions:
       snapshot_seq:
         type: integer
     type: object
+  orchestration.EnvPreconditions:
+    properties:
+      effect_class:
+        type: string
+      kind:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      mode:
+        type: string
+      required:
+        type: boolean
+      resource_name:
+        type: string
+    type: object
   orchestration.HumanCheckpoint:
     properties:
       blocks_run:
@@ -3490,6 +3573,8 @@ definitions:
         type: string
       decomposed_from_task_id:
         type: string
+      env_preconditions:
+        $ref: '#/definitions/orchestration.EnvPreconditions'
       goal:
         type: string
       id:
@@ -9113,6 +9198,143 @@ paths:
       security:
       - BearerAuth: []
       summary: Resolve a human checkpoint
+      tags:
+      - orchestration
+  /orchestration/env-resources:
+    get:
+      description: Return every env resource template registered for the caller's
+        tenant
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.EnvResourceListPage'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List orchestration env resources
+      tags:
+      - orchestration
+    post:
+      description: Add a new env resource template under the caller's tenant
+      parameters:
+      - description: Env resource payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.EnvResourceCreateRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.EnvResourceView'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Register an orchestration env resource
+      tags:
+      - orchestration
+  /orchestration/env-resources/{id}:
+    get:
+      description: Return a single env resource, scoped to the caller's tenant
+      parameters:
+      - description: Env resource ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.EnvResourceView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get an orchestration env resource
+      tags:
+      - orchestration
+    patch:
+      description: Rewrite the mutable fields (config, capacity, status, metadata)
+        of an env resource
+      parameters:
+      - description: Env resource ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Env resource update payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.EnvResourceUpdateRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.EnvResourceView'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Update an orchestration env resource
       tags:
       - orchestration
   /orchestration/runs:
