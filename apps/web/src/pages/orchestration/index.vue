@@ -835,6 +835,30 @@ function inferNodeKind(task: RunInspectorTask, level: number): NodeKind {
 
 function statusMeta(status: string): { label: string, icon: LucideIcon, dot: string, chip: string, task: string } {
   switch (status) {
+    case 'created':
+      return {
+        label: t('orchestration.statusPending'),
+        icon: Clock3,
+        dot: 'bg-muted-foreground',
+        chip: 'border-border bg-muted/70 text-muted-foreground',
+        task: 'border-border bg-muted/30',
+      }
+    case 'idle':
+      return {
+        label: t('orchestration.statusIdle'),
+        icon: Clock3,
+        dot: 'bg-muted-foreground',
+        chip: 'border-border bg-muted/70 text-muted-foreground',
+        task: 'border-border bg-muted/30',
+      }
+    case 'active':
+      return {
+        label: t('orchestration.statusActive'),
+        icon: LoaderCircle,
+        dot: 'bg-sky-500',
+        chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+        task: 'border-sky-500/30 bg-sky-500/8',
+      }
     case 'completed':
       return {
         label: t('orchestration.statusSuccess'),
@@ -844,10 +868,24 @@ function statusMeta(status: string): { label: string, icon: LucideIcon, dot: str
         task: 'bg-background',
       }
     case 'running':
+      return {
+        label: t('orchestration.statusRunning'),
+        icon: LoaderCircle,
+        dot: 'bg-sky-500',
+        chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+        task: 'border-sky-500/30 bg-sky-500/8',
+      }
     case 'dispatching':
+      return {
+        label: t('orchestration.statusDispatching'),
+        icon: LoaderCircle,
+        dot: 'bg-sky-500',
+        chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+        task: 'border-sky-500/30 bg-sky-500/8',
+      }
     case 'verifying':
       return {
-        label: status === 'verifying' ? t('orchestration.verifyingTasks') : t('orchestration.runningTasks'),
+        label: t('orchestration.statusVerifying'),
         icon: LoaderCircle,
         dot: 'bg-sky-500',
         chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
@@ -855,17 +893,31 @@ function statusMeta(status: string): { label: string, icon: LucideIcon, dot: str
       }
     case 'waiting_human':
       return {
-        label: t('orchestration.statusWaiting'),
+        label: t('orchestration.statusWaitingHuman'),
         icon: Clock3,
         dot: 'bg-amber-500',
         chip: 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300',
         task: 'border-amber-500/30 bg-amber-500/8',
       }
     case 'failed':
+      return {
+        label: t('orchestration.statusFailed'),
+        icon: AlertCircle,
+        dot: 'bg-rose-500',
+        chip: 'border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300',
+        task: 'border-rose-500/30 bg-rose-500/8',
+      }
     case 'blocked':
+      return {
+        label: t('orchestration.statusBlocked'),
+        icon: AlertCircle,
+        dot: 'bg-rose-500',
+        chip: 'border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300',
+        task: 'border-rose-500/30 bg-rose-500/8',
+      }
     case 'cancelled':
       return {
-        label: status || t('orchestration.blockedTasks'),
+        label: t('orchestration.statusCancelled'),
         icon: AlertCircle,
         dot: 'bg-rose-500',
         chip: 'border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300',
@@ -873,7 +925,7 @@ function statusMeta(status: string): { label: string, icon: LucideIcon, dot: str
       }
     default:
       return {
-        label: status || t('orchestration.pendingTasks'),
+        label: status ? status.replaceAll('_', ' ') : t('orchestration.statusPending'),
         icon: Clock3,
         dot: 'bg-muted-foreground',
         chip: 'border-border bg-muted/70 text-muted-foreground',
@@ -1050,13 +1102,13 @@ async function resolveCheckpointOption(checkpointId: string, optionId: string) {
       },
       throwOnError: true,
     })
-    toast.success(t('orchestration.runRefresh'))
+    toast.success(t('orchestration.checkpointResolved'))
     await refetchInspector()
     if (selectedBotId.value) {
       queryCache.invalidateQueries({ key: ['orchestration-runs', selectedBotId.value] })
     }
   } catch (err) {
-    toast.error(resolveApiErrorMessage(err, t('orchestration.inspectorLoadFailed')))
+    toast.error(resolveApiErrorMessage(err, t('orchestration.checkpointResolveFailed')))
   } finally {
     resolvingCheckpointId.value = ''
   }
@@ -1614,7 +1666,7 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
               class="size-1.5 rounded-full"
               :class="statusMeta(inspector.run.lifecycle_status).dot"
             />
-            {{ inspector.run.lifecycle_status }}
+            {{ statusMeta(inspector.run.lifecycle_status).label }}
           </span>
         </div>
 
