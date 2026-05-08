@@ -1347,9 +1347,11 @@ func (s *Service) dispatchNextReadyTask(ctx context.Context, workerProfileSet ma
 		if activeAttempts > 0 {
 			continue
 		}
+		capturedBlackboardRevisions := s.captureBlackboardRevisions(ctx, qtx, taskRow.RunID, taskRow.ID)
 		manifestHash, err := hashJSON(map[string]any{
-			"task_id": taskRow.ID.String(),
-			"inputs":  decodeJSONObject(taskRow.Inputs),
+			"task_id":                       taskRow.ID.String(),
+			"inputs":                        decodeJSONObject(taskRow.Inputs),
+			"captured_blackboard_revisions": capturedBlackboardRevisions,
 		})
 		if err != nil {
 			return false, fmt.Errorf("hash input manifest: %w", err)
@@ -1364,7 +1366,7 @@ func (s *Service) dispatchNextReadyTask(ctx context.Context, workerProfileSet ma
 			TaskID:                      taskRow.ID,
 			CapturedTaskInputs:          taskRow.Inputs,
 			CapturedArtifactVersions:    marshalJSON([]map[string]any{}),
-			CapturedBlackboardRevisions: marshalJSON([]map[string]any{}),
+			CapturedBlackboardRevisions: marshalJSON(capturedBlackboardRevisions),
 			ProjectionHash:              manifestHash,
 		})
 		if err != nil {
@@ -2237,6 +2239,7 @@ func (s *Service) CompleteAttempt(ctx context.Context, input AttemptCompletion) 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit complete attempt tx: %w", err)
 	}
+	s.publishTaskCompletionToBlackboard(ctx, finalAttempt, completionStatus, input)
 	attempt := toTaskAttempt(finalAttempt)
 	return &attempt, nil
 }

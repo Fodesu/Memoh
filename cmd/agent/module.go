@@ -79,6 +79,7 @@ func options() fx.Option {
 			audiopkg.NewService,
 			provideAudioTempStore,
 			provideOrchestrationBus,
+			provideOrchestrationBlackboard,
 			provideOrchestrationOutbox,
 			provideOrchestrationFactConsumer,
 			orchestration.NewService,
@@ -176,6 +177,7 @@ func options() fx.Option {
 			startOrchestrationRuntime,
 			startOrchestrationOutbox,
 			startOrchestrationFactConsumer,
+			wireOrchestrationBlackboard,
 		),
 		fx.WithLogger(func(logger *slog.Logger) fxevent.Logger {
 			return &fxevent.SlogLogger{Logger: logger.With(slog.String("component", "fx"))}
