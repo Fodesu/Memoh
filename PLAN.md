@@ -367,40 +367,42 @@ Goal: introduce a reconstructable shared runtime view with explicit ownership an
 
 ### 2.1 Schema And Namespaces
 
-- Define KV layout:
-  - `bb.run.{run_id}` for run-scoped values
-  - `bb.task.{task_id}` for task-scoped values
-- Encode each value with `schema_version`, `writer_type`, `writer_id`, `attempt_id`, `claim_epoch`, `updated_at`, and `persistence_class` per `RFC.md`.
-- Lock down keyspaces: `context.*`, `plan.*`, `deps.*`, `progress.*`, `result.*`, `artifacts.*`, `verifier.*`, `human.*`.
+- [x] Defined KV layout in `internal/orchestrationblackboard/keys.go`:
+  - `bb.run.{run_id}.{namespace}.{...}` for run-scoped values
+  - `bb.task.{task_id}.{namespace}.{...}` for task-scoped values
+- [x] Each `Value` envelope carries `schema_version`, `writer_type`, `writer_id`, `attempt_id`, `claim_epoch`, `updated_at`, `persistence_class`, and `payload` per `RFC.md`.
+- [x] Locked-down namespaces (`internal/orchestrationblackboard/keys.go::Namespace*`): `context`, `plan`, `deps`, `progress`, `result`, `artifacts`, `verifier`, `human`.
 
 ### 2.2 Writer Ownership And CAS
 
-- Workers can only write their task scope.
-- Verifiers can only write the verifier namespace.
-- Orchestrator can write all scopes.
-- All `result.*` writes must use KV revision CAS and carry the current `claim_epoch`.
-- Stale writers (lost lease, superseded planner epoch, terminal task) are rejected at the blackboard layer, not just at Postgres.
+- [x] `internal/orchestrationblackboard.Writer` enforces scope rules: workers may only write their own task scope, verifiers may only write the verifier namespace, the orchestrator may write any scope.
+- [x] `result.*` writes go through `Writer.CompareAndSwap`, which preserves KV revision CAS and rejects writes whose `claim_epoch` is below the value already on the blackboard.
+- [x] Stale writers (lost lease, superseded planner epoch, terminal task) are rejected at the blackboard layer through `ErrStaleWriter` / `ErrUnauthorisedWriter`, not just at Postgres.
+- [x] Two backends behind the same `Store` interface: `InMemoryStore` (single-process / tests) and `JetStreamStore` on top of NATS KV. The factory in `internal/orchestrationblackboard/factory.go` mirrors `orchestrationbus` and falls back to in-memory when `[nats].url` is empty.
 
 ### 2.3 Frozen Input Manifest Integration
 
-- Dispatch must produce an `InputManifest` that captures blackboard keys and revisions, artifact refs and digests, and env preconditions.
-- `TaskSpec` carries `InputProjection` plus `InputManifest`.
-- Worker correctness logic only depends on `InputProjection`. Live blackboard reads are advisory.
-- Verifier replay uses the same `InputManifest` to reconstruct inputs.
+- [x] Dispatch captures the live blackboard view through `Service.captureBlackboardRevisions` (`internal/orchestration/blackboard.go`) and writes the snapshot into `orchestration_input_manifests.captured_blackboard_revisions` before hashing the manifest.
+- [x] Captured revisions cover the run-scope context plus every direct predecessor task's `result.*` keys, so verifier replay can later reach the same view through `GetRevision`.
+- [x] When the kernel runs without a wired blackboard store the dispatch path stays identical to its pre-Stage-2 shape, keeping tests and single-process deploys unchanged.
+- [x] `Service.publishTaskCompletionToBlackboard` writes `bb.task.{task_id}.result.summary` after the Postgres commit succeeds, with CAS so repeated commits stay idempotent.
 
 ### 2.4 Rebuild Path
 
-- Implement a deterministic `rebuild_blackboard(run_id)` that recomputes blackboard contents from `orchestration_runs`, `orchestration_tasks`, `orchestration_task_results`, `orchestration_artifacts`, and verifier notes.
-- Add a CLI subcommand or admin endpoint that triggers rebuild.
-- Recovery on orchestrator/server restart never assumes blackboard contents are intact; if KV is missing, rebuild from Postgres.
+- [x] `Service.RebuildBlackboard(ctx, caller, runID)` (`internal/orchestration/blackboard.go`) walks `orchestration_runs` for run-scope context and `orchestration_task_results` joined with the producing attempt for `result.*` summaries, writing each entry through the orchestrator-class `Writer`.
+- [x] Admin entry point lives at `POST /orchestration/runs/{run_id}/blackboard/rebuild` (declared on `orchestrationAPI`, surfaced through the regenerated `@memohai/sdk` as `postOrchestrationRunsByRunIdBlackboardRebuild`).
+- [x] Recovery on orchestrator/server restart never assumes blackboard contents are intact; if KV is missing, callers invoke rebuild and the kernel keeps serving Postgres truth in the meantime.
+- [ ] Pending: structured artifacts (`bb.task.*.artifacts.*`) and verifier notes (`bb.task.*.verifier.*`) are not yet rebuilt because they require artifact-store / verifier persistence work that lands with later stages.
 
 ### 2.5 Tests
 
-- Unit tests for KV CAS rules and stale-writer rejection.
-- Integration tests for dispatch with frozen `InputManifest`.
-- Blackbox test that wipes KV mid-run and confirms rebuild restores progress.
+- [x] Unit tests for envelope encoding (`value_test.go`), key validation (`keys_test.go`), in-memory CAS / stale-writer rejection (`inmem_test.go`, `writer_test.go`), and JetStream KV behaviour gated on `TEST_NATS_URL` (`jetstream_test.go`).
+- [x] `TestIntegrationBlackboardCaptureAndPublish` drives a producer/consumer DAG end-to-end and asserts both publish and capture paths.
+- [x] `TestIntegrationRebuildBlackboardRecoversAfterStoreWipe` wipes the in-memory store mid-run and asserts the rebuild path restores the runtime view from Postgres.
+- [x] `TestIntegrationRebuildBlackboardWithoutStoreReturnsConfiguredFalse` pins the no-store contract for deploys without NATS.
+- [ ] Pending: a JetStream-backed blackbox test that wipes the live KV bucket mid-run; gated on the same JetStream blackbox harness Stage 1 still owes.
 
-Done when blackboard is observable, writer ownership is enforced, and the system tolerates KV loss without losing committed state.
+Done when blackboard is observable, writer ownership is enforced, and the system tolerates KV loss without losing committed state. The kernel-side contract is in place; the remaining bullets are JetStream-backed end-to-end coverage that will land alongside the Stage 1 blackbox follow-up.
 
 ## Stage 3. Env Session Runtime
 
@@ -592,10 +594,11 @@ Stage 1:
 
 Stage 2:
 
-- [ ] blackboard KV layout matches `RFC.md`
-- [ ] CAS rules and stale writer rejection are enforced
-- [ ] dispatch produces frozen `InputManifest`
-- [ ] `rebuild_blackboard(run_id)` succeeds for all states
+- [x] blackboard KV layout matches `RFC.md` (`internal/orchestrationblackboard/keys.go`, `value.go`)
+- [x] CAS rules and stale writer rejection are enforced (`internal/orchestrationblackboard/writer.go`, `inmem.go`, `jetstream.go`)
+- [x] dispatch produces frozen `InputManifest` covering predecessor `result.*` and run-scope context (`internal/orchestration/blackboard.go::captureBlackboardRevisions`)
+- [x] `Service.RebuildBlackboard(run_id)` reconstructs the runtime view from Postgres (`internal/orchestration/blackboard.go`) and is reachable through `POST /orchestration/runs/{run_id}/blackboard/rebuild`
+- [ ] artifact/verifier rebuild paths land alongside Stage 3/Stage 4 once those stores are persisted
 
 Stage 3:
 
@@ -624,8 +627,9 @@ Stage 5:
 Where we are right now:
 
 1. Stage 0 stabilization (executor recovery, planner hardening, HITL barriers, observability, hygiene) is the substrate the rest of this plan rides on. Keep its tests green as later stages land.
-2. Stage 1 (NATS event bus) is partly landed: subject contract, in-memory + JetStream bus, committed-event outbox, bus-backed `WatchRun`, and fact emission from `workerd`/`verifyd` are all in. The remaining 1.x bullets are the server-side fact consumer, the SSE-driven UI stream, and the JetStream-backed blackbox test.
-3. Stage 2 (blackboard) is the next net-new stage once the Stage 1 follow-ups settle: schema/namespaces, CAS, frozen `InputManifest`, and the deterministic rebuild path.
-4. Stages 3, 4, and 5 follow in order. Every earlier stage's tests must keep passing as later stages land.
+2. Stage 1 (NATS event bus) is mostly landed: subject contract, in-memory + JetStream bus, committed-event outbox, bus-backed `WatchRun`, fact emission from `workerd`/`verifyd`, the kernel-side fact consumer, and the SSE-driven UI thinking/activity stream are all in. The two open bullets are (a) moving control-plane state transitions onto the bus instead of direct daemon → kernel calls (now unblocked by Stage 2 CAS) and (b) a JetStream-backed blackbox test against the Compose `nats` service.
+3. Stage 2 (blackboard) is in: contract + namespaces, in-memory + JetStream KV stores, writer ownership / CAS, frozen `InputManifest` capture at dispatch, post-commit `result.summary` publish, and the Postgres-backed `RebuildBlackboard` recovery path with an admin endpoint. Remaining work is a JetStream-backed blackbox wipe-and-recover test (shares the harness with Stage 1's open blackbox bullet) and rebuild coverage for artifacts and verifier notes once those persistence stores land in Stages 3-4.
+4. Stage 3 (env session runtime) is the next net-new stage. The blackboard CAS layer plus the kernel-side fact consumer give us the substrate to thread `env_lease_epoch` / `env_lease_token` through worker writes without losing fencing guarantees.
+5. Stages 4 and 5 follow in order. Every earlier stage's tests must keep passing as later stages land.
 
 Each stage ends with docs and PR descriptions updated to reflect actual landed behavior, not target state.
