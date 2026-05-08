@@ -1373,6 +1373,7 @@ INSERT INTO orchestration_input_manifests (
   captured_task_inputs,
   captured_artifact_versions,
   captured_blackboard_revisions,
+  captured_env_preconditions,
   projection_hash
 ) VALUES (
   $1,
@@ -1381,8 +1382,9 @@ INSERT INTO orchestration_input_manifests (
   $4,
   $5,
   $6,
-  $7
-) RETURNING id, run_id, task_id, captured_task_inputs, captured_artifact_versions, captured_blackboard_revisions, projection_hash, created_at
+  $7,
+  $8
+) RETURNING id, run_id, task_id, captured_task_inputs, captured_artifact_versions, captured_blackboard_revisions, captured_env_preconditions, projection_hash, created_at
 `
 
 type CreateOrchestrationInputManifestParams struct {
@@ -1392,6 +1394,7 @@ type CreateOrchestrationInputManifestParams struct {
 	CapturedTaskInputs          []byte      `json:"captured_task_inputs"`
 	CapturedArtifactVersions    []byte      `json:"captured_artifact_versions"`
 	CapturedBlackboardRevisions []byte      `json:"captured_blackboard_revisions"`
+	CapturedEnvPreconditions    []byte      `json:"captured_env_preconditions"`
 	ProjectionHash              string      `json:"projection_hash"`
 }
 
@@ -1403,6 +1406,7 @@ func (q *Queries) CreateOrchestrationInputManifest(ctx context.Context, arg Crea
 		arg.CapturedTaskInputs,
 		arg.CapturedArtifactVersions,
 		arg.CapturedBlackboardRevisions,
+		arg.CapturedEnvPreconditions,
 		arg.ProjectionHash,
 	)
 	var i OrchestrationInputManifest
@@ -1413,6 +1417,7 @@ func (q *Queries) CreateOrchestrationInputManifest(ctx context.Context, arg Crea
 		&i.CapturedTaskInputs,
 		&i.CapturedArtifactVersions,
 		&i.CapturedBlackboardRevisions,
+		&i.CapturedEnvPreconditions,
 		&i.ProjectionHash,
 		&i.CreatedAt,
 	)
@@ -1649,6 +1654,7 @@ INSERT INTO orchestration_tasks (
   priority,
   retry_policy,
   verification_policy,
+  env_preconditions,
   status,
   status_version,
   waiting_scope,
@@ -1672,8 +1678,9 @@ INSERT INTO orchestration_tasks (
   $14,
   $15,
   $16,
-  $17
-) RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+  $17,
+  $18
+) RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type CreateOrchestrationTaskParams struct {
@@ -1688,6 +1695,7 @@ type CreateOrchestrationTaskParams struct {
 	Priority             int32       `json:"priority"`
 	RetryPolicy          []byte      `json:"retry_policy"`
 	VerificationPolicy   []byte      `json:"verification_policy"`
+	EnvPreconditions     []byte      `json:"env_preconditions"`
 	Status               string      `json:"status"`
 	StatusVersion        int64       `json:"status_version"`
 	WaitingScope         string      `json:"waiting_scope"`
@@ -1709,6 +1717,7 @@ func (q *Queries) CreateOrchestrationTask(ctx context.Context, arg CreateOrchest
 		arg.Priority,
 		arg.RetryPolicy,
 		arg.VerificationPolicy,
+		arg.EnvPreconditions,
 		arg.Status,
 		arg.StatusVersion,
 		arg.WaitingScope,
@@ -1730,6 +1739,7 @@ func (q *Queries) CreateOrchestrationTask(ctx context.Context, arg CreateOrchest
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -2479,7 +2489,7 @@ func (q *Queries) GetOrchestrationIdempotencyRecordForUpdate(ctx context.Context
 }
 
 const getOrchestrationInputManifestByID = `-- name: GetOrchestrationInputManifestByID :one
-SELECT id, run_id, task_id, captured_task_inputs, captured_artifact_versions, captured_blackboard_revisions, projection_hash, created_at
+SELECT id, run_id, task_id, captured_task_inputs, captured_artifact_versions, captured_blackboard_revisions, captured_env_preconditions, projection_hash, created_at
 FROM orchestration_input_manifests
 WHERE id = $1
 `
@@ -2494,6 +2504,7 @@ func (q *Queries) GetOrchestrationInputManifestByID(ctx context.Context, id pgty
 		&i.CapturedTaskInputs,
 		&i.CapturedArtifactVersions,
 		&i.CapturedBlackboardRevisions,
+		&i.CapturedEnvPreconditions,
 		&i.ProjectionHash,
 		&i.CreatedAt,
 	)
@@ -2701,7 +2712,7 @@ func (q *Queries) GetOrchestrationTaskAttemptByIDForUpdate(ctx context.Context, 
 }
 
 const getOrchestrationTaskByID = `-- name: GetOrchestrationTaskByID :one
-SELECT id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+SELECT id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 FROM orchestration_tasks
 WHERE id = $1
 `
@@ -2722,6 +2733,7 @@ func (q *Queries) GetOrchestrationTaskByID(ctx context.Context, id pgtype.UUID) 
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -2738,7 +2750,7 @@ func (q *Queries) GetOrchestrationTaskByID(ctx context.Context, id pgtype.UUID) 
 }
 
 const getOrchestrationTaskByIDForUpdate = `-- name: GetOrchestrationTaskByIDForUpdate :one
-SELECT id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+SELECT id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 FROM orchestration_tasks
 WHERE id = $1
 FOR UPDATE
@@ -2760,6 +2772,7 @@ func (q *Queries) GetOrchestrationTaskByIDForUpdate(ctx context.Context, id pgty
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -3644,7 +3657,7 @@ func (q *Queries) ListCurrentOrchestrationTaskVerificationsByRun(ctx context.Con
 }
 
 const listCurrentOrchestrationTasksByRun = `-- name: ListCurrentOrchestrationTasksByRun :many
-SELECT id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+SELECT id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 FROM orchestration_tasks
 WHERE run_id = $1
 ORDER BY created_at ASC, id ASC
@@ -3672,6 +3685,7 @@ func (q *Queries) ListCurrentOrchestrationTasksByRun(ctx context.Context, runID 
 			&i.Priority,
 			&i.RetryPolicy,
 			&i.VerificationPolicy,
+			&i.EnvPreconditions,
 			&i.Status,
 			&i.StatusVersion,
 			&i.WaitingCheckpointID,
@@ -3695,7 +3709,7 @@ func (q *Queries) ListCurrentOrchestrationTasksByRun(ctx context.Context, runID 
 }
 
 const listDependencyBlockedOrchestrationTasks = `-- name: ListDependencyBlockedOrchestrationTasks :many
-SELECT t.id, t.run_id, t.decomposed_from_task_id, t.kind, t.goal, t.inputs, t.planner_epoch, t.superseded_by_planner_epoch, t.worker_profile, t.priority, t.retry_policy, t.verification_policy, t.status, t.status_version, t.waiting_checkpoint_id, t.waiting_scope, t.latest_result_id, t.ready_at, t.blocked_reason, t.terminal_reason, t.blackboard_scope, t.created_at, t.updated_at
+SELECT t.id, t.run_id, t.decomposed_from_task_id, t.kind, t.goal, t.inputs, t.planner_epoch, t.superseded_by_planner_epoch, t.worker_profile, t.priority, t.retry_policy, t.verification_policy, t.env_preconditions, t.status, t.status_version, t.waiting_checkpoint_id, t.waiting_scope, t.latest_result_id, t.ready_at, t.blocked_reason, t.terminal_reason, t.blackboard_scope, t.created_at, t.updated_at
 FROM orchestration_tasks t
 JOIN orchestration_runs r ON r.id = t.run_id
 WHERE t.status = 'created'
@@ -3726,6 +3740,7 @@ func (q *Queries) ListDependencyBlockedOrchestrationTasks(ctx context.Context) (
 			&i.Priority,
 			&i.RetryPolicy,
 			&i.VerificationPolicy,
+			&i.EnvPreconditions,
 			&i.Status,
 			&i.StatusVersion,
 			&i.WaitingCheckpointID,
@@ -4501,7 +4516,7 @@ func (q *Queries) ListPendingOrchestrationEnvLeaseReservationsByResource(ctx con
 }
 
 const listSchedulableOrchestrationTasks = `-- name: ListSchedulableOrchestrationTasks :many
-SELECT t.id, t.run_id, t.decomposed_from_task_id, t.kind, t.goal, t.inputs, t.planner_epoch, t.superseded_by_planner_epoch, t.worker_profile, t.priority, t.retry_policy, t.verification_policy, t.status, t.status_version, t.waiting_checkpoint_id, t.waiting_scope, t.latest_result_id, t.ready_at, t.blocked_reason, t.terminal_reason, t.blackboard_scope, t.created_at, t.updated_at
+SELECT t.id, t.run_id, t.decomposed_from_task_id, t.kind, t.goal, t.inputs, t.planner_epoch, t.superseded_by_planner_epoch, t.worker_profile, t.priority, t.retry_policy, t.verification_policy, t.env_preconditions, t.status, t.status_version, t.waiting_checkpoint_id, t.waiting_scope, t.latest_result_id, t.ready_at, t.blocked_reason, t.terminal_reason, t.blackboard_scope, t.created_at, t.updated_at
 FROM orchestration_tasks t
 JOIN orchestration_runs r ON r.id = t.run_id
 WHERE t.status = 'ready'
@@ -4533,6 +4548,7 @@ func (q *Queries) ListSchedulableOrchestrationTasks(ctx context.Context) ([]Orch
 			&i.Priority,
 			&i.RetryPolicy,
 			&i.VerificationPolicy,
+			&i.EnvPreconditions,
 			&i.Status,
 			&i.StatusVersion,
 			&i.WaitingCheckpointID,
@@ -5376,7 +5392,7 @@ SET status = 'blocked',
     blocked_reason = $1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskBlockedParams struct {
@@ -5400,6 +5416,7 @@ func (q *Queries) MarkOrchestrationTaskBlocked(ctx context.Context, arg MarkOrch
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5424,7 +5441,7 @@ SET status = 'cancelled',
     terminal_reason = $1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskCancelledParams struct {
@@ -5448,6 +5465,7 @@ func (q *Queries) MarkOrchestrationTaskCancelled(ctx context.Context, arg MarkOr
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5471,7 +5489,7 @@ SET status = 'completed',
     terminal_reason = '',
     updated_at = now()
 WHERE id = $2
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskCompletedParams struct {
@@ -5495,6 +5513,7 @@ func (q *Queries) MarkOrchestrationTaskCompleted(ctx context.Context, arg MarkOr
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5546,7 +5565,7 @@ SET status = 'dispatching',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 func (q *Queries) MarkOrchestrationTaskDispatching(ctx context.Context, id pgtype.UUID) (OrchestrationTask, error) {
@@ -5565,6 +5584,7 @@ func (q *Queries) MarkOrchestrationTaskDispatching(ctx context.Context, id pgtyp
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5588,7 +5608,7 @@ SET status = 'failed',
     terminal_reason = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskFailedParams struct {
@@ -5613,6 +5633,7 @@ func (q *Queries) MarkOrchestrationTaskFailed(ctx context.Context, arg MarkOrche
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5640,7 +5661,7 @@ SET status = 'ready',
     ready_at = clock_timestamp() + ($1::integer * interval '1 second'),
     updated_at = now()
 WHERE id = $2
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskReadyForRetryParams struct {
@@ -5664,6 +5685,7 @@ func (q *Queries) MarkOrchestrationTaskReadyForRetry(ctx context.Context, arg Ma
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5688,7 +5710,7 @@ SET status = 'ready',
     ready_at = now(),
     updated_at = now()
 WHERE id = $1
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 func (q *Queries) MarkOrchestrationTaskReadyFromCheckpoint(ctx context.Context, id pgtype.UUID) (OrchestrationTask, error) {
@@ -5707,6 +5729,7 @@ func (q *Queries) MarkOrchestrationTaskReadyFromCheckpoint(ctx context.Context, 
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5728,7 +5751,7 @@ SET status = 'running',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 func (q *Queries) MarkOrchestrationTaskRunning(ctx context.Context, id pgtype.UUID) (OrchestrationTask, error) {
@@ -5747,6 +5770,7 @@ func (q *Queries) MarkOrchestrationTaskRunning(ctx context.Context, id pgtype.UU
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -5771,7 +5795,7 @@ SET superseded_by_planner_epoch = $1,
     updated_at = now()
 WHERE id = $2
   AND superseded_by_planner_epoch IS NULL
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskSupersededParams struct {
@@ -5795,6 +5819,7 @@ func (q *Queries) MarkOrchestrationTaskSuperseded(ctx context.Context, arg MarkO
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -6059,7 +6084,7 @@ SET status = 'verifying',
     terminal_reason = '',
     updated_at = now()
 WHERE id = $2
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskVerifyingParams struct {
@@ -6083,6 +6108,7 @@ func (q *Queries) MarkOrchestrationTaskVerifying(ctx context.Context, arg MarkOr
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -6106,7 +6132,7 @@ SET status = 'waiting_human',
     waiting_scope = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type MarkOrchestrationTaskWaitingHumanParams struct {
@@ -6131,6 +6157,7 @@ func (q *Queries) MarkOrchestrationTaskWaitingHuman(ctx context.Context, arg Mar
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,
@@ -6879,7 +6906,7 @@ SET inputs = $1,
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
 `
 
 type UpdateOrchestrationTaskInputsParams struct {
@@ -6903,6 +6930,7 @@ func (q *Queries) UpdateOrchestrationTaskInputs(ctx context.Context, arg UpdateO
 		&i.Priority,
 		&i.RetryPolicy,
 		&i.VerificationPolicy,
+		&i.EnvPreconditions,
 		&i.Status,
 		&i.StatusVersion,
 		&i.WaitingCheckpointID,

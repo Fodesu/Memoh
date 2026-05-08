@@ -244,6 +244,7 @@ func (s *Service) StartRun(ctx context.Context, caller ControlIdentity, req Star
 		Priority:             0,
 		RetryPolicy:          marshalObject(nil),
 		VerificationPolicy:   marshalObject(nil),
+		EnvPreconditions:     defaultEnvPreconditionsJSON(),
 		Status:               TaskStatusCreated,
 		StatusVersion:        1,
 		WaitingScope:         "",
@@ -4327,6 +4328,14 @@ func hashJSON(value any) (string, error) {
 
 func marshalObject(value map[string]any) []byte {
 	return marshalJSON(normalizeObject(value))
+}
+
+// defaultEnvPreconditionsJSON returns the wire form Stage 3-E uses when a task
+// or dispatch manifest has not declared any env requirement yet. The kernel
+// stores it as `{"required": false}` so the column never goes through NULL and
+// readers can decode the value without a special case.
+func defaultEnvPreconditionsJSON() []byte {
+	return []byte(`{"required":false}`)
 }
 
 func marshalJSON(value any) []byte {
