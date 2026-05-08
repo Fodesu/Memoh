@@ -1349,7 +1349,11 @@ func (s *Service) dispatchNextReadyTask(ctx context.Context, workerProfileSet ma
 		}
 		capturedBlackboardRevisions := s.captureBlackboardRevisions(ctx, qtx, taskRow.RunID, taskRow.ID)
 		envPreconditions := decodeEnvPreconditions(taskRow.EnvPreconditions)
-		envCapture, err := s.acquireEnvForDispatch(ctx, runRow, taskRow, envPreconditions)
+		_, attemptUUID, err := newPGUUID()
+		if err != nil {
+			return false, err
+		}
+		envCapture, err := s.acquireEnvForDispatch(ctx, runRow, taskRow, attemptUUID.String(), envPreconditions)
 		if err != nil {
 			return false, err
 		}
@@ -1391,10 +1395,6 @@ func (s *Service) dispatchNextReadyTask(ctx context.Context, workerProfileSet ma
 		attemptNo, err := qtx.GetNextOrchestrationTaskAttemptNo(ctx, taskRow.ID)
 		if err != nil {
 			return false, fmt.Errorf("get next task attempt number: %w", err)
-		}
-		_, attemptUUID, err := newPGUUID()
-		if err != nil {
-			return false, err
 		}
 		createdAttempt, err = qtx.CreateOrchestrationTaskAttempt(ctx, sqlc.CreateOrchestrationTaskAttemptParams{
 			ID:               attemptUUID,

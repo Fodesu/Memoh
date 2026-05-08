@@ -170,7 +170,9 @@ type PlannedTaskSpec struct {
 // *orchestrationenv.Manager to it.
 type EnvManager interface {
 	GetEnvResourceByName(ctx context.Context, tenantID, name string) (EnvResourceRef, error)
+	GetHeldEnvBindingForTask(ctx context.Context, runID, taskID string) (EnvHeldBindingRef, bool, error)
 	AcquireEnvSession(ctx context.Context, req EnvAcquireRequest) (EnvSessionLease, error)
+	ResumeEnvBinding(ctx context.Context, req EnvResumeBindingRequest) (EnvResumedBinding, error)
 	CreateEnvBinding(ctx context.Context, req EnvCreateBindingRequest) (EnvBindingHandle, error)
 	CaptureEnvSnapshot(ctx context.Context, req EnvCaptureSnapshotRequest) (EnvSnapshotRef, error)
 	ReleaseEnvBinding(ctx context.Context, req EnvReleaseBindingRequest) error
@@ -216,6 +218,30 @@ type EnvSessionLease struct {
 	ResourceID     string
 	ResourceKind   string
 	ResourceName   string
+	LeaseToken     string
+	LeaseEpoch     int64
+	LeaseExpiresAt *time.Time
+	RuntimeHandle  map[string]any
+}
+
+type EnvHeldBindingRef struct {
+	BindingID           string
+	SessionID           string
+	HeldForCheckpointID string
+}
+
+type EnvResumeBindingRequest struct {
+	BindingID        string
+	NewAttemptID     string
+	NewLeaseHolderID string
+	LeaseTTL         time.Duration
+	Metadata         map[string]any
+}
+
+type EnvResumedBinding struct {
+	BindingID      string
+	SessionID      string
+	ResourceID     string
 	LeaseToken     string
 	LeaseEpoch     int64
 	LeaseExpiresAt *time.Time

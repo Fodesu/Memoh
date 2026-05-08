@@ -41,7 +41,7 @@ type envCapture struct {
 // FOR UPDATE, so two schedulers cannot acquire two sessions for the same
 // task. The returned *envCapture is nil when the task does not need an env;
 // the dispatch path treats that as the common-case fast path.
-func (s *Service) acquireEnvForDispatch(ctx context.Context, runRow sqlc.OrchestrationRun, taskRow sqlc.OrchestrationTask, pre EnvPreconditions) (*envCapture, error) {
+func (s *Service) acquireEnvForDispatch(ctx context.Context, runRow sqlc.OrchestrationRun, taskRow sqlc.OrchestrationTask, attemptID string, pre EnvPreconditions) (*envCapture, error) {
 	if !pre.Required {
 		return nil, nil
 	}
@@ -65,6 +65,36 @@ func (s *Service) acquireEnvForDispatch(ctx context.Context, runRow sqlc.Orchest
 	if leaseTTL <= 0 {
 		leaseTTL = defaultEnvLeaseTTL
 	}
+	if held, ok, err := s.envManager.GetHeldEnvBindingForTask(ctx, runRow.ID.String(), taskRow.ID.String()); err != nil {
+		return nil, fmt.Errorf("orchestration: find held env binding: %w", err)
+	} else if ok {
+		resumed, err := s.envManager.ResumeEnvBinding(ctx, EnvResumeBindingRequest{
+			BindingID:        held.BindingID,
+			NewAttemptID:     attemptID,
+			NewLeaseHolderID: "kernel-dispatch",
+			LeaseTTL:         leaseTTL,
+			Metadata: map[string]any{
+				"resume_reason":          "checkpoint_resolved",
+				"held_for_checkpoint_id": held.HeldForCheckpointID,
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("orchestration: resume held env binding: %w", err)
+		}
+		return &envCapture{
+			Kind:          resource.Kind,
+			ResourceID:    resumed.ResourceID,
+			ResourceName:  resource.Name,
+			SessionID:     resumed.SessionID,
+			LeaseToken:    resumed.LeaseToken,
+			LeaseEpoch:    resumed.LeaseEpoch,
+			BindingID:     resumed.BindingID,
+			RuntimeHandle: resumed.RuntimeHandle,
+			Mode:          pre.Mode,
+			EffectClass:   pre.EffectClass,
+			Metadata:      pre.Metadata,
+		}, nil
+	}
 	lease, err := s.envManager.AcquireEnvSession(ctx, EnvAcquireRequest{
 		TenantID:        runRow.TenantID,
 		ResourceID:      resource.ID,
@@ -73,6 +103,7 @@ func (s *Service) acquireEnvForDispatch(ctx context.Context, runRow sqlc.Orchest
 		LeaseTTL:        leaseTTL,
 		RunID:           taskRow.RunID.String(),
 		TaskID:          taskRow.ID.String(),
+		AttemptID:       attemptID,
 		Metadata:        pre.Metadata,
 	})
 	if err != nil {
@@ -104,20 +135,22 @@ func (s *Service) bindEnvAndPersistCapture(ctx context.Context, qtx *sqlc.Querie
 	if s.envManager == nil {
 		return errors.New("orchestration: env manager became unavailable mid-dispatch")
 	}
-	binding, err := s.envManager.CreateEnvBinding(ctx, EnvCreateBindingRequest{
-		SessionID:  capture.SessionID,
-		LeaseToken: capture.LeaseToken,
-		LeaseEpoch: capture.LeaseEpoch,
-		RunID:      attempt.RunID.String(),
-		TaskID:     attempt.TaskID.String(),
-		AttemptID:  attempt.ID.String(),
-		Purpose:    EnvBindingPurposePrimary,
-		Metadata:   capture.Metadata,
-	})
-	if err != nil {
-		return fmt.Errorf("orchestration: create env binding: %w", err)
+	if capture.BindingID == "" {
+		binding, err := s.envManager.CreateEnvBinding(ctx, EnvCreateBindingRequest{
+			SessionID:  capture.SessionID,
+			LeaseToken: capture.LeaseToken,
+			LeaseEpoch: capture.LeaseEpoch,
+			RunID:      attempt.RunID.String(),
+			TaskID:     attempt.TaskID.String(),
+			AttemptID:  attempt.ID.String(),
+			Purpose:    EnvBindingPurposePrimary,
+			Metadata:   capture.Metadata,
+		})
+		if err != nil {
+			return fmt.Errorf("orchestration: create env binding: %w", err)
+		}
+		capture.BindingID = binding.BindingID
 	}
-	capture.BindingID = binding.BindingID
 	if err := qtx.UpdateOrchestrationInputManifestEnvCapture(ctx, sqlc.UpdateOrchestrationInputManifestEnvCaptureParams{
 		ID:                       manifestID,
 		CapturedEnvPreconditions: marshalCapturedEnvPreconditions(capture, EnvPreconditions{Required: true}),
@@ -309,6 +342,120 @@ func stringFrom(m map[string]any, key string) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+func (s *Service) holdEnvForAttemptCheckpoint(ctx context.Context, qtx *sqlc.Queries, attempt sqlc.OrchestrationTaskAttempt, checkpointID pgtype.UUID) {
+	if !checkpointID.Valid {
+		return
+	}
+	manifestRow, err := qtx.GetOrchestrationInputManifestByID(ctx, attempt.InputManifestID)
+	if err != nil {
+		return
+	}
+	capture, ok := decodeCapturedEnvPreconditions(manifestRow.CapturedEnvPreconditions)
+	if !ok || capture.BindingID == "" {
+		return
+	}
+	bindingID := db.ParseUUIDOrEmpty(capture.BindingID)
+	if !bindingID.Valid {
+		return
+	}
+	bindingRow, err := qtx.GetOrchestrationEnvBindingByID(ctx, bindingID)
+	if err != nil {
+		s.logger.Warn("load env binding for checkpoint hold failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("binding_id", capture.BindingID),
+			slog.Any("error", err),
+		)
+		return
+	}
+	if bindingRow.Status != "active" {
+		return
+	}
+	sessionRow, err := qtx.GetOrchestrationEnvSessionByIDForUpdate(ctx, bindingRow.SessionID)
+	if err != nil {
+		s.logger.Warn("load env session for checkpoint hold failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("session_id", capture.SessionID),
+			slog.Any("error", err),
+		)
+		return
+	}
+	if sessionRow.LeaseToken != capture.LeaseToken || sessionRow.LeaseEpoch != capture.LeaseEpoch {
+		s.logger.Warn("skip checkpoint env hold with stale lease",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("session_id", capture.SessionID),
+		)
+		return
+	}
+	if _, err := qtx.UpdateOrchestrationEnvSessionStatus(ctx, sqlc.UpdateOrchestrationEnvSessionStatusParams{
+		Status:        "held",
+		RuntimeHandle: sessionRow.RuntimeHandle,
+		Metadata:      mergeJSONObjects(sessionRow.Metadata, map[string]any{"held_for_checkpoint_id": checkpointID.String()}),
+		ReleasedAt:    pgtype.Timestamptz{},
+		ID:            sessionRow.ID,
+	}); err != nil {
+		s.logger.Warn("mark env session held for checkpoint failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("session_id", capture.SessionID),
+			slog.Any("error", err),
+		)
+		return
+	}
+	if _, err := qtx.UpdateOrchestrationEnvBindingStatus(ctx, sqlc.UpdateOrchestrationEnvBindingStatusParams{
+		Status:              "held",
+		HeldForCheckpointID: checkpointID,
+		Metadata:            mergeJSONObjects(bindingRow.Metadata, map[string]any{"hold_reason": "checkpoint_waiting"}),
+		ReleasedAt:          pgtype.Timestamptz{},
+		ID:                  bindingRow.ID,
+	}); err != nil {
+		s.logger.Warn("mark env binding held for checkpoint failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("binding_id", capture.BindingID),
+			slog.Any("error", err),
+		)
+		return
+	}
+	recordID, recordUUID, err := newPGUUID()
+	if err != nil {
+		s.logger.Warn("allocate env hold action id failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.Any("error", err),
+		)
+		return
+	}
+	inputPayload := marshalObject(map[string]any{
+		"reason":        "checkpoint_waiting",
+		"checkpoint_id": checkpointID.String(),
+	})
+	outputPayload := marshalObject(envActionPayload(capture))
+	if _, err := qtx.CreateCompletedOrchestrationAttemptActionRecord(ctx, sqlc.CreateCompletedOrchestrationAttemptActionRecordParams{
+		ID:            recordUUID,
+		RunID:         attempt.RunID,
+		TaskID:        attempt.TaskID,
+		AttemptID:     attempt.ID,
+		ActionKind:    "env_hold",
+		EffectClass:   normalizeEnvLedgerEffectClass(capture),
+		EnvSessionID:  db.ParseUUIDOrEmpty(capture.SessionID),
+		EnvBindingID:  bindingRow.ID,
+		InputPayload:  inputPayload,
+		OutputPayload: outputPayload,
+		Summary:       "held env session for checkpoint resume",
+	}); err != nil {
+		s.logger.Warn("record env hold action failed",
+			slog.String("attempt_id", attempt.ID.String()),
+			slog.String("action_record_id", recordID),
+			slog.Any("error", err),
+		)
+	}
+}
+
+func mergeJSONObjects(raw []byte, extra map[string]any) []byte {
+	base := decodeJSONObject(raw)
+	for key, value := range extra {
+		base[key] = value
+	}
+	return marshalObject(base)
 }
 
 // releaseEnvForAttempt is invoked after the kernel commits a terminal

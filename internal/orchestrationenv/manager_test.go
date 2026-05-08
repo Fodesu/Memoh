@@ -350,6 +350,11 @@ func TestIntegrationManagerHoldAndResumeBumpsEpoch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, orchestrationenv.BindingStatusHeld, held.Status)
 
+	foundHeld, ok, err := manager.GetHeldBindingForTask(ctx, session.RunID, session.TaskID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, binding.ID, foundHeld.ID)
+
 	heldSession, err := manager.GetSession(ctx, session.ID)
 	require.NoError(t, err)
 	require.Equal(t, orchestrationenv.SessionStatusHeld, heldSession.Status)
@@ -371,6 +376,9 @@ func TestIntegrationManagerHoldAndResumeBumpsEpoch(t *testing.T) {
 	require.NotEqual(t, session.LeaseToken, resumedSession.LeaseToken, "resume must rotate the token")
 	require.Equal(t, "worker-2", resumedSession.LeaseHolderID)
 	require.Equal(t, newAttempt, resumedSession.AttemptID)
+	_, ok, err = manager.GetHeldBindingForTask(ctx, session.RunID, session.TaskID)
+	require.NoError(t, err)
+	require.False(t, ok)
 
 	// stale credentials from the held attempt are now fenced out.
 	err = manager.ReleaseSession(ctx, orchestrationenv.ReleaseSessionRequest{
