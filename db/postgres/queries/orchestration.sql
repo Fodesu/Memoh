@@ -165,6 +165,7 @@ INSERT INTO orchestration_tasks (
   priority,
   retry_policy,
   verification_policy,
+  env_preconditions,
   status,
   status_version,
   waiting_scope,
@@ -183,6 +184,7 @@ INSERT INTO orchestration_tasks (
   sqlc.arg(priority),
   sqlc.arg(retry_policy),
   sqlc.arg(verification_policy),
+  sqlc.arg(env_preconditions),
   sqlc.arg(status),
   sqlc.arg(status_version),
   sqlc.arg(waiting_scope),
@@ -560,6 +562,7 @@ INSERT INTO orchestration_input_manifests (
   captured_task_inputs,
   captured_artifact_versions,
   captured_blackboard_revisions,
+  captured_env_preconditions,
   projection_hash
 ) VALUES (
   sqlc.arg(id),
@@ -568,6 +571,7 @@ INSERT INTO orchestration_input_manifests (
   sqlc.arg(captured_task_inputs),
   sqlc.arg(captured_artifact_versions),
   sqlc.arg(captured_blackboard_revisions),
+  sqlc.arg(captured_env_preconditions),
   sqlc.arg(projection_hash)
 ) RETURNING *;
 

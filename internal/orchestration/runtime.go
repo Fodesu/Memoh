@@ -1367,6 +1367,7 @@ func (s *Service) dispatchNextReadyTask(ctx context.Context, workerProfileSet ma
 			CapturedTaskInputs:          taskRow.Inputs,
 			CapturedArtifactVersions:    marshalJSON([]map[string]any{}),
 			CapturedBlackboardRevisions: marshalJSON(capturedBlackboardRevisions),
+			CapturedEnvPreconditions:    defaultEnvPreconditionsJSON(),
 			ProjectionHash:              manifestHash,
 		})
 		if err != nil {
@@ -3868,6 +3869,7 @@ func (s *Service) expandChildTasksFromPlans(
 			Priority:             clampInt32(plan.Priority),
 			RetryPolicy:          marshalObject(plan.RetryPolicy),
 			VerificationPolicy:   marshalObject(plan.VerificationPolicy),
+			EnvPreconditions:     defaultEnvPreconditionsJSON(),
 			Status:               TaskStatusCreated,
 			StatusVersion:        1,
 			WaitingScope:         "",

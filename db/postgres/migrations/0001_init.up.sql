@@ -771,6 +771,7 @@ CREATE TABLE IF NOT EXISTS orchestration_tasks (
   priority INTEGER NOT NULL DEFAULT 0,
   retry_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
   verification_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  env_preconditions JSONB NOT NULL DEFAULT '{"required": false}'::jsonb,
   status TEXT NOT NULL CHECK (status IN ('created', 'ready', 'dispatching', 'running', 'verifying', 'waiting_human', 'completed', 'blocked', 'failed', 'cancelled')),
   status_version BIGINT NOT NULL DEFAULT 1,
   waiting_checkpoint_id UUID,
@@ -797,6 +798,7 @@ CREATE TABLE IF NOT EXISTS orchestration_input_manifests (
   captured_task_inputs JSONB NOT NULL DEFAULT '{}'::jsonb,
   captured_artifact_versions JSONB NOT NULL DEFAULT '[]'::jsonb,
   captured_blackboard_revisions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  captured_env_preconditions JSONB NOT NULL DEFAULT '{"required": false}'::jsonb,
   projection_hash TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT orchestration_input_manifests_id_run_task_unique UNIQUE (id, run_id, task_id)

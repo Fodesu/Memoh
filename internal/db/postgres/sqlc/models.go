@@ -581,6 +581,7 @@ type OrchestrationInputManifest struct {
 	CapturedTaskInputs          []byte             `json:"captured_task_inputs"`
 	CapturedArtifactVersions    []byte             `json:"captured_artifact_versions"`
 	CapturedBlackboardRevisions []byte             `json:"captured_blackboard_revisions"`
+	CapturedEnvPreconditions    []byte             `json:"captured_env_preconditions"`
 	ProjectionHash              string             `json:"projection_hash"`
 	CreatedAt                   pgtype.Timestamptz `json:"created_at"`
 }
@@ -650,6 +651,7 @@ type OrchestrationTask struct {
 	Priority                 int32              `json:"priority"`
 	RetryPolicy              []byte             `json:"retry_policy"`
 	VerificationPolicy       []byte             `json:"verification_policy"`
+	EnvPreconditions         []byte             `json:"env_preconditions"`
 	Status                   string             `json:"status"`
 	StatusVersion            int64              `json:"status_version"`
 	WaitingCheckpointID      pgtype.UUID        `json:"waiting_checkpoint_id"`
