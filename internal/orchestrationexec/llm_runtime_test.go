@@ -51,6 +51,7 @@ func TestDecodeStartRunPlannerPayloadValidatesChildTasks(t *testing.T) {
 				"priority":            float64(2),
 				"retry_policy":        map[string]any{},
 				"verification_policy": map[string]any{"mode": "builtin.basic"},
+				"env_preconditions":   map[string]any{"required": false},
 				"blackboard_scope":    "run.a",
 			},
 		},
@@ -67,6 +68,82 @@ func TestDecodeStartRunPlannerPayloadValidatesChildTasks(t *testing.T) {
 	}
 	if child.VerificationPolicy["mode"] != "builtin.basic" {
 		t.Fatalf("verification policy = %#v, want preserved policy", child.VerificationPolicy)
+	}
+	if child.EnvPreconditions.Required {
+		t.Fatalf("env_preconditions.required = true, want false")
+	}
+}
+
+func TestDecodeStartRunPlannerPayloadAcceptsEnvBoundChildTask(t *testing.T) {
+	plan, err := decodeStartRunPlannerPayload(map[string]any{
+		"summary": "container task",
+		"child_tasks": []any{
+			map[string]any{
+				"goal": "patch repo",
+				"env_preconditions": map[string]any{
+					"required":      true,
+					"kind":          "container",
+					"resource_name": "ubuntu-default",
+					"effect_class":  "internal",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("decodeStartRunPlannerPayload() error = %v", err)
+	}
+	got := plan.ChildTasks[0].EnvPreconditions
+	if !got.Required || got.Kind != "container" || got.ResourceName != "ubuntu-default" || got.EffectClass != "internal" {
+		t.Fatalf("env_preconditions = %#v, want container/ubuntu-default/internal", got)
+	}
+}
+
+func TestDecodeStartRunPlannerPayloadRejectsMissingEnvPreconditions(t *testing.T) {
+	_, err := decodeStartRunPlannerPayload(map[string]any{
+		"summary": "missing env",
+		"child_tasks": []any{
+			map[string]any{"goal": "step a"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "env_preconditions is required") {
+		t.Fatalf("decodeStartRunPlannerPayload() error = %v, want env_preconditions required", err)
+	}
+}
+
+func TestDecodeStartRunPlannerPayloadRejectsInvalidEnvKind(t *testing.T) {
+	_, err := decodeStartRunPlannerPayload(map[string]any{
+		"summary": "bad kind",
+		"child_tasks": []any{
+			map[string]any{
+				"goal": "step a",
+				"env_preconditions": map[string]any{
+					"required":      true,
+					"kind":          "vm",
+					"resource_name": "anything",
+				},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "env_preconditions.kind") {
+		t.Fatalf("decodeStartRunPlannerPayload() error = %v, want kind validation error", err)
+	}
+}
+
+func TestDecodeStartRunPlannerPayloadRejectsRequiredWithoutResourceName(t *testing.T) {
+	_, err := decodeStartRunPlannerPayload(map[string]any{
+		"summary": "missing resource",
+		"child_tasks": []any{
+			map[string]any{
+				"goal": "step a",
+				"env_preconditions": map[string]any{
+					"required": true,
+					"kind":     "container",
+				},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "resource_name") {
+		t.Fatalf("decodeStartRunPlannerPayload() error = %v, want resource_name required", err)
 	}
 }
 
@@ -90,10 +167,11 @@ func TestDecodeReplanPlannerPayloadUsesStrictChildTaskSchema(t *testing.T) {
 		"summary": "replace failed task",
 		"child_tasks": []any{
 			map[string]any{
-				"alias":          "replacement",
-				"goal":           "repair and rerun the failed step",
-				"worker_profile": "llm.default",
-				"depends_on":     []any{},
+				"alias":             "replacement",
+				"goal":              "repair and rerun the failed step",
+				"worker_profile":    "llm.default",
+				"depends_on":        []any{},
+				"env_preconditions": map[string]any{"required": false},
 			},
 		},
 	})

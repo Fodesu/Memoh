@@ -3658,6 +3658,7 @@ type plannedChildTask struct {
 	Priority           int
 	RetryPolicy        map[string]any
 	VerificationPolicy map[string]any
+	EnvPreconditions   EnvPreconditions
 	BlackboardScope    string
 }
 
@@ -3869,7 +3870,7 @@ func (s *Service) expandChildTasksFromPlans(
 			Priority:             clampInt32(plan.Priority),
 			RetryPolicy:          marshalObject(plan.RetryPolicy),
 			VerificationPolicy:   marshalObject(plan.VerificationPolicy),
-			EnvPreconditions:     defaultEnvPreconditionsJSON(),
+			EnvPreconditions:     marshalEnvPreconditions(plan.EnvPreconditions),
 			Status:               TaskStatusCreated,
 			StatusVersion:        1,
 			WaitingScope:         "",
@@ -3983,6 +3984,7 @@ func encodePlannedChildTasks(childPlans []plannedChildTask) []any {
 			"priority":            plan.Priority,
 			"retry_policy":        normalizeObject(plan.RetryPolicy),
 			"verification_policy": normalizeObject(plan.VerificationPolicy),
+			"env_preconditions":   normalizeObject(envPreconditionsAsObject(plan.EnvPreconditions)),
 			"blackboard_scope":    plan.BlackboardScope,
 		}
 		items = append(items, item)
@@ -4262,6 +4264,7 @@ func plannedChildTasksFromSpecs(specs []PlannedTaskSpec) ([]plannedChildTask, er
 			Priority:           spec.Priority,
 			RetryPolicy:        normalizeObject(spec.RetryPolicy),
 			VerificationPolicy: normalizeObject(spec.VerificationPolicy),
+			EnvPreconditions:   normalizeEnvPreconditions(spec.EnvPreconditions),
 			BlackboardScope:    strings.TrimSpace(spec.BlackboardScope),
 		})
 	}
@@ -4546,6 +4549,10 @@ func decodePlannedChildTasks(structuredOutput map[string]any) ([]plannedChildTas
 		if err != nil {
 			return nil, fmt.Errorf("%w: child_tasks[%d]: %w", ErrPlanningIntentInvalid, index, err)
 		}
+		envPreconditions, err := plannedChildTaskEnvPreconditions(item)
+		if err != nil {
+			return nil, fmt.Errorf("%w: child_tasks[%d]: %w", ErrPlanningIntentInvalid, index, err)
+		}
 		plan := plannedChildTask{
 			Alias:              alias,
 			Kind:               kind,
@@ -4556,6 +4563,7 @@ func decodePlannedChildTasks(structuredOutput map[string]any) ([]plannedChildTas
 			Priority:           priority,
 			RetryPolicy:        retryPolicy,
 			VerificationPolicy: verificationPolicy,
+			EnvPreconditions:   envPreconditions,
 			BlackboardScope:    blackboardScope,
 		}
 		plans = append(plans, plan)
@@ -4648,13 +4656,158 @@ func plannedChildTaskInt(item map[string]any, key string) (int, error) {
 func rejectUnknownPlannedChildTaskKeys(item map[string]any) error {
 	for key := range item {
 		switch key {
-		case "alias", "kind", "goal", "inputs", "depends_on", "worker_profile", "priority", "retry_policy", "verification_policy", "blackboard_scope":
+		case "alias", "kind", "goal", "inputs", "depends_on", "worker_profile", "priority", "retry_policy", "verification_policy", "env_preconditions", "blackboard_scope":
 			continue
 		default:
 			return fmt.Errorf("unknown field %q", key)
 		}
 	}
 	return nil
+}
+
+// plannedChildTaskEnvPreconditions decodes the env_preconditions field stored
+// inside a replacement-plan payload back into the domain struct. Old payloads
+// that pre-date Stage 3-E may still omit the key entirely; in that case we
+// fall through to the not-required default rather than rejecting the intent
+// so historic replans stay replayable.
+func plannedChildTaskEnvPreconditions(item map[string]any) (EnvPreconditions, error) {
+	raw, ok := item["env_preconditions"]
+	if !ok || raw == nil {
+		return EnvPreconditions{}, nil
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return EnvPreconditions{}, errors.New("env_preconditions must be an object")
+	}
+	value, err := decodeEnvPreconditionsObject(obj)
+	if err != nil {
+		return EnvPreconditions{}, err
+	}
+	return value, nil
+}
+
+// envPreconditionsAsObject renders a decoded EnvPreconditions back into the
+// generic map shape used by replacement_plan payloads. Required=false is the
+// default sentinel and only Required is encoded so the payload stays small.
+func envPreconditionsAsObject(value EnvPreconditions) map[string]any {
+	out := map[string]any{"required": value.Required}
+	if !value.Required {
+		return out
+	}
+	if value.Kind != "" {
+		out["kind"] = value.Kind
+	}
+	if value.ResourceName != "" {
+		out["resource_name"] = value.ResourceName
+	}
+	if value.Mode != "" {
+		out["mode"] = value.Mode
+	}
+	if value.EffectClass != "" {
+		out["effect_class"] = value.EffectClass
+	}
+	if len(value.Metadata) > 0 {
+		out["metadata"] = normalizeObject(value.Metadata)
+	}
+	return out
+}
+
+// normalizeEnvPreconditions reshapes an EnvPreconditions value emitted by the
+// replanner / API layer into the canonical form the kernel persists. It is
+// safe to call on partially-populated values; required=false collapses every
+// non-required field to its zero value so the stored row stays comparable.
+func normalizeEnvPreconditions(value EnvPreconditions) EnvPreconditions {
+	if !value.Required {
+		return EnvPreconditions{Required: false}
+	}
+	return EnvPreconditions{
+		Required:     true,
+		Kind:         strings.TrimSpace(value.Kind),
+		ResourceName: strings.TrimSpace(value.ResourceName),
+		Mode:         strings.TrimSpace(value.Mode),
+		EffectClass:  strings.TrimSpace(value.EffectClass),
+		Metadata:     normalizeObject(value.Metadata),
+	}
+}
+
+// decodeEnvPreconditionsObject performs structural validation of an
+// env_preconditions payload coming from a planner / replanner JSON document.
+// Required=true demands a recognised Kind and a non-empty ResourceName; the
+// optional Mode and EffectClass fields are accepted as opaque strings so the
+// kernel can stay forward-compatible with future Stage 3 add-ons.
+func decodeEnvPreconditionsObject(obj map[string]any) (EnvPreconditions, error) {
+	for key := range obj {
+		switch key {
+		case "required", "kind", "resource_name", "mode", "effect_class", "metadata":
+			continue
+		default:
+			return EnvPreconditions{}, fmt.Errorf("env_preconditions: unknown field %q", key)
+		}
+	}
+	rawRequired, ok := obj["required"]
+	if !ok || rawRequired == nil {
+		return EnvPreconditions{}, errors.New("env_preconditions.required is required")
+	}
+	required, ok := rawRequired.(bool)
+	if !ok {
+		return EnvPreconditions{}, errors.New("env_preconditions.required must be a boolean")
+	}
+	if !required {
+		return EnvPreconditions{Required: false}, nil
+	}
+	kind, err := envPreconditionsString(obj, "kind", true)
+	if err != nil {
+		return EnvPreconditions{}, err
+	}
+	switch kind {
+	case EnvPreconditionsKindContainer, EnvPreconditionsKindBrowser:
+	default:
+		return EnvPreconditions{}, fmt.Errorf("env_preconditions.kind must be one of %q or %q", EnvPreconditionsKindContainer, EnvPreconditionsKindBrowser)
+	}
+	resourceName, err := envPreconditionsString(obj, "resource_name", true)
+	if err != nil {
+		return EnvPreconditions{}, err
+	}
+	mode, err := envPreconditionsString(obj, "mode", false)
+	if err != nil {
+		return EnvPreconditions{}, err
+	}
+	effectClass, err := envPreconditionsString(obj, "effect_class", false)
+	if err != nil {
+		return EnvPreconditions{}, err
+	}
+	metadataRaw, ok := obj["metadata"]
+	var metadata map[string]any
+	if ok && metadataRaw != nil {
+		metadataObj, ok := metadataRaw.(map[string]any)
+		if !ok {
+			return EnvPreconditions{}, errors.New("env_preconditions.metadata must be an object")
+		}
+		metadata = normalizeObject(metadataObj)
+	}
+	return EnvPreconditions{
+		Required:     true,
+		Kind:         kind,
+		ResourceName: resourceName,
+		Mode:         mode,
+		EffectClass:  effectClass,
+		Metadata:     metadata,
+	}, nil
+}
+
+func envPreconditionsString(obj map[string]any, key string, required bool) (string, error) {
+	raw, ok := obj[key]
+	if !ok || raw == nil {
+		if required {
+			return "", fmt.Errorf("env_preconditions.%s is required", key)
+		}
+		return "", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("env_preconditions.%s must be a string", key)
+	}
+	return strings.TrimSpace(value), nil
 }
 
 func findRestorableRunBarrierVerification(verifications []sqlc.OrchestrationTaskVerification, taskID pgtype.UUID) (bool, sqlc.OrchestrationTaskVerification) {

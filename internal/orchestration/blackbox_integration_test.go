@@ -2458,16 +2458,16 @@ func newFakeOpenAICompletionsServer(t *testing.T) *fakeOpenAICompletionsServer {
 		switch {
 		case isStartRunPlannerPrompt && strings.Contains(prompt, fakeLLMInitialPlanGoal):
 			fake.plannerCalls.Add(1)
-			payload = `{"summary":"decomposed initial run into execution and verification","child_tasks":[{"alias":"prepare","kind":"step","goal":"prepare fibonacci inputs","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{},"blackboard_scope":""},{"alias":"verify","kind":"step","goal":"verify fibonacci result","inputs":{},"depends_on":["prepare"],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{"mode":"builtin_basic","require_structured_output":true},"blackboard_scope":""}]}`
+			payload = `{"summary":"decomposed initial run into execution and verification","child_tasks":[{"alias":"prepare","kind":"step","goal":"prepare fibonacci inputs","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{},"env_preconditions":{"required":false},"blackboard_scope":""},{"alias":"verify","kind":"step","goal":"verify fibonacci result","inputs":{},"depends_on":["prepare"],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{"mode":"builtin_basic","require_structured_output":true},"env_preconditions":{"required":false},"blackboard_scope":""}]}`
 		case isStartRunPlannerPrompt:
 			fake.plannerCalls.Add(1)
 			payload = `{"summary":"execute root task directly","child_tasks":[]}`
 		case isReplannerPrompt && strings.Contains(prompt, fakeLLMReplannerGoal):
 			fake.replannerCalls.Add(1)
-			payload = `{"summary":"replace root from hint","child_tasks":[{"alias":"blackbox-replanner-replacement","kind":"step","goal":"blackbox replanner replacement task","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{},"blackboard_scope":""}]}`
+			payload = `{"summary":"replace root from hint","child_tasks":[{"alias":"blackbox-replanner-replacement","kind":"step","goal":"blackbox replanner replacement task","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{},"env_preconditions":{"required":false},"blackboard_scope":""}]}`
 		case isReplannerPrompt && strings.Contains(prompt, fakeLLMFailureReplanGoal):
 			fake.replannerCalls.Add(1)
-			payload = `{"summary":"replace failed root from replanner","child_tasks":[{"alias":"fib-recovery","kind":"step","goal":"compute Fibonacci and return verified result","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{},"blackboard_scope":""}]}`
+			payload = `{"summary":"replace failed root from replanner","child_tasks":[{"alias":"fib-recovery","kind":"step","goal":"compute Fibonacci and return verified result","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{},"env_preconditions":{"required":false},"blackboard_scope":""}]}`
 		case strings.Contains(prompt, "Verify the following orchestration task result."):
 			fake.verifierCalls.Add(1)
 			payload = `{"status":"completed","verdict":"accepted","summary":"verification accepted","failure_class":"","terminal_reason":"","request_replan":false}`

@@ -208,6 +208,7 @@ func decodeStartRunPlannerTask(obj map[string]any, index int) (orchestration.Pla
 		"priority":            {},
 		"retry_policy":        {},
 		"verification_policy": {},
+		"env_preconditions":   {},
 		"blackboard_scope":    {},
 	}); err != nil {
 		return orchestration.PlannedTaskSpec{}, fmt.Errorf("child_tasks[%d]: %w", index, err)
@@ -252,6 +253,10 @@ func decodeStartRunPlannerTask(obj map[string]any, index int) (orchestration.Pla
 	if err != nil {
 		return orchestration.PlannedTaskSpec{}, fmt.Errorf("child_tasks[%d]: %w", index, err)
 	}
+	envPreconditions, err := requiredPlannerEnvPreconditions(obj)
+	if err != nil {
+		return orchestration.PlannedTaskSpec{}, fmt.Errorf("child_tasks[%d]: %w", index, err)
+	}
 	return orchestration.PlannedTaskSpec{
 		Alias:              alias,
 		Kind:               kind,
@@ -262,7 +267,90 @@ func decodeStartRunPlannerTask(obj map[string]any, index int) (orchestration.Pla
 		Priority:           priority,
 		RetryPolicy:        retryPolicy,
 		VerificationPolicy: verificationPolicy,
+		EnvPreconditions:   envPreconditions,
 		BlackboardScope:    blackboardScope,
+	}, nil
+}
+
+// requiredPlannerEnvPreconditions decodes the env_preconditions object the
+// planner must include in every child task. The kernel uses Required=true
+// payloads to reserve and bind a real env session before dispatch (Stage
+// 3-E.3); Required=false signals a pure-LLM step and skips env manager
+// involvement entirely. Marking the field as required (rather than letting
+// the planner silently omit it) makes "this task touches an env" an explicit
+// signal we can audit in event payloads instead of an implicit default.
+func requiredPlannerEnvPreconditions(obj map[string]any) (orchestration.EnvPreconditions, error) {
+	raw, ok := obj["env_preconditions"]
+	if !ok || raw == nil {
+		return orchestration.EnvPreconditions{}, errors.New("env_preconditions is required")
+	}
+	value, ok := raw.(map[string]any)
+	if !ok {
+		return orchestration.EnvPreconditions{}, errors.New("env_preconditions must be an object")
+	}
+	return decodePlannerEnvPreconditions(value)
+}
+
+func decodePlannerEnvPreconditions(obj map[string]any) (orchestration.EnvPreconditions, error) {
+	for key := range obj {
+		switch key {
+		case "required", "kind", "resource_name", "mode", "effect_class", "metadata":
+			continue
+		default:
+			return orchestration.EnvPreconditions{}, fmt.Errorf("env_preconditions: unknown field %q", key)
+		}
+	}
+	rawRequired, ok := obj["required"]
+	if !ok || rawRequired == nil {
+		return orchestration.EnvPreconditions{}, errors.New("env_preconditions.required is required")
+	}
+	required, ok := rawRequired.(bool)
+	if !ok {
+		return orchestration.EnvPreconditions{}, errors.New("env_preconditions.required must be a boolean")
+	}
+	if !required {
+		return orchestration.EnvPreconditions{Required: false}, nil
+	}
+	kind, err := optionalPlannerString(obj, "kind")
+	if err != nil {
+		return orchestration.EnvPreconditions{}, err
+	}
+	switch kind {
+	case orchestration.EnvPreconditionsKindContainer, orchestration.EnvPreconditionsKindBrowser:
+	case "":
+		return orchestration.EnvPreconditions{}, errors.New("env_preconditions.kind is required when required=true")
+	default:
+		return orchestration.EnvPreconditions{}, fmt.Errorf("env_preconditions.kind must be %q or %q", orchestration.EnvPreconditionsKindContainer, orchestration.EnvPreconditionsKindBrowser)
+	}
+	resourceName, err := optionalPlannerString(obj, "resource_name")
+	if err != nil {
+		return orchestration.EnvPreconditions{}, err
+	}
+	if resourceName == "" {
+		return orchestration.EnvPreconditions{}, errors.New("env_preconditions.resource_name is required when required=true")
+	}
+	mode, err := optionalPlannerString(obj, "mode")
+	if err != nil {
+		return orchestration.EnvPreconditions{}, err
+	}
+	effectClass, err := optionalPlannerString(obj, "effect_class")
+	if err != nil {
+		return orchestration.EnvPreconditions{}, err
+	}
+	metadata, err := optionalPlannerObject(obj, "metadata")
+	if err != nil {
+		return orchestration.EnvPreconditions{}, err
+	}
+	if len(metadata) == 0 {
+		metadata = nil
+	}
+	return orchestration.EnvPreconditions{
+		Required:     true,
+		Kind:         kind,
+		ResourceName: resourceName,
+		Mode:         mode,
+		EffectClass:  effectClass,
+		Metadata:     metadata,
 	}, nil
 }
 
@@ -369,6 +457,7 @@ Rules:
 - Use depends_on aliases to form an acyclic DAG.
 - Default worker_profile should usually be "llm.default".
 - Use verification_policy only when a child clearly needs an explicit verifier gate.
+- env_preconditions is required on every child task. Set required=false for pure-LLM steps. Set required=true with kind="container" or kind="browser" and a resource_name string only when the task must touch an external runtime (file edits, shell commands, browser navigation). Pick the smallest credible set of env-bound tasks; the kernel pays a real cost for each lease.
 - Do not call tools.
 - Use exactly the JSON field names shown below. Do not invent aliases or extra fields.
 - Return child_tasks as an array. Use [] when no decomposition is needed.
@@ -387,6 +476,14 @@ Return JSON:
       "priority": integer,
       "retry_policy": object,
       "verification_policy": object,
+      "env_preconditions": {
+        "required": boolean,
+        "kind": "container" | "browser",
+        "resource_name": string,
+        "mode": string,
+        "effect_class": string,
+        "metadata": object
+      },
       "blackboard_scope": string
     }
   ]
@@ -404,6 +501,7 @@ Rules:
 - Use depends_on aliases to form an acyclic DAG.
 - Default worker_profile should usually be "llm.default".
 - Use verification_policy only when a replacement child clearly needs an explicit verifier gate.
+- env_preconditions is required on every replacement child. Set required=false for pure-LLM steps. Set required=true with kind="container" or kind="browser" and a resource_name string only when the task must touch an external runtime. Carry the same env requirement the original task had unless the replan reason explicitly demands a different one.
 - Do not call tools.
 - Use exactly the JSON field names shown below. Do not invent aliases or extra fields.
 - Return child_tasks as a non-empty array. If no safe replacement can be produced, explain the blocker in summary and return the smallest safe diagnostic task.
@@ -422,6 +520,14 @@ Return JSON:
       "priority": integer,
       "retry_policy": object,
       "verification_policy": object,
+      "env_preconditions": {
+        "required": boolean,
+        "kind": "container" | "browser",
+        "resource_name": string,
+        "mode": string,
+        "effect_class": string,
+        "metadata": object
+      },
       "blackboard_scope": string
     }
   ]

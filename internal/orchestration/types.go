@@ -147,17 +147,55 @@ type RunHandle struct {
 }
 
 type PlannedTaskSpec struct {
-	Alias              string         `json:"alias,omitempty"`
-	Kind               string         `json:"kind,omitempty"`
-	Goal               string         `json:"goal"`
-	Inputs             map[string]any `json:"inputs"`
-	DependsOnAliases   []string       `json:"depends_on,omitempty"`
-	WorkerProfile      string         `json:"worker_profile,omitempty"`
-	Priority           int            `json:"priority,omitempty"`
-	RetryPolicy        map[string]any `json:"retry_policy"`
-	VerificationPolicy map[string]any `json:"verification_policy"`
-	BlackboardScope    string         `json:"blackboard_scope,omitempty"`
+	Alias              string           `json:"alias,omitempty"`
+	Kind               string           `json:"kind,omitempty"`
+	Goal               string           `json:"goal"`
+	Inputs             map[string]any   `json:"inputs"`
+	DependsOnAliases   []string         `json:"depends_on,omitempty"`
+	WorkerProfile      string           `json:"worker_profile,omitempty"`
+	Priority           int              `json:"priority,omitempty"`
+	RetryPolicy        map[string]any   `json:"retry_policy"`
+	VerificationPolicy map[string]any   `json:"verification_policy"`
+	EnvPreconditions   EnvPreconditions `json:"env_preconditions"`
+	BlackboardScope    string           `json:"blackboard_scope,omitempty"`
 }
+
+// EnvPreconditions is the planner-emitted contract that tells the kernel
+// whether a task depends on a leasable runtime environment (a container or a
+// browser session) and, if so, which env_resource it should lease from. The
+// kernel reserves and binds the session before dispatching the task, captures
+// the resolved lease in the dispatch input manifest, and releases (or holds
+// for HITL) the binding when the attempt completes.
+//
+// Required=false means the task is purely an LLM step and the kernel must not
+// touch the env manager. Required=true demands Kind ∈ {container, browser}
+// and a non-empty ResourceName. Mode and EffectClass are advisory hints used
+// by Stage 3-F (action ledger) and Stage 3-H (approval tokens for irreversible
+// side effects).
+type EnvPreconditions struct {
+	Required     bool           `json:"required"`
+	Kind         string         `json:"kind,omitempty"`
+	ResourceName string         `json:"resource_name,omitempty"`
+	Mode         string         `json:"mode,omitempty"`
+	EffectClass  string         `json:"effect_class,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
+// EnvPreconditionsKind* mirror the orchestration_env_resources.kind CHECK
+// constraint so the kernel and the planner agree on the same vocabulary.
+const (
+	EnvPreconditionsKindContainer = "container"
+	EnvPreconditionsKindBrowser   = "browser"
+)
+
+// EnvPreconditionsEffect* matches orchestrationenv.EffectClass and the
+// effect_class column the action ledger uses. Stage 3-E only stores the value;
+// Stage 3-F enforces it on every recorded action.
+const (
+	EnvPreconditionsEffectInternal            = "internal"
+	EnvPreconditionsEffectExternalIdempotent  = "external_idempotent"
+	EnvPreconditionsEffectExternalIrreversibe = "external_irreversible"
+)
 
 type StartRunPlanningInput struct {
 	Run      Run  `json:"run"`
@@ -528,29 +566,30 @@ type CreateHumanCheckpointResult struct {
 }
 
 type Task struct {
-	ID                       string         `json:"id"`
-	RunID                    string         `json:"run_id"`
-	DecomposedFromTaskID     string         `json:"decomposed_from_task_id,omitempty"`
-	Kind                     string         `json:"kind"`
-	Goal                     string         `json:"goal"`
-	Inputs                   map[string]any `json:"inputs"`
-	PlannerEpoch             uint64         `json:"planner_epoch"`
-	SupersededByPlannerEpoch uint64         `json:"superseded_by_planner_epoch,omitempty"`
-	WorkerProfile            string         `json:"worker_profile,omitempty"`
-	Priority                 int            `json:"priority"`
-	RetryPolicy              map[string]any `json:"retry_policy"`
-	VerificationPolicy       map[string]any `json:"verification_policy"`
-	Status                   string         `json:"status"`
-	StatusVersion            uint64         `json:"status_version"`
-	WaitingCheckpointID      string         `json:"waiting_checkpoint_id,omitempty"`
-	WaitingScope             string         `json:"waiting_scope,omitempty"`
-	LatestResultID           string         `json:"latest_result_id,omitempty"`
-	ReadyAt                  *time.Time     `json:"ready_at,omitempty"`
-	BlockedReason            string         `json:"blocked_reason,omitempty"`
-	TerminalReason           string         `json:"terminal_reason,omitempty"`
-	BlackboardScope          string         `json:"blackboard_scope,omitempty"`
-	CreatedAt                time.Time      `json:"created_at"`
-	UpdatedAt                time.Time      `json:"updated_at"`
+	ID                       string           `json:"id"`
+	RunID                    string           `json:"run_id"`
+	DecomposedFromTaskID     string           `json:"decomposed_from_task_id,omitempty"`
+	Kind                     string           `json:"kind"`
+	Goal                     string           `json:"goal"`
+	Inputs                   map[string]any   `json:"inputs"`
+	PlannerEpoch             uint64           `json:"planner_epoch"`
+	SupersededByPlannerEpoch uint64           `json:"superseded_by_planner_epoch,omitempty"`
+	WorkerProfile            string           `json:"worker_profile,omitempty"`
+	Priority                 int              `json:"priority"`
+	RetryPolicy              map[string]any   `json:"retry_policy"`
+	VerificationPolicy       map[string]any   `json:"verification_policy"`
+	EnvPreconditions         EnvPreconditions `json:"env_preconditions"`
+	Status                   string           `json:"status"`
+	StatusVersion            uint64           `json:"status_version"`
+	WaitingCheckpointID      string           `json:"waiting_checkpoint_id,omitempty"`
+	WaitingScope             string           `json:"waiting_scope,omitempty"`
+	LatestResultID           string           `json:"latest_result_id,omitempty"`
+	ReadyAt                  *time.Time       `json:"ready_at,omitempty"`
+	BlockedReason            string           `json:"blocked_reason,omitempty"`
+	TerminalReason           string           `json:"terminal_reason,omitempty"`
+	BlackboardScope          string           `json:"blackboard_scope,omitempty"`
+	CreatedAt                time.Time        `json:"created_at"`
+	UpdatedAt                time.Time        `json:"updated_at"`
 }
 
 type PlanningIntent struct {
