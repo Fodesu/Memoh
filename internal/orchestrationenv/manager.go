@@ -160,6 +160,34 @@ func (m *Manager) GetResourceByName(ctx context.Context, tenantID, name string) 
 	return &resource, nil
 }
 
+// UpdateResource applies admin-controlled fields to a resource template.
+// Existing sessions are left untouched; status and capacity only affect
+// future admission decisions.
+func (m *Manager) UpdateResource(ctx context.Context, req UpdateResourceRequest) (*Resource, error) {
+	if err := validateUpdateResource(&req); err != nil {
+		return nil, err
+	}
+	pgID, err := db.ParseUUID(req.ID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid resource id", ErrInvalidArgument)
+	}
+	row, err := m.queries.UpdateOrchestrationEnvResource(ctx, sqlc.UpdateOrchestrationEnvResourceParams{
+		ID:       pgID,
+		Config:   encodeObject(req.Config),
+		Capacity: int32(req.Capacity), //nolint:gosec // capacity is small and CHECK > 0
+		Status:   req.Status,
+		Metadata: encodeObject(req.Metadata),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrResourceNotFound
+		}
+		return nil, fmt.Errorf("env: update resource: %w", err)
+	}
+	resource := projectResource(row)
+	return &resource, nil
+}
+
 // ListResources returns every resource for a tenant, alphabetised so
 // admin UIs render a stable order without further sorting.
 func (m *Manager) ListResources(ctx context.Context, tenantID string) ([]Resource, error) {

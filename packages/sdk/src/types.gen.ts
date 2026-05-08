@@ -970,6 +970,52 @@ export type HandlersDailyTokenUsage = {
     reasoning_tokens?: number;
 };
 
+export type HandlersEnvResourceCreateRequest = {
+    capacity?: number;
+    config?: {
+        [key: string]: unknown;
+    };
+    kind: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name: string;
+    status?: string;
+};
+
+export type HandlersEnvResourceListPage = {
+    items?: Array<HandlersEnvResourceView>;
+};
+
+export type HandlersEnvResourceUpdateRequest = {
+    capacity?: number;
+    config?: {
+        [key: string]: unknown;
+    };
+    metadata?: {
+        [key: string]: unknown;
+    };
+    status?: string;
+};
+
+export type HandlersEnvResourceView = {
+    capacity?: number;
+    config?: {
+        [key: string]: unknown;
+    };
+    created_at?: string;
+    id?: string;
+    kind?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name?: string;
+    owner_subject?: string;
+    status?: string;
+    tenant_id?: string;
+    updated_at?: string;
+};
+
 export type HandlersErrorResponse = {
     message?: string;
 };
@@ -1685,6 +1731,17 @@ export type OrchestrationCreateHumanCheckpointResult = {
     snapshot_seq?: number;
 };
 
+export type OrchestrationEnvPreconditions = {
+    effect_class?: string;
+    kind?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    mode?: string;
+    required?: boolean;
+    resource_name?: string;
+};
+
 export type OrchestrationHumanCheckpoint = {
     blocks_run?: boolean;
     created_at?: string;
@@ -2045,6 +2102,7 @@ export type OrchestrationTask = {
     blocked_reason?: string;
     created_at?: string;
     decomposed_from_task_id?: string;
+    env_preconditions?: OrchestrationEnvPreconditions;
     goal?: string;
     id?: string;
     inputs?: {
@@ -8435,6 +8493,166 @@ export type PostOrchestrationCheckpointsByCheckpointIdResolveResponses = {
 };
 
 export type PostOrchestrationCheckpointsByCheckpointIdResolveResponse = PostOrchestrationCheckpointsByCheckpointIdResolveResponses[keyof PostOrchestrationCheckpointsByCheckpointIdResolveResponses];
+
+export type GetOrchestrationEnvResourcesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/orchestration/env-resources';
+};
+
+export type GetOrchestrationEnvResourcesErrors = {
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetOrchestrationEnvResourcesError = GetOrchestrationEnvResourcesErrors[keyof GetOrchestrationEnvResourcesErrors];
+
+export type GetOrchestrationEnvResourcesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersEnvResourceListPage;
+};
+
+export type GetOrchestrationEnvResourcesResponse = GetOrchestrationEnvResourcesResponses[keyof GetOrchestrationEnvResourcesResponses];
+
+export type PostOrchestrationEnvResourcesData = {
+    /**
+     * Env resource payload
+     */
+    body: HandlersEnvResourceCreateRequest;
+    path?: never;
+    query?: never;
+    url: '/orchestration/env-resources';
+};
+
+export type PostOrchestrationEnvResourcesErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostOrchestrationEnvResourcesError = PostOrchestrationEnvResourcesErrors[keyof PostOrchestrationEnvResourcesErrors];
+
+export type PostOrchestrationEnvResourcesResponses = {
+    /**
+     * Created
+     */
+    201: HandlersEnvResourceView;
+};
+
+export type PostOrchestrationEnvResourcesResponse = PostOrchestrationEnvResourcesResponses[keyof PostOrchestrationEnvResourcesResponses];
+
+export type GetOrchestrationEnvResourcesByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Env resource ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/orchestration/env-resources/{id}';
+};
+
+export type GetOrchestrationEnvResourcesByIdErrors = {
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetOrchestrationEnvResourcesByIdError = GetOrchestrationEnvResourcesByIdErrors[keyof GetOrchestrationEnvResourcesByIdErrors];
+
+export type GetOrchestrationEnvResourcesByIdResponses = {
+    /**
+     * OK
+     */
+    200: HandlersEnvResourceView;
+};
+
+export type GetOrchestrationEnvResourcesByIdResponse = GetOrchestrationEnvResourcesByIdResponses[keyof GetOrchestrationEnvResourcesByIdResponses];
+
+export type PatchOrchestrationEnvResourcesByIdData = {
+    /**
+     * Env resource update payload
+     */
+    body: HandlersEnvResourceUpdateRequest;
+    path: {
+        /**
+         * Env resource ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/orchestration/env-resources/{id}';
+};
+
+export type PatchOrchestrationEnvResourcesByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PatchOrchestrationEnvResourcesByIdError = PatchOrchestrationEnvResourcesByIdErrors[keyof PatchOrchestrationEnvResourcesByIdErrors];
+
+export type PatchOrchestrationEnvResourcesByIdResponses = {
+    /**
+     * OK
+     */
+    200: HandlersEnvResourceView;
+};
+
+export type PatchOrchestrationEnvResourcesByIdResponse = PatchOrchestrationEnvResourcesByIdResponses[keyof PatchOrchestrationEnvResourcesByIdResponses];
 
 export type PostOrchestrationRunsData = {
     /**

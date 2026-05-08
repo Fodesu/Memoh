@@ -303,6 +303,16 @@ type RegisterResourceRequest struct {
 	Metadata     map[string]any
 }
 
+// UpdateResourceRequest rewrites the mutable fields of a resource
+// template.
+type UpdateResourceRequest struct {
+	ID       string
+	Config   map[string]any
+	Capacity int
+	Status   string
+	Metadata map[string]any
+}
+
 // ReclaimResult summarises a single ReclaimExpiredSessions sweep so
 // callers (the env reclaim loop, the admin endpoint, support
 // tooling) can decide whether to retry or surface the totals.
