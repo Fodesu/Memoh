@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/memohai/memoh/internal/logger"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/orchestration"
+	"github.com/memohai/memoh/internal/orchestrationbus"
 	"github.com/memohai/memoh/internal/orchestrationexec"
 	"github.com/memohai/memoh/internal/settings"
 	"github.com/memohai/memoh/internal/workspace"
@@ -70,6 +72,14 @@ func run() error {
 	svc := orchestration.NewService(log, pool, queries)
 	var executor orchestration.AttemptExecutor = svc
 	var workerLeases orchestration.WorkerLeaseRuntime = svc
+
+	bus, err := orchestrationbus.New(ctx, log, cfg.NATS)
+	if err != nil {
+		log.Warn("orchestration bus unavailable, attempt facts will not be published", slog.Any("error", err))
+		bus = orchestrationbus.NewInMemoryBus(0)
+	}
+	defer func() { _ = bus.Close() }()
+	facts := newAttemptFactEmitter(log, bus)
 	llmRuntime, cleanupLLMRuntime, err := buildLLMRuntime(ctx, log, cfg, pool, queries)
 	if err != nil {
 		log.Warn("llm runtime unavailable, worker will use builtin fallback", slog.Any("error", err))
@@ -138,6 +148,12 @@ func run() error {
 			}
 		}
 
+		facts.emit(ctx, *attempt, "attempt.claimed", map[string]any{
+			"executor_id":     executorID,
+			"worker_id":       workerID,
+			"worker_profiles": workerProfiles,
+		})
+
 		if err := sleepWithContext(ctx, time.Duration(envInt("WORKER_START_DELAY_MS", 0))*time.Millisecond); err != nil {
 			return nil
 		}
@@ -145,6 +161,9 @@ func run() error {
 		runningAttempt, err := executor.StartClaimedAttempt(ctx, claimedFence)
 		if err != nil {
 			log.Error("start attempt failed", slog.String("attempt_id", attempt.ID), slog.Any("error", err))
+			facts.emit(ctx, *attempt, "attempt.start_failed", map[string]any{
+				"error": err.Error(),
+			})
 			select {
 			case <-ctx.Done():
 				return nil
@@ -153,8 +172,12 @@ func run() error {
 			}
 		}
 
+		facts.emit(ctx, *runningAttempt, "attempt.started", nil)
+
 		leaseLost := runAttempt(ctx, executor, log, *runningAttempt, leaseTTLSeconds, workerProfiles, func(execCtx context.Context, attempt orchestration.TaskAttempt, profiles []string) orchestration.AttemptCompletion {
-			return executeAttempt(execCtx, queries, llmRuntime, attempt, profiles)
+			completion := executeAttempt(execCtx, queries, llmRuntime, attempt, profiles)
+			facts.emitCompletion(execCtx, attempt, completion)
+			return completion
 		})
 		if leaseLost {
 			log.Warn("dropping stale attempt completion after lease loss", slog.String("attempt_id", runningAttempt.ID))
@@ -635,6 +658,76 @@ func heartbeatInterval(leaseTTLSeconds int) time.Duration {
 		return time.Second
 	}
 	return time.Duration(leaseTTLSeconds/2) * time.Second
+}
+
+// attemptFactEmitter publishes the worker's view of an attempt onto the
+// orchestration bus. Publish failures are logged and dropped: the kernel
+// still has the row in Postgres, so a missing fact does not corrupt state.
+type attemptFactEmitter struct {
+	log *slog.Logger
+	bus orchestrationbus.AttemptFactPublisher
+}
+
+func newAttemptFactEmitter(log *slog.Logger, bus orchestrationbus.AttemptFactPublisher) *attemptFactEmitter {
+	return &attemptFactEmitter{log: log, bus: bus}
+}
+
+func (e *attemptFactEmitter) emit(ctx context.Context, attempt orchestration.TaskAttempt, factType string, payload map[string]any) {
+	if e == nil || e.bus == nil {
+		return
+	}
+	env := orchestrationbus.AttemptFactEnvelope{
+		FactID:     uuid.NewString(),
+		RunID:      attempt.RunID,
+		TaskID:     attempt.TaskID,
+		AttemptID:  attempt.ID,
+		ClaimEpoch: int64(attempt.ClaimEpoch & math.MaxInt64), //nolint:gosec // claim epoch fits in int64
+		ClaimToken: attempt.ClaimToken,
+		Type:       factType,
+		Payload:    payload,
+		ObservedAt: time.Now().UTC(),
+	}
+	if env.ClaimEpoch <= 0 {
+		// A real claim always sets a positive epoch. If we got here without
+		// one, fall back to attempt_no so envelope.Validate accepts the fact
+		// instead of dropping it on the floor.
+		env.ClaimEpoch = int64(attempt.AttemptNo)
+		if env.ClaimEpoch <= 0 {
+			env.ClaimEpoch = 1
+		}
+	}
+	publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := e.bus.PublishAttemptFact(publishCtx, env); err != nil {
+		e.log.Debug("publish attempt fact failed",
+			slog.String("attempt_id", attempt.ID),
+			slog.String("type", factType),
+			slog.Any("error", err),
+		)
+	}
+}
+
+func (e *attemptFactEmitter) emitCompletion(ctx context.Context, attempt orchestration.TaskAttempt, completion orchestration.AttemptCompletion) {
+	factType := "attempt.completed"
+	switch completion.Status {
+	case orchestration.TaskAttemptStatusFailed:
+		factType = "attempt.failed"
+	case orchestration.TaskAttemptStatusLost:
+		factType = "attempt.lost"
+	}
+	payload := map[string]any{
+		"status": completion.Status,
+	}
+	if completion.FailureClass != "" {
+		payload["failure_class"] = completion.FailureClass
+	}
+	if completion.TerminalReason != "" {
+		payload["terminal_reason"] = completion.TerminalReason
+	}
+	if completion.Summary != "" {
+		payload["summary"] = completion.Summary
+	}
+	e.emit(ctx, attempt, factType, payload)
 }
 
 func sleepWithContext(ctx context.Context, duration time.Duration) error {

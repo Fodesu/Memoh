@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"github.com/memohai/memoh/internal/logger"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/orchestration"
+	"github.com/memohai/memoh/internal/orchestrationbus"
 	"github.com/memohai/memoh/internal/orchestrationexec"
 	"github.com/memohai/memoh/internal/settings"
 	"github.com/memohai/memoh/internal/workspace"
@@ -65,6 +67,14 @@ func run() error {
 	svc := orchestration.NewService(log, pool, queries)
 	var executor orchestration.VerificationWorkExecutor = svc
 	var workerLeases orchestration.WorkerLeaseRuntime = svc
+
+	bus, err := orchestrationbus.New(ctx, log, cfg.NATS)
+	if err != nil {
+		log.Warn("orchestration bus unavailable, verification facts will not be published", slog.Any("error", err))
+		bus = orchestrationbus.NewInMemoryBus(0)
+	}
+	defer func() { _ = bus.Close() }()
+	facts := newVerificationFactEmitter(log, bus)
 	llmRuntime, cleanupLLMRuntime, err := buildLLMRuntime(ctx, log, cfg, pool, queries)
 	if err != nil {
 		log.Warn("llm runtime unavailable, verifier will use builtin fallback", slog.Any("error", err))
@@ -133,6 +143,12 @@ func run() error {
 			}
 		}
 
+		facts.emit(ctx, *verification, "verification.claimed", map[string]any{
+			"executor_id":       executorID,
+			"worker_id":         workerID,
+			"verifier_profiles": verifierProfiles,
+		})
+
 		if err := sleepWithContext(ctx, time.Duration(envInt("VERIFIER_START_DELAY_MS", 0))*time.Millisecond); err != nil {
 			return nil
 		}
@@ -140,6 +156,9 @@ func run() error {
 		runningVerification, err := executor.StartClaimedVerification(ctx, claimedFence)
 		if err != nil {
 			log.Error("start verification failed", slog.String("verification_id", verification.ID), slog.Any("error", err))
+			facts.emit(ctx, *verification, "verification.start_failed", map[string]any{
+				"error": err.Error(),
+			})
 			select {
 			case <-ctx.Done():
 				return nil
@@ -148,8 +167,12 @@ func run() error {
 			}
 		}
 
+		facts.emit(ctx, *runningVerification, "verification.started", nil)
+
 		leaseLost := runVerification(ctx, executor, log, *runningVerification, leaseTTLSeconds, verifierProfiles, func(execCtx context.Context, verification orchestration.TaskVerification, profiles []string) orchestration.VerificationCompletion {
-			return executeVerification(execCtx, queries, llmRuntime, verification, profiles)
+			completion := executeVerification(execCtx, queries, llmRuntime, verification, profiles)
+			facts.emitCompletion(execCtx, verification, completion)
+			return completion
 		})
 		if leaseLost {
 			log.Warn("dropping stale verification completion after lease loss", slog.String("verification_id", runningVerification.ID))
@@ -306,6 +329,76 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// verificationFactEmitter is verifyd's counterpart to workerd's
+// attemptFactEmitter. It pushes verification updates onto the bus; publish
+// errors are logged and dropped because Postgres still has the row.
+type verificationFactEmitter struct {
+	log *slog.Logger
+	bus orchestrationbus.AttemptFactPublisher
+}
+
+func newVerificationFactEmitter(log *slog.Logger, bus orchestrationbus.AttemptFactPublisher) *verificationFactEmitter {
+	return &verificationFactEmitter{log: log, bus: bus}
+}
+
+func (e *verificationFactEmitter) emit(ctx context.Context, verification orchestration.TaskVerification, factType string, payload map[string]any) {
+	if e == nil || e.bus == nil {
+		return
+	}
+	env := orchestrationbus.AttemptFactEnvelope{
+		FactID:     uuid.NewString(),
+		RunID:      verification.RunID,
+		TaskID:     verification.TaskID,
+		AttemptID:  verification.ID,
+		ClaimEpoch: int64(verification.ClaimEpoch & math.MaxInt64), //nolint:gosec // claim epoch fits in int64
+		ClaimToken: verification.ClaimToken,
+		Type:       factType,
+		Payload:    payload,
+		ObservedAt: time.Now().UTC(),
+	}
+	if env.ClaimEpoch <= 0 {
+		// Recovery paths can emit a fact before the claim has set an epoch.
+		// Fall back to attempt_no so envelope.Validate still accepts it.
+		env.ClaimEpoch = int64(verification.AttemptNo)
+		if env.ClaimEpoch <= 0 {
+			env.ClaimEpoch = 1
+		}
+	}
+	publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := e.bus.PublishAttemptFact(publishCtx, env); err != nil {
+		e.log.Debug("publish verification fact failed",
+			slog.String("verification_id", verification.ID),
+			slog.String("type", factType),
+			slog.Any("error", err),
+		)
+	}
+}
+
+func (e *verificationFactEmitter) emitCompletion(ctx context.Context, verification orchestration.TaskVerification, completion orchestration.VerificationCompletion) {
+	factType := "verification.completed"
+	switch completion.Status {
+	case orchestration.TaskVerificationStatusFailed:
+		factType = "verification.failed"
+	case orchestration.TaskVerificationStatusLost:
+		factType = "verification.lost"
+	}
+	payload := map[string]any{
+		"status":  completion.Status,
+		"verdict": completion.Verdict,
+	}
+	if completion.FailureClass != "" {
+		payload["failure_class"] = completion.FailureClass
+	}
+	if completion.TerminalReason != "" {
+		payload["terminal_reason"] = completion.TerminalReason
+	}
+	if completion.Summary != "" {
+		payload["summary"] = completion.Summary
+	}
+	e.emit(ctx, verification, factType, payload)
 }
 
 func buildLLMRuntime(
