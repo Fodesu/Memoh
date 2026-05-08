@@ -41,25 +41,27 @@ const (
 )
 
 type Config struct {
-	Log         LogConfig         `toml:"log"`
-	Server      ServerConfig      `toml:"server"`
-	Admin       AdminConfig       `toml:"admin"`
-	Auth        AuthConfig        `toml:"auth"`
-	Timezone    string            `toml:"timezone"`
-	Database    DatabaseConfig    `toml:"database"`
-	Container   ContainerConfig   `toml:"container"`
-	Containerd  ContainerdConfig  `toml:"containerd"`
-	Docker      DockerConfig      `toml:"docker"`
-	Kubernetes  KubernetesConfig  `toml:"kubernetes"`
-	Apple       AppleConfig       `toml:"apple"`
-	Local       LocalConfig       `toml:"local"`
-	Workspace   WorkspaceConfig   `toml:"workspace"`
-	Postgres    PostgresConfig    `toml:"postgres"`
-	SQLite      SQLiteConfig      `toml:"sqlite"`
-	Qdrant      QdrantConfig      `toml:"qdrant"`
-	Sparse      SparseConfig      `toml:"sparse"`
-	Registry    RegistryConfig    `toml:"registry"`
-	Supermarket SupermarketConfig `toml:"supermarket"`
+	Log            LogConfig            `toml:"log"`
+	Server         ServerConfig         `toml:"server"`
+	Admin          AdminConfig          `toml:"admin"`
+	Auth           AuthConfig           `toml:"auth"`
+	Timezone       string               `toml:"timezone"`
+	Database       DatabaseConfig       `toml:"database"`
+	Container      ContainerConfig      `toml:"container"`
+	Containerd     ContainerdConfig     `toml:"containerd"`
+	Docker         DockerConfig         `toml:"docker"`
+	Kubernetes     KubernetesConfig     `toml:"kubernetes"`
+	Apple          AppleConfig          `toml:"apple"`
+	Local          LocalConfig          `toml:"local"`
+	Workspace      WorkspaceConfig      `toml:"workspace"`
+	Postgres       PostgresConfig       `toml:"postgres"`
+	SQLite         SQLiteConfig         `toml:"sqlite"`
+	Qdrant         QdrantConfig         `toml:"qdrant"`
+	Sparse         SparseConfig         `toml:"sparse"`
+	NATS           NATSConfig           `toml:"nats"`
+	BrowserGateway BrowserGatewayConfig `toml:"browser_gateway"`
+	Registry       RegistryConfig       `toml:"registry"`
+	Supermarket    SupermarketConfig    `toml:"supermarket"`
 }
 
 type LogConfig struct {
@@ -311,6 +313,38 @@ type QdrantConfig struct {
 
 type SparseConfig struct {
 	BaseURL string `toml:"base_url"`
+}
+
+// NATSConfig configures the orchestration event bus client. URL is empty by
+// default; orchestration falls back to the in-process bus when no URL is set.
+type NATSConfig struct {
+	URL             string `toml:"url"`
+	Token           string `toml:"token" json:"-"`
+	User            string `toml:"user"`
+	Password        string `toml:"password" json:"-"`
+	CredentialsFile string `toml:"credentials_file"`
+	StreamReplicas  int    `toml:"stream_replicas"`
+}
+
+// Enabled reports whether a JetStream backend should be wired up.
+func (c NATSConfig) Enabled() bool {
+	return strings.TrimSpace(c.URL) != ""
+}
+
+// EffectiveStreamReplicas returns the configured stream replica count or 1 as
+// default. Zero replicas would be invalid for JetStream.
+func (c NATSConfig) EffectiveStreamReplicas() int {
+	if c.StreamReplicas > 0 {
+		return c.StreamReplicas
+	}
+	return 1
+}
+
+// BrowserGatewayConfig keeps backward-compatible parsing for [browser_gateway].
+type BrowserGatewayConfig struct {
+	Host       string `toml:"host"`
+	Port       int    `toml:"port"`
+	ServerAddr string `toml:"server_addr"`
 }
 
 const DefaultProvidersDir = "conf/providers"

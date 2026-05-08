@@ -84,6 +84,7 @@ import (
 	"github.com/memohai/memoh/internal/network/kubeapi"
 	netoverlay "github.com/memohai/memoh/internal/network/overlay"
 	"github.com/memohai/memoh/internal/orchestration"
+	"github.com/memohai/memoh/internal/orchestrationbus"
 	"github.com/memohai/memoh/internal/orchestrationexec"
 	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 	"github.com/memohai/memoh/internal/policy"
@@ -358,6 +359,23 @@ func provideHeartbeatSessionCreator(sessionService *sessionpkg.Service) heartbea
 
 func provideScheduleSessionCreator(sessionService *sessionpkg.Service) schedule.SessionCreator {
 	return &sessionCreatorAdapter{svc: sessionService}
+}
+
+// provideOrchestrationBus wires the orchestration event bus. When NATS is
+// configured (cfg.NATS.URL non-empty) this returns a JetStream-backed bus;
+// otherwise the in-process bus is returned, which is fine for single-process
+// deployments and integration tests.
+func provideOrchestrationBus(lc fx.Lifecycle, log *slog.Logger, cfg config.Config) (orchestrationbus.Bus, error) {
+	bus, err := orchestrationbus.New(context.Background(), log, cfg.NATS)
+	if err != nil {
+		return nil, fmt.Errorf("orchestration bus: %w", err)
+	}
+	lc.Append(fx.Hook{
+		OnStop: func(_ context.Context) error {
+			return bus.Close()
+		},
+	})
+	return bus, nil
 }
 
 func provideAgent(log *slog.Logger, provider bridge.Provider) *agentpkg.Agent {

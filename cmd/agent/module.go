@@ -74,6 +74,7 @@ func options() fx.Option {
 			provideAudioRegistry,
 			audiopkg.NewService,
 			provideAudioTempStore,
+			provideOrchestrationBus,
 			orchestration.NewService,
 			emailpkg.NewDBOAuthTokenStore,
 			provideEmailRegistry,

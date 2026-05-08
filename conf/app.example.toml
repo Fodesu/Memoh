@@ -123,6 +123,17 @@ timeout_seconds = 10
 [sparse]
 base_url = "http://127.0.0.1:8085"
 
+[nats]
+# Optional. When url is set, the orchestration kernel publishes committed run
+# events and ingests attempt facts via NATS JetStream. Leave empty to fall back
+# to the in-process bus (suitable for single-process deployments and tests).
+url = ""
+# token = ""
+# user = ""
+# password = ""
+# credentials_file = ""
+# stream_replicas = 1
+
 [registry]
 providers_dir = "conf/providers"
 
