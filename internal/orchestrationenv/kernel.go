@@ -91,6 +91,29 @@ func (a *KernelAdapter) CreateEnvBinding(ctx context.Context, req orchestration.
 	return orchestration.EnvBindingHandle{BindingID: binding.ID}, nil
 }
 
+// CaptureEnvSnapshot records a fenced point-in-time snapshot for the
+// current session.
+func (a *KernelAdapter) CaptureEnvSnapshot(ctx context.Context, req orchestration.EnvCaptureSnapshotRequest) (orchestration.EnvSnapshotRef, error) {
+	snapshot, err := a.manager.CaptureSnapshot(ctx, CaptureSnapshotRequest{
+		SessionID:   req.SessionID,
+		LeaseToken:  req.LeaseToken,
+		LeaseEpoch:  req.LeaseEpoch,
+		Kind:        req.Kind,
+		EffectClass: req.EffectClass,
+		RunID:       req.RunID,
+		TaskID:      req.TaskID,
+		AttemptID:   req.AttemptID,
+		Metadata:    req.Metadata,
+	})
+	if err != nil {
+		return orchestration.EnvSnapshotRef{}, err
+	}
+	return orchestration.EnvSnapshotRef{
+		SnapshotID: snapshot.ID,
+		Digest:     snapshot.Digest,
+	}, nil
+}
+
 // ReleaseEnvBinding marks the binding done. The manager decides whether to
 // also release the underlying session based on remaining bindings; the
 // kernel always pairs a release-binding call with a release-session call so

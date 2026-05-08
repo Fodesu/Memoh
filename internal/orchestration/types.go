@@ -172,6 +172,7 @@ type EnvManager interface {
 	GetEnvResourceByName(ctx context.Context, tenantID, name string) (EnvResourceRef, error)
 	AcquireEnvSession(ctx context.Context, req EnvAcquireRequest) (EnvSessionLease, error)
 	CreateEnvBinding(ctx context.Context, req EnvCreateBindingRequest) (EnvBindingHandle, error)
+	CaptureEnvSnapshot(ctx context.Context, req EnvCaptureSnapshotRequest) (EnvSnapshotRef, error)
 	ReleaseEnvBinding(ctx context.Context, req EnvReleaseBindingRequest) error
 	HoldEnvBinding(ctx context.Context, req EnvHoldBindingRequest) error
 	ReleaseEnvSession(ctx context.Context, req EnvReleaseSessionRequest) error
@@ -237,6 +238,23 @@ type EnvCreateBindingRequest struct {
 
 type EnvBindingHandle struct {
 	BindingID string
+}
+
+type EnvCaptureSnapshotRequest struct {
+	SessionID   string
+	LeaseToken  string
+	LeaseEpoch  int64
+	Kind        string
+	EffectClass string
+	RunID       string
+	TaskID      string
+	AttemptID   string
+	Metadata    map[string]any
+}
+
+type EnvSnapshotRef struct {
+	SnapshotID string
+	Digest     string
 }
 
 type EnvReleaseBindingRequest struct {
@@ -657,23 +675,28 @@ type RunExecutionSpan struct {
 }
 
 type ActionRecord struct {
-	ID             string     `json:"id"`
-	RunID          string     `json:"run_id"`
-	TaskID         string     `json:"task_id"`
-	AttemptID      string     `json:"attempt_id,omitempty"`
-	VerificationID string     `json:"verification_id,omitempty"`
-	ActionKind     string     `json:"action_kind"`
-	Status         string     `json:"status"`
-	ToolName       string     `json:"tool_name"`
-	ToolCallID     string     `json:"tool_call_id"`
-	InputPayload   any        `json:"input_payload"`
-	OutputPayload  any        `json:"output_payload"`
-	ErrorPayload   any        `json:"error_payload"`
-	Summary        string     `json:"summary,omitempty"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID                  string     `json:"id"`
+	RunID               string     `json:"run_id"`
+	TaskID              string     `json:"task_id"`
+	AttemptID           string     `json:"attempt_id,omitempty"`
+	VerificationID      string     `json:"verification_id,omitempty"`
+	ActionKind          string     `json:"action_kind"`
+	Status              string     `json:"status"`
+	EffectClass         string     `json:"effect_class,omitempty"`
+	EnvSessionID        string     `json:"env_session_id,omitempty"`
+	EnvBindingID        string     `json:"env_binding_id,omitempty"`
+	BeforeEnvSnapshotID string     `json:"before_env_snapshot_id,omitempty"`
+	AfterEnvSnapshotID  string     `json:"after_env_snapshot_id,omitempty"`
+	ToolName            string     `json:"tool_name"`
+	ToolCallID          string     `json:"tool_call_id"`
+	InputPayload        any        `json:"input_payload"`
+	OutputPayload       any        `json:"output_payload"`
+	ErrorPayload        any        `json:"error_payload"`
+	Summary             string     `json:"summary,omitempty"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 type CreateHumanCheckpointResult struct {

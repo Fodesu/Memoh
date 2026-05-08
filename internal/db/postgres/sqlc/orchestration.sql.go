@@ -437,7 +437,7 @@ SET status = $1,
 WHERE attempt_id = $5
   AND tool_call_id = $6
   AND status = 'running'
-RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
+RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, effect_class, env_session_id, env_binding_id, before_env_snapshot_id, after_env_snapshot_id, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
 `
 
 type CompleteOrchestrationAttemptActionRecordParams struct {
@@ -467,6 +467,11 @@ func (q *Queries) CompleteOrchestrationAttemptActionRecord(ctx context.Context, 
 		&i.VerificationID,
 		&i.ActionKind,
 		&i.Status,
+		&i.EffectClass,
+		&i.EnvSessionID,
+		&i.EnvBindingID,
+		&i.BeforeEnvSnapshotID,
+		&i.AfterEnvSnapshotID,
 		&i.ToolName,
 		&i.ToolCallID,
 		&i.InputPayload,
@@ -584,7 +589,7 @@ SET status = $1,
 WHERE verification_id = $5
   AND tool_call_id = $6
   AND status = 'running'
-RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
+RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, effect_class, env_session_id, env_binding_id, before_env_snapshot_id, after_env_snapshot_id, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
 `
 
 type CompleteOrchestrationVerificationActionRecordParams struct {
@@ -614,6 +619,11 @@ func (q *Queries) CompleteOrchestrationVerificationActionRecord(ctx context.Cont
 		&i.VerificationID,
 		&i.ActionKind,
 		&i.Status,
+		&i.EffectClass,
+		&i.EnvSessionID,
+		&i.EnvBindingID,
+		&i.BeforeEnvSnapshotID,
+		&i.AfterEnvSnapshotID,
 		&i.ToolName,
 		&i.ToolCallID,
 		&i.InputPayload,
@@ -729,6 +739,102 @@ func (q *Queries) CountOpenRunBlockingCheckpointsByRun(ctx context.Context, runI
 	return count, err
 }
 
+const createCompletedOrchestrationAttemptActionRecord = `-- name: CreateCompletedOrchestrationAttemptActionRecord :one
+INSERT INTO orchestration_action_ledger (
+  id,
+  run_id,
+  task_id,
+  attempt_id,
+  action_kind,
+  status,
+  effect_class,
+  env_session_id,
+  env_binding_id,
+  before_env_snapshot_id,
+  after_env_snapshot_id,
+  input_payload,
+  output_payload,
+  summary,
+  finished_at
+) VALUES (
+  $1,
+  $2,
+  $3,
+  $4,
+  $5,
+  'completed',
+  $6,
+  $7,
+  $8,
+  $9,
+  $10,
+  $11,
+  $12,
+  $13,
+  now()
+) RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, effect_class, env_session_id, env_binding_id, before_env_snapshot_id, after_env_snapshot_id, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
+`
+
+type CreateCompletedOrchestrationAttemptActionRecordParams struct {
+	ID                  pgtype.UUID `json:"id"`
+	RunID               pgtype.UUID `json:"run_id"`
+	TaskID              pgtype.UUID `json:"task_id"`
+	AttemptID           pgtype.UUID `json:"attempt_id"`
+	ActionKind          string      `json:"action_kind"`
+	EffectClass         string      `json:"effect_class"`
+	EnvSessionID        pgtype.UUID `json:"env_session_id"`
+	EnvBindingID        pgtype.UUID `json:"env_binding_id"`
+	BeforeEnvSnapshotID pgtype.UUID `json:"before_env_snapshot_id"`
+	AfterEnvSnapshotID  pgtype.UUID `json:"after_env_snapshot_id"`
+	InputPayload        []byte      `json:"input_payload"`
+	OutputPayload       []byte      `json:"output_payload"`
+	Summary             string      `json:"summary"`
+}
+
+func (q *Queries) CreateCompletedOrchestrationAttemptActionRecord(ctx context.Context, arg CreateCompletedOrchestrationAttemptActionRecordParams) (OrchestrationActionLedger, error) {
+	row := q.db.QueryRow(ctx, createCompletedOrchestrationAttemptActionRecord,
+		arg.ID,
+		arg.RunID,
+		arg.TaskID,
+		arg.AttemptID,
+		arg.ActionKind,
+		arg.EffectClass,
+		arg.EnvSessionID,
+		arg.EnvBindingID,
+		arg.BeforeEnvSnapshotID,
+		arg.AfterEnvSnapshotID,
+		arg.InputPayload,
+		arg.OutputPayload,
+		arg.Summary,
+	)
+	var i OrchestrationActionLedger
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.VerificationID,
+		&i.ActionKind,
+		&i.Status,
+		&i.EffectClass,
+		&i.EnvSessionID,
+		&i.EnvBindingID,
+		&i.BeforeEnvSnapshotID,
+		&i.AfterEnvSnapshotID,
+		&i.ToolName,
+		&i.ToolCallID,
+		&i.InputPayload,
+		&i.OutputPayload,
+		&i.ErrorPayload,
+		&i.Summary,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createOrchestrationArtifact = `-- name: CreateOrchestrationArtifact :one
 INSERT INTO orchestration_artifacts (
   id,
@@ -811,6 +917,7 @@ INSERT INTO orchestration_action_ledger (
   attempt_id,
   action_kind,
   status,
+  effect_class,
   tool_name,
   tool_call_id,
   input_payload
@@ -823,8 +930,9 @@ INSERT INTO orchestration_action_ledger (
   $6,
   $7,
   $8,
-  $9
-) RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
+  $9,
+  $10
+) RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, effect_class, env_session_id, env_binding_id, before_env_snapshot_id, after_env_snapshot_id, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
 `
 
 type CreateOrchestrationAttemptActionRecordParams struct {
@@ -834,6 +942,7 @@ type CreateOrchestrationAttemptActionRecordParams struct {
 	AttemptID    pgtype.UUID `json:"attempt_id"`
 	ActionKind   string      `json:"action_kind"`
 	Status       string      `json:"status"`
+	EffectClass  string      `json:"effect_class"`
 	ToolName     string      `json:"tool_name"`
 	ToolCallID   string      `json:"tool_call_id"`
 	InputPayload []byte      `json:"input_payload"`
@@ -847,6 +956,7 @@ func (q *Queries) CreateOrchestrationAttemptActionRecord(ctx context.Context, ar
 		arg.AttemptID,
 		arg.ActionKind,
 		arg.Status,
+		arg.EffectClass,
 		arg.ToolName,
 		arg.ToolCallID,
 		arg.InputPayload,
@@ -860,6 +970,11 @@ func (q *Queries) CreateOrchestrationAttemptActionRecord(ctx context.Context, ar
 		&i.VerificationID,
 		&i.ActionKind,
 		&i.Status,
+		&i.EffectClass,
+		&i.EnvSessionID,
+		&i.EnvBindingID,
+		&i.BeforeEnvSnapshotID,
+		&i.AfterEnvSnapshotID,
 		&i.ToolName,
 		&i.ToolCallID,
 		&i.InputPayload,
@@ -2023,6 +2138,7 @@ INSERT INTO orchestration_action_ledger (
   verification_id,
   action_kind,
   status,
+  effect_class,
   tool_name,
   tool_call_id,
   input_payload
@@ -2035,8 +2151,9 @@ INSERT INTO orchestration_action_ledger (
   $6,
   $7,
   $8,
-  $9
-) RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
+  $9,
+  $10
+) RETURNING id, run_id, task_id, attempt_id, verification_id, action_kind, status, effect_class, env_session_id, env_binding_id, before_env_snapshot_id, after_env_snapshot_id, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
 `
 
 type CreateOrchestrationVerificationActionRecordParams struct {
@@ -2046,6 +2163,7 @@ type CreateOrchestrationVerificationActionRecordParams struct {
 	VerificationID pgtype.UUID `json:"verification_id"`
 	ActionKind     string      `json:"action_kind"`
 	Status         string      `json:"status"`
+	EffectClass    string      `json:"effect_class"`
 	ToolName       string      `json:"tool_name"`
 	ToolCallID     string      `json:"tool_call_id"`
 	InputPayload   []byte      `json:"input_payload"`
@@ -2059,6 +2177,7 @@ func (q *Queries) CreateOrchestrationVerificationActionRecord(ctx context.Contex
 		arg.VerificationID,
 		arg.ActionKind,
 		arg.Status,
+		arg.EffectClass,
 		arg.ToolName,
 		arg.ToolCallID,
 		arg.InputPayload,
@@ -2072,6 +2191,11 @@ func (q *Queries) CreateOrchestrationVerificationActionRecord(ctx context.Contex
 		&i.VerificationID,
 		&i.ActionKind,
 		&i.Status,
+		&i.EffectClass,
+		&i.EnvSessionID,
+		&i.EnvBindingID,
+		&i.BeforeEnvSnapshotID,
+		&i.AfterEnvSnapshotID,
 		&i.ToolName,
 		&i.ToolCallID,
 		&i.InputPayload,
@@ -3349,7 +3473,7 @@ func (q *Queries) ListActiveOrchestrationWorkers(ctx context.Context) ([]Orchest
 }
 
 const listCurrentOrchestrationActionRecordsByRun = `-- name: ListCurrentOrchestrationActionRecordsByRun :many
-SELECT id, run_id, task_id, attempt_id, verification_id, action_kind, status, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
+SELECT id, run_id, task_id, attempt_id, verification_id, action_kind, status, effect_class, env_session_id, env_binding_id, before_env_snapshot_id, after_env_snapshot_id, tool_name, tool_call_id, input_payload, output_payload, error_payload, summary, started_at, finished_at, created_at, updated_at
 FROM orchestration_action_ledger
 WHERE run_id = $1
 ORDER BY started_at ASC, created_at ASC, id ASC
@@ -3372,6 +3496,11 @@ func (q *Queries) ListCurrentOrchestrationActionRecordsByRun(ctx context.Context
 			&i.VerificationID,
 			&i.ActionKind,
 			&i.Status,
+			&i.EffectClass,
+			&i.EnvSessionID,
+			&i.EnvBindingID,
+			&i.BeforeEnvSnapshotID,
+			&i.AfterEnvSnapshotID,
 			&i.ToolName,
 			&i.ToolCallID,
 			&i.InputPayload,

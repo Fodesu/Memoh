@@ -665,6 +665,7 @@ INSERT INTO orchestration_action_ledger (
   attempt_id,
   action_kind,
   status,
+  effect_class,
   tool_name,
   tool_call_id,
   input_payload
@@ -675,6 +676,7 @@ INSERT INTO orchestration_action_ledger (
   sqlc.arg(attempt_id),
   sqlc.arg(action_kind),
   sqlc.arg(status),
+  sqlc.arg(effect_class),
   sqlc.arg(tool_name),
   sqlc.arg(tool_call_id),
   sqlc.arg(input_payload)
@@ -688,6 +690,7 @@ INSERT INTO orchestration_action_ledger (
   verification_id,
   action_kind,
   status,
+  effect_class,
   tool_name,
   tool_call_id,
   input_payload
@@ -698,9 +701,45 @@ INSERT INTO orchestration_action_ledger (
   sqlc.arg(verification_id),
   sqlc.arg(action_kind),
   sqlc.arg(status),
+  sqlc.arg(effect_class),
   sqlc.arg(tool_name),
   sqlc.arg(tool_call_id),
   sqlc.arg(input_payload)
+) RETURNING *;
+
+-- name: CreateCompletedOrchestrationAttemptActionRecord :one
+INSERT INTO orchestration_action_ledger (
+  id,
+  run_id,
+  task_id,
+  attempt_id,
+  action_kind,
+  status,
+  effect_class,
+  env_session_id,
+  env_binding_id,
+  before_env_snapshot_id,
+  after_env_snapshot_id,
+  input_payload,
+  output_payload,
+  summary,
+  finished_at
+) VALUES (
+  sqlc.arg(id),
+  sqlc.arg(run_id),
+  sqlc.arg(task_id),
+  sqlc.arg(attempt_id),
+  sqlc.arg(action_kind),
+  'completed',
+  sqlc.arg(effect_class),
+  sqlc.arg(env_session_id),
+  sqlc.arg(env_binding_id),
+  sqlc.arg(before_env_snapshot_id),
+  sqlc.arg(after_env_snapshot_id),
+  sqlc.arg(input_payload),
+  sqlc.arg(output_payload),
+  sqlc.arg(summary),
+  now()
 ) RETURNING *;
 
 -- name: CompleteOrchestrationAttemptActionRecord :one
