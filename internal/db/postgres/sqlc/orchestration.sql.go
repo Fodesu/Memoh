@@ -3493,6 +3493,58 @@ func (q *Queries) ListSchedulableOrchestrationTasks(ctx context.Context) ([]Orch
 	return items, nil
 }
 
+const listTimedOutOpenOrchestrationHumanCheckpoints = `-- name: ListTimedOutOpenOrchestrationHumanCheckpoints :many
+SELECT id, run_id, task_id, blocks_run, planner_epoch, superseded_by_planner_epoch, status, status_version, question, options, default_action, resume_policy, timeout_at, resolved_by, resolved_mode, resolved_option_id, resolved_freeform_input, resolved_at, metadata, created_at, updated_at
+FROM orchestration_human_checkpoints
+WHERE status = 'open'
+  AND timeout_at IS NOT NULL
+  AND timeout_at <= clock_timestamp()
+ORDER BY timeout_at ASC, created_at ASC, id ASC
+LIMIT $1
+`
+
+func (q *Queries) ListTimedOutOpenOrchestrationHumanCheckpoints(ctx context.Context, limitCount int32) ([]OrchestrationHumanCheckpoint, error) {
+	rows, err := q.db.Query(ctx, listTimedOutOpenOrchestrationHumanCheckpoints, limitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrchestrationHumanCheckpoint
+	for rows.Next() {
+		var i OrchestrationHumanCheckpoint
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.TaskID,
+			&i.BlocksRun,
+			&i.PlannerEpoch,
+			&i.SupersededByPlannerEpoch,
+			&i.Status,
+			&i.StatusVersion,
+			&i.Question,
+			&i.Options,
+			&i.DefaultAction,
+			&i.ResumePolicy,
+			&i.TimeoutAt,
+			&i.ResolvedBy,
+			&i.ResolvedMode,
+			&i.ResolvedOptionID,
+			&i.ResolvedFreeformInput,
+			&i.ResolvedAt,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnpublishedOrchestrationRunEvents = `-- name: ListUnpublishedOrchestrationRunEvents :many
 SELECT id, run_id, task_id, attempt_id, checkpoint_id, seq, aggregate_type, aggregate_id, aggregate_version, type, causation_event_id, correlation_id, idempotency_key, payload, created_at, published_at
 FROM orchestration_events
@@ -3594,6 +3646,66 @@ type MarkOrchestrationHumanCheckpointSupersededParams struct {
 
 func (q *Queries) MarkOrchestrationHumanCheckpointSuperseded(ctx context.Context, arg MarkOrchestrationHumanCheckpointSupersededParams) (OrchestrationHumanCheckpoint, error) {
 	row := q.db.QueryRow(ctx, markOrchestrationHumanCheckpointSuperseded, arg.SupersededByPlannerEpoch, arg.ID)
+	var i OrchestrationHumanCheckpoint
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.TaskID,
+		&i.BlocksRun,
+		&i.PlannerEpoch,
+		&i.SupersededByPlannerEpoch,
+		&i.Status,
+		&i.StatusVersion,
+		&i.Question,
+		&i.Options,
+		&i.DefaultAction,
+		&i.ResumePolicy,
+		&i.TimeoutAt,
+		&i.ResolvedBy,
+		&i.ResolvedMode,
+		&i.ResolvedOptionID,
+		&i.ResolvedFreeformInput,
+		&i.ResolvedAt,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const markOrchestrationHumanCheckpointTimedOut = `-- name: MarkOrchestrationHumanCheckpointTimedOut :one
+UPDATE orchestration_human_checkpoints
+SET status = 'timed_out',
+    status_version = status_version + 1,
+    resolved_by = $1,
+    resolved_mode = $2,
+    resolved_option_id = $3,
+    resolved_freeform_input = $4,
+    resolved_at = now(),
+    updated_at = now()
+WHERE id = $5
+  AND status = 'open'
+  AND timeout_at IS NOT NULL
+  AND timeout_at <= clock_timestamp()
+RETURNING id, run_id, task_id, blocks_run, planner_epoch, superseded_by_planner_epoch, status, status_version, question, options, default_action, resume_policy, timeout_at, resolved_by, resolved_mode, resolved_option_id, resolved_freeform_input, resolved_at, metadata, created_at, updated_at
+`
+
+type MarkOrchestrationHumanCheckpointTimedOutParams struct {
+	ResolvedBy            string      `json:"resolved_by"`
+	ResolvedMode          string      `json:"resolved_mode"`
+	ResolvedOptionID      string      `json:"resolved_option_id"`
+	ResolvedFreeformInput string      `json:"resolved_freeform_input"`
+	ID                    pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) MarkOrchestrationHumanCheckpointTimedOut(ctx context.Context, arg MarkOrchestrationHumanCheckpointTimedOutParams) (OrchestrationHumanCheckpoint, error) {
+	row := q.db.QueryRow(ctx, markOrchestrationHumanCheckpointTimedOut,
+		arg.ResolvedBy,
+		arg.ResolvedMode,
+		arg.ResolvedOptionID,
+		arg.ResolvedFreeformInput,
+		arg.ID,
+	)
 	var i OrchestrationHumanCheckpoint
 	err := row.Scan(
 		&i.ID,
@@ -4970,6 +5082,15 @@ func (q *Queries) MarkOrchestrationTaskWaitingHuman(ctx context.Context, arg Mar
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const notifyOrchestrationVerificationReady = `-- name: NotifyOrchestrationVerificationReady :exec
+SELECT pg_notify('orchestration_verification_ready', '')
+`
+
+func (q *Queries) NotifyOrchestrationVerificationReady(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, notifyOrchestrationVerificationReady)
+	return err
 }
 
 const preemptRunningOrchestrationTaskAttemptFailed = `-- name: PreemptRunningOrchestrationTaskAttemptFailed :one

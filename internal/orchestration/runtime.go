@@ -512,7 +512,7 @@ func (s *Service) processCheckpointResumePlanningIntent(ctx context.Context, qtx
 	if checkpointRow.RunID != runRow.ID {
 		return sqlc.OrchestrationEvent{}, ErrCheckpointNotFound
 	}
-	if checkpointRow.Status != CheckpointStatusResolved {
+	if checkpointRow.Status != CheckpointStatusResolved && checkpointRow.Status != CheckpointStatusTimedOut {
 		return sqlc.OrchestrationEvent{}, ErrCheckpointNotOpen
 	}
 
@@ -2870,6 +2870,12 @@ func (s *Service) RunRecoveryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			checkpointCount, err := s.RecoverTimedOutHumanCheckpoints(ctx)
+			if err != nil {
+				s.logger.Error("checkpoint timeout recovery loop failed", slog.Any("error", err))
+			} else if checkpointCount > 0 {
+				s.logger.Info("timed out orchestration human checkpoints", slog.Int("count", checkpointCount))
+			}
 			planningCount, err := s.RecoverExpiredPlanningIntents(ctx)
 			if err != nil {
 				s.logger.Error("planning intent recovery loop failed", slog.Any("error", err))

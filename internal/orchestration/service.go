@@ -1915,6 +1915,167 @@ func (s *Service) ResolveCheckpoint(ctx context.Context, caller ControlIdentity,
 	return &result, nil
 }
 
+func (s *Service) RecoverTimedOutHumanCheckpoints(ctx context.Context) (int, error) {
+	candidates, err := s.queries.ListTimedOutOpenOrchestrationHumanCheckpoints(ctx, 100)
+	if err != nil {
+		return 0, fmt.Errorf("list timed out human checkpoints: %w", err)
+	}
+	recovered := 0
+	for _, candidate := range candidates {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			return recovered, fmt.Errorf("begin checkpoint timeout tx: %w", err)
+		}
+		qtx := s.queries.WithTx(tx)
+
+		lockedCheckpoint, err := qtx.GetOrchestrationHumanCheckpointByIDForUpdate(ctx, candidate.ID)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return recovered, fmt.Errorf("lock timed out checkpoint: %w", err)
+		}
+		if lockedCheckpoint.Status != CheckpointStatusOpen {
+			_ = tx.Rollback(ctx)
+			continue
+		}
+
+		lockedRun, err := qtx.GetOrchestrationRunByIDForUpdate(ctx, lockedCheckpoint.RunID)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return recovered, fmt.Errorf("lock checkpoint timeout run: %w", err)
+		}
+		if !runAcceptsExternalMutations(lockedRun.LifecycleStatus) {
+			_ = tx.Rollback(ctx)
+			continue
+		}
+		lockedTask, err := qtx.GetOrchestrationTaskByIDForUpdate(ctx, lockedCheckpoint.TaskID)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return recovered, fmt.Errorf("lock checkpoint timeout task: %w", err)
+		}
+		if lockedTask.RunID != lockedRun.ID {
+			_ = tx.Rollback(ctx)
+			continue
+		}
+
+		normalized, _, err := normalizeCheckpointResolution(lockedCheckpoint, CheckpointResolution{
+			Mode:           CheckpointResolutionModeUseDefault,
+			Metadata:       map[string]any{"trigger": "timeout"},
+			IdempotencyKey: "checkpoint-timeout-" + lockedCheckpoint.ID.String(),
+		})
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return recovered, fmt.Errorf("normalize timed out checkpoint default action: %w", err)
+		}
+
+		timedOutCheckpoint, err := qtx.MarkOrchestrationHumanCheckpointTimedOut(ctx, sqlc.MarkOrchestrationHumanCheckpointTimedOutParams{
+			ID:                    lockedCheckpoint.ID,
+			ResolvedBy:            "system",
+			ResolvedMode:          normalized.Mode,
+			ResolvedOptionID:      normalized.OptionID,
+			ResolvedFreeformInput: normalized.FreeformInput,
+		})
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return recovered, fmt.Errorf("mark checkpoint timed out: %w", err)
+		}
+		if _, err := s.appendEvent(ctx, qtx, lockedRun.ID, eventSpec{
+			TaskID:           lockedCheckpoint.TaskID,
+			CheckpointID:     lockedCheckpoint.ID,
+			AggregateType:    "checkpoint",
+			AggregateID:      lockedCheckpoint.ID,
+			AggregateVersion: timedOutCheckpoint.StatusVersion,
+			Type:             "run.event.hitl.timed_out",
+			Payload: map[string]any{
+				"checkpoint_id":           timedOutCheckpoint.ID.String(),
+				"task_id":                 timedOutCheckpoint.TaskID.String(),
+				"previous_status":         lockedCheckpoint.Status,
+				"new_status":              timedOutCheckpoint.Status,
+				"status":                  timedOutCheckpoint.Status,
+				"blocks_run":              timedOutCheckpoint.BlocksRun,
+				"timeout_at":              timeForJSON(db.TimeFromPg(timedOutCheckpoint.TimeoutAt)),
+				"resolved_by":             "system",
+				"resolved_mode":           normalized.Mode,
+				"resolved_option_id":      normalized.OptionID,
+				"resolved_freeform_input": normalized.FreeformInput,
+				"resolution_metadata":     normalized.Metadata,
+			},
+		}); err != nil {
+			_ = tx.Rollback(ctx)
+			return recovered, err
+		}
+
+		_, planningIntentUUID, err := newPGUUID()
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return recovered, err
+		}
+		planningIntent, err := qtx.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+			ID:               planningIntentUUID,
+			RunID:            lockedRun.ID,
+			TaskID:           lockedTask.ID,
+			CheckpointID:     timedOutCheckpoint.ID,
+			Kind:             PlanningIntentKindCheckpointResume,
+			Status:           PlanningIntentStatusPending,
+			BasePlannerEpoch: lockedRun.PlannerEpoch,
+			Payload: marshalJSON(map[string]any{
+				"run_id":              lockedRun.ID.String(),
+				"task_id":             lockedTask.ID.String(),
+				"checkpoint_id":       timedOutCheckpoint.ID.String(),
+				"checkpoint_blocking": timedOutCheckpoint.BlocksRun,
+				"resolved_by":         "system",
+				"resolved_mode":       normalized.Mode,
+				"resolution_metadata": normalized.Metadata,
+				"timeout":             true,
+			}),
+		})
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return recovered, fmt.Errorf("create timeout checkpoint resume planning intent: %w", err)
+		}
+		if _, err := s.appendEvent(ctx, qtx, lockedRun.ID, eventSpec{
+			TaskID:           lockedTask.ID,
+			CheckpointID:     timedOutCheckpoint.ID,
+			AggregateType:    "planning_intent",
+			AggregateID:      planningIntent.ID,
+			AggregateVersion: 1,
+			Type:             "run.event.planning_intent.enqueued",
+			Payload: map[string]any{
+				"planning_intent_id": planningIntent.ID.String(),
+				"run_id":             lockedRun.ID.String(),
+				"task_id":            lockedTask.ID.String(),
+				"checkpoint_id":      timedOutCheckpoint.ID.String(),
+				"kind":               planningIntent.Kind,
+				"status":             planningIntent.Status,
+				"enqueue_reason":     "checkpoint_timeout",
+			},
+		}); err != nil {
+			_ = tx.Rollback(ctx)
+			return recovered, err
+		}
+		if err := s.syncRunPlanningStatus(ctx, qtx, lockedRun.ID); err != nil {
+			_ = tx.Rollback(ctx)
+			return recovered, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return recovered, fmt.Errorf("commit checkpoint timeout tx: %w", err)
+		}
+		recovered++
+	}
+	return recovered, nil
+}
+
 func (s *Service) CreateHumanCheckpoint(ctx context.Context, caller ControlIdentity, req CreateHumanCheckpointRequest) (*CreateHumanCheckpointResult, error) {
 	var err error
 	caller, err = normalizeControlIdentity(caller)
@@ -1930,9 +2091,6 @@ func (s *Service) CreateHumanCheckpoint(ctx context.Context, caller ControlIdent
 	}
 	if normalizedIdempotencyKey == "" {
 		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
-	}
-	if !req.TimeoutAt.IsZero() {
-		return nil, fmt.Errorf("%w: timeout_at is not supported by current runtime", ErrInvalidArgument)
 	}
 
 	pgRunID, err := db.ParseUUID(req.RunID)
