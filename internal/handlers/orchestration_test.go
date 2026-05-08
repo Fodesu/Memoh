@@ -34,6 +34,7 @@ type fakeOrchestrationService struct {
 	injectRunHint         func(context.Context, orchestration.ControlIdentity, string, orchestration.InjectRunHintRequest) (*orchestration.InjectRunHintResult, error)
 	resolveCheckpoint     func(context.Context, orchestration.ControlIdentity, string, orchestration.CheckpointResolution) (*orchestration.ResolveCheckpointResult, error)
 	retryTask             func(context.Context, orchestration.ControlIdentity, string, orchestration.RetryTaskRequest) (*orchestration.RetryTaskResult, error)
+	rebuildBlackboard     func(context.Context, orchestration.ControlIdentity, string) (orchestration.RebuildBlackboardResult, error)
 }
 
 func (f fakeOrchestrationService) StartRun(ctx context.Context, caller orchestration.ControlIdentity, req orchestration.StartRunRequest) (orchestration.RunHandle, error) {
@@ -94,6 +95,13 @@ func (f fakeOrchestrationService) ResolveCheckpoint(ctx context.Context, caller 
 
 func (f fakeOrchestrationService) RetryTask(ctx context.Context, caller orchestration.ControlIdentity, taskID string, req orchestration.RetryTaskRequest) (*orchestration.RetryTaskResult, error) {
 	return f.retryTask(ctx, caller, taskID, req)
+}
+
+func (f fakeOrchestrationService) RebuildBlackboard(ctx context.Context, caller orchestration.ControlIdentity, runID string) (orchestration.RebuildBlackboardResult, error) {
+	if f.rebuildBlackboard == nil {
+		return orchestration.RebuildBlackboardResult{}, nil
+	}
+	return f.rebuildBlackboard(ctx, caller, runID)
 }
 
 func newNoopOrchestrationService() fakeOrchestrationService {

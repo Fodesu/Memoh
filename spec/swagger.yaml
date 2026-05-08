@@ -3034,6 +3034,17 @@ definitions:
       updated_at:
         type: string
     type: object
+  orchestration.RebuildBlackboardResult:
+    properties:
+      blackboard_configured:
+        type: boolean
+      run_context_written:
+        type: integer
+      task_results_written:
+        type: integer
+      write_errors:
+        type: integer
+    type: object
   orchestration.ResolveCheckpointResult:
     properties:
       checkpoint_id:
@@ -9092,6 +9103,46 @@ paths:
       security:
       - BearerAuth: []
       summary: List orchestration artifacts
+      tags:
+      - orchestration
+  /orchestration/runs/{run_id}/blackboard/rebuild:
+    post:
+      description: |-
+        Recovery primitive that repopulates the run's blackboard
+        (run-scope context + committed task results) from the
+        authoritative Postgres copy. Use this after a JetStream KV
+        bucket loss or before bringing a partial deployment back
+        online. The rebuild is idempotent.
+      parameters:
+      - description: Run ID
+        in: path
+        name: run_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/orchestration.RebuildBlackboardResult'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Rebuild the blackboard runtime view from Postgres
       tags:
       - orchestration
   /orchestration/runs/{run_id}/cancel:

@@ -33,6 +33,7 @@ type orchestrationAPI interface {
 	InjectRunHint(context.Context, orchestration.ControlIdentity, string, orchestration.InjectRunHintRequest) (*orchestration.InjectRunHintResult, error)
 	ResolveCheckpoint(context.Context, orchestration.ControlIdentity, string, orchestration.CheckpointResolution) (*orchestration.ResolveCheckpointResult, error)
 	RetryTask(context.Context, orchestration.ControlIdentity, string, orchestration.RetryTaskRequest) (*orchestration.RetryTaskResult, error)
+	RebuildBlackboard(context.Context, orchestration.ControlIdentity, string) (orchestration.RebuildBlackboardResult, error)
 }
 
 type OrchestrationHandler struct {
@@ -65,6 +66,7 @@ func (h *OrchestrationHandler) Register(e *echo.Echo) {
 	group.GET("/runs/:run_id/artifacts", h.ListRunArtifacts)
 	group.GET("/runs/:run_id/events", h.ListRunEvents)
 	group.POST("/checkpoints/:checkpoint_id/resolve", h.ResolveCheckpoint)
+	group.POST("/runs/:run_id/blackboard/rebuild", h.RebuildBlackboard)
 }
 
 // CancelRun godoc
@@ -554,6 +556,34 @@ func (h *OrchestrationHandler) ResolveCheckpoint(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	result, err := h.service.ResolveCheckpoint(c.Request().Context(), caller, strings.TrimSpace(c.Param("checkpoint_id")), req)
+	if err != nil {
+		return h.httpError(err)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
+// RebuildBlackboard godoc
+// @Summary Rebuild the blackboard runtime view from Postgres
+// @Description Recovery primitive that repopulates the run's blackboard
+// @Description (run-scope context + committed task results) from the
+// @Description authoritative Postgres copy. Use this after a JetStream KV
+// @Description bucket loss or before bringing a partial deployment back
+// @Description online. The rebuild is idempotent.
+// @Tags orchestration
+// @Security BearerAuth
+// @Param run_id path string true "Run ID"
+// @Success 200 {object} orchestration.RebuildBlackboardResult
+// @Failure 401 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /orchestration/runs/{run_id}/blackboard/rebuild [post].
+func (h *OrchestrationHandler) RebuildBlackboard(c echo.Context) error {
+	caller, err := controlIdentity(c)
+	if err != nil {
+		return err
+	}
+	result, err := h.service.RebuildBlackboard(c.Request().Context(), caller, strings.TrimSpace(c.Param("run_id")))
 	if err != nil {
 		return h.httpError(err)
 	}

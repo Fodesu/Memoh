@@ -12375,6 +12375,142 @@ func TestIntegrationBlackboardCaptureAndPublish(t *testing.T) {
 	}
 }
 
+// TestIntegrationRebuildBlackboardRecoversAfterStoreWipe covers the
+// Stage 2.4 recovery primitive: if the blackboard backend (NATS KV) is
+// wiped while Postgres still holds the durable state, calling
+// Service.RebuildBlackboard repopulates the run's runtime view from the
+// authoritative copy.
+func TestIntegrationRebuildBlackboardRecoversAfterStoreWipe(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	store := orchestrationblackboard.NewInMemoryStore()
+	t.Cleanup(func() { _ = store.Close() })
+	svc.SetBlackboardStore(store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	caller := ControlIdentity{
+		TenantID: "tenant-rebuild-" + uuid.NewString(),
+		Subject:  "subject-rebuild-" + uuid.NewString(),
+	}
+
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "rebuild blackboard from postgres",
+		IdempotencyKey: "rebuild-" + uuid.NewString(),
+		Input: map[string]any{
+			"builtin_workerd": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	processRunPlanningIntent(t, ctx, svc)
+	rootAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
+		WorkerID:        "worker-rebuild",
+		ExecutorID:      DefaultWorkerExecutorID,
+		WorkerProfiles:  []string{DefaultRootWorkerProfile},
+		LeaseTTLSeconds: 30,
+	}, 2)
+	rootRunning, err := svc.StartAttempt(ctx, rootAttempt.ID, rootAttempt.ClaimToken)
+	if err != nil {
+		t.Fatalf("StartAttempt() error = %v", err)
+	}
+	if _, err := svc.CompleteAttempt(ctx, AttemptCompletion{
+		AttemptID:        rootRunning.ID,
+		ClaimToken:       rootRunning.ClaimToken,
+		Status:           TaskAttemptStatusCompleted,
+		Summary:          "rebuild source result",
+		StructuredOutput: map[string]any{"answer": 42},
+	}); err != nil {
+		t.Fatalf("CompleteAttempt() error = %v", err)
+	}
+
+	rootResultKey := orchestrationblackboard.TaskKey(
+		rootAttempt.TaskID,
+		orchestrationblackboard.NamespaceResult,
+		"summary",
+	)
+	if _, err := store.Get(ctx, rootResultKey); err != nil {
+		t.Fatalf("expected blackboard entry before wipe: %v", err)
+	}
+
+	wipedStore := orchestrationblackboard.NewInMemoryStore()
+	t.Cleanup(func() { _ = wipedStore.Close() })
+	svc.SetBlackboardStore(wipedStore)
+	if _, err := wipedStore.Get(ctx, rootResultKey); !errors.Is(err, orchestrationblackboard.ErrNotFound) {
+		t.Fatalf("wiped store should be empty for %q, got err=%v", rootResultKey, err)
+	}
+
+	report, err := svc.RebuildBlackboard(ctx, caller, handle.RunID)
+	if err != nil {
+		t.Fatalf("RebuildBlackboard() error = %v", err)
+	}
+	if !report.BlackboardConfigured {
+		t.Fatalf("RebuildBlackboard() blackboard_configured = false, want true")
+	}
+	if report.TaskResultsWritten == 0 {
+		t.Fatalf("RebuildBlackboard() task_results_written = 0, want >= 1")
+	}
+	if report.RunContextWritten == 0 {
+		t.Fatalf("RebuildBlackboard() run_context_written = 0, want 1")
+	}
+
+	rootEntry, err := wipedStore.Get(ctx, rootResultKey)
+	if err != nil {
+		t.Fatalf("blackboard Get(root result) after rebuild error = %v", err)
+	}
+	if rootEntry.Value.WriterType != orchestrationblackboard.WriterOrchestrator {
+		t.Fatalf("rebuilt result writer_type = %q, want %q", rootEntry.Value.WriterType, orchestrationblackboard.WriterOrchestrator)
+	}
+	if rootEntry.Value.PersistenceClass != orchestrationblackboard.PersistenceFromPostgres {
+		t.Fatalf("rebuilt result persistence_class = %q, want %q", rootEntry.Value.PersistenceClass, orchestrationblackboard.PersistenceFromPostgres)
+	}
+	contextKey := orchestrationblackboard.RunKey(
+		handle.RunID,
+		orchestrationblackboard.NamespaceContext,
+		"goal",
+	)
+	if _, err := wipedStore.Get(ctx, contextKey); err != nil {
+		t.Fatalf("blackboard Get(run context) after rebuild error = %v", err)
+	}
+}
+
+func TestIntegrationRebuildBlackboardWithoutStoreReturnsConfiguredFalse(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	caller := ControlIdentity{
+		TenantID: "tenant-rebuild-noop-" + uuid.NewString(),
+		Subject:  "subject-rebuild-noop-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "rebuild without store",
+		IdempotencyKey: "rebuild-noop-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	report, err := svc.RebuildBlackboard(ctx, caller, handle.RunID)
+	if err != nil {
+		t.Fatalf("RebuildBlackboard() error = %v", err)
+	}
+	if report.BlackboardConfigured {
+		t.Fatalf("blackboard_configured = true, want false when store is unwired")
+	}
+	if report.TaskResultsWritten != 0 || report.RunContextWritten != 0 {
+		t.Fatalf("rebuild without store wrote entries: %+v", report)
+	}
+}
+
 func jsonNumberToUint64(raw any) (uint64, error) {
 	switch v := raw.(type) {
 	case uint64:
