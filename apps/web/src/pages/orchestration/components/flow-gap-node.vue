@@ -11,7 +11,7 @@ const widthStyle = computed(() => ({ width: `${props.data.width}px` }))
 <template>
   <div
     class="memoh-flow-gap-node flex h-[22px] items-center justify-center rounded-full border border-dashed border-border/80 bg-background/90 px-2 text-[10px] font-medium tabular-nums text-muted-foreground shadow-sm backdrop-blur"
-    :class="[data.isGrouped ? 'border-primary/35 bg-primary/5 text-primary' : '']"
+    :class="[data.isGrouped ? 'border-foreground/20 bg-muted/50 text-foreground' : '']"
     :style="widthStyle"
     :title="data.groupLabel ? `${data.label} · ${data.groupLabel}` : data.label"
   >

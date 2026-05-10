@@ -114,8 +114,8 @@ function onNodeClick(event: NodeMouseEvent) {
 </script>
 
 <template>
-  <div class="memoh-run-flow relative size-full bg-[#fbfaf8] dark:bg-background">
-    <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,hsl(var(--border))_1px,transparent_0)] bg-[length:24px_24px] opacity-45" />
+  <div class="memoh-run-flow relative size-full bg-background">
+    <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,hsl(var(--border)/0.8)_1px,transparent_0)] bg-[length:24px_24px] opacity-30" />
 
     <VueFlow
       :node-types="nodeTypes"
@@ -283,11 +283,11 @@ function onNodeClick(event: NodeMouseEvent) {
 }
 
 .memoh-run-flow .memoh-vue-flow .vue-flow__handle:hover {
-  background: hsl(var(--primary)) !important;
+  background: hsl(var(--foreground) / 0.7) !important;
 }
 
 .memoh-flow-span-node:hover .vue-flow__handle,
 .memoh-run-flow .memoh-vue-flow .vue-flow__node-flowSpan:hover .vue-flow__handle {
-  background: hsl(var(--primary) / 0.6) !important;
+  background: hsl(var(--foreground) / 0.55) !important;
 }
 </style>

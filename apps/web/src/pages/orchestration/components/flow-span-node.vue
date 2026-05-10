@@ -58,7 +58,7 @@ const isDimmed = computed(() => props.data.hasSelection && !props.data.isRelated
     :style="widthStyle"
     :class="[
       data.isSelected
-        ? 'border-primary/50 ring-2 ring-primary/15 shadow-[0_0.8px_1px_hsl(var(--foreground)/0.05),0_3px_5px_-0.5px_hsl(var(--primary)/0.08),0_10px_18px_-1px_hsl(var(--primary)/0.10),0_24px_44px_-3px_hsl(var(--primary)/0.12)]'
+        ? 'border-foreground/25 ring-2 ring-foreground/10 shadow-[0_0.8px_1px_hsl(var(--foreground)/0.05),0_3px_5px_-0.5px_hsl(var(--foreground)/0.06),0_10px_18px_-1px_hsl(var(--foreground)/0.08),0_24px_44px_-3px_hsl(var(--foreground)/0.10)]'
         : 'border-border/70',
       isDimmed ? 'opacity-45' : '',
     ]"
@@ -118,7 +118,7 @@ const isDimmed = computed(() => props.data.hasSelection && !props.data.isRelated
     <div class="mt-1.5 flex items-center gap-1.5 text-[10px]">
       <p
         v-if="data.taskTitle"
-        class="min-w-0 truncate rounded-md bg-primary/5 px-2 py-0.5 text-primary"
+        class="min-w-0 truncate rounded-md border border-border bg-muted/35 px-2 py-0.5 text-foreground"
         :title="data.taskTitle"
       >
         {{ data.taskTitle }}

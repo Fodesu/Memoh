@@ -33,7 +33,7 @@
                   :tooltip="item.title"
                   :is-active="isItemActive(item.name)"
                   :aria-current="isItemActive(item.name) ? 'page' : undefined"
-                  class="relative h-9 gap-2 before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full data-[active=true]:before:bg-[#8B56E3] group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+                  class="relative h-9 gap-2 before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full data-[active=true]:before:bg-foreground/70 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
                   @click="router.push({ name: item.name })"
                 >
                   <component

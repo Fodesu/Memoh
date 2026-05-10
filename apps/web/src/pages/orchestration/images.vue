@@ -66,7 +66,7 @@ function imageCreatedAt(image: { builtin?: boolean, created_at?: string }) {
   <div class="flex h-full min-h-0 flex-col bg-background">
     <header class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-5">
       <div class="flex min-w-0 items-center gap-3">
-        <div class="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+        <div class="flex size-8 items-center justify-center rounded-lg border border-border bg-card text-foreground shadow-sm">
           <Container class="size-4" />
         </div>
         <h1 class="truncate text-sm font-semibold">

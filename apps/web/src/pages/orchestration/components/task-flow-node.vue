@@ -46,7 +46,7 @@ function kindStyle(kind: TaskNodeKind): KindStyle {
     case 'trigger':
       return { label: t('orchestration.nodeKindTrigger'), icon: PlayCircle, color: 'text-emerald-600 bg-emerald-500/10 border-emerald-500/20' }
     case 'planner':
-      return { label: t('orchestration.nodeKindPlanner'), icon: Sparkles, color: 'text-purple-600 bg-purple-500/10 border-purple-500/20' }
+      return { label: t('orchestration.nodeKindPlanner'), icon: Sparkles, color: 'border-border bg-muted/45 text-foreground' }
     case 'search':
       return { label: t('orchestration.nodeKindSearch'), icon: Search, color: 'text-sky-600 bg-sky-500/10 border-sky-500/20' }
     case 'memory':
@@ -60,7 +60,7 @@ function kindStyle(kind: TaskNodeKind): KindStyle {
     case 'tool':
       return { label: t('orchestration.nodeKindTool'), icon: Wrench, color: 'text-amber-600 bg-amber-500/10 border-amber-500/20' }
     default:
-      return { label: t('orchestration.nodeKindLlm'), icon: Bot, color: 'text-violet-600 bg-violet-500/10 border-violet-500/20' }
+      return { label: t('orchestration.nodeKindLlm'), icon: Bot, color: 'border-border bg-background text-foreground' }
   }
 }
 
@@ -109,7 +109,7 @@ const isDimmed = computed(() => props.data.hasSelection && !props.data.isRelated
     class="memoh-task-node group relative w-[208px] rounded-lg border bg-card px-2.5 py-2 text-left shadow-[0_0.7px_0.8px_hsl(var(--foreground)/0.05),0_2.2px_2.8px_-0.5px_hsl(var(--foreground)/0.06),0_6px_10px_-1px_hsl(var(--foreground)/0.07),0_16px_28px_-2px_hsl(var(--foreground)/0.09)] transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[0_0.9px_1px_hsl(var(--foreground)/0.06),0_3px_4px_-0.5px_hsl(var(--foreground)/0.07),0_9px_14px_-1px_hsl(var(--foreground)/0.09),0_24px_40px_-2.5px_hsl(var(--foreground)/0.11)]"
     :class="[
       data.isSelected
-        ? 'border-primary/50 ring-2 ring-primary/15 shadow-[0_0.8px_1px_hsl(var(--foreground)/0.05),0_3px_5px_-0.5px_hsl(var(--primary)/0.08),0_10px_18px_-1px_hsl(var(--primary)/0.10),0_24px_44px_-3px_hsl(var(--primary)/0.12)]'
+        ? 'border-foreground/25 ring-2 ring-foreground/10 shadow-[0_0.8px_1px_hsl(var(--foreground)/0.05),0_3px_5px_-0.5px_hsl(var(--foreground)/0.06),0_10px_18px_-1px_hsl(var(--foreground)/0.08),0_24px_44px_-3px_hsl(var(--foreground)/0.10)]'
         : 'border-border/70',
       isDimmed ? 'opacity-45' : '',
     ]"
