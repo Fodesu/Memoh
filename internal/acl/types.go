@@ -12,35 +12,27 @@ const (
 
 	EffectAllow = "allow"
 	EffectDeny  = "deny"
-
-	SubjectKindAll             = "all"
-	SubjectKindChannelIdentity = "channel_identity"
-	SubjectKindChannelType     = "channel_type"
 )
 
 // Rule is the full ACL rule record returned to callers.
 type Rule struct {
-	ID                         string       `json:"id"`
-	BotID                      string       `json:"bot_id"`
-	Priority                   int32        `json:"priority"`
-	Enabled                    bool         `json:"enabled"`
-	Description                string       `json:"description,omitempty"`
-	Action                     string       `json:"action"`
-	Effect                     string       `json:"effect"`
-	SubjectKind                string       `json:"subject_kind"`
-	ChannelIdentityID          string       `json:"channel_identity_id,omitempty"`
-	SubjectChannelType         string       `json:"subject_channel_type,omitempty"`
-	SourceScope                *SourceScope `json:"source_scope,omitempty"`
-	ChannelType                string       `json:"channel_type,omitempty"`
-	ChannelSubjectID           string       `json:"channel_subject_id,omitempty"`
-	ChannelIdentityDisplayName string       `json:"channel_identity_display_name,omitempty"`
-	ChannelIdentityAvatarURL   string       `json:"channel_identity_avatar_url,omitempty"`
-	LinkedUserID               string       `json:"linked_user_id,omitempty"`
-	LinkedUserUsername         string       `json:"linked_user_username,omitempty"`
-	LinkedUserDisplayName      string       `json:"linked_user_display_name,omitempty"`
-	LinkedUserAvatarURL        string       `json:"linked_user_avatar_url,omitempty"`
-	CreatedAt                  time.Time    `json:"created_at"`
-	UpdatedAt                  time.Time    `json:"updated_at"`
+	ID                          string       `json:"id"`
+	BotID                       string       `json:"bot_id"`
+	Enabled                     bool         `json:"enabled"`
+	Description                 string       `json:"description,omitempty"`
+	Action                      string       `json:"action"`
+	Effect                      string       `json:"effect"`
+	ChannelIdentityID           string       `json:"channel_identity_id,omitempty"`
+	SubjectChannelType          string       `json:"subject_channel_type,omitempty"`
+	SourceScope                 *SourceScope `json:"source_scope,omitempty"`
+	ChannelType                 string       `json:"channel_type,omitempty"`
+	ChannelSubjectID            string       `json:"channel_subject_id,omitempty"`
+	ChannelIdentityDisplayName  string       `json:"channel_identity_display_name,omitempty"`
+	ChannelIdentityAvatarURL    string       `json:"channel_identity_avatar_url,omitempty"`
+	SourceConversationName      string       `json:"source_conversation_name,omitempty"`
+	SourceConversationAvatarURL string       `json:"source_conversation_avatar_url,omitempty"`
+	CreatedAt                   time.Time    `json:"created_at"`
+	UpdatedAt                   time.Time    `json:"updated_at"`
 }
 
 type ListRulesResponse struct {
@@ -53,7 +45,7 @@ type DefaultEffectResponse struct {
 
 // SourceScope narrows a rule to a specific conversation / thread.
 // Any zero-value field means "match any".
-// Channel filtering is handled at the subject level (channel_type / channel_identity).
+// Channel filtering is handled at the rule target level.
 type SourceScope struct {
 	ConversationType string `json:"conversation_type,omitempty"`
 	ConversationID   string `json:"conversation_id,omitempty"`
@@ -62,11 +54,9 @@ type SourceScope struct {
 
 // CreateRuleRequest is used to create a new ACL rule.
 type CreateRuleRequest struct {
-	Priority           int32        `json:"priority"`
 	Enabled            bool         `json:"enabled"`
 	Description        string       `json:"description,omitempty"`
 	Effect             string       `json:"effect"`
-	SubjectKind        string       `json:"subject_kind"`
 	ChannelIdentityID  string       `json:"channel_identity_id,omitempty"`
 	SubjectChannelType string       `json:"subject_channel_type,omitempty"`
 	SourceScope        *SourceScope `json:"source_scope,omitempty"`
@@ -74,24 +64,12 @@ type CreateRuleRequest struct {
 
 // UpdateRuleRequest is used to update an existing ACL rule.
 type UpdateRuleRequest struct {
-	Priority           int32        `json:"priority"`
 	Enabled            bool         `json:"enabled"`
 	Description        string       `json:"description,omitempty"`
 	Effect             string       `json:"effect"`
-	SubjectKind        string       `json:"subject_kind"`
 	ChannelIdentityID  string       `json:"channel_identity_id,omitempty"`
 	SubjectChannelType string       `json:"subject_channel_type,omitempty"`
 	SourceScope        *SourceScope `json:"source_scope,omitempty"`
-}
-
-// ReorderItem is a single priority update in a batch reorder request.
-type ReorderItem struct {
-	ID       string `json:"id"`
-	Priority int32  `json:"priority"`
-}
-
-type ReorderRequest struct {
-	Items []ReorderItem `json:"items"`
 }
 
 // EvaluateRequest carries all context needed to evaluate a chat.trigger.
@@ -103,15 +81,11 @@ type EvaluateRequest struct {
 }
 
 type ChannelIdentityCandidate struct {
-	ID                string `json:"id"`
-	Channel           string `json:"channel"`
-	ChannelSubjectID  string `json:"channel_subject_id"`
-	DisplayName       string `json:"display_name,omitempty"`
-	AvatarURL         string `json:"avatar_url,omitempty"`
-	LinkedUserID      string `json:"linked_user_id,omitempty"`
-	LinkedUsername    string `json:"linked_username,omitempty"`
-	LinkedDisplayName string `json:"linked_display_name,omitempty"`
-	LinkedAvatarURL   string `json:"linked_avatar_url,omitempty"`
+	ID               string `json:"id"`
+	Channel          string `json:"channel"`
+	ChannelSubjectID string `json:"channel_subject_id"`
+	DisplayName      string `json:"display_name,omitempty"`
+	AvatarURL        string `json:"avatar_url,omitempty"`
 }
 
 type ChannelIdentityCandidateListResponse struct {
@@ -119,13 +93,14 @@ type ChannelIdentityCandidateListResponse struct {
 }
 
 type ObservedConversationCandidate struct {
-	RouteID          string    `json:"route_id"`
-	Channel          string    `json:"channel"`
-	ConversationType string    `json:"conversation_type,omitempty"`
-	ConversationID   string    `json:"conversation_id"`
-	ThreadID         string    `json:"thread_id,omitempty"`
-	ConversationName string    `json:"conversation_name,omitempty"`
-	LastObservedAt   time.Time `json:"last_observed_at"`
+	RouteID               string    `json:"route_id"`
+	Channel               string    `json:"channel"`
+	ConversationType      string    `json:"conversation_type,omitempty"`
+	ConversationID        string    `json:"conversation_id"`
+	ThreadID              string    `json:"thread_id,omitempty"`
+	ConversationName      string    `json:"conversation_name,omitempty"`
+	ConversationAvatarURL string    `json:"conversation_avatar_url,omitempty"`
+	LastObservedAt        time.Time `json:"last_observed_at"`
 }
 
 type ObservedConversationCandidateListResponse struct {

@@ -77,7 +77,7 @@ type QRPollRequest struct {
 
 // QRPollResponse returns the poll result.
 type QRPollResponse struct {
-	Status  string `json:"status"` // wait, scaned, confirmed, expired
+	Status  string `json:"status"` // wait, scanned, confirmed, expired
 	Message string `json:"message"`
 }
 
@@ -159,7 +159,7 @@ func statusMessage(s string) string {
 	switch s {
 	case "wait":
 		return "Waiting for scan..."
-	case "scaned":
+	case "scanned":
 		return "Scanned — confirm on your phone"
 	case "confirmed":
 		return "Login successful"

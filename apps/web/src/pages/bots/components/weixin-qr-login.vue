@@ -52,7 +52,7 @@
 
         <!-- Overlay for scanned state -->
         <div
-          v-if="pollStatus === 'scaned'"
+          v-if="pollStatus === 'scanned'"
           class="absolute inset-0 flex items-center justify-center rounded-lg bg-background/80"
         >
           <div class="text-center">
@@ -100,9 +100,9 @@
       v-else-if="qrState === 'success'"
       class="flex flex-col items-center gap-3 py-4"
     >
-      <div class="flex size-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900">
+      <div class="flex size-12 items-center justify-center rounded-full bg-success-soft">
         <Check
-          class="size-5 text-green-600 dark:text-green-400"
+          class="size-5 text-success-foreground"
         />
       </div>
       <p class="text-xs font-medium">
@@ -162,7 +162,7 @@ const statusText = computed(() => {
   switch (pollStatus.value) {
     case 'wait':
       return t('bots.channels.weixinQr.waitingScan')
-    case 'scaned':
+    case 'scanned':
       return t('bots.channels.weixinQr.scanned')
     case 'expired':
       return t('bots.channels.weixinQr.expired')
@@ -251,7 +251,7 @@ async function pollOnce() {
       case 'expired':
         return
       case 'wait':
-      case 'scaned':
+      case 'scanned':
         if (!aborted) {
           pollTimer = setTimeout(pollOnce, 1500)
         }

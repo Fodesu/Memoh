@@ -9,10 +9,8 @@ import (
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/acl"
 	audiopkg "github.com/memohai/memoh/internal/audio"
-	"github.com/memohai/memoh/internal/bind"
 	"github.com/memohai/memoh/internal/boot"
 	"github.com/memohai/memoh/internal/bots"
-	"github.com/memohai/memoh/internal/browsercontexts"
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/channel/adapters/local"
 	"github.com/memohai/memoh/internal/channel/adapters/weixin"
@@ -69,12 +67,10 @@ func options() fx.Option {
 			toolapproval.NewService,
 			provideProvidersService,
 			searchproviders.NewService,
-			browsercontexts.NewService,
 			policy.NewService,
 			mcp.NewConnectionService,
 			conversation.NewService,
 			identities.NewService,
-			bind.NewService,
 			event.NewHub,
 			provideAudioRegistry,
 			audiopkg.NewService,
@@ -135,7 +131,6 @@ func options() fx.Option {
 			provideServerHandler(handlers.NewSettingsHandler),
 			provideServerHandler(handlers.NewToolApprovalHandler),
 			provideServerHandler(handlers.NewACLHandler),
-			provideServerHandler(handlers.NewBindHandler),
 			provideServerHandler(handlers.NewScheduleHandler),
 			provideServerHandler(handlers.NewHeartbeatHandler),
 			provideServerHandler(handlers.NewCompactionHandler),
@@ -157,7 +152,6 @@ func options() fx.Option {
 			provideOAuthService,
 			provideServerHandler(handlers.NewTokenUsageHandler),
 			provideServerHandler(handlers.NewSessionInfoHandler),
-			provideServerHandler(handlers.NewBrowserContextsHandler),
 			provideServerHandler(handlers.NewSupermarketHandler),
 			provideServerHandler(handlers.NewOrchestrationHandler),
 			provideServerHandler(handlers.NewEnvResourceHandler),

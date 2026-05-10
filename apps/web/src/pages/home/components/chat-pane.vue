@@ -60,14 +60,22 @@
                 </p>
               </div>
 
-              <MessageItem
+              <div
                 v-for="msg in messages"
                 :key="msg.id"
-                :message="msg"
-                :session-type="activeSession?.type"
-                :bot-id="currentBotId"
-                :on-open-media="galleryOpenBySrc"
-              />
+                :data-message-id="msg.id"
+                :data-external-message-id="(msg.role === 'user' || msg.role === 'assistant') ? msg.externalMessageId : undefined"
+                class="rounded-2xl transition-[background-color,box-shadow] duration-500"
+                :class="highlightedMessageId === msg.id ? 'bg-primary/10 ring-2 ring-primary/25' : ''"
+              >
+                <MessageItem
+                  :message="msg"
+                  :session-type="activeSession?.type"
+                  :bot-id="currentBotId"
+                  :on-open-media="galleryOpenBySrc"
+                  :on-reply-click="handleReplyJump"
+                />
+              </div>
             </div>
           </ScrollArea>
         </section>
@@ -119,6 +127,13 @@
             @change="handleFileInputChange"
           >
           <section>
+            <div
+              v-if="composerError"
+              class="mb-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              <CircleAlert class="mt-0.5 size-3.5 shrink-0" />
+              <span class="min-w-0 break-words">{{ composerError }}</span>
+            </div>
             <InputGroup class="bg-transparent overflow-hidden shadow-none! ring-0! border-border!">
               <InputGroupTextarea
                 v-model="inputText"
@@ -215,7 +230,7 @@
                   size="icon"
                   :disabled="(!inputText.trim() && !pendingFiles.length) || !currentBotId || activeChatReadOnly"
                   aria-label="Send message"
-                  class="size-7 rounded-full bg-[#8B56E3] text-white"
+                  class="size-7 rounded-full bg-primary text-primary-foreground"
                   @click="handleSend"
                 >
                   <Send
@@ -245,12 +260,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, useTemplateRef, watchEffect, watch, nextTick } from 'vue'
-import { LoaderCircle, Image as ImageIcon, File as FileIcon, X, Paperclip, Send, ChevronDown, Lightbulb } from 'lucide-vue-next'
+import { ref, computed, onMounted, onBeforeUnmount, useTemplateRef, watchEffect, watch, nextTick } from 'vue'
+import { LoaderCircle, Image as ImageIcon, File as FileIcon, X, Paperclip, Send, ChevronDown, Lightbulb, CircleAlert } from 'lucide-vue-next'
 import { ScrollArea, Button, InputGroup, InputGroupAddon, InputGroupTextarea, Popover, PopoverContent, PopoverTrigger } from '@memohai/ui'
 import { useChatStore } from '@/store/chat-list'
 import { storeToRefs } from 'pinia'
-import { useScroll, useElementBounding, useIntersectionObserver } from '@vueuse/core'
+import { useScroll, useElementBounding, useIntersectionObserver, useStorage } from '@vueuse/core'
 import { useQuery } from '@pinia/colada'
 import { getModels, getProviders, getBotsByBotIdSettings } from '@memohai/sdk'
 import type { ModelsGetResponse, ProvidersGetResponse } from '@memohai/sdk'
@@ -264,12 +279,22 @@ import { EFFORT_LABELS, EFFORT_OPACITY } from '@/pages/bots/components/reasoning
 import { useMediaGallery } from '../composables/useMediaGallery'
 import type { ChatAttachment } from '@/composables/api/useChat'
 
+const props = withDefaults(defineProps<{
+  tabId?: string
+  active?: boolean
+}>(), {
+  tabId: 'chat',
+  active: true,
+})
+
 const { t } = useI18n()
 const chatStore = useChatStore()
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingFiles = ref<File[]>([])
+const composerError = ref('')
 const modelPopoverOpen = ref(false)
 const reasoningPopoverOpen = ref(false)
+const inputDrafts = useStorage<Record<string, string>>('chat-input-drafts', {})
 
 const {
   messages,
@@ -283,6 +308,8 @@ const {
   overrideModelId,
   overrideReasoningEffort,
 } = storeToRefs(chatStore)
+
+const isActive = computed(() => props.active !== false)
 
 
 const { data: modelData } = useQuery({
@@ -387,19 +414,41 @@ const {
 } = useMediaGallery(messages)
 
 const inputText = ref('')
+const inputDraftKey = computed(() => {
+  const botId = (currentBotId.value ?? '').trim()
+  const tabId = props.tabId.trim()
+  if (!botId || !tabId) return ''
+  return `${botId}:${tabId}`
+})
 
-onMounted(async () => {
-  try {
-    if (chatStore.currentBotId || chatStore.sessionId) {
-      await chatStore.initialize()
-    }
-  } finally {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        isInstant.value = true
-      })
-    })
+function saveInputDraft(key: string, text: string) {
+  if (!key) return
+  const next = { ...inputDrafts.value }
+  if (text) {
+    next[key] = text
+  } else {
+    delete next[key]
   }
+  inputDrafts.value = next
+}
+
+watch(inputDraftKey, (nextKey, previousKey) => {
+  if (previousKey) {
+    saveInputDraft(previousKey, inputText.value)
+  }
+  inputText.value = nextKey ? inputDrafts.value[nextKey] ?? '' : ''
+}, { immediate: true })
+
+watch(inputText, (text) => {
+  saveInputDraft(inputDraftKey.value, text)
+})
+
+onMounted(() => {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      isInstant.value = true
+    })
+  })
 })
 
 const elNode = useTemplateRef('scrollContainer')
@@ -416,16 +465,24 @@ const descEl = computed<HTMLElement | null>(() => {
 const loadMoreSentinel = useTemplateRef<HTMLElement>('loadMoreSentinel')
 const isAutoScroll = ref(true)
 const isInstant = ref(false)
+const highlightedMessageId = ref('')
 const { y, directions, arrivedState } = useScroll(scrollEl, { behavior: computed(() => isAutoScroll.value && isInstant.value ? 'smooth' : 'instant') })
 const { height } = useElementBounding(descEl)
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
+
+onBeforeUnmount(() => {
+  if (highlightTimer) clearTimeout(highlightTimer)
+})
 
 watch(activeSession, async () => {
+  if (!isActive.value) return
   isInstant.value = false
   y.value = height.value
 }, { immediate: true, deep: true })
 
 
 watchEffect(() => {
+  if (!isActive.value) return
   if (directions.top) {
     isAutoScroll.value = false
     isInstant.value = true
@@ -438,6 +495,7 @@ watchEffect(() => {
 
 
 watchEffect(() => {
+  if (!isActive.value) return
   if (isAutoScroll.value) {
     y.value = height.value
   }
@@ -514,6 +572,7 @@ async function ensureOlderLoaded() {
 useIntersectionObserver(
   loadMoreSentinel,
   ([entry]) => {
+    if (!isActive.value) return
     if (!entry?.isIntersecting) return
     void ensureOlderLoaded()
   },
@@ -523,6 +582,47 @@ useIntersectionObserver(
     threshold: 0,
   },
 )
+
+function findMessageElement(messageId: string): HTMLElement | null {
+  const root = scrollEl.value
+  if (!root) return null
+  for (const item of Array.from(root.querySelectorAll<HTMLElement>('[data-message-id]'))) {
+    if (item.dataset.messageId === messageId) return item
+  }
+  return null
+}
+
+async function scrollToMessage(messageId: string): Promise<boolean> {
+  await nextTick()
+  const root = scrollEl.value
+  const target = findMessageElement(messageId)
+  if (!root || !target) return false
+  isAutoScroll.value = false
+  isInstant.value = true
+  const rootRect = root.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const offset = targetRect.top - rootRect.top - Math.max(24, root.clientHeight * 0.22)
+  root.scrollTo({ top: root.scrollTop + offset, behavior: 'smooth' })
+  highlightedMessageId.value = messageId
+  if (highlightTimer) clearTimeout(highlightTimer)
+  highlightTimer = setTimeout(() => {
+    if (highlightedMessageId.value === messageId) {
+      highlightedMessageId.value = ''
+    }
+  }, 1800)
+  return true
+}
+
+async function handleReplyJump(messageId: string) {
+  const target = messageId.trim()
+  if (!target) return
+  const localId = chatStore.findMessageIdByExternalId(target)
+  if (localId && await scrollToMessage(localId)) return
+  const locatedId = await chatStore.locateMessageByExternalId(target)
+  if (locatedId) {
+    await scrollToMessage(locatedId)
+  }
+}
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.isComposing || e.keyCode === 229) return
@@ -568,19 +668,35 @@ async function fileToAttachment(file: File): Promise<ChatAttachment> {
 }
 
 async function handleSend() {
+  if (!isActive.value) return
   isAutoScroll.value = true
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
   if ((!text && !files.length) || streaming.value || activeChatReadOnly.value) return
 
+  const sentDraftKey = inputDraftKey.value
+  composerError.value = ''
   inputText.value = ''
+  saveInputDraft(sentDraftKey, '')
   pendingFiles.value = []
 
   let attachments: ChatAttachment[] | undefined
-  if (files.length) {
-    attachments = await Promise.all(files.map(fileToAttachment))
+  try {
+    if (files.length) {
+      attachments = await Promise.all(files.map(fileToAttachment))
+    }
+  } catch (error) {
+    inputText.value = text
+    pendingFiles.value = files
+    composerError.value = error instanceof Error ? error.message : t('chat.sendFailed')
+    return
   }
 
-  chatStore.sendMessage(text, attachments)
+  const result = await chatStore.sendMessage(text, attachments)
+  if (!result.ok && result.stage === 'startup') {
+    inputText.value = result.restoreInput ?? text
+    pendingFiles.value = files
+    composerError.value = result.error || t('chat.sendFailed')
+  }
 }
 </script>

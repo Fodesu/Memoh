@@ -37,10 +37,10 @@ type Bot struct {
 	DiscussProbeModelID    sql.NullString `json:"discuss_probe_model_id"`
 	TtsModelID             sql.NullString `json:"tts_model_id"`
 	TranscriptionModelID   sql.NullString `json:"transcription_model_id"`
-	BrowserContextID       sql.NullString `json:"browser_context_id"`
 	PersistFullToolResults int64          `json:"persist_full_tool_results"`
 	ShowToolCallsInIm      int64          `json:"show_tool_calls_in_im"`
 	ToolApprovalConfig     string         `json:"tool_approval_config"`
+	DisplayEnabled         int64          `json:"display_enabled"`
 	OverlayProvider        string         `json:"overlay_provider"`
 	OverlayEnabled         int64          `json:"overlay_enabled"`
 	OverlayConfig          string         `json:"overlay_config"`
@@ -52,12 +52,10 @@ type Bot struct {
 type BotAclRule struct {
 	ID                     string         `json:"id"`
 	BotID                  string         `json:"bot_id"`
-	Priority               int64          `json:"priority"`
 	Enabled                int64          `json:"enabled"`
 	Description            sql.NullString `json:"description"`
 	Action                 string         `json:"action"`
 	Effect                 string         `json:"effect"`
-	SubjectKind            string         `json:"subject_kind"`
 	ChannelIdentityID      sql.NullString `json:"channel_identity_id"`
 	SubjectChannelType     sql.NullString `json:"subject_channel_type"`
 	SourceChannel          sql.NullString `json:"source_channel"`
@@ -204,17 +202,8 @@ type BotStorageBinding struct {
 	UpdatedAt         string `json:"updated_at"`
 }
 
-type BrowserContext struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Config    string `json:"config"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-}
-
 type ChannelIdentity struct {
 	ID               string         `json:"id"`
-	UserID           sql.NullString `json:"user_id"`
 	ChannelType      string         `json:"channel_type"`
 	ChannelSubjectID string         `json:"channel_subject_id"`
 	DisplayName      sql.NullString `json:"display_name"`
@@ -222,17 +211,6 @@ type ChannelIdentity struct {
 	Metadata         string         `json:"metadata"`
 	CreatedAt        string         `json:"created_at"`
 	UpdatedAt        string         `json:"updated_at"`
-}
-
-type ChannelIdentityBindCode struct {
-	ID                      string         `json:"id"`
-	Token                   string         `json:"token"`
-	IssuedByUserID          string         `json:"issued_by_user_id"`
-	ChannelType             sql.NullString `json:"channel_type"`
-	ExpiresAt               sql.NullString `json:"expires_at"`
-	UsedAt                  sql.NullString `json:"used_at"`
-	UsedByChannelIdentityID sql.NullString `json:"used_by_channel_identity_id"`
-	CreatedAt               string         `json:"created_at"`
 }
 
 type Container struct {

@@ -434,7 +434,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/acl/rules": {
             "get": {
-                "description": "List all ACL rules for a bot ordered by priority",
+                "description": "List all ACL rules for a bot",
                 "tags": [
                     "bots"
                 ],
@@ -476,7 +476,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new priority-ordered ACL rule for chat.trigger",
+                "description": "Create a new ACL rule for chat.trigger",
                 "tags": [
                     "bots"
                 ],
@@ -505,56 +505,6 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/acl.Rule"
                         }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/acl/rules/reorder": {
-            "put": {
-                "description": "Batch-update priorities for multiple ACL rules",
-                "tags": [
-                    "bots"
-                ],
-                "summary": "Reorder ACL rules",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Reorder payload",
-                        "name": "payload",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/acl.ReorderRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
                     },
                     "400": {
                         "description": "Bad Request",
@@ -998,6 +948,184 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/container/display": {
+            "get": {
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Check workspace display availability for bot container",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.displayInfoResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/container/display/prepare": {
+            "post": {
+                "description": "Installs the workspace desktop/VNC/browser packages when needed, starts the display server, and launches the browser.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Prepare workspace display dependencies",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream of display preparation events",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/container/display/sessions": {
+            "get": {
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "List active workspace display WebRTC sessions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.displaySessionListResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/container/display/sessions/{session_id}": {
+            "delete": {
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Close a workspace display WebRTC session",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Display session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/container/display/webrtc/offer": {
+            "post": {
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Create a WebRTC answer for bot workspace display",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "WebRTC offer payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.displayWebRTCOfferRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.displayWebRTCOfferResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -3912,6 +4040,86 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/messages/locate": {
+            "get": {
+                "description": "Locate a session message by external message ID and return nearby UI turns",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "messages"
+                ],
+                "summary": "Locate a bot history message",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "External message ID",
+                        "name": "external_message_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Messages before target",
+                        "name": "before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Messages after target",
+                        "name": "after",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/schedule": {
             "get": {
                 "description": "List schedules for current user",
@@ -5819,230 +6027,6 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/browser-contexts": {
-            "get": {
-                "description": "List all browser context configurations",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "browser-contexts"
-                ],
-                "summary": "List browser contexts",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/browsercontexts.BrowserContext"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "post": {
-                "description": "Create a browser context configuration",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "browser-contexts"
-                ],
-                "summary": "Create a browser context",
-                "parameters": [
-                    {
-                        "description": "Browser context configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/browsercontexts.CreateRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/browsercontexts.BrowserContext"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/browser-contexts/cores": {
-            "get": {
-                "description": "Get the list of browser cores available in the Browser Gateway container",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "browser-contexts"
-                ],
-                "summary": "Get available browser cores",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.BrowserCoresResponse"
-                        }
-                    },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/browser-contexts/{id}": {
-            "get": {
-                "description": "Get browser context by ID",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "browser-contexts"
-                ],
-                "summary": "Get a browser context",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Browser Context ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/browsercontexts.BrowserContext"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "description": "Update browser context by ID",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "browser-contexts"
-                ],
-                "summary": "Update a browser context",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Browser Context ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Updated configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/browsercontexts.UpdateRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/browsercontexts.BrowserContext"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "description": "Delete browser context by ID",
-                "tags": [
-                    "browser-contexts"
-                ],
-                "summary": "Delete a browser context",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Browser Context ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -10855,41 +10839,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/users/me/identities": {
-            "get": {
-                "description": "List all channel identities linked to current user",
-                "tags": [
-                    "users"
-                ],
-                "summary": "List current user's channel identities",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.listMyIdentitiesResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/users/me/password": {
             "put": {
                 "description": "Update current user password with current password check",
@@ -11234,18 +11183,6 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
-                },
-                "linked_avatar_url": {
-                    "type": "string"
-                },
-                "linked_display_name": {
-                    "type": "string"
-                },
-                "linked_user_id": {
-                    "type": "string"
-                },
-                "linked_username": {
-                    "type": "string"
                 }
             }
         },
@@ -11275,16 +11212,10 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
-                "priority": {
-                    "type": "integer"
-                },
                 "source_scope": {
                     "$ref": "#/definitions/acl.SourceScope"
                 },
                 "subject_channel_type": {
-                    "type": "string"
-                },
-                "subject_kind": {
                     "type": "string"
                 }
             }
@@ -11314,6 +11245,9 @@ const docTemplate = `{
                 "channel": {
                     "type": "string"
                 },
+                "conversation_avatar_url": {
+                    "type": "string"
+                },
                 "conversation_id": {
                     "type": "string"
                 },
@@ -11341,28 +11275,6 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/acl.ObservedConversationCandidate"
-                    }
-                }
-            }
-        },
-        "acl.ReorderItem": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string"
-                },
-                "priority": {
-                    "type": "integer"
-                }
-            }
-        },
-        "acl.ReorderRequest": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/acl.ReorderItem"
                     }
                 }
             }
@@ -11406,28 +11318,16 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "linked_user_avatar_url": {
+                "source_conversation_avatar_url": {
                     "type": "string"
                 },
-                "linked_user_display_name": {
+                "source_conversation_name": {
                     "type": "string"
-                },
-                "linked_user_id": {
-                    "type": "string"
-                },
-                "linked_user_username": {
-                    "type": "string"
-                },
-                "priority": {
-                    "type": "integer"
                 },
                 "source_scope": {
                     "$ref": "#/definitions/acl.SourceScope"
                 },
                 "subject_channel_type": {
-                    "type": "string"
-                },
-                "subject_kind": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -11464,16 +11364,10 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
-                "priority": {
-                    "type": "integer"
-                },
                 "source_scope": {
                     "$ref": "#/definitions/acl.SourceScope"
                 },
                 "subject_channel_type": {
-                    "type": "string"
-                },
-                "subject_kind": {
                     "type": "string"
                 }
             }
@@ -12341,57 +12235,6 @@ const docTemplate = `{
                 }
             }
         },
-        "browsercontexts.BrowserContext": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "browsercontexts.CreateRequest": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
-        "browsercontexts.UpdateRequest": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
         "channel.Action": {
             "type": "object",
             "properties": {
@@ -12693,6 +12536,26 @@ const docTemplate = `{
                 "FieldEnum"
             ]
         },
+        "channel.ForwardRef": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "integer"
+                },
+                "from_conversation_id": {
+                    "type": "string"
+                },
+                "from_user_id": {
+                    "type": "string"
+                },
+                "message_id": {
+                    "type": "string"
+                },
+                "sender": {
+                    "type": "string"
+                }
+            }
+        },
         "channel.Message": {
             "type": "object",
             "properties": {
@@ -12710,6 +12573,9 @@ const docTemplate = `{
                 },
                 "format": {
                     "$ref": "#/definitions/channel.MessageFormat"
+                },
+                "forward": {
+                    "$ref": "#/definitions/channel.ForwardRef"
                 },
                 "id": {
                     "type": "string"
@@ -12816,6 +12682,12 @@ const docTemplate = `{
         "channel.ReplyRef": {
             "type": "object",
             "properties": {
+                "attachments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/channel.Attachment"
+                    }
+                },
                 "message_id": {
                     "type": "string"
                 },
@@ -12968,6 +12840,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "usage": {}
+            }
+        },
+        "display.SessionInfo": {
+            "type": "object",
+            "properties": {
+                "codec": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
             }
         },
         "email.BindingResponse": {
@@ -13263,17 +13152,6 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
-        "handlers.BrowserCoresResponse": {
-            "type": "object",
-            "properties": {
-                "cores": {
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -14576,6 +14454,89 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.displayInfoResponse": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "browser_available": {
+                    "type": "boolean"
+                },
+                "desktop_available": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "encoder": {
+                    "type": "string"
+                },
+                "encoder_available": {
+                    "type": "boolean"
+                },
+                "prepare_supported": {
+                    "type": "boolean"
+                },
+                "prepare_system": {
+                    "type": "string"
+                },
+                "running": {
+                    "type": "boolean"
+                },
+                "toolkit_available": {
+                    "type": "boolean"
+                },
+                "transport": {
+                    "type": "string"
+                },
+                "unavailable_reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.displaySessionListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/display.SessionInfo"
+                    }
+                }
+            }
+        },
+        "handlers.displayWebRTCOfferRequest": {
+            "type": "object",
+            "properties": {
+                "candidate_host": {
+                    "type": "string"
+                },
+                "sdp": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.displayWebRTCOfferResponse": {
+            "type": "object",
+            "properties": {
+                "sdp": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.emailOAuthStatusResponse": {
             "type": "object",
             "properties": {
@@ -14604,20 +14565,6 @@ const docTemplate = `{
             "properties": {
                 "ok": {
                     "type": "boolean"
-                }
-            }
-        },
-        "handlers.listMyIdentitiesResponse": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/identities.ChannelIdentity"
-                    }
-                },
-                "user_id": {
-                    "type": "string"
                 }
             }
         },
@@ -14835,39 +14782,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "usage": {}
-            }
-        },
-        "identities.ChannelIdentity": {
-            "type": "object",
-            "properties": {
-                "avatar_url": {
-                    "type": "string"
-                },
-                "channel": {
-                    "type": "string"
-                },
-                "channel_subject_id": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "display_name": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "user_id": {
-                    "type": "string"
-                }
             }
         },
         "mcp.AuthorizeResult": {
@@ -17374,9 +17288,6 @@ const docTemplate = `{
                 "acl_default_effect": {
                     "type": "string"
                 },
-                "browser_context_id": {
-                    "type": "string"
-                },
                 "chat_model_id": {
                     "type": "string"
                 },
@@ -17394,6 +17305,9 @@ const docTemplate = `{
                 },
                 "discuss_probe_model_id": {
                     "type": "string"
+                },
+                "display_enabled": {
+                    "type": "boolean"
                 },
                 "heartbeat_enabled": {
                     "type": "boolean"
@@ -17518,9 +17432,6 @@ const docTemplate = `{
                 "acl_default_effect": {
                     "type": "string"
                 },
-                "browser_context_id": {
-                    "type": "string"
-                },
                 "chat_model_id": {
                     "type": "string"
                 },
@@ -17538,6 +17449,9 @@ const docTemplate = `{
                 },
                 "discuss_probe_model_id": {
                     "type": "string"
+                },
+                "display_enabled": {
+                    "type": "boolean"
                 },
                 "heartbeat_enabled": {
                     "type": "boolean"

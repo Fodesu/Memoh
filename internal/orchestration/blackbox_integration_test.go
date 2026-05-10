@@ -2208,7 +2208,6 @@ func (h *blackboxHarness) createLLMBot(t *testing.T, providerBaseURL string) str
 		ImageModelID:           pgtype.UUID{},
 		TtsModelID:             pgtype.UUID{},
 		TranscriptionModelID:   pgtype.UUID{},
-		BrowserContextID:       pgtype.UUID{},
 		PersistFullToolResults: false,
 		ShowToolCallsInIm:      false,
 		ToolApprovalConfig:     mustMarshalJSON(t, settings.DefaultToolApprovalConfig()),

@@ -92,14 +92,6 @@ definitions:
         type: string
       id:
         type: string
-      linked_avatar_url:
-        type: string
-      linked_display_name:
-        type: string
-      linked_user_id:
-        type: string
-      linked_username:
-        type: string
     type: object
   acl.ChannelIdentityCandidateListResponse:
     properties:
@@ -118,13 +110,9 @@ definitions:
         type: string
       enabled:
         type: boolean
-      priority:
-        type: integer
       source_scope:
         $ref: '#/definitions/acl.SourceScope'
       subject_channel_type:
-        type: string
-      subject_kind:
         type: string
     type: object
   acl.DefaultEffectResponse:
@@ -142,6 +130,8 @@ definitions:
   acl.ObservedConversationCandidate:
     properties:
       channel:
+        type: string
+      conversation_avatar_url:
         type: string
       conversation_id:
         type: string
@@ -161,20 +151,6 @@ definitions:
       items:
         items:
           $ref: '#/definitions/acl.ObservedConversationCandidate'
-        type: array
-    type: object
-  acl.ReorderItem:
-    properties:
-      id:
-        type: string
-      priority:
-        type: integer
-    type: object
-  acl.ReorderRequest:
-    properties:
-      items:
-        items:
-          $ref: '#/definitions/acl.ReorderItem'
         type: array
     type: object
   acl.Rule:
@@ -203,21 +179,13 @@ definitions:
         type: boolean
       id:
         type: string
-      linked_user_avatar_url:
+      source_conversation_avatar_url:
         type: string
-      linked_user_display_name:
+      source_conversation_name:
         type: string
-      linked_user_id:
-        type: string
-      linked_user_username:
-        type: string
-      priority:
-        type: integer
       source_scope:
         $ref: '#/definitions/acl.SourceScope'
       subject_channel_type:
-        type: string
-      subject_kind:
         type: string
       updated_at:
         type: string
@@ -241,13 +209,9 @@ definitions:
         type: string
       enabled:
         type: boolean
-      priority:
-        type: integer
       source_scope:
         $ref: '#/definitions/acl.SourceScope'
       subject_channel_type:
-        type: string
-      subject_kind:
         type: string
     type: object
   adapters.CDFPoint:
@@ -820,39 +784,6 @@ definitions:
       timezone:
         type: string
     type: object
-  browsercontexts.BrowserContext:
-    properties:
-      config:
-        items:
-          type: integer
-        type: array
-      created_at:
-        type: string
-      id:
-        type: string
-      name:
-        type: string
-      updated_at:
-        type: string
-    type: object
-  browsercontexts.CreateRequest:
-    properties:
-      config:
-        items:
-          type: integer
-        type: array
-      name:
-        type: string
-    type: object
-  browsercontexts.UpdateRequest:
-    properties:
-      config:
-        items:
-          type: integer
-        type: array
-      name:
-        type: string
-    type: object
   channel.Action:
     properties:
       label:
@@ -1067,6 +998,19 @@ definitions:
     - FieldBool
     - FieldNumber
     - FieldEnum
+  channel.ForwardRef:
+    properties:
+      date:
+        type: integer
+      from_conversation_id:
+        type: string
+      from_user_id:
+        type: string
+      message_id:
+        type: string
+      sender:
+        type: string
+    type: object
   channel.Message:
     properties:
       actions:
@@ -1079,6 +1023,8 @@ definitions:
         type: array
       format:
         $ref: '#/definitions/channel.MessageFormat'
+      forward:
+        $ref: '#/definitions/channel.ForwardRef'
       id:
         type: string
       metadata:
@@ -1155,6 +1101,10 @@ definitions:
     - MessageStyleCode
   channel.ReplyRef:
     properties:
+      attachments:
+        items:
+          $ref: '#/definitions/channel.Attachment'
+        type: array
       message_id:
         type: string
       preview:
@@ -1255,6 +1205,17 @@ definitions:
       summary:
         type: string
       usage: {}
+    type: object
+  display.SessionInfo:
+    properties:
+      codec:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      state:
+        type: string
     type: object
   email.BindingResponse:
     properties:
@@ -1451,13 +1412,6 @@ definitions:
   handlers.BatchDeleteRequest:
     properties:
       ids:
-        items:
-          type: string
-        type: array
-    type: object
-  handlers.BrowserCoresResponse:
-    properties:
-      cores:
         items:
           type: string
         type: array
@@ -2308,6 +2262,60 @@ definitions:
       title:
         type: string
     type: object
+  handlers.displayInfoResponse:
+    properties:
+      available:
+        type: boolean
+      browser_available:
+        type: boolean
+      desktop_available:
+        type: boolean
+      enabled:
+        type: boolean
+      encoder:
+        type: string
+      encoder_available:
+        type: boolean
+      prepare_supported:
+        type: boolean
+      prepare_system:
+        type: string
+      running:
+        type: boolean
+      toolkit_available:
+        type: boolean
+      transport:
+        type: string
+      unavailable_reason:
+        type: string
+    type: object
+  handlers.displaySessionListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/display.SessionInfo'
+        type: array
+    type: object
+  handlers.displayWebRTCOfferRequest:
+    properties:
+      candidate_host:
+        type: string
+      sdp:
+        type: string
+      session_id:
+        type: string
+      type:
+        type: string
+    type: object
+  handlers.displayWebRTCOfferResponse:
+    properties:
+      sdp:
+        type: string
+      session_id:
+        type: string
+      type:
+        type: string
+    type: object
   handlers.emailOAuthStatusResponse:
     properties:
       configured:
@@ -2327,15 +2335,6 @@ definitions:
     properties:
       ok:
         type: boolean
-    type: object
-  handlers.listMyIdentitiesResponse:
-    properties:
-      items:
-        items:
-          $ref: '#/definitions/identities.ChannelIdentity'
-        type: array
-      user_id:
-        type: string
     type: object
   handlers.memoryAddPayload:
     properties:
@@ -2477,28 +2476,6 @@ definitions:
       status:
         type: string
       usage: {}
-    type: object
-  identities.ChannelIdentity:
-    properties:
-      avatar_url:
-        type: string
-      channel:
-        type: string
-      channel_subject_id:
-        type: string
-      created_at:
-        type: string
-      display_name:
-        type: string
-      id:
-        type: string
-      metadata:
-        additionalProperties: {}
-        type: object
-      updated_at:
-        type: string
-      user_id:
-        type: string
     type: object
   mcp.AuthorizeResult:
     properties:
@@ -4181,8 +4158,6 @@ definitions:
     properties:
       acl_default_effect:
         type: string
-      browser_context_id:
-        type: string
       chat_model_id:
         type: string
       compaction_enabled:
@@ -4195,6 +4170,8 @@ definitions:
         type: integer
       discuss_probe_model_id:
         type: string
+      display_enabled:
+        type: boolean
       heartbeat_enabled:
         type: boolean
       heartbeat_interval:
@@ -4276,8 +4253,6 @@ definitions:
     properties:
       acl_default_effect:
         type: string
-      browser_context_id:
-        type: string
       chat_model_id:
         type: string
       compaction_enabled:
@@ -4290,6 +4265,8 @@ definitions:
         type: integer
       discuss_probe_model_id:
         type: string
+      display_enabled:
+        type: boolean
       heartbeat_enabled:
         type: boolean
       heartbeat_interval:
@@ -4613,7 +4590,7 @@ paths:
       - bots
   /bots/{bot_id}/acl/rules:
     get:
-      description: List all ACL rules for a bot ordered by priority
+      description: List all ACL rules for a bot
       parameters:
       - description: Bot ID
         in: path
@@ -4641,7 +4618,7 @@ paths:
       tags:
       - bots
     post:
-      description: Create a new priority-ordered ACL rule for chat.trigger
+      description: Create a new ACL rule for chat.trigger
       parameters:
       - description: Bot ID
         in: path
@@ -4743,39 +4720,6 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Update ACL rule
-      tags:
-      - bots
-  /bots/{bot_id}/acl/rules/reorder:
-    put:
-      description: Batch-update priorities for multiple ACL rules
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Reorder payload
-        in: body
-        name: payload
-        required: true
-        schema:
-          $ref: '#/definitions/acl.ReorderRequest'
-      responses:
-        "204":
-          description: No Content
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Reorder ACL rules
       tags:
       - bots
   /bots/{bot_id}/compaction/logs:
@@ -4988,6 +4932,123 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Restore previously preserved data into container
+      tags:
+      - containerd
+  /bots/{bot_id}/container/display:
+    get:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.displayInfoResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Check workspace display availability for bot container
+      tags:
+      - containerd
+  /bots/{bot_id}/container/display/prepare:
+    post:
+      description: Installs the workspace desktop/VNC/browser packages when needed,
+        starts the display server, and launches the browser.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE stream of display preparation events
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Prepare workspace display dependencies
+      tags:
+      - containerd
+  /bots/{bot_id}/container/display/sessions:
+    get:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.displaySessionListResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List active workspace display WebRTC sessions
+      tags:
+      - containerd
+  /bots/{bot_id}/container/display/sessions/{session_id}:
+    delete:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Display session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Close a workspace display WebRTC session
+      tags:
+      - containerd
+  /bots/{bot_id}/container/display/webrtc/offer:
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: WebRTC offer payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.displayWebRTCOfferRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.displayWebRTCOfferResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Create a WebRTC answer for bot workspace display
       tags:
       - containerd
   /bots/{bot_id}/container/fs:
@@ -6931,6 +6992,61 @@ paths:
       summary: List bot history messages
       tags:
       - messages
+  /bots/{bot_id}/messages/locate:
+    get:
+      description: Locate a session message by external message ID and return nearby
+        UI turns
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: query
+        name: session_id
+        required: true
+        type: string
+      - description: External message ID
+        in: query
+        name: external_message_id
+        required: true
+        type: string
+      - description: Messages before target
+        in: query
+        name: before
+        type: integer
+      - description: Messages after target
+        in: query
+        name: after
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Locate a bot history message
+      tags:
+      - messages
   /bots/{bot_id}/schedule:
     get:
       description: List schedules for current user
@@ -8210,155 +8326,6 @@ paths:
       summary: Transfer bot owner (admin only)
       tags:
       - bots
-  /browser-contexts:
-    get:
-      description: List all browser context configurations
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            items:
-              $ref: '#/definitions/browsercontexts.BrowserContext'
-            type: array
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: List browser contexts
-      tags:
-      - browser-contexts
-    post:
-      consumes:
-      - application/json
-      description: Create a browser context configuration
-      parameters:
-      - description: Browser context configuration
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/browsercontexts.CreateRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            $ref: '#/definitions/browsercontexts.BrowserContext'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Create a browser context
-      tags:
-      - browser-contexts
-  /browser-contexts/{id}:
-    delete:
-      description: Delete browser context by ID
-      parameters:
-      - description: Browser Context ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "204":
-          description: No Content
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Delete a browser context
-      tags:
-      - browser-contexts
-    get:
-      description: Get browser context by ID
-      parameters:
-      - description: Browser Context ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/browsercontexts.BrowserContext'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Get a browser context
-      tags:
-      - browser-contexts
-    put:
-      consumes:
-      - application/json
-      description: Update browser context by ID
-      parameters:
-      - description: Browser Context ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Updated configuration
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/browsercontexts.UpdateRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/browsercontexts.BrowserContext'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Update a browser context
-      tags:
-      - browser-contexts
-  /browser-contexts/cores:
-    get:
-      description: Get the list of browser cores available in the Browser Gateway
-        container
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.BrowserCoresResponse'
-        "502":
-          description: Bad Gateway
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Get available browser cores
-      tags:
-      - browser-contexts
   /channels:
     get:
       description: List channel meta information including capabilities and schemas
@@ -11620,29 +11587,6 @@ paths:
       summary: Update channel user config
       tags:
       - channel
-  /users/me/identities:
-    get:
-      description: List all channel identities linked to current user
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.listMyIdentitiesResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: List current user's channel identities
-      tags:
-      - users
   /users/me/password:
     put:
       description: Update current user password with current password check

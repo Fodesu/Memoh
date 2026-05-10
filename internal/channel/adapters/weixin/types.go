@@ -210,7 +210,7 @@ type QRCodeResponse struct {
 
 // QRStatusResponse from get_qrcode_status.
 type QRStatusResponse struct {
-	Status      string `json:"status"` // wait, scaned, confirmed, expired
+	Status      string `json:"status"` // wait, scanned, confirmed, expired
 	BotToken    string `json:"bot_token,omitempty"`
 	ILinkBotID  string `json:"ilink_bot_id,omitempty"`
 	BaseURL     string `json:"baseurl,omitempty"`

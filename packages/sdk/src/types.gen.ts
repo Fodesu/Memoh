@@ -60,10 +60,6 @@ export type AclChannelIdentityCandidate = {
     channel_subject_id?: string;
     display_name?: string;
     id?: string;
-    linked_avatar_url?: string;
-    linked_display_name?: string;
-    linked_user_id?: string;
-    linked_username?: string;
 };
 
 export type AclChannelIdentityCandidateListResponse = {
@@ -75,10 +71,8 @@ export type AclCreateRuleRequest = {
     description?: string;
     effect?: string;
     enabled?: boolean;
-    priority?: number;
     source_scope?: AclSourceScope;
     subject_channel_type?: string;
-    subject_kind?: string;
 };
 
 export type AclDefaultEffectResponse = {
@@ -91,6 +85,7 @@ export type AclListRulesResponse = {
 
 export type AclObservedConversationCandidate = {
     channel?: string;
+    conversation_avatar_url?: string;
     conversation_id?: string;
     conversation_name?: string;
     conversation_type?: string;
@@ -101,15 +96,6 @@ export type AclObservedConversationCandidate = {
 
 export type AclObservedConversationCandidateListResponse = {
     items?: Array<AclObservedConversationCandidate>;
-};
-
-export type AclReorderItem = {
-    id?: string;
-    priority?: number;
-};
-
-export type AclReorderRequest = {
-    items?: Array<AclReorderItem>;
 };
 
 export type AclRule = {
@@ -125,14 +111,10 @@ export type AclRule = {
     effect?: string;
     enabled?: boolean;
     id?: string;
-    linked_user_avatar_url?: string;
-    linked_user_display_name?: string;
-    linked_user_id?: string;
-    linked_user_username?: string;
-    priority?: number;
+    source_conversation_avatar_url?: string;
+    source_conversation_name?: string;
     source_scope?: AclSourceScope;
     subject_channel_type?: string;
-    subject_kind?: string;
     updated_at?: string;
 };
 
@@ -147,10 +129,8 @@ export type AclUpdateRuleRequest = {
     description?: string;
     effect?: string;
     enabled?: boolean;
-    priority?: number;
     source_scope?: AclSourceScope;
     subject_channel_type?: string;
-    subject_kind?: string;
 };
 
 export type AdaptersCdfPoint = {
@@ -513,24 +493,6 @@ export type BotsUpdateBotRequest = {
     timezone?: string;
 };
 
-export type BrowsercontextsBrowserContext = {
-    config?: Array<number>;
-    created_at?: string;
-    id?: string;
-    name?: string;
-    updated_at?: string;
-};
-
-export type BrowsercontextsCreateRequest = {
-    config?: Array<number>;
-    name?: string;
-};
-
-export type BrowsercontextsUpdateRequest = {
-    config?: Array<number>;
-    name?: string;
-};
-
 export type ChannelAction = {
     label?: string;
     type?: string;
@@ -641,10 +603,19 @@ export type ChannelFieldSchema = {
 
 export type ChannelFieldType = 'string' | 'secret' | 'bool' | 'number' | 'enum';
 
+export type ChannelForwardRef = {
+    date?: number;
+    from_conversation_id?: string;
+    from_user_id?: string;
+    message_id?: string;
+    sender?: string;
+};
+
 export type ChannelMessage = {
     actions?: Array<ChannelAction>;
     attachments?: Array<ChannelAttachment>;
     format?: ChannelMessageFormat;
+    forward?: ChannelForwardRef;
     id?: string;
     metadata?: {
         [key: string]: unknown;
@@ -675,6 +646,7 @@ export type ChannelMessagePartType = 'text' | 'link' | 'code_block' | 'mention' 
 export type ChannelMessageTextStyle = 'bold' | 'italic' | 'strikethrough' | 'code';
 
 export type ChannelReplyRef = {
+    attachments?: Array<ChannelAttachment>;
     message_id?: string;
     preview?: string;
     sender?: string;
@@ -743,6 +715,13 @@ export type CompactionLog = {
     status?: string;
     summary?: string;
     usage?: unknown;
+};
+
+export type DisplaySessionInfo = {
+    codec?: string;
+    created_at?: string;
+    id?: string;
+    state?: string;
 };
 
 export type EmailBindingResponse = {
@@ -866,10 +845,6 @@ export type GithubComMemohaiMemohInternalMcpConnection = {
 
 export type HandlersBatchDeleteRequest = {
     ids?: Array<string>;
-};
-
-export type HandlersBrowserCoresResponse = {
-    cores?: Array<string>;
 };
 
 export type HandlersCacheStats = {
@@ -1384,6 +1359,38 @@ export type HandlersCreateSessionRequest = {
     title?: string;
 };
 
+export type HandlersDisplayInfoResponse = {
+    available?: boolean;
+    browser_available?: boolean;
+    desktop_available?: boolean;
+    enabled?: boolean;
+    encoder?: string;
+    encoder_available?: boolean;
+    prepare_supported?: boolean;
+    prepare_system?: string;
+    running?: boolean;
+    toolkit_available?: boolean;
+    transport?: string;
+    unavailable_reason?: string;
+};
+
+export type HandlersDisplaySessionListResponse = {
+    items?: Array<DisplaySessionInfo>;
+};
+
+export type HandlersDisplayWebRtcOfferRequest = {
+    candidate_host?: string;
+    sdp?: string;
+    session_id?: string;
+    type?: string;
+};
+
+export type HandlersDisplayWebRtcOfferResponse = {
+    sdp?: string;
+    session_id?: string;
+    type?: string;
+};
+
 export type HandlersEmailOAuthStatusResponse = {
     configured?: boolean;
     email_address?: string;
@@ -1395,11 +1402,6 @@ export type HandlersEmailOAuthStatusResponse = {
 
 export type HandlersFsOpResponse = {
     ok?: boolean;
-};
-
-export type HandlersListMyIdentitiesResponse = {
-    items?: Array<IdentitiesChannelIdentity>;
-    user_id?: string;
 };
 
 export type HandlersMemoryAddPayload = {
@@ -1494,20 +1496,6 @@ export type HeartbeatLog = {
     started_at?: string;
     status?: string;
     usage?: unknown;
-};
-
-export type IdentitiesChannelIdentity = {
-    avatar_url?: string;
-    channel?: string;
-    channel_subject_id?: string;
-    created_at?: string;
-    display_name?: string;
-    id?: string;
-    metadata?: {
-        [key: string]: unknown;
-    };
-    updated_at?: string;
-    user_id?: string;
 };
 
 export type McpAuthorizeResult = {
@@ -2463,13 +2451,13 @@ export type SessionSession = {
 
 export type SettingsSettings = {
     acl_default_effect?: string;
-    browser_context_id?: string;
     chat_model_id?: string;
     compaction_enabled?: boolean;
     compaction_model_id?: string;
     compaction_ratio?: number;
     compaction_threshold?: number;
     discuss_probe_model_id?: string;
+    display_enabled?: boolean;
     heartbeat_enabled?: boolean;
     heartbeat_interval?: number;
     heartbeat_model_id?: string;
@@ -2514,13 +2502,13 @@ export type SettingsToolApprovalFilePolicy = {
 
 export type SettingsUpsertRequest = {
     acl_default_effect?: string;
-    browser_context_id?: string;
     chat_model_id?: string;
     compaction_enabled?: boolean;
     compaction_model_id?: string;
     compaction_ratio?: number;
     compaction_threshold?: number;
     discuss_probe_model_id?: string;
+    display_enabled?: boolean;
     heartbeat_enabled?: boolean;
     heartbeat_interval?: number;
     heartbeat_model_id?: string;
@@ -2970,45 +2958,6 @@ export type PostBotsByBotIdAclRulesResponses = {
 
 export type PostBotsByBotIdAclRulesResponse = PostBotsByBotIdAclRulesResponses[keyof PostBotsByBotIdAclRulesResponses];
 
-export type PutBotsByBotIdAclRulesReorderData = {
-    /**
-     * Reorder payload
-     */
-    body: AclReorderRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/acl/rules/reorder';
-};
-
-export type PutBotsByBotIdAclRulesReorderErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PutBotsByBotIdAclRulesReorderError = PutBotsByBotIdAclRulesReorderErrors[keyof PutBotsByBotIdAclRulesReorderErrors];
-
-export type PutBotsByBotIdAclRulesReorderResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
 export type DeleteBotsByBotIdAclRulesByRuleIdData = {
     body?: never;
     path: {
@@ -3381,6 +3330,165 @@ export type PostBotsByBotIdContainerDataRestoreResponses = {
 };
 
 export type PostBotsByBotIdContainerDataRestoreResponse = PostBotsByBotIdContainerDataRestoreResponses[keyof PostBotsByBotIdContainerDataRestoreResponses];
+
+export type GetBotsByBotIdContainerDisplayData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/display';
+};
+
+export type GetBotsByBotIdContainerDisplayErrors = {
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdContainerDisplayError = GetBotsByBotIdContainerDisplayErrors[keyof GetBotsByBotIdContainerDisplayErrors];
+
+export type GetBotsByBotIdContainerDisplayResponses = {
+    /**
+     * OK
+     */
+    200: HandlersDisplayInfoResponse;
+};
+
+export type GetBotsByBotIdContainerDisplayResponse = GetBotsByBotIdContainerDisplayResponses[keyof GetBotsByBotIdContainerDisplayResponses];
+
+export type PostBotsByBotIdContainerDisplayPrepareData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/display/prepare';
+};
+
+export type PostBotsByBotIdContainerDisplayPrepareErrors = {
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdContainerDisplayPrepareError = PostBotsByBotIdContainerDisplayPrepareErrors[keyof PostBotsByBotIdContainerDisplayPrepareErrors];
+
+export type PostBotsByBotIdContainerDisplayPrepareResponses = {
+    /**
+     * SSE stream of display preparation events
+     */
+    200: string;
+};
+
+export type PostBotsByBotIdContainerDisplayPrepareResponse = PostBotsByBotIdContainerDisplayPrepareResponses[keyof PostBotsByBotIdContainerDisplayPrepareResponses];
+
+export type GetBotsByBotIdContainerDisplaySessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/display/sessions';
+};
+
+export type GetBotsByBotIdContainerDisplaySessionsErrors = {
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdContainerDisplaySessionsError = GetBotsByBotIdContainerDisplaySessionsErrors[keyof GetBotsByBotIdContainerDisplaySessionsErrors];
+
+export type GetBotsByBotIdContainerDisplaySessionsResponses = {
+    /**
+     * OK
+     */
+    200: HandlersDisplaySessionListResponse;
+};
+
+export type GetBotsByBotIdContainerDisplaySessionsResponse = GetBotsByBotIdContainerDisplaySessionsResponses[keyof GetBotsByBotIdContainerDisplaySessionsResponses];
+
+export type DeleteBotsByBotIdContainerDisplaySessionsBySessionIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Display session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/display/sessions/{session_id}';
+};
+
+export type DeleteBotsByBotIdContainerDisplaySessionsBySessionIdErrors = {
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type DeleteBotsByBotIdContainerDisplaySessionsBySessionIdError = DeleteBotsByBotIdContainerDisplaySessionsBySessionIdErrors[keyof DeleteBotsByBotIdContainerDisplaySessionsBySessionIdErrors];
+
+export type DeleteBotsByBotIdContainerDisplaySessionsBySessionIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PostBotsByBotIdContainerDisplayWebrtcOfferData = {
+    /**
+     * WebRTC offer payload
+     */
+    body: HandlersDisplayWebRtcOfferRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/display/webrtc/offer';
+};
+
+export type PostBotsByBotIdContainerDisplayWebrtcOfferErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdContainerDisplayWebrtcOfferError = PostBotsByBotIdContainerDisplayWebrtcOfferErrors[keyof PostBotsByBotIdContainerDisplayWebrtcOfferErrors];
+
+export type PostBotsByBotIdContainerDisplayWebrtcOfferResponses = {
+    /**
+     * OK
+     */
+    200: HandlersDisplayWebRtcOfferResponse;
+};
+
+export type PostBotsByBotIdContainerDisplayWebrtcOfferResponse = PostBotsByBotIdContainerDisplayWebrtcOfferResponses[keyof PostBotsByBotIdContainerDisplayWebrtcOfferResponses];
 
 export type GetBotsByBotIdContainerFsData = {
     body?: never;
@@ -5722,6 +5830,67 @@ export type GetBotsByBotIdMessagesResponses = {
 
 export type GetBotsByBotIdMessagesResponse = GetBotsByBotIdMessagesResponses[keyof GetBotsByBotIdMessagesResponses];
 
+export type GetBotsByBotIdMessagesLocateData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query: {
+        /**
+         * Session ID
+         */
+        session_id: string;
+        /**
+         * External message ID
+         */
+        external_message_id: string;
+        /**
+         * Messages before target
+         */
+        before?: number;
+        /**
+         * Messages after target
+         */
+        after?: number;
+    };
+    url: '/bots/{bot_id}/messages/locate';
+};
+
+export type GetBotsByBotIdMessagesLocateErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdMessagesLocateError = GetBotsByBotIdMessagesLocateErrors[keyof GetBotsByBotIdMessagesLocateErrors];
+
+export type GetBotsByBotIdMessagesLocateResponses = {
+    /**
+     * OK
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetBotsByBotIdMessagesLocateResponse = GetBotsByBotIdMessagesLocateResponses[keyof GetBotsByBotIdMessagesLocateResponses];
+
 export type GetBotsByBotIdScheduleData = {
     body?: never;
     path?: never;
@@ -7290,191 +7459,6 @@ export type PutBotsByIdOwnerResponses = {
 };
 
 export type PutBotsByIdOwnerResponse = PutBotsByIdOwnerResponses[keyof PutBotsByIdOwnerResponses];
-
-export type GetBrowserContextsData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/browser-contexts';
-};
-
-export type GetBrowserContextsErrors = {
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBrowserContextsError = GetBrowserContextsErrors[keyof GetBrowserContextsErrors];
-
-export type GetBrowserContextsResponses = {
-    /**
-     * OK
-     */
-    200: Array<BrowsercontextsBrowserContext>;
-};
-
-export type GetBrowserContextsResponse = GetBrowserContextsResponses[keyof GetBrowserContextsResponses];
-
-export type PostBrowserContextsData = {
-    /**
-     * Browser context configuration
-     */
-    body: BrowsercontextsCreateRequest;
-    path?: never;
-    query?: never;
-    url: '/browser-contexts';
-};
-
-export type PostBrowserContextsErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PostBrowserContextsError = PostBrowserContextsErrors[keyof PostBrowserContextsErrors];
-
-export type PostBrowserContextsResponses = {
-    /**
-     * Created
-     */
-    201: BrowsercontextsBrowserContext;
-};
-
-export type PostBrowserContextsResponse = PostBrowserContextsResponses[keyof PostBrowserContextsResponses];
-
-export type GetBrowserContextsCoresData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/browser-contexts/cores';
-};
-
-export type GetBrowserContextsCoresErrors = {
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
-};
-
-export type GetBrowserContextsCoresError = GetBrowserContextsCoresErrors[keyof GetBrowserContextsCoresErrors];
-
-export type GetBrowserContextsCoresResponses = {
-    /**
-     * OK
-     */
-    200: HandlersBrowserCoresResponse;
-};
-
-export type GetBrowserContextsCoresResponse = GetBrowserContextsCoresResponses[keyof GetBrowserContextsCoresResponses];
-
-export type DeleteBrowserContextsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Browser Context ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/browser-contexts/{id}';
-};
-
-export type DeleteBrowserContextsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type DeleteBrowserContextsByIdError = DeleteBrowserContextsByIdErrors[keyof DeleteBrowserContextsByIdErrors];
-
-export type DeleteBrowserContextsByIdResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type GetBrowserContextsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Browser Context ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/browser-contexts/{id}';
-};
-
-export type GetBrowserContextsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetBrowserContextsByIdError = GetBrowserContextsByIdErrors[keyof GetBrowserContextsByIdErrors];
-
-export type GetBrowserContextsByIdResponses = {
-    /**
-     * OK
-     */
-    200: BrowsercontextsBrowserContext;
-};
-
-export type GetBrowserContextsByIdResponse = GetBrowserContextsByIdResponses[keyof GetBrowserContextsByIdResponses];
-
-export type PutBrowserContextsByIdData = {
-    /**
-     * Updated configuration
-     */
-    body: BrowsercontextsUpdateRequest;
-    path: {
-        /**
-         * Browser Context ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/browser-contexts/{id}';
-};
-
-export type PutBrowserContextsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PutBrowserContextsByIdError = PutBrowserContextsByIdErrors[keyof PutBrowserContextsByIdErrors];
-
-export type PutBrowserContextsByIdResponses = {
-    /**
-     * OK
-     */
-    200: BrowsercontextsBrowserContext;
-};
-
-export type PutBrowserContextsByIdResponse = PutBrowserContextsByIdResponses[keyof PutBrowserContextsByIdResponses];
 
 export type GetChannelsData = {
     body?: never;
@@ -11324,39 +11308,6 @@ export type PutUsersMeChannelsByPlatformResponses = {
 };
 
 export type PutUsersMeChannelsByPlatformResponse = PutUsersMeChannelsByPlatformResponses[keyof PutUsersMeChannelsByPlatformResponses];
-
-export type GetUsersMeIdentitiesData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/users/me/identities';
-};
-
-export type GetUsersMeIdentitiesErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetUsersMeIdentitiesError = GetUsersMeIdentitiesErrors[keyof GetUsersMeIdentitiesErrors];
-
-export type GetUsersMeIdentitiesResponses = {
-    /**
-     * OK
-     */
-    200: HandlersListMyIdentitiesResponse;
-};
-
-export type GetUsersMeIdentitiesResponse = GetUsersMeIdentitiesResponses[keyof GetUsersMeIdentitiesResponses];
 
 export type PutUsersMePasswordData = {
     /**

@@ -129,7 +129,7 @@
       >
         <div
           v-if="message.text"
-          class="w-full rounded-lg border border-violet-200 dark:border-violet-400/20 bg-violet-50/50 dark:bg-violet-950/20 px-4 py-3"
+          class="w-full rounded-lg border border-event-subagent-border bg-event-subagent-soft px-4 py-3"
         >
           <div class="prose prose-sm dark:prose-invert max-w-none *:first:mt-0">
             <MarkdownRender
@@ -159,13 +159,60 @@
         class="space-y-2"
       >
         <div
-          v-if="cleanUserText(message.text)"
+          v-if="cleanUserText(message.text) || message.forward || message.reply"
           class="rounded-2xl px-3 py-2 text-xs whitespace-pre-wrap break-all"
           :class="isSelf
-            ? 'rounded-tr-sm bg-foreground text-background'
-            : 'rounded-tl-sm bg-accent text-foreground'"
+            ? 'rounded-tr-sm bg-accent text-foreground'
+            : 'rounded-tl-sm bg-muted text-foreground'"
         >
-          {{ cleanUserText(message.text) }}
+          <div
+            v-if="message.forward"
+            class="mb-1 text-[11px] font-medium leading-snug text-muted-foreground"
+          >
+            {{ t('chat.forwardedFrom', { sender: forwardSenderLabel }) }}
+          </div>
+          <button
+            v-if="message.reply"
+            type="button"
+            class="relative mb-1 min-w-0 overflow-hidden rounded-sm py-1 pl-3 pr-2 leading-snug break-normal"
+            :class="[
+              'bg-background/55 dark:bg-background/20',
+              canJumpReply ? 'block w-full text-left cursor-pointer hover:bg-background/70 dark:hover:bg-background/30 focus:outline-none focus:ring-1 focus:ring-primary/40' : 'block w-full text-left cursor-default',
+            ]"
+            :disabled="!canJumpReply"
+            @click.stop="handleReplyClick"
+          >
+            <span
+              class="absolute inset-y-0 left-0 w-[3px]"
+              :class="isSelf ? 'bg-border' : 'bg-primary/70'"
+            />
+            <div class="flex min-w-0 items-start gap-2">
+              <div class="min-w-0 flex-1">
+                <div
+                  class="truncate text-[11px] font-semibold"
+                  :class="isSelf ? 'text-foreground' : 'text-primary'"
+                >
+                  {{ replySenderLabel }}
+                </div>
+                <div
+                  v-if="replyPreviewLabel"
+                  class="mt-0.5 line-clamp-2 text-[11px] whitespace-pre-wrap break-words text-muted-foreground"
+                >
+                  {{ replyPreviewLabel }}
+                </div>
+              </div>
+              <img
+                v-if="replyThumbnailSrc"
+                :src="replyThumbnailSrc"
+                :alt="replyPreviewLabel || replySenderLabel"
+                class="size-9 shrink-0 rounded-sm object-cover"
+                loading="lazy"
+              >
+            </div>
+          </button>
+          <div v-if="cleanUserText(message.text)">
+            {{ cleanUserText(message.text) }}
+          </div>
         </div>
         <AttachmentBlock
           v-if="userAttachmentBlock"
@@ -223,6 +270,15 @@
             />
           </div>
 
+          <!-- Error block -->
+          <div
+            v-else-if="block.type === 'error' && block.content"
+            class="flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            <CircleAlert class="mt-0.5 size-3.5 shrink-0" />
+            <span class="min-w-0 whitespace-pre-wrap break-words">{{ block.content }}</span>
+          </div>
+
           <!-- Attachment block -->
           <AttachmentBlock
             v-else-if="block.type === 'attachments'"
@@ -254,7 +310,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { LoaderCircle } from 'lucide-vue-next'
+import { CircleAlert, LoaderCircle } from 'lucide-vue-next'
 import { formatRelativeTime, formatDateTime } from '@/utils/date-time'
 import { Avatar, AvatarImage, AvatarFallback } from '@memohai/ui'
 import MarkdownRender, { enableKatex, enableMermaid } from 'markstream-vue'
@@ -269,13 +325,15 @@ import ChannelBadge from '@/components/chat-list/channel-badge/index.vue'
 // import { useUserStore } from '@/store/user'
 // import { useChatStore } from '@/store/chat-list'
 // import { storeToRefs } from 'pinia'
-// import { useI18n } from 'vue-i18n'
+import { useI18n } from 'vue-i18n'
 import type {
+  AttachmentItem,
   ChatMessage,
   ThinkingBlock as ThinkingBlockType,
   ToolCallBlock as ToolCallBlockType,
   AttachmentBlock as AttachmentBlockType,
 } from '@/store/chat-list'
+import { resolveUrl } from '../composables/useMediaGallery'
 
 enableKatex()
 enableMermaid()
@@ -288,6 +346,7 @@ const props = defineProps<{
   sessionType?: string
   botId?: string
   onOpenMedia?: (src: string) => void
+  onReplyClick?: (messageId: string) => void
 }>()
 
 // const chatStore = useChatStore()
@@ -304,7 +363,7 @@ const isSelf = computed(() =>
 // const botAvatarUrl = computed(() => currentBot.value?.avatar_url ?? '')
 // const botName = computed(() => currentBot.value?.display_name ?? '')
 
-// const { t } = useI18n()
+const { t } = useI18n()
 
 // const senderFallbackName = computed(() => {
 //   const p = (props.message.platform ?? '').trim()
@@ -318,6 +377,53 @@ const senderFallback = computed(() => {
   const name = props.message.role === 'user' ? (props.message.senderDisplayName ?? '') : ''
   return name.slice(0, 2).toUpperCase() || '?'
 })
+
+const replySenderLabel = computed(() => {
+  if (props.message.role !== 'user') return ''
+  return props.message.reply?.sender || props.message.reply?.message_id || t('chat.unknownMessage')
+})
+
+const forwardSenderLabel = computed(() => {
+  if (props.message.role !== 'user') return ''
+  return props.message.forward?.sender
+    || props.message.forward?.from_conversation_id
+    || props.message.forward?.from_user_id
+    || t('chat.unknownMessage')
+})
+
+const canJumpReply = computed(() =>
+  props.message.role === 'user'
+  && !!props.message.reply?.message_id?.trim()
+  && typeof props.onReplyClick === 'function',
+)
+
+const replyThumbnail = computed<AttachmentItem | null>(() => {
+  if (props.message.role !== 'user') return null
+  return (props.message.reply?.attachments ?? []).find((att) => isImageAttachment(att) && resolveUrl(att)) ?? null
+})
+
+const replyThumbnailSrc = computed(() => replyThumbnail.value ? resolveUrl(replyThumbnail.value) : '')
+
+const replyPreviewLabel = computed(() => {
+  if (props.message.role !== 'user') return ''
+  const preview = props.message.reply?.preview?.trim()
+  if (preview) return preview
+  return replyThumbnailSrc.value ? t('chat.replyPhoto') : ''
+})
+
+function isImageAttachment(att: AttachmentItem): boolean {
+  const type = String(att.type ?? '').toLowerCase()
+  if (type === 'image' || type === 'gif') return true
+  const mime = String(att.mime ?? '').toLowerCase()
+  return mime.startsWith('image/')
+}
+
+function handleReplyClick() {
+  if (props.message.role !== 'user') return
+  const messageId = props.message.reply?.message_id?.trim()
+  if (!messageId || !props.onReplyClick) return
+  props.onReplyClick(messageId)
+}
 
 function cleanUserText(content?: string): string {
   if (!content) return ''

@@ -26,10 +26,8 @@ import (
 	"github.com/memohai/memoh/internal/agent/background"
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
 	audiopkg "github.com/memohai/memoh/internal/audio"
-	"github.com/memohai/memoh/internal/bind"
 	"github.com/memohai/memoh/internal/boot"
 	"github.com/memohai/memoh/internal/bots"
-	"github.com/memohai/memoh/internal/browsercontexts"
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/channel/adapters/dingtalk"
 	"github.com/memohai/memoh/internal/channel/adapters/discord"
@@ -636,7 +634,6 @@ func provideChannelRouter(
 	botService *bots.Service,
 	aclService *acl.Service,
 	policyService *policy.Service,
-	bindService *bind.Service,
 	mediaService *media.Service,
 	audioService *audiopkg.Service,
 	settingsService *settings.Service,
@@ -646,7 +643,6 @@ func provideChannelRouter(
 	providersService *providers.Service,
 	memProvService *memprovider.Service,
 	searchProvService *searchproviders.Service,
-	browserCtxService *browsercontexts.Service,
 	emailService *emailpkg.Service,
 	emailOutboxService *emailpkg.OutboxService,
 	heartbeatService *heartbeat.Service,
@@ -670,7 +666,7 @@ func provideChannelRouter(
 	qqAdapter.SetChannelIdentityResolver(identityService)
 	qqAdapter.SetRouteResolver(routeService)
 
-	processor := inbound.NewChannelInboundProcessor(log, registry, routeService, msgService, resolver, identityService, policyService, bindService, rc.JwtSecret, 5*time.Minute)
+	processor := inbound.NewChannelInboundProcessor(log, registry, routeService, msgService, resolver, identityService, policyService, rc.JwtSecret, 5*time.Minute)
 	processor.SetSessionEnsurer(&sessionEnsurerAdapter{svc: sessionService})
 	processor.SetPipeline(pipeline, eventStore, discussDriver)
 	discussDriver.SetResolver(resolver)
@@ -692,7 +688,6 @@ func provideChannelRouter(
 		providersService,
 		memProvService,
 		searchProvService,
-		browserCtxService,
 		emailService,
 		emailOutboxService,
 		heartbeatService,
@@ -758,7 +753,7 @@ func provideBackgroundManager(log *slog.Logger) *background.Manager {
 	return background.New(log)
 }
 
-func provideToolProviders(log *slog.Logger, cfg config.Config, channelManager *channel.Manager, registry *channel.Registry, routeService *route.DBService, scheduleService *schedule.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *workspace.Manager, mediaService *media.Service, memoryRegistry *memprovider.Registry, emailService *emailpkg.Service, emailManager *emailpkg.Manager, fedGateway *handlers.MCPFederationGateway, mcpConnService *mcp.ConnectionService, modelsService *models.Service, browserContextService *browsercontexts.Service, queries dbstore.Queries, audioService *audiopkg.Service, sessionService *sessionpkg.Service, bgManager *background.Manager, botService *bots.Service, orchestrationService *orchestration.Service) []agenttools.ToolProvider {
+func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, registry *channel.Registry, routeService *route.DBService, scheduleService *schedule.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *workspace.Manager, mediaService *media.Service, memoryRegistry *memprovider.Registry, emailService *emailpkg.Service, emailManager *emailpkg.Manager, fedGateway *handlers.MCPFederationGateway, mcpConnService *mcp.ConnectionService, modelsService *models.Service, queries dbstore.Queries, audioService *audiopkg.Service, sessionService *sessionpkg.Service, bgManager *background.Manager, botService *bots.Service, orchestrationService *orchestration.Service) []agenttools.ToolProvider {
 	var assetResolver messaging.AssetResolver
 	if mediaService != nil {
 		assetResolver = &mediaAssetResolverAdapter{media: mediaService}
@@ -771,11 +766,11 @@ func provideToolProviders(log *slog.Logger, cfg config.Config, channelManager *c
 		agenttools.NewMemoryProvider(log, memoryRegistry, settingsService),
 		agenttools.NewWebProvider(log, settingsService, searchProviderService),
 		agenttools.NewContainerProvider(log, manager, bgManager, config.DefaultDataMount),
+		agenttools.NewBrowserProvider(log, settingsService, manager, manager, config.DefaultDataMount),
 		agenttools.NewEmailProvider(log, emailService, emailManager),
 		agenttools.NewWebFetchProvider(log),
 		agenttools.NewSpawnProvider(log, settingsService, modelsService, queries, sessionService),
 		agenttools.NewSkillProvider(log),
-		agenttools.NewBrowserProvider(log, settingsService, browserContextService, manager, cfg.BrowserGateway),
 		agenttools.NewTTSProvider(log, settingsService, audioService, channelManager, registry),
 		agenttools.NewTranscriptionProvider(log, settingsService, audioService, mediaService),
 		agenttools.NewImageGenProvider(log, settingsService, modelsService, queries, manager, config.DefaultDataMount),
@@ -820,8 +815,8 @@ func provideMediaService(log *slog.Logger, provider bridge.Provider, cfg config.
 	return media.NewService(log, storageProvider)
 }
 
-func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, identityService *identities.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelLifecycle *channel.Lifecycle, channelManager *channel.Manager, registry *channel.Registry) *handlers.UsersHandler {
-	return handlers.NewUsersHandler(log, accountService, identityService, botService, routeService, channelStore, channelLifecycle, channelManager, registry)
+func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelLifecycle *channel.Lifecycle, channelManager *channel.Manager, registry *channel.Registry) *handlers.UsersHandler {
+	return handlers.NewUsersHandler(log, accountService, botService, routeService, channelStore, channelLifecycle, channelManager, registry)
 }
 
 func provideWebHandler(channelManager *channel.Manager, channelStore *channel.Store, chatService *conversation.Service, hub *local.RouteHub, botService *bots.Service, accountService *accounts.Service, resolver *flow.Resolver, mediaService *media.Service, audioService *audiopkg.Service, settingsService *settings.Service) *handlers.LocalChannelHandler {

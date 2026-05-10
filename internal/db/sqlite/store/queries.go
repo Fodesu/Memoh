@@ -365,25 +365,6 @@ func (q *Queries) CreateAccount(ctx context.Context, arg pgsqlc.CreateAccountPar
 	return result, nil
 }
 
-func (q *Queries) CreateBindCode(ctx context.Context, arg pgsqlc.CreateBindCodeParams) (pgsqlc.ChannelIdentityBindCode, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.ChannelIdentityBindCode{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteArg sqlitesqlc.CreateBindCodeParams
-	if err := convertValue(arg, &sqliteArg); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	out, err := q.store.queries.CreateBindCode(ctx, sqliteArg)
-	if err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, mapQueryErr(err)
-	}
-	var result pgsqlc.ChannelIdentityBindCode
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	return result, nil
-}
-
 func (q *Queries) CreateBot(ctx context.Context, arg pgsqlc.CreateBotParams) (pgsqlc.CreateBotRow, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.CreateBotRow{}, errSQLiteQueriesNotConfigured
@@ -403,21 +384,21 @@ func (q *Queries) CreateBot(ctx context.Context, arg pgsqlc.CreateBotParams) (pg
 	return result, nil
 }
 
-func (q *Queries) CreateBotACLRule(ctx context.Context, arg pgsqlc.CreateBotACLRuleParams) (pgsqlc.CreateBotACLRuleRow, error) {
+func (q *Queries) CreateBotACLRule(ctx context.Context, arg pgsqlc.CreateBotACLRuleParams) (pgsqlc.BotAclRule, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.CreateBotACLRuleRow{}, errSQLiteQueriesNotConfigured
+		return pgsqlc.BotAclRule{}, errSQLiteQueriesNotConfigured
 	}
 	var sqliteArg sqlitesqlc.CreateBotACLRuleParams
 	if err := convertValue(arg, &sqliteArg); err != nil {
-		return pgsqlc.CreateBotACLRuleRow{}, err
+		return pgsqlc.BotAclRule{}, err
 	}
 	out, err := q.store.queries.CreateBotACLRule(ctx, sqliteArg)
 	if err != nil {
-		return pgsqlc.CreateBotACLRuleRow{}, mapQueryErr(err)
+		return pgsqlc.BotAclRule{}, mapQueryErr(err)
 	}
-	var result pgsqlc.CreateBotACLRuleRow
+	var result pgsqlc.BotAclRule
 	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.CreateBotACLRuleRow{}, err
+		return pgsqlc.BotAclRule{}, err
 	}
 	return result, nil
 }
@@ -437,25 +418,6 @@ func (q *Queries) CreateBotEmailBinding(ctx context.Context, arg pgsqlc.CreateBo
 	var result pgsqlc.BotEmailBinding
 	if err := convertValue(out, &result); err != nil {
 		return pgsqlc.BotEmailBinding{}, err
-	}
-	return result, nil
-}
-
-func (q *Queries) CreateBrowserContext(ctx context.Context, arg pgsqlc.CreateBrowserContextParams) (pgsqlc.BrowserContext, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.BrowserContext{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteArg sqlitesqlc.CreateBrowserContextParams
-	if err := convertValue(arg, &sqliteArg); err != nil {
-		return pgsqlc.BrowserContext{}, err
-	}
-	out, err := q.store.queries.CreateBrowserContext(ctx, sqliteArg)
-	if err != nil {
-		return pgsqlc.BrowserContext{}, mapQueryErr(err)
-	}
-	var result pgsqlc.BrowserContext
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.BrowserContext{}, err
 	}
 	return result, nil
 }
@@ -926,18 +888,6 @@ func (q *Queries) DeleteBotEmailBinding(ctx context.Context, id pgtype.UUID) err
 	return mapQueryErr(err)
 }
 
-func (q *Queries) DeleteBrowserContext(ctx context.Context, id pgtype.UUID) error {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return errSQLiteQueriesNotConfigured
-	}
-	var sqliteId string
-	if err := convertValue(id, &sqliteId); err != nil {
-		return err
-	}
-	err := q.store.queries.DeleteBrowserContext(ctx, sqliteId)
-	return mapQueryErr(err)
-}
-
 func (q *Queries) DeleteChat(ctx context.Context, chatID pgtype.UUID) error {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return errSQLiteQueriesNotConfigured
@@ -1333,44 +1283,6 @@ func (q *Queries) GetActiveSessionForRoute(ctx context.Context, routeID pgtype.U
 	return result, nil
 }
 
-func (q *Queries) GetBindCode(ctx context.Context, token string) (pgsqlc.ChannelIdentityBindCode, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.ChannelIdentityBindCode{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteToken string
-	if err := convertValue(token, &sqliteToken); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	out, err := q.store.queries.GetBindCode(ctx, sqliteToken)
-	if err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, mapQueryErr(err)
-	}
-	var result pgsqlc.ChannelIdentityBindCode
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	return result, nil
-}
-
-func (q *Queries) GetBindCodeForUpdate(ctx context.Context, token string) (pgsqlc.ChannelIdentityBindCode, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.ChannelIdentityBindCode{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteToken string
-	if err := convertValue(token, &sqliteToken); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	out, err := q.store.queries.GetBindCodeForUpdate(ctx, sqliteToken)
-	if err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, mapQueryErr(err)
-	}
-	var result pgsqlc.ChannelIdentityBindCode
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	return result, nil
-}
-
 func (q *Queries) GetBotACLDefaultEffect(ctx context.Context, id pgtype.UUID) (string, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return "", errSQLiteQueriesNotConfigured
@@ -1519,25 +1431,6 @@ func (q *Queries) GetBotStorageBinding(ctx context.Context, botID pgtype.UUID) (
 	var result pgsqlc.BotStorageBinding
 	if err := convertValue(out, &result); err != nil {
 		return pgsqlc.BotStorageBinding{}, err
-	}
-	return result, nil
-}
-
-func (q *Queries) GetBrowserContextByID(ctx context.Context, id pgtype.UUID) (pgsqlc.BrowserContext, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.BrowserContext{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteId string
-	if err := convertValue(id, &sqliteId); err != nil {
-		return pgsqlc.BrowserContext{}, err
-	}
-	out, err := q.store.queries.GetBrowserContextByID(ctx, sqliteId)
-	if err != nil {
-		return pgsqlc.BrowserContext{}, mapQueryErr(err)
-	}
-	var result pgsqlc.BrowserContext
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.BrowserContext{}, err
 	}
 	return result, nil
 }
@@ -2758,40 +2651,6 @@ func (q *Queries) ListBotsByOwner(ctx context.Context, ownerUserID pgtype.UUID) 
 	return result, nil
 }
 
-func (q *Queries) ListBrowserContexts(ctx context.Context) ([]pgsqlc.BrowserContext, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return nil, errSQLiteQueriesNotConfigured
-	}
-	out, err := q.store.queries.ListBrowserContexts(ctx)
-	if err != nil {
-		return nil, mapQueryErr(err)
-	}
-	var result []pgsqlc.BrowserContext
-	if err := convertValue(out, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func (q *Queries) ListChannelIdentitiesByUserID(ctx context.Context, userID pgtype.UUID) ([]pgsqlc.ChannelIdentity, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return nil, errSQLiteQueriesNotConfigured
-	}
-	var sqliteUserID sql.NullString
-	if err := convertValue(userID, &sqliteUserID); err != nil {
-		return nil, err
-	}
-	out, err := q.store.queries.ListChannelIdentitiesByUserID(ctx, sqliteUserID)
-	if err != nil {
-		return nil, mapQueryErr(err)
-	}
-	var result []pgsqlc.ChannelIdentity
-	if err := convertValue(out, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
 func (q *Queries) ListChatParticipants(ctx context.Context, chatID pgtype.UUID) ([]pgsqlc.ListChatParticipantsRow, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return nil, errSQLiteQueriesNotConfigured
@@ -3146,6 +3005,44 @@ func (q *Queries) ListMessagesBefore(ctx context.Context, arg pgsqlc.ListMessage
 		return nil, mapQueryErr(err)
 	}
 	var result []pgsqlc.ListMessagesBeforeRow
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (q *Queries) GetMessageByExternalIDBySession(ctx context.Context, arg pgsqlc.GetMessageByExternalIDBySessionParams) (pgsqlc.GetMessageByExternalIDBySessionRow, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.GetMessageByExternalIDBySessionRow{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.GetMessageByExternalIDBySessionParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.GetMessageByExternalIDBySessionRow{}, err
+	}
+	out, err := q.store.queries.GetMessageByExternalIDBySession(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.GetMessageByExternalIDBySessionRow{}, mapQueryErr(err)
+	}
+	var result pgsqlc.GetMessageByExternalIDBySessionRow
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.GetMessageByExternalIDBySessionRow{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) ListMessagesAfterBySession(ctx context.Context, arg pgsqlc.ListMessagesAfterBySessionParams) ([]pgsqlc.ListMessagesAfterBySessionRow, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.ListMessagesAfterBySessionParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ListMessagesAfterBySession(ctx, sqliteArg)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.ListMessagesAfterBySessionRow
 	if err := convertValue(out, &result); err != nil {
 		return nil, err
 	}
@@ -3956,25 +3853,6 @@ func (q *Queries) ListVisibleChatsByBotAndUser(ctx context.Context, arg pgsqlc.L
 	return result, nil
 }
 
-func (q *Queries) MarkBindCodeUsed(ctx context.Context, arg pgsqlc.MarkBindCodeUsedParams) (pgsqlc.ChannelIdentityBindCode, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.ChannelIdentityBindCode{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteArg sqlitesqlc.MarkBindCodeUsedParams
-	if err := convertValue(arg, &sqliteArg); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	out, err := q.store.queries.MarkBindCodeUsed(ctx, sqliteArg)
-	if err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, mapQueryErr(err)
-	}
-	var result pgsqlc.ChannelIdentityBindCode
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.ChannelIdentityBindCode{}, err
-	}
-	return result, nil
-}
-
 func (q *Queries) MarkMessagesCompacted(ctx context.Context, arg pgsqlc.MarkMessagesCompactedParams) error {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return errSQLiteQueriesNotConfigured
@@ -4075,7 +3953,7 @@ func (q *Queries) SearchAccounts(ctx context.Context, arg pgsqlc.SearchAccountsP
 	return result, nil
 }
 
-func (q *Queries) SearchChannelIdentities(ctx context.Context, arg pgsqlc.SearchChannelIdentitiesParams) ([]pgsqlc.SearchChannelIdentitiesRow, error) {
+func (q *Queries) SearchChannelIdentities(ctx context.Context, arg pgsqlc.SearchChannelIdentitiesParams) ([]pgsqlc.ChannelIdentity, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return nil, errSQLiteQueriesNotConfigured
 	}
@@ -4087,7 +3965,7 @@ func (q *Queries) SearchChannelIdentities(ctx context.Context, arg pgsqlc.Search
 	if err != nil {
 		return nil, mapQueryErr(err)
 	}
-	var result []pgsqlc.SearchChannelIdentitiesRow
+	var result []pgsqlc.ChannelIdentity
 	if err := convertValue(out, &result); err != nil {
 		return nil, err
 	}
@@ -4123,25 +4001,6 @@ func (q *Queries) SetBotACLDefaultEffect(ctx context.Context, arg pgsqlc.SetBotA
 	}
 	err := q.store.queries.SetBotACLDefaultEffect(ctx, sqliteArg)
 	return mapQueryErr(err)
-}
-
-func (q *Queries) SetChannelIdentityLinkedUser(ctx context.Context, arg pgsqlc.SetChannelIdentityLinkedUserParams) (pgsqlc.ChannelIdentity, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.ChannelIdentity{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteArg sqlitesqlc.SetChannelIdentityLinkedUserParams
-	if err := convertValue(arg, &sqliteArg); err != nil {
-		return pgsqlc.ChannelIdentity{}, err
-	}
-	out, err := q.store.queries.SetChannelIdentityLinkedUser(ctx, sqliteArg)
-	if err != nil {
-		return pgsqlc.ChannelIdentity{}, mapQueryErr(err)
-	}
-	var result pgsqlc.ChannelIdentity
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.ChannelIdentity{}, err
-	}
-	return result, nil
 }
 
 func (q *Queries) SetRouteActiveSession(ctx context.Context, arg pgsqlc.SetRouteActiveSessionParams) error {
@@ -4280,35 +4139,23 @@ func (q *Queries) UpdateAccountProfile(ctx context.Context, arg pgsqlc.UpdateAcc
 	return result, nil
 }
 
-func (q *Queries) UpdateBotACLRule(ctx context.Context, arg pgsqlc.UpdateBotACLRuleParams) (pgsqlc.UpdateBotACLRuleRow, error) {
+func (q *Queries) UpdateBotACLRule(ctx context.Context, arg pgsqlc.UpdateBotACLRuleParams) (pgsqlc.BotAclRule, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.UpdateBotACLRuleRow{}, errSQLiteQueriesNotConfigured
+		return pgsqlc.BotAclRule{}, errSQLiteQueriesNotConfigured
 	}
 	var sqliteArg sqlitesqlc.UpdateBotACLRuleParams
 	if err := convertValue(arg, &sqliteArg); err != nil {
-		return pgsqlc.UpdateBotACLRuleRow{}, err
+		return pgsqlc.BotAclRule{}, err
 	}
 	out, err := q.store.queries.UpdateBotACLRule(ctx, sqliteArg)
 	if err != nil {
-		return pgsqlc.UpdateBotACLRuleRow{}, mapQueryErr(err)
+		return pgsqlc.BotAclRule{}, mapQueryErr(err)
 	}
-	var result pgsqlc.UpdateBotACLRuleRow
+	var result pgsqlc.BotAclRule
 	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.UpdateBotACLRuleRow{}, err
+		return pgsqlc.BotAclRule{}, err
 	}
 	return result, nil
-}
-
-func (q *Queries) UpdateBotACLRulePriority(ctx context.Context, arg pgsqlc.UpdateBotACLRulePriorityParams) error {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return errSQLiteQueriesNotConfigured
-	}
-	var sqliteArg sqlitesqlc.UpdateBotACLRulePriorityParams
-	if err := convertValue(arg, &sqliteArg); err != nil {
-		return err
-	}
-	err := q.store.queries.UpdateBotACLRulePriority(ctx, sqliteArg)
-	return mapQueryErr(err)
 }
 
 func (q *Queries) UpdateBotChannelConfigDisabled(ctx context.Context, arg pgsqlc.UpdateBotChannelConfigDisabledParams) (pgsqlc.BotChannelConfig, error) {
@@ -4397,25 +4244,6 @@ func (q *Queries) UpdateBotStatus(ctx context.Context, arg pgsqlc.UpdateBotStatu
 	}
 	err := q.store.queries.UpdateBotStatus(ctx, sqliteArg)
 	return mapQueryErr(err)
-}
-
-func (q *Queries) UpdateBrowserContext(ctx context.Context, arg pgsqlc.UpdateBrowserContextParams) (pgsqlc.BrowserContext, error) {
-	if q == nil || q.store == nil || q.store.queries == nil {
-		return pgsqlc.BrowserContext{}, errSQLiteQueriesNotConfigured
-	}
-	var sqliteArg sqlitesqlc.UpdateBrowserContextParams
-	if err := convertValue(arg, &sqliteArg); err != nil {
-		return pgsqlc.BrowserContext{}, err
-	}
-	out, err := q.store.queries.UpdateBrowserContext(ctx, sqliteArg)
-	if err != nil {
-		return pgsqlc.BrowserContext{}, mapQueryErr(err)
-	}
-	var result pgsqlc.BrowserContext
-	if err := convertValue(out, &result); err != nil {
-		return pgsqlc.BrowserContext{}, err
-	}
-	return result, nil
 }
 
 func (q *Queries) UpdateChatRouteMetadata(ctx context.Context, arg pgsqlc.UpdateChatRouteMetadataParams) error {

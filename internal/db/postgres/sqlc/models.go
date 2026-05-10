@@ -35,10 +35,10 @@ type Bot struct {
 	DiscussProbeModelID    pgtype.UUID        `json:"discuss_probe_model_id"`
 	TtsModelID             pgtype.UUID        `json:"tts_model_id"`
 	TranscriptionModelID   pgtype.UUID        `json:"transcription_model_id"`
-	BrowserContextID       pgtype.UUID        `json:"browser_context_id"`
 	PersistFullToolResults bool               `json:"persist_full_tool_results"`
 	ShowToolCallsInIm      bool               `json:"show_tool_calls_in_im"`
 	ToolApprovalConfig     []byte             `json:"tool_approval_config"`
+	DisplayEnabled         bool               `json:"display_enabled"`
 	OverlayProvider        string             `json:"overlay_provider"`
 	OverlayEnabled         bool               `json:"overlay_enabled"`
 	OverlayConfig          []byte             `json:"overlay_config"`
@@ -53,7 +53,6 @@ type BotAclRule struct {
 	BotID                  pgtype.UUID        `json:"bot_id"`
 	Action                 string             `json:"action"`
 	Effect                 string             `json:"effect"`
-	SubjectKind            string             `json:"subject_kind"`
 	ChannelIdentityID      pgtype.UUID        `json:"channel_identity_id"`
 	SourceChannel          pgtype.Text        `json:"source_channel"`
 	SourceConversationType pgtype.Text        `json:"source_conversation_type"`
@@ -62,7 +61,6 @@ type BotAclRule struct {
 	CreatedByUserID        pgtype.UUID        `json:"created_by_user_id"`
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
-	Priority               int32              `json:"priority"`
 	Enabled                bool               `json:"enabled"`
 	Description            pgtype.Text        `json:"description"`
 	SubjectChannelType     pgtype.Text        `json:"subject_channel_type"`
@@ -203,17 +201,8 @@ type BotStorageBinding struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
-type BrowserContext struct {
-	ID        pgtype.UUID        `json:"id"`
-	Name      string             `json:"name"`
-	Config    []byte             `json:"config"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-}
-
 type ChannelIdentity struct {
 	ID               pgtype.UUID        `json:"id"`
-	UserID           pgtype.UUID        `json:"user_id"`
 	ChannelType      string             `json:"channel_type"`
 	ChannelSubjectID string             `json:"channel_subject_id"`
 	DisplayName      pgtype.Text        `json:"display_name"`
@@ -221,17 +210,6 @@ type ChannelIdentity struct {
 	Metadata         []byte             `json:"metadata"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-}
-
-type ChannelIdentityBindCode struct {
-	ID                      pgtype.UUID        `json:"id"`
-	Token                   string             `json:"token"`
-	IssuedByUserID          pgtype.UUID        `json:"issued_by_user_id"`
-	ChannelType             pgtype.Text        `json:"channel_type"`
-	ExpiresAt               pgtype.Timestamptz `json:"expires_at"`
-	UsedAt                  pgtype.Timestamptz `json:"used_at"`
-	UsedByChannelIdentityID pgtype.UUID        `json:"used_by_channel_identity_id"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 }
 
 type Container struct {

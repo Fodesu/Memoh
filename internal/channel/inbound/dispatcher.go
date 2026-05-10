@@ -35,13 +35,13 @@ const (
 
 // QueuedTask holds everything needed to start an agent stream for a queued message.
 type QueuedTask struct {
-	Ctx     context.Context
-	Cfg     channel.ChannelConfig
-	Msg     channel.InboundMessage
-	Sender  channel.StreamReplySender
-	Ident   InboundIdentity
-	Text    string
-	Attachs []conversation.ChatAttachment
+	Ctx         context.Context
+	Cfg         channel.ChannelConfig
+	Msg         channel.InboundMessage
+	Sender      channel.StreamReplySender
+	Ident       InboundIdentity
+	Text        string
+	Attachments []conversation.ChatAttachment
 }
 
 // PersistFunc is a deferred persistence closure called after the active stream

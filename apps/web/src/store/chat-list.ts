@@ -15,9 +15,12 @@ import {
   type ChatWebSocket,
   type UIAttachment,
   type UIAttachmentsMessage,
+  type UIErrorMessage,
   type UIBackgroundTask,
   type UIMessage,
   type UIReasoningMessage,
+  type UIReplyRef,
+  type UIForwardRef,
   type UISystemTurn,
   type UITextMessage,
   type UIToolApproval,
@@ -30,12 +33,14 @@ import {
   sendLocalChannelMessage,
   streamMessageEvents,
   connectWebSocket,
+  locateMessageUI,
 } from '@/composables/api/useChat'
 
 export type TextBlock = UITextMessage
 export type ThinkingBlock = UIReasoningMessage
 export type AttachmentItem = UIAttachment
 export type AttachmentBlock = UIAttachmentsMessage
+export type ErrorBlock = UIErrorMessage
 
 export interface ToolCallBlock extends UIToolMessage {
   toolCallId: string
@@ -46,18 +51,21 @@ export interface ToolCallBlock extends UIToolMessage {
   backgroundTask?: BackgroundTask
 }
 
-export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | AttachmentBlock
+export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | AttachmentBlock | ErrorBlock
 
 export interface ChatUserTurn {
   id: string
   role: 'user'
   text: string
   attachments: AttachmentItem[]
+  reply?: UIReplyRef
+  forward?: UIForwardRef
   timestamp: string
   platform?: string
   senderDisplayName?: string
   senderAvatarUrl?: string
   senderUserId?: string
+  externalMessageId?: string
   streaming: boolean
   isSelf: boolean
 }
@@ -68,6 +76,7 @@ export interface ChatAssistantTurn {
   messages: ContentBlock[]
   timestamp: string
   platform?: string
+  externalMessageId?: string
   streaming: boolean
   localOnly?: boolean
 }
@@ -102,9 +111,37 @@ export type ChatMessage = ChatUserTurn | ChatAssistantTurn | ChatSystemTurn
 
 interface PendingAssistantStream {
   assistantTurn: ChatAssistantTurn
+  botId: string
+  sessionId: string
   done: boolean
   resolve: () => void
   reject: (err: Error) => void
+  streamError?: StreamFailureError
+}
+
+export type SendMessageStage = 'startup' | 'stream'
+
+export interface SendMessageResult {
+  ok: boolean
+  stage?: SendMessageStage
+  error?: string
+  restoreInput?: string
+  restoreAttachments?: ChatAttachment[]
+}
+
+class StreamFailureError extends Error {
+  stage: SendMessageStage
+
+  constructor(message: string, stage: SendMessageStage) {
+    super(message)
+    this.name = 'StreamFailureError'
+    this.stage = stage
+  }
+}
+
+interface SessionMessageState {
+  items: ChatMessage[]
+  hasMoreOlder: boolean
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -142,10 +179,15 @@ export const useChatStore = defineStore('chat', () => {
   let pendingAssistantStream: PendingAssistantStream | null = null
   let activeWs: ChatWebSocket | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
-  let refreshPromise: Promise<void> | null = null
+  let refreshPromise: { key: string; promise: Promise<void> } | null = null
   let suppressNextStartPlaceholder = false
   const pendingBackgroundEvents = new Map<string, BackgroundTask[]>()
   const latestBackgroundTasks = new Map<string, BackgroundTask>()
+  // Open chat tabs share this store, so keep a small per-session view cache.
+  // Switching tabs saves/restores from here; the active session remains the
+  // only live `messages` array rendered by ChatPane.
+  const sessionMessageStates = new Map<string, SessionMessageState>()
+  const ephemeralAssistantErrors = new Map<string, string[]>()
   const messageEventsStream = useRetryingStream()
 
   const activeSession = computed(() =>
@@ -201,6 +243,31 @@ export const useChatStore = defineStore('chat', () => {
 
   function normalizeAttachment(att: UIAttachment): AttachmentItem {
     return { ...att }
+  }
+
+  function normalizeReplyRef(reply?: UIReplyRef): UIReplyRef | undefined {
+    if (!reply) return undefined
+    const normalized = {
+      message_id: (reply.message_id ?? '').trim(),
+      sender: (reply.sender ?? '').trim(),
+      preview: (reply.preview ?? '').trim(),
+      attachments: (reply.attachments ?? []).map(normalizeAttachment),
+    }
+    return normalized.message_id || normalized.sender || normalized.preview || normalized.attachments.length ? normalized : undefined
+  }
+
+  function normalizeForwardRef(forward?: UIForwardRef): UIForwardRef | undefined {
+    if (!forward) return undefined
+    const normalized = {
+      message_id: (forward.message_id ?? '').trim(),
+      from_user_id: (forward.from_user_id ?? '').trim(),
+      from_conversation_id: (forward.from_conversation_id ?? '').trim(),
+      sender: (forward.sender ?? '').trim(),
+      date: typeof forward.date === 'number' && Number.isFinite(forward.date) ? forward.date : undefined,
+    }
+    return normalized.message_id || normalized.from_user_id || normalized.from_conversation_id || normalized.sender || normalized.date
+      ? normalized
+      : undefined
   }
 
   function asRecord(value: unknown): Record<string, unknown> {
@@ -369,6 +436,8 @@ export const useChatStore = defineStore('chat', () => {
           ...msg,
           attachments: msg.attachments.map(normalizeAttachment),
         }
+      case 'error':
+        return { ...msg }
       default:
         return { ...msg }
     }
@@ -381,11 +450,14 @@ export const useChatStore = defineStore('chat', () => {
         role: 'user',
         text: turn.text ?? '',
         attachments: (turn.attachments ?? []).map(normalizeAttachment),
+        reply: normalizeReplyRef(turn.reply),
+        forward: normalizeForwardRef(turn.forward),
         timestamp: normalizeTimestamp(turn.timestamp),
         platform: (turn.platform ?? '').trim() || undefined,
         senderDisplayName: (turn.sender_display_name ?? '').trim() || undefined,
         senderAvatarUrl: (turn.sender_avatar_url ?? '').trim() || undefined,
         senderUserId: (turn.sender_user_id ?? '').trim() || undefined,
+        externalMessageId: (turn.external_message_id ?? '').trim() || undefined,
         streaming: false,
         isSelf: resolveIsSelf(turn),
       }
@@ -414,6 +486,7 @@ export const useChatStore = defineStore('chat', () => {
       messages: (turn.messages ?? []).map(normalizeUIMessage),
       timestamp: normalizeTimestamp(turn.timestamp),
       platform: (turn.platform ?? '').trim() || undefined,
+      externalMessageId: (turn.external_message_id ?? '').trim() || undefined,
       streaming: false,
     }
   }
@@ -451,17 +524,108 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function updateSinceFromMessages(items: ChatMessage[]) {
-    messageEventsSince = ''
+    // Advance only. Restoring an older tab snapshot must not move the event
+    // cursor backwards and replay unrelated stream events.
     for (const item of items) {
       updateSince(item.timestamp)
     }
   }
 
-  function replaceMessages(items: UITurn[]) {
+  function appendEphemeralErrors(items: ChatMessage[], targetSessionId?: string) {
+    const sid = (targetSessionId ?? sessionId.value ?? '').trim()
+    if (!sid) return
+    const errors = ephemeralAssistantErrors.get(sid)
+    if (!errors?.length) return
+    const assistantTurn = [...items].reverse().find((item): item is ChatAssistantTurn => item.role === 'assistant')
+    if (!assistantTurn) return
+    for (const error of errors) {
+      const text = error.trim()
+      if (!text) continue
+      if (assistantTurn.messages.some(block => block.type === 'error' && block.content === text)) continue
+      assistantTurn.messages.push({
+        id: nextAssistantMessageId(assistantTurn),
+        type: 'error',
+        content: text,
+      })
+    }
+  }
+
+  function normalizeTurns(items: UITurn[], targetSessionId?: string): ChatMessage[] {
     const normalized = items.map(normalizeTurn)
     reconcileBackgroundTasksInMessages(normalized)
-    messages.splice(0, messages.length, ...normalized)
-    updateSinceFromMessages(normalized)
+    appendEphemeralErrors(normalized, targetSessionId)
+    return normalized
+  }
+
+  function setMessages(items: ChatMessage[]) {
+    messages.splice(0, messages.length, ...items)
+    updateSinceFromMessages(items)
+  }
+
+  function replaceMessages(items: UITurn[], targetSessionId?: string) {
+    setMessages(normalizeTurns(items, targetSessionId))
+  }
+
+  function sortChatMessages(items: ChatMessage[]): ChatMessage[] {
+    return [...items].sort((a, b) => {
+      const at = Date.parse(a.timestamp)
+      const bt = Date.parse(b.timestamp)
+      if (!Number.isNaN(at) && !Number.isNaN(bt) && at !== bt) return at - bt
+      return a.id.localeCompare(b.id)
+    })
+  }
+
+  function mergeMessages(items: UITurn[], targetSessionId?: string) {
+    const merged = new Map<string, ChatMessage>()
+    for (const item of messages) {
+      merged.set(item.id, item)
+    }
+    for (const item of normalizeTurns(items, targetSessionId)) {
+      merged.set(item.id, item)
+    }
+    setMessages(sortChatMessages([...merged.values()]))
+  }
+
+  function sessionMessageKey(botId?: string | null, sid?: string | null): string {
+    const bid = (botId ?? '').trim()
+    const session = (sid ?? '').trim()
+    return bid && session ? `${bid}:${session}` : ''
+  }
+
+  function cacheCurrentMessages() {
+    const key = sessionMessageKey(currentBotId.value, sessionId.value)
+    if (!key) return
+    sessionMessageStates.set(key, {
+      items: [...messages],
+      hasMoreOlder: hasMoreOlder.value,
+    })
+  }
+
+  function restoreCachedMessages(botId: string, sid: string): boolean {
+    const key = sessionMessageKey(botId, sid)
+    const cached = key ? sessionMessageStates.get(key) : undefined
+    if (!cached) return false
+    messages.splice(0, messages.length, ...cached.items)
+    hasMoreOlder.value = cached.hasMoreOlder
+    updateSinceFromMessages(cached.items)
+    return true
+  }
+
+  function cacheFetchedMessages(botId: string, sid: string, items: ChatMessage[], moreOlder: boolean) {
+    const key = sessionMessageKey(botId, sid)
+    if (!key) return
+    sessionMessageStates.set(key, {
+      items: [...items],
+      hasMoreOlder: moreOlder,
+    })
+    for (const item of items) {
+      updateSince(item.timestamp)
+    }
+  }
+
+  function clearCachedMessages(botId?: string | null, sid?: string | null) {
+    const key = sessionMessageKey(botId, sid)
+    if (key) sessionMessageStates.delete(key)
   }
 
   function isLocalOnlyAssistantTurn(message: ChatMessage): message is ChatAssistantTurn {
@@ -480,6 +644,8 @@ export const useChatStore = defineStore('chat', () => {
     return new Promise<void>((resolve, reject) => {
       pendingAssistantStream = {
         assistantTurn,
+        botId: currentBotId.value ?? '',
+        sessionId: streamingSessionId.value ?? sessionId.value ?? '',
         done: false,
         resolve,
         reject,
@@ -520,6 +686,10 @@ export const useChatStore = defineStore('chat', () => {
     session.assistantTurn.streaming = false
     session.done = true
     pendingAssistantStream = null
+    if (session.streamError) {
+      session.reject(session.streamError)
+      return
+    }
     session.resolve()
   }
 
@@ -552,11 +722,25 @@ export const useChatStore = defineStore('chat', () => {
     return turn.messages.reduce((maxId, message) => Math.max(maxId, message.id), -1) + 1
   }
 
+  function hasVisibleAssistantBlocks(turn: ChatAssistantTurn): boolean {
+    return turn.messages.some(block => block.type !== 'error')
+  }
+
+  function rememberAssistantError(errorMessage: string) {
+    const sid = (streamingSessionId.value ?? sessionId.value ?? '').trim()
+    const text = errorMessage.trim()
+    if (!sid || !text) return
+    const current = ephemeralAssistantErrors.get(sid) ?? []
+    if (current.includes(text)) return
+    ephemeralAssistantErrors.set(sid, [...current, text].slice(-5))
+  }
+
   function appendAssistantError(session: PendingAssistantStream, errorMessage: string) {
     const text = errorMessage.trim()
     if (!text) return
 
     session.assistantTurn.localOnly = true
+    rememberAssistantError(text)
 
     for (let index = session.assistantTurn.messages.length - 1; index >= 0; index -= 1) {
       const current = session.assistantTurn.messages[index]
@@ -571,8 +755,8 @@ export const useChatStore = defineStore('chat', () => {
 
     session.assistantTurn.messages.push({
       id: nextAssistantMessageId(session.assistantTurn),
-      type: 'text',
-      content: `**Error:** ${text}`,
+      type: 'error',
+      content: text,
     })
   }
 
@@ -584,7 +768,7 @@ export const useChatStore = defineStore('chat', () => {
     if (idx >= 0) messages.splice(idx, 1)
   }
 
-  function handleWSStreamEvent(event: UIStreamEvent) {
+  function handleWSStreamEvent(event: UIStreamEvent, targetSessionId?: string) {
     switch (event.type) {
       case 'start':
         if (suppressNextStartPlaceholder) {
@@ -597,20 +781,33 @@ export const useChatStore = defineStore('chat', () => {
         upsertAssistantUIMessage(ensureDiscussStream().assistantTurn, event.data)
         break
       case 'end':
+        const endedBotId = pendingAssistantStream?.botId
+        const endedSessionId = targetSessionId || pendingAssistantStream?.sessionId
         pruneEmptyAssistantTurnIfPending()
         resolvePendingAssistantStream()
         streamingSessionId.value = null
         loading.value = false
         abortFn = null
-        void refreshCurrentSession()
+        void refreshCurrentSession(endedBotId, endedSessionId)
         break
       case 'error': {
         const session = ensureDiscussStream()
-        appendAssistantError(session, event.message || 'stream error')
-        rejectPendingAssistantStream(new Error(event.message || 'stream error'))
-        streamingSessionId.value = null
+        const message = event.message || 'stream error'
+        const stage: SendMessageStage = hasVisibleAssistantBlocks(session.assistantTurn) ? 'stream' : 'startup'
+        if (stage === 'stream') {
+          appendAssistantError(session, message)
+          session.assistantTurn.streaming = false
+          session.streamError = new StreamFailureError(message, stage)
+        } else {
+          const idx = messages.indexOf(session.assistantTurn)
+          if (idx >= 0) messages.splice(idx, 1)
+          rejectPendingAssistantStream(new StreamFailureError(message, stage))
+        }
         loading.value = false
-        abortFn = null
+        if (stage === 'startup') {
+          streamingSessionId.value = null
+          abortFn = null
+        }
         break
       }
     }
@@ -647,16 +844,27 @@ export const useChatStore = defineStore('chat', () => {
     const bid = (targetBotId ?? currentBotId.value ?? '').trim()
     const sid = (targetSessionId ?? sessionId.value ?? '').trim()
     if (!bid || !sid) return
+    const key = sessionMessageKey(bid, sid)
 
     if (refreshPromise) {
-      await refreshPromise
-      return
+      if (refreshPromise.key === key) {
+        await refreshPromise.promise
+        return
+      }
+      await refreshPromise.promise
     }
 
-    refreshPromise = (async () => {
+    const promise = (async () => {
       const turns = await fetchMessagesUI(bid, sid, { limit: PAGE_SIZE })
-      if (currentBotId.value !== bid || sessionId.value !== sid) return
-      replaceMessagesPreservingLocalOnly(turns)
+      const normalized = normalizeTurns(turns, sid)
+      const moreOlder = turns.length > 0
+      if (currentBotId.value === bid && sessionId.value === sid) {
+        replaceMessagesPreservingLocalOnly(turns)
+        hasMoreOlder.value = moreOlder
+        cacheCurrentMessages()
+      } else {
+        cacheFetchedMessages(bid, sid, normalized, moreOlder)
+      }
       touchSession(sid)
       const streamStillActive = streamingSessionId.value === sid && pendingAssistantStream && !pendingAssistantStream.done
       if (!streamStillActive && pendingAssistantStream) {
@@ -667,10 +875,13 @@ export const useChatStore = defineStore('chat', () => {
         streamingSessionId.value = null
       }
     })().finally(() => {
-      refreshPromise = null
+      if (refreshPromise?.promise === promise) {
+        refreshPromise = null
+      }
     })
+    refreshPromise = { key, promise }
 
-    await refreshPromise
+    await promise
   }
 
   function scheduleRefreshCurrentSession(expectedSessionId?: string, delay = 100) {
@@ -688,10 +899,10 @@ export const useChatStore = defineStore('chat', () => {
     }, delay)
   }
 
-  function findBackgroundToolBlock(taskId: string): ToolCallBlock | null {
+  function findBackgroundToolBlockIn(items: ChatMessage[], taskId: string): ToolCallBlock | null {
     const id = taskId.trim()
     if (!id) return null
-    for (const item of messages) {
+    for (const item of items) {
       if (item.role !== 'assistant') continue
       for (const block of item.messages) {
         if (block.type !== 'tool') continue
@@ -701,20 +912,36 @@ export const useChatStore = defineStore('chat', () => {
     return null
   }
 
+  function findBackgroundToolBlock(taskId: string): ToolCallBlock | null {
+    return findBackgroundToolBlockIn(messages, taskId)
+  }
+
+  function applyBackgroundTaskToCachedMessages(botId: string, task: BackgroundTask) {
+    const key = sessionMessageKey(botId, task.sessionId)
+    const cached = key ? sessionMessageStates.get(key) : undefined
+    if (!cached) return
+    const block = findBackgroundToolBlockIn(cached.items, task.taskId)
+    if (block) mergeBackgroundTaskIntoToolBlock(block, task)
+  }
+
   function queuePendingBackgroundEvent(task: BackgroundTask) {
     const current = pendingBackgroundEvents.get(task.taskId) ?? []
     current.push(task)
     pendingBackgroundEvents.set(task.taskId, current.slice(-40))
   }
 
-  function applyBackgroundTaskEvent(event: MessageStreamEvent) {
+  function applyBackgroundTaskEvent(targetBotId: string, event: MessageStreamEvent) {
     const incoming = normalizeBackgroundTask(event.task ?? (event as UIBackgroundTask), event.event)
     if (!incoming) return
 
     const sid = (sessionId.value ?? '').trim()
-    if (incoming.sessionId && sid && incoming.sessionId !== sid) return
 
     const task = rememberBackgroundTask(incoming)
+
+    if (incoming.sessionId && sid && incoming.sessionId !== sid) {
+      applyBackgroundTaskToCachedMessages(targetBotId, task)
+      return
+    }
 
     const block = findBackgroundToolBlock(task.taskId)
     if (block) {
@@ -737,7 +964,10 @@ export const useChatStore = defineStore('chat', () => {
 
     const sid = (event.session_id ?? '').trim()
     const activeSid = (sessionId.value ?? '').trim()
-    if (sid && activeSid && sid !== activeSid) return
+    if (sid && activeSid && sid !== activeSid) {
+      const isKnownBackgroundStream = streamingSessionId.value === sid && pendingAssistantStream && !pendingAssistantStream.done
+      if (!isKnownBackgroundStream) return
+    }
 
     if (stream.type === 'start' || stream.type === 'message') {
       if (sid) streamingSessionId.value = sid
@@ -745,7 +975,7 @@ export const useChatStore = defineStore('chat', () => {
       suppressNextStartPlaceholder = false
     }
 
-    handleWSStreamEvent(stream)
+    handleWSStreamEvent(stream, sid || undefined)
 
     if (stream.type === 'end' || stream.type === 'error') {
       if (sid) touchSession(sid)
@@ -758,7 +988,7 @@ export const useChatStore = defineStore('chat', () => {
     if (eBotId && eBotId !== targetBotId) return
 
     if (eventType === 'background_task') {
-      applyBackgroundTaskEvent(event)
+      applyBackgroundTaskEvent(targetBotId, event)
       return
     }
 
@@ -842,6 +1072,7 @@ export const useChatStore = defineStore('chat', () => {
     const turns = await fetchMessagesUI(botId, sid, { limit: PAGE_SIZE })
     replaceMessages(turns)
     hasMoreOlder.value = turns.length > 0
+    cacheCurrentMessages()
   }
 
   async function loadOlderMessages(): Promise<number> {
@@ -872,7 +1103,7 @@ export const useChatStore = defineStore('chat', () => {
         }
 
         const existingIds = new Set(messages.map(message => message.id))
-        const normalized = turns.map(normalizeTurn)
+        const normalized = normalizeTurns(turns)
         const older = normalized.filter(turn => !existingIds.has(turn.id))
 
         if (older.length > 0) {
@@ -913,6 +1144,38 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function findMessageIdByExternalId(externalMessageId: string): string | null {
+    const target = externalMessageId.trim()
+    if (!target) return null
+    const found = messages.find(message =>
+      (message.role === 'user' || message.role === 'assistant')
+      && message.externalMessageId === target,
+    )
+    return found?.id ?? null
+  }
+
+  async function locateMessageByExternalId(externalMessageId: string): Promise<string | null> {
+    const localID = findMessageIdByExternalId(externalMessageId)
+    if (localID) return localID
+
+    const bid = currentBotId.value ?? ''
+    const sid = sessionId.value ?? ''
+    const target = externalMessageId.trim()
+    if (!bid || !sid || !target) return null
+
+    try {
+      const result = await locateMessageUI(bid, sid, target, PAGE_SIZE, PAGE_SIZE)
+      if (!result.items.length) return null
+      mergeMessages(result.items, sid)
+      hasMoreOlder.value = true
+      cacheCurrentMessages()
+      return result.target_id?.trim() || findMessageIdByExternalId(target)
+    } catch (error) {
+      console.error('Failed to locate message:', error)
+      return null
+    }
+  }
+
   function touchSession(targetSessionId: string) {
     const index = sessions.value.findIndex(session => session.id === targetSessionId)
     if (index < 0) return
@@ -930,6 +1193,7 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value = [created, ...sessions.value.filter(session => session.id !== created.id)]
     sessionId.value = created.id
     replaceMessages([])
+    hasMoreOlder.value = false
   }
 
   async function initialize() {
@@ -945,6 +1209,7 @@ export const useChatStore = defineStore('chat', () => {
         sessions.value = []
         sessionId.value = null
         replaceMessages([])
+        hasMoreOlder.value = false
         return
       }
 
@@ -954,12 +1219,15 @@ export const useChatStore = defineStore('chat', () => {
         messageEventsSince = ''
         sessionId.value = null
         replaceMessages([])
+        hasMoreOlder.value = false
       } else {
         const activeSessionId = sessionId.value && visible.some(session => session.id === sessionId.value)
           ? sessionId.value
           : (visible.find((s) => s.type === 'chat' || s.type === 'discuss')?.id ?? visible[0]!.id)
         sessionId.value = activeSessionId
-        await loadMessages(bid, activeSessionId)
+        if (!restoreCachedMessages(bid, activeSessionId)) {
+          await loadMessages(bid, activeSessionId)
+        }
       }
 
       startWebSocket(bid)
@@ -981,11 +1249,13 @@ export const useChatStore = defineStore('chat', () => {
   async function selectSession(targetSessionId: string) {
     const sid = targetSessionId.trim()
     if (!sid || sid === sessionId.value) return
+    cacheCurrentMessages()
     sessionId.value = sid
     loadingChats.value = true
     try {
       const bid = currentBotId.value ?? ''
       if (!bid) throw new Error('Bot not selected')
+      if (restoreCachedMessages(bid, sid)) return
       await loadMessages(bid, sid)
     } finally {
       loadingChats.value = false
@@ -993,10 +1263,12 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function createNewSession() {
+    cacheCurrentMessages()
     const bid = await ensureBot()
     if (!bid) return
     sessionId.value = null
     replaceMessages([])
+    hasMoreOlder.value = false
   }
 
   async function removeSession(targetSessionId: string) {
@@ -1007,12 +1279,14 @@ export const useChatStore = defineStore('chat', () => {
       const bid = currentBotId.value ?? ''
       if (!bid) throw new Error('Bot not selected')
       await requestDeleteSession(bid, delId)
+      clearCachedMessages(bid, delId)
       const remaining = sessions.value.filter(session => session.id !== delId)
       sessions.value = remaining
       if (sessionId.value !== delId) return
       if (!remaining.length) {
         sessionId.value = null
         replaceMessages([])
+        hasMoreOlder.value = false
         return
       }
       sessionId.value = remaining[0]!.id
@@ -1022,12 +1296,13 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(text: string, attachments?: ChatAttachment[]) {
+  async function sendMessage(text: string, attachments?: ChatAttachment[]): Promise<SendMessageResult> {
     const trimmed = text.trim()
-    if ((!trimmed && !attachments?.length) || streaming.value || !currentBotId.value) return
+    if ((!trimmed && !attachments?.length) || streaming.value || !currentBotId.value) return { ok: false, stage: 'startup' }
 
     loading.value = true
     let assistantTurn: ChatAssistantTurn | null = null
+    let userTurn: ChatUserTurn | null = null
 
     try {
       await ensureActiveSession()
@@ -1036,7 +1311,8 @@ export const useChatStore = defineStore('chat', () => {
       const sid = sessionId.value!
       streamingSessionId.value = sid
 
-      messages.push(createOptimisticUserTurn(trimmed, attachments))
+      userTurn = createOptimisticUserTurn(trimmed, attachments)
+      messages.push(userTurn)
       messages.push(createOptimisticAssistantTurn())
       assistantTurn = messages[messages.length - 1] as ChatAssistantTurn
 
@@ -1046,6 +1322,9 @@ export const useChatStore = defineStore('chat', () => {
 
       const ws = ensureWebSocket(bid)
       if (ws) {
+        if (!ws.connected) {
+          throw new StreamFailureError('WebSocket is not connected', 'startup')
+        }
         const completion = createCompletionForAssistantTurn(assistantTurn)
         abortFn = () => {
           const abortError = new Error('aborted')
@@ -1074,10 +1353,15 @@ export const useChatStore = defineStore('chat', () => {
       loading.value = false
       abortFn = null
       touchSession(sid)
+      return { ok: true }
     } catch (error) {
       const isAbort = error instanceof Error && error.name === 'AbortError'
       const reason = error instanceof Error ? error.message : 'Unknown error'
-      if (!isAbort && assistantTurn) {
+      const stage: SendMessageStage = error instanceof StreamFailureError
+        ? error.stage
+        : (assistantTurn && hasVisibleAssistantBlocks(assistantTurn) ? 'stream' : 'startup')
+
+      if (!isAbort && stage === 'startup' && assistantTurn) {
         assistantTurn.localOnly = true
         assistantTurn.messages = [{
           id: 0,
@@ -1085,14 +1369,28 @@ export const useChatStore = defineStore('chat', () => {
           content: `Failed to send message: ${reason}`,
         }]
         assistantTurn.streaming = false
+      } else if (!isAbort && stage === 'startup') {
+        if (assistantTurn) {
+          const idx = messages.indexOf(assistantTurn)
+          if (idx >= 0) messages.splice(idx, 1)
+        }
+        if (userTurn) {
+          const idx = messages.indexOf(userTurn)
+          if (idx >= 0) messages.splice(idx, 1)
+        }
+      } else if (!isAbort && assistantTurn && stage === 'stream') {
+        if (!assistantTurn.messages.some(block => block.type === 'error')) {
+          appendAssistantError({ assistantTurn, done: false, resolve: () => {}, reject: () => {} }, reason)
+        }
+        assistantTurn.streaming = false
       } else if (!isAbort) {
         messages.push({
           id: nextId(),
           role: 'assistant',
           messages: [{
             id: 0,
-            type: 'text',
-            content: `Failed to send message: ${reason}`,
+            type: 'error',
+            content: reason,
           }],
           timestamp: new Date().toISOString(),
           streaming: false,
@@ -1103,6 +1401,17 @@ export const useChatStore = defineStore('chat', () => {
       streamingSessionId.value = null
       loading.value = false
       abortFn = null
+      if (isAbort) return { ok: false, stage: 'stream', error: reason }
+      if (stage === 'startup') {
+        return {
+          ok: false,
+          stage,
+          error: reason,
+          restoreInput: text,
+          restoreAttachments: attachments,
+        }
+      }
+      return { ok: false, stage, error: reason }
     }
   }
 
@@ -1149,6 +1458,8 @@ export const useChatStore = defineStore('chat', () => {
   function clearMessages() {
     abort()
     replaceMessages([])
+    hasMoreOlder.value = false
+    cacheCurrentMessages()
   }
 
   const chats = sessions
@@ -1187,6 +1498,8 @@ export const useChatStore = defineStore('chat', () => {
     respondToolApproval,
     clearMessages,
     loadOlderMessages,
+    findMessageIdByExternalId,
+    locateMessageByExternalId,
     abort,
   }
 })

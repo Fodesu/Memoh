@@ -166,14 +166,6 @@ type SearchProviderStore interface {
 	Delete(ctx context.Context, id ID) error
 }
 
-type BrowserContextStore interface {
-	Create(ctx context.Context, input Input) (Record, error)
-	GetByID(ctx context.Context, id ID) (Record, error)
-	List(ctx context.Context) ([]Record, error)
-	Update(ctx context.Context, id ID, input Patch) (Record, error)
-	Delete(ctx context.Context, id ID) error
-}
-
 type MessageRepository interface {
 	Create(ctx context.Context, input Input) (Record, error)
 	CreateAsset(ctx context.Context, input Input) (Record, error)
@@ -244,9 +236,6 @@ type ChannelIdentityRepository interface {
 	GetByID(ctx context.Context, id ID) (Record, error)
 	UpsertByChannelSubject(ctx context.Context, input Input) (Record, error)
 	Search(ctx context.Context, filter Filter) ([]Record, error)
-	ListByUserID(ctx context.Context, userID ID) ([]Record, error)
-	SetLinkedUser(ctx context.Context, identityID ID, userID ID) (Record, error)
-	GetLinkedUserID(ctx context.Context, identityID ID) (ID, error)
 	GetUserByID(ctx context.Context, userID ID) (Record, error)
 }
 
@@ -270,19 +259,11 @@ type BotACLStore interface {
 	CreateRule(ctx context.Context, input Input) (Record, error)
 	UpdateRule(ctx context.Context, id ID, input Patch) (Record, error)
 	DeleteRule(ctx context.Context, id ID) error
-	UpdateRulePriority(ctx context.Context, id ID, priority int32) error
-	ReorderRules(ctx context.Context, botID ID, orderedIDs []ID) error
 }
 
 type ObservedConversationStore interface {
 	ListByChannelIdentity(ctx context.Context, identityID ID) ([]Record, error)
 	ListByChannelType(ctx context.Context, channelType string) ([]Record, error)
-}
-
-type BindCodeStore interface {
-	Create(ctx context.Context, input Input) (Record, error)
-	Get(ctx context.Context, token string) (Record, error)
-	Consume(ctx context.Context, token string, sourceIdentityID ID) error
 }
 
 type ScheduleStore interface {

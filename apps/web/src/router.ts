@@ -177,19 +177,19 @@ const routes = [
         },
       },
       {
-        name: 'browser',
-        path: 'browser',
-        component: () => import('@/pages/browser/index.vue'),
-        meta: {
-          breadcrumb: i18nRef('sidebar.browser'),
-        },
-      },
-      {
         name: 'usage',
         path: 'usage',
         component: () => import('@/pages/usage/index.vue'),
         meta: {
           breadcrumb: i18nRef('sidebar.usage'),
+        },
+      },
+      {
+        name: 'appearance',
+        path: 'appearance',
+        component: () => import('@/pages/appearance/index.vue'),
+        meta: {
+          breadcrumb: i18nRef('sidebar.appearance'),
         },
       },
       {

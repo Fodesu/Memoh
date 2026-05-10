@@ -263,5 +263,8 @@ func (c *Client) PollQRStatus(ctx context.Context, apiBaseURL, qrcode string) (*
 	if err := json.Unmarshal(raw, &status); err != nil {
 		return nil, fmt.Errorf("weixin qrstatus decode: %w", err)
 	}
+	if status.Status == "scaned" {
+		status.Status = "scanned"
+	}
 	return &status, nil
 }

@@ -35,7 +35,6 @@ func (h *ACLHandler) Register(e *echo.Echo) {
 	group := e.Group("/bots/:bot_id/acl")
 	group.GET("/rules", h.ListRules)
 	group.POST("/rules", h.CreateRule)
-	group.PUT("/rules/reorder", h.ReorderRules)
 	group.PUT("/rules/:rule_id", h.UpdateRule)
 	group.DELETE("/rules/:rule_id", h.DeleteRule)
 	group.GET("/default-effect", h.GetDefaultEffect)
@@ -47,7 +46,7 @@ func (h *ACLHandler) Register(e *echo.Echo) {
 
 // ListRules godoc
 // @Summary List bot ACL rules
-// @Description List all ACL rules for a bot ordered by priority
+// @Description List all ACL rules for a bot
 // @Tags bots
 // @Param bot_id path string true "Bot ID"
 // @Success 200 {object} acl.ListRulesResponse
@@ -69,7 +68,7 @@ func (h *ACLHandler) ListRules(c echo.Context) error {
 
 // CreateRule godoc
 // @Summary Create ACL rule
-// @Description Create a new priority-ordered ACL rule for chat.trigger
+// @Description Create a new ACL rule for chat.trigger
 // @Tags bots
 // @Param bot_id path string true "Bot ID"
 // @Param payload body acl.CreateRuleRequest true "Rule payload"
@@ -150,31 +149,6 @@ func (h *ACLHandler) DeleteRule(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// ReorderRules godoc
-// @Summary Reorder ACL rules
-// @Description Batch-update priorities for multiple ACL rules
-// @Tags bots
-// @Param bot_id path string true "Bot ID"
-// @Param payload body acl.ReorderRequest true "Reorder payload"
-// @Success 204 "No Content"
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/acl/rules/reorder [put].
-func (h *ACLHandler) ReorderRules(c echo.Context) error {
-	if _, _, err := h.requireManageAccess(c); err != nil {
-		return err
-	}
-	var req acl.ReorderRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	if err := h.service.ReorderRules(c.Request().Context(), req.Items); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-	}
-	return c.NoContent(http.StatusNoContent)
-}
-
 // GetDefaultEffect godoc
 // @Summary Get bot ACL default effect
 // @Description Get the fallback effect when no rule matches
@@ -249,15 +223,11 @@ func (h *ACLHandler) SearchChannelIdentities(c echo.Context) error {
 	result := make([]acl.ChannelIdentityCandidate, 0, len(items))
 	for _, item := range items {
 		result = append(result, acl.ChannelIdentityCandidate{
-			ID:                item.ID,
-			Channel:           item.Channel,
-			ChannelSubjectID:  item.ChannelSubjectID,
-			DisplayName:       item.DisplayName,
-			AvatarURL:         item.AvatarURL,
-			LinkedUserID:      item.UserID,
-			LinkedUsername:    item.LinkedUsername,
-			LinkedDisplayName: item.LinkedDisplayName,
-			LinkedAvatarURL:   item.LinkedAvatarURL,
+			ID:               item.ID,
+			Channel:          item.Channel,
+			ChannelSubjectID: item.ChannelSubjectID,
+			DisplayName:      item.DisplayName,
+			AvatarURL:        item.AvatarURL,
 		})
 	}
 	return c.JSON(http.StatusOK, acl.ChannelIdentityCandidateListResponse{Items: result})

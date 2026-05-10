@@ -31,11 +31,9 @@ type Queries interface {
 	CountSessionEvents(ctx context.Context, sessionID pgtype.UUID) (int64, error)
 	CountTokenUsageRecords(ctx context.Context, arg dbsqlc.CountTokenUsageRecordsParams) (int64, error)
 	CreateAccount(ctx context.Context, arg dbsqlc.CreateAccountParams) (dbsqlc.User, error)
-	CreateBindCode(ctx context.Context, arg dbsqlc.CreateBindCodeParams) (dbsqlc.ChannelIdentityBindCode, error)
 	CreateBot(ctx context.Context, arg dbsqlc.CreateBotParams) (dbsqlc.CreateBotRow, error)
-	CreateBotACLRule(ctx context.Context, arg dbsqlc.CreateBotACLRuleParams) (dbsqlc.CreateBotACLRuleRow, error)
+	CreateBotACLRule(ctx context.Context, arg dbsqlc.CreateBotACLRuleParams) (dbsqlc.BotAclRule, error)
 	CreateBotEmailBinding(ctx context.Context, arg dbsqlc.CreateBotEmailBindingParams) (dbsqlc.BotEmailBinding, error)
-	CreateBrowserContext(ctx context.Context, arg dbsqlc.CreateBrowserContextParams) (dbsqlc.BrowserContext, error)
 	CreateChannelIdentity(ctx context.Context, arg dbsqlc.CreateChannelIdentityParams) (dbsqlc.ChannelIdentity, error)
 	CreateChat(ctx context.Context, arg dbsqlc.CreateChatParams) (dbsqlc.CreateChatRow, error)
 	CreateChatRoute(ctx context.Context, arg dbsqlc.CreateChatRouteParams) (dbsqlc.CreateChatRouteRow, error)
@@ -62,7 +60,6 @@ type Queries interface {
 	DeleteBotByID(ctx context.Context, id pgtype.UUID) error
 	DeleteBotChannelConfig(ctx context.Context, arg dbsqlc.DeleteBotChannelConfigParams) error
 	DeleteBotEmailBinding(ctx context.Context, id pgtype.UUID) error
-	DeleteBrowserContext(ctx context.Context, id pgtype.UUID) error
 	DeleteChat(ctx context.Context, chatID pgtype.UUID) error
 	DeleteChatRoute(ctx context.Context, id pgtype.UUID) error
 	DeleteCompactionLogsByBot(ctx context.Context, botID pgtype.UUID) error
@@ -93,8 +90,6 @@ type Queries interface {
 	GetAccountByIdentity(ctx context.Context, identity pgtype.Text) (dbsqlc.User, error)
 	GetAccountByUserID(ctx context.Context, userID pgtype.UUID) (dbsqlc.User, error)
 	GetActiveSessionForRoute(ctx context.Context, routeID pgtype.UUID) (dbsqlc.BotSession, error)
-	GetBindCode(ctx context.Context, token string) (dbsqlc.ChannelIdentityBindCode, error)
-	GetBindCodeForUpdate(ctx context.Context, token string) (dbsqlc.ChannelIdentityBindCode, error)
 	GetBotACLDefaultEffect(ctx context.Context, id pgtype.UUID) (string, error)
 	GetBotByID(ctx context.Context, id pgtype.UUID) (dbsqlc.GetBotByIDRow, error)
 	GetBotChannelConfig(ctx context.Context, arg dbsqlc.GetBotChannelConfigParams) (dbsqlc.BotChannelConfig, error)
@@ -103,7 +98,6 @@ type Queries interface {
 	GetBotEmailBindingByID(ctx context.Context, id pgtype.UUID) (dbsqlc.BotEmailBinding, error)
 	GetBotOverlayConfig(ctx context.Context, id pgtype.UUID) (dbsqlc.GetBotOverlayConfigRow, error)
 	GetBotStorageBinding(ctx context.Context, botID pgtype.UUID) (dbsqlc.BotStorageBinding, error)
-	GetBrowserContextByID(ctx context.Context, id pgtype.UUID) (dbsqlc.BrowserContext, error)
 	GetChannelIdentityByChannelSubject(ctx context.Context, arg dbsqlc.GetChannelIdentityByChannelSubjectParams) (dbsqlc.ChannelIdentity, error)
 	GetChannelIdentityByID(ctx context.Context, id pgtype.UUID) (dbsqlc.ChannelIdentity, error)
 	GetChannelIdentityByIDForUpdate(ctx context.Context, id pgtype.UUID) (dbsqlc.ChannelIdentity, error)
@@ -169,8 +163,6 @@ type Queries interface {
 	ListBotEmailBindings(ctx context.Context, botID pgtype.UUID) ([]dbsqlc.BotEmailBinding, error)
 	ListBotEmailBindingsByProvider(ctx context.Context, emailProviderID pgtype.UUID) ([]dbsqlc.BotEmailBinding, error)
 	ListBotsByOwner(ctx context.Context, ownerUserID pgtype.UUID) ([]dbsqlc.ListBotsByOwnerRow, error)
-	ListBrowserContexts(ctx context.Context) ([]dbsqlc.BrowserContext, error)
-	ListChannelIdentitiesByUserID(ctx context.Context, userID pgtype.UUID) ([]dbsqlc.ChannelIdentity, error)
 	ListChatParticipants(ctx context.Context, chatID pgtype.UUID) ([]dbsqlc.ListChatParticipantsRow, error)
 	ListChatRoutes(ctx context.Context, chatID pgtype.UUID) ([]dbsqlc.ListChatRoutesRow, error)
 	ListChatsByBotAndUser(ctx context.Context, arg dbsqlc.ListChatsByBotAndUserParams) ([]dbsqlc.ListChatsByBotAndUserRow, error)
@@ -190,6 +182,8 @@ type Queries interface {
 	ListMessageAssets(ctx context.Context, messageID pgtype.UUID) ([]dbsqlc.ListMessageAssetsRow, error)
 	ListMessageAssetsBatch(ctx context.Context, messageIds []pgtype.UUID) ([]dbsqlc.ListMessageAssetsBatchRow, error)
 	ListMessages(ctx context.Context, botID pgtype.UUID) ([]dbsqlc.ListMessagesRow, error)
+	GetMessageByExternalIDBySession(ctx context.Context, arg dbsqlc.GetMessageByExternalIDBySessionParams) (dbsqlc.GetMessageByExternalIDBySessionRow, error)
+	ListMessagesAfterBySession(ctx context.Context, arg dbsqlc.ListMessagesAfterBySessionParams) ([]dbsqlc.ListMessagesAfterBySessionRow, error)
 	ListMessagesBefore(ctx context.Context, arg dbsqlc.ListMessagesBeforeParams) ([]dbsqlc.ListMessagesBeforeRow, error)
 	ListMessagesBeforeBySession(ctx context.Context, arg dbsqlc.ListMessagesBeforeBySessionParams) ([]dbsqlc.ListMessagesBeforeBySessionRow, error)
 	ListMessagesBySession(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListMessagesBySessionRow, error)
@@ -235,17 +229,15 @@ type Queries interface {
 	ListUserChannelBindingsByPlatform(ctx context.Context, channelType string) ([]dbsqlc.UserChannelBinding, error)
 	ListVersionsByContainerID(ctx context.Context, containerID string) ([]dbsqlc.ListVersionsByContainerIDRow, error)
 	ListVisibleChatsByBotAndUser(ctx context.Context, arg dbsqlc.ListVisibleChatsByBotAndUserParams) ([]dbsqlc.ListVisibleChatsByBotAndUserRow, error)
-	MarkBindCodeUsed(ctx context.Context, arg dbsqlc.MarkBindCodeUsedParams) (dbsqlc.ChannelIdentityBindCode, error)
 	MarkMessagesCompacted(ctx context.Context, arg dbsqlc.MarkMessagesCompactedParams) error
 	NextVersion(ctx context.Context, containerID string) (int32, error)
 	RejectToolApprovalRequest(ctx context.Context, arg dbsqlc.RejectToolApprovalRequestParams) (dbsqlc.ToolApprovalRequest, error)
 	RemoveChatParticipant(ctx context.Context, arg dbsqlc.RemoveChatParticipantParams) error
 	SaveMatrixSyncSinceToken(ctx context.Context, arg dbsqlc.SaveMatrixSyncSinceTokenParams) (int64, error)
 	SearchAccounts(ctx context.Context, arg dbsqlc.SearchAccountsParams) ([]dbsqlc.User, error)
-	SearchChannelIdentities(ctx context.Context, arg dbsqlc.SearchChannelIdentitiesParams) ([]dbsqlc.SearchChannelIdentitiesRow, error)
+	SearchChannelIdentities(ctx context.Context, arg dbsqlc.SearchChannelIdentitiesParams) ([]dbsqlc.ChannelIdentity, error)
 	SearchMessages(ctx context.Context, arg dbsqlc.SearchMessagesParams) ([]dbsqlc.SearchMessagesRow, error)
 	SetBotACLDefaultEffect(ctx context.Context, arg dbsqlc.SetBotACLDefaultEffectParams) error
-	SetChannelIdentityLinkedUser(ctx context.Context, arg dbsqlc.SetChannelIdentityLinkedUserParams) (dbsqlc.ChannelIdentity, error)
 	SetRouteActiveSession(ctx context.Context, arg dbsqlc.SetRouteActiveSessionParams) error
 	SoftDeleteSession(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteSessionsByBot(ctx context.Context, botID pgtype.UUID) error
@@ -255,14 +247,12 @@ type Queries interface {
 	UpdateAccountLastLogin(ctx context.Context, id pgtype.UUID) (dbsqlc.User, error)
 	UpdateAccountPassword(ctx context.Context, arg dbsqlc.UpdateAccountPasswordParams) (dbsqlc.User, error)
 	UpdateAccountProfile(ctx context.Context, arg dbsqlc.UpdateAccountProfileParams) (dbsqlc.User, error)
-	UpdateBotACLRule(ctx context.Context, arg dbsqlc.UpdateBotACLRuleParams) (dbsqlc.UpdateBotACLRuleRow, error)
-	UpdateBotACLRulePriority(ctx context.Context, arg dbsqlc.UpdateBotACLRulePriorityParams) error
+	UpdateBotACLRule(ctx context.Context, arg dbsqlc.UpdateBotACLRuleParams) (dbsqlc.BotAclRule, error)
 	UpdateBotChannelConfigDisabled(ctx context.Context, arg dbsqlc.UpdateBotChannelConfigDisabledParams) (dbsqlc.BotChannelConfig, error)
 	UpdateBotEmailBinding(ctx context.Context, arg dbsqlc.UpdateBotEmailBindingParams) (dbsqlc.BotEmailBinding, error)
 	UpdateBotOwner(ctx context.Context, arg dbsqlc.UpdateBotOwnerParams) (dbsqlc.UpdateBotOwnerRow, error)
 	UpdateBotProfile(ctx context.Context, arg dbsqlc.UpdateBotProfileParams) (dbsqlc.UpdateBotProfileRow, error)
 	UpdateBotStatus(ctx context.Context, arg dbsqlc.UpdateBotStatusParams) error
-	UpdateBrowserContext(ctx context.Context, arg dbsqlc.UpdateBrowserContextParams) (dbsqlc.BrowserContext, error)
 	UpdateChatRouteMetadata(ctx context.Context, arg dbsqlc.UpdateChatRouteMetadataParams) error
 	UpdateChatRouteReplyTarget(ctx context.Context, arg dbsqlc.UpdateChatRouteReplyTargetParams) error
 	UpdateChatTitle(ctx context.Context, arg dbsqlc.UpdateChatTitleParams) (dbsqlc.UpdateChatTitleRow, error)
