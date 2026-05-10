@@ -102,7 +102,6 @@ services:
     environment:
       CONFIG_PATH: /workspace/devenv/app.dev.toml
       GOFLAGS: -buildvcs=false
-      MEMOH_ORCHESTRATION_BUILTIN_VERIFYD: "false"
       MEMOH_DISPLAY_WEBRTC_UDP_PORT_MIN: "${MEMOH_DEV_DISPLAY_WEBRTC_UDP_PORT_MIN:-30000}"
       MEMOH_DISPLAY_WEBRTC_UDP_PORT_MAX: "${MEMOH_DEV_DISPLAY_WEBRTC_UDP_PORT_MAX:-30100}"
     volumes:
@@ -134,6 +133,42 @@ services:
       migrate:
         condition: service_completed_successfully
       qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: devenv/Dockerfile.server
+    container_name: memoh-dev-orchestrator
+    healthcheck:
+      disable: true
+    working_dir: /workspace
+    entrypoint: []
+    command: ["go", "run", "./cmd/orchestrator"]
+    environment:
+      CONFIG_PATH: /workspace/devenv/app.dev.toml
+      GOFLAGS: -buildvcs=false
+    volumes:
+      - ..:/workspace
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+      - containerd_sock:/run/containerd
+      - containerd_data:/var/lib/containerd
+      - server_cni_state:/var/lib/cni
+      - memoh_data:/opt/memoh/data
+      - ../.toolkit:/opt/memoh/runtime/toolkit
+      - ../docker/toolkit/bin:/opt/memoh/runtime/toolkit/bin
+      - ../cmd/bridge/template:/opt/memoh/runtime/templates
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      server:
         condition: service_healthy
     restart: unless-stopped
 
@@ -219,6 +254,8 @@ services:
         condition: service_completed_successfully
       server:
         condition: service_healthy
+      orchestrator:
+        condition: service_started
       workerd:
         condition: service_started
       verifyd:

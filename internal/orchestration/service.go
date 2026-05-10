@@ -70,6 +70,22 @@ func (s *Service) SetReplanner(planner Replanner) {
 	s.replanner = planner
 }
 
+func (s *Service) OrchestratorAvailable(ctx context.Context) (bool, error) {
+	if s == nil || s.queries == nil {
+		return false, nil
+	}
+	workers, err := s.queries.ListActiveOrchestrationWorkers(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list orchestration workers: %w", err)
+	}
+	for _, worker := range workers {
+		if strings.TrimSpace(worker.ExecutorID) == DefaultOrchestratorExecutorID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // SetEventCommittedHook registers a callback fired immediately after the
 // orchestration kernel commits a transaction that produced one or more
 // run events. The hook should return quickly: callers like the outbox

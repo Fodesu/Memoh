@@ -63,7 +63,6 @@ services:
     privileged: true
     pid: host
     environment:
-      MEMOH_ORCHESTRATION_BUILTIN_VERIFYD: "false"
       MEMOH_DISPLAY_WEBRTC_UDP_PORT_MIN: "${MEMOH_DISPLAY_WEBRTC_UDP_PORT_MIN:-30000}"
       MEMOH_DISPLAY_WEBRTC_UDP_PORT_MAX: "${MEMOH_DISPLAY_WEBRTC_UDP_PORT_MAX:-30100}"
     volumes:
@@ -84,6 +83,34 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - memoh-network
+
+  orchestrator:
+    image: memohai/server:latest
+    container_name: memoh-orchestrator
+    entrypoint: ["/app/orchestrator"]
+    healthcheck:
+      disable: true
+    environment:
+      CONFIG_PATH: /app/config.toml
+    volumes:
+      - ${MEMOH_CONFIG:-./config.toml}:/app/config.toml:ro
+      - containerd_sock:/run/containerd
+      - containerd_data:/var/lib/containerd
+      - server_cni_state:/var/lib/cni
+      - memoh_data:/opt/memoh/data
+      - /etc/cdi:/etc/cdi:ro
+      - /var/run/cdi:/var/run/cdi:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      server:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - memoh-network
@@ -137,6 +164,7 @@ services:
       - "8082:8082"
     depends_on:
       - server
+      - orchestrator
       - workerd
       - verifyd
     restart: unless-stopped

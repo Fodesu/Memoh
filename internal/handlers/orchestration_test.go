@@ -36,6 +36,14 @@ type fakeOrchestrationService struct {
 	resolveCheckpoint     func(context.Context, orchestration.ControlIdentity, string, orchestration.CheckpointResolution) (*orchestration.ResolveCheckpointResult, error)
 	retryTask             func(context.Context, orchestration.ControlIdentity, string, orchestration.RetryTaskRequest) (*orchestration.RetryTaskResult, error)
 	rebuildBlackboard     func(context.Context, orchestration.ControlIdentity, string) (orchestration.RebuildBlackboardResult, error)
+	orchestratorAvailable func(context.Context) (bool, error)
+}
+
+func (f fakeOrchestrationService) OrchestratorAvailable(ctx context.Context) (bool, error) {
+	if f.orchestratorAvailable == nil {
+		return true, nil
+	}
+	return f.orchestratorAvailable(ctx)
 }
 
 func (f fakeOrchestrationService) StartRun(ctx context.Context, caller orchestration.ControlIdentity, req orchestration.StartRunRequest) (orchestration.RunHandle, error) {
