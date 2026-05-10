@@ -2468,7 +2468,7 @@ func newFakeOpenAICompletionsServer(t *testing.T) *fakeOpenAICompletionsServer {
 		case isReplannerPrompt && strings.Contains(prompt, fakeLLMFailureReplanGoal):
 			fake.replannerCalls.Add(1)
 			payload = `{"summary":"replace failed root from replanner","child_tasks":[{"alias":"fib-recovery","kind":"step","goal":"compute Fibonacci and return verified result","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{},"env_preconditions":{"required":false},"blackboard_scope":""}]}`
-		case strings.Contains(prompt, "Verify the following orchestration task result."):
+		case strings.Contains(prompt, `<orchestration-context kind="task_verification">`):
 			fake.verifierCalls.Add(1)
 			payload = `{"status":"completed","verdict":"accepted","summary":"verification accepted","failure_class":"","terminal_reason":"","request_replan":false}`
 		case strings.Contains(prompt, fakeLLMToolActionGoal):
@@ -2520,7 +2520,7 @@ func newFakeOpenAICompletionsServer(t *testing.T) *fakeOpenAICompletionsServer {
 			payload = `{"status":"failed","summary":"decomposition required before execution","failure_class":"needs_decomposition","terminal_reason":"task must be decomposed before execution","request_replan":true,"artifact_intents":[],"structured_output":{"failure_context":"task must be replaced by the replanner"}}`
 		case strings.Contains(prompt, "blackbox llm worker verifier path"):
 			fake.workerCalls.Add(1)
-			payload = `{"status":"completed","summary":"planned verification child task","failure_class":"","terminal_reason":"","request_replan":true,"artifact_intents":[],"child_tasks":[{"alias":"fib-verify","kind":"step","goal":"compute Fibonacci and return verified result","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{"require_structured_output":true},"blackboard_scope":""}],"structured_output":{}}`
+			payload = `{"status":"completed","summary":"planned verification child task","failure_class":"","terminal_reason":"","request_replan":true,"artifact_intents":[],"child_tasks":[{"alias":"fib-verify","kind":"step","goal":"compute Fibonacci and return verified result","inputs":{},"depends_on":[],"worker_profile":"llm.default","priority":0,"retry_policy":{},"verification_policy":{"require_structured_output":true},"env_preconditions":{"required":false},"blackboard_scope":""}],"structured_output":{}}`
 		}
 
 		if body.Stream {

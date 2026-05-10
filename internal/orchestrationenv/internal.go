@@ -63,8 +63,12 @@ func validateUpdateResource(req *UpdateResourceRequest) error {
 		return fmt.Errorf("%w: request is nil", ErrInvalidArgument)
 	}
 	req.ID = strings.TrimSpace(req.ID)
+	req.Name = strings.TrimSpace(req.Name)
 	if req.ID == "" {
 		return fmt.Errorf("%w: id is required", ErrInvalidArgument)
+	}
+	if req.Name == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidArgument)
 	}
 	if req.Capacity <= 0 {
 		req.Capacity = 1

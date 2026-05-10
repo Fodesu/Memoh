@@ -900,6 +900,50 @@ export type HandlersContainerGpuRequest = {
     devices?: Array<string>;
 };
 
+export type HandlersContainerImageCapabilities = {
+    dockerfile_build?: boolean;
+    reason?: string;
+};
+
+export type HandlersContainerImageCreateRequest = {
+    build_options?: {
+        [key: string]: unknown;
+    };
+    dockerfile?: string;
+    image_ref: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name: string;
+    source_type: string;
+};
+
+export type HandlersContainerImageListPage = {
+    items?: Array<HandlersContainerImageView>;
+};
+
+export type HandlersContainerImageView = {
+    build_options?: {
+        [key: string]: unknown;
+    };
+    builtin?: boolean;
+    created_at?: string;
+    digest?: string;
+    dockerfile?: string;
+    id?: string;
+    image_ref?: string;
+    last_build_error?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name?: string;
+    owner_subject?: string;
+    source_type?: string;
+    status?: string;
+    tenant_id?: string;
+    updated_at?: string;
+};
+
 export type HandlersContainerMemoryMetricsResponse = {
     limit_bytes?: number;
     usage_bytes?: number;
@@ -995,6 +1039,7 @@ export type HandlersEnvResourceUpdateRequest = {
     metadata?: {
         [key: string]: unknown;
     };
+    name: string;
     status?: string;
 };
 
@@ -2033,6 +2078,7 @@ export type OrchestrationRunInspectorSummary = {
 };
 
 export type OrchestrationRunListItem = {
+    bot_id?: string;
     created_at?: string;
     finished_at?: string;
     goal?: string;
@@ -8499,6 +8545,138 @@ export type PostOrchestrationCheckpointsByCheckpointIdResolveResponses = {
 
 export type PostOrchestrationCheckpointsByCheckpointIdResolveResponse = PostOrchestrationCheckpointsByCheckpointIdResolveResponses[keyof PostOrchestrationCheckpointsByCheckpointIdResolveResponses];
 
+export type GetOrchestrationContainerImagesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/orchestration/container-images';
+};
+
+export type GetOrchestrationContainerImagesErrors = {
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetOrchestrationContainerImagesError = GetOrchestrationContainerImagesErrors[keyof GetOrchestrationContainerImagesErrors];
+
+export type GetOrchestrationContainerImagesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersContainerImageListPage;
+};
+
+export type GetOrchestrationContainerImagesResponse = GetOrchestrationContainerImagesResponses[keyof GetOrchestrationContainerImagesResponses];
+
+export type PostOrchestrationContainerImagesData = {
+    /**
+     * Container image payload
+     */
+    body: HandlersContainerImageCreateRequest;
+    path?: never;
+    query?: never;
+    url: '/orchestration/container-images';
+};
+
+export type PostOrchestrationContainerImagesErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostOrchestrationContainerImagesError = PostOrchestrationContainerImagesErrors[keyof PostOrchestrationContainerImagesErrors];
+
+export type PostOrchestrationContainerImagesResponses = {
+    /**
+     * Created
+     */
+    201: HandlersContainerImageView;
+};
+
+export type PostOrchestrationContainerImagesResponse = PostOrchestrationContainerImagesResponses[keyof PostOrchestrationContainerImagesResponses];
+
+export type GetOrchestrationContainerImagesCapabilitiesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/orchestration/container-images/capabilities';
+};
+
+export type GetOrchestrationContainerImagesCapabilitiesErrors = {
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+};
+
+export type GetOrchestrationContainerImagesCapabilitiesError = GetOrchestrationContainerImagesCapabilitiesErrors[keyof GetOrchestrationContainerImagesCapabilitiesErrors];
+
+export type GetOrchestrationContainerImagesCapabilitiesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersContainerImageCapabilities;
+};
+
+export type GetOrchestrationContainerImagesCapabilitiesResponse = GetOrchestrationContainerImagesCapabilitiesResponses[keyof GetOrchestrationContainerImagesCapabilitiesResponses];
+
+export type GetOrchestrationContainerImagesByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Image ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/orchestration/container-images/{id}';
+};
+
+export type GetOrchestrationContainerImagesByIdErrors = {
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetOrchestrationContainerImagesByIdError = GetOrchestrationContainerImagesByIdErrors[keyof GetOrchestrationContainerImagesByIdErrors];
+
+export type GetOrchestrationContainerImagesByIdResponses = {
+    /**
+     * OK
+     */
+    200: HandlersContainerImageView;
+};
+
+export type GetOrchestrationContainerImagesByIdResponse = GetOrchestrationContainerImagesByIdResponses[keyof GetOrchestrationContainerImagesByIdResponses];
+
 export type GetOrchestrationEnvResourcesData = {
     body?: never;
     path?: never;
@@ -8567,6 +8745,46 @@ export type PostOrchestrationEnvResourcesResponses = {
 };
 
 export type PostOrchestrationEnvResourcesResponse = PostOrchestrationEnvResourcesResponses[keyof PostOrchestrationEnvResourcesResponses];
+
+export type DeleteOrchestrationEnvResourcesByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Env resource ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/orchestration/env-resources/{id}';
+};
+
+export type DeleteOrchestrationEnvResourcesByIdErrors = {
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type DeleteOrchestrationEnvResourcesByIdError = DeleteOrchestrationEnvResourcesByIdErrors[keyof DeleteOrchestrationEnvResourcesByIdErrors];
+
+export type DeleteOrchestrationEnvResourcesByIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
 
 export type GetOrchestrationEnvResourcesByIdData = {
     body?: never;
@@ -8658,6 +8876,44 @@ export type PatchOrchestrationEnvResourcesByIdResponses = {
 };
 
 export type PatchOrchestrationEnvResourcesByIdResponse = PatchOrchestrationEnvResourcesByIdResponses[keyof PatchOrchestrationEnvResourcesByIdResponses];
+
+export type GetOrchestrationRunsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Maximum number of runs
+         */
+        limit?: number;
+    };
+    url: '/orchestration/runs';
+};
+
+export type GetOrchestrationRunsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetOrchestrationRunsError = GetOrchestrationRunsErrors[keyof GetOrchestrationRunsErrors];
+
+export type GetOrchestrationRunsResponses = {
+    /**
+     * OK
+     */
+    200: OrchestrationRunListPage;
+};
+
+export type GetOrchestrationRunsResponse = GetOrchestrationRunsResponses[keyof GetOrchestrationRunsResponses];
 
 export type PostOrchestrationRunsData = {
     /**

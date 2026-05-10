@@ -3,6 +3,7 @@ package orchestrationenv
 import (
 	"context"
 
+	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	"github.com/memohai/memoh/internal/orchestration"
 )
 
@@ -117,6 +118,25 @@ func (a *KernelAdapter) ResumeEnvBinding(ctx context.Context, req orchestration.
 // adds secondary bindings for resume_held_env.
 func (a *KernelAdapter) CreateEnvBinding(ctx context.Context, req orchestration.EnvCreateBindingRequest) (orchestration.EnvBindingHandle, error) {
 	binding, err := a.manager.CreateBinding(ctx, CreateBindingRequest{
+		SessionID:  req.SessionID,
+		LeaseToken: req.LeaseToken,
+		LeaseEpoch: req.LeaseEpoch,
+		RunID:      req.RunID,
+		TaskID:     req.TaskID,
+		AttemptID:  req.AttemptID,
+		Purpose:    req.Purpose,
+		Metadata:   req.Metadata,
+	})
+	if err != nil {
+		return orchestration.EnvBindingHandle{}, err
+	}
+	return orchestration.EnvBindingHandle{BindingID: binding.ID}, nil
+}
+
+// CreateEnvBindingInTx records the binding using the scheduler transaction so
+// FK checks can see the attempt row created earlier in the same dispatch.
+func (a *KernelAdapter) CreateEnvBindingInTx(ctx context.Context, qtx *sqlc.Queries, req orchestration.EnvCreateBindingRequest) (orchestration.EnvBindingHandle, error) {
+	binding, err := a.manager.CreateBindingInTx(ctx, qtx, CreateBindingRequest{
 		SessionID:  req.SessionID,
 		LeaseToken: req.LeaseToken,
 		LeaseEpoch: req.LeaseEpoch,

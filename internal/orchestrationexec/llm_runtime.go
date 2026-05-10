@@ -2,6 +2,8 @@ package orchestrationexec
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -31,7 +34,29 @@ import (
 const (
 	LLMWorkerExecutorID   = "llm.workerd"
 	LLMVerifierExecutorID = "llm.verifyd"
+
+	addAttemptArtifactToolName = "add_attempt_artifact"
+	finishAttemptToolName      = "finish_attempt"
+	finishVerificationToolName = "finish_verification"
 )
+
+type finishAttemptInput struct {
+	Status               string `json:"status"`
+	Summary              string `json:"summary"`
+	FailureClass         string `json:"failure_class,omitempty"`
+	TerminalReason       string `json:"terminal_reason,omitempty"`
+	RequestReplan        bool   `json:"request_replan,omitempty"`
+	StructuredOutputJSON string `json:"structured_output_json,omitempty"`
+}
+
+type finishVerificationInput struct {
+	Status         string `json:"status"`
+	Verdict        string `json:"verdict"`
+	Summary        string `json:"summary"`
+	FailureClass   string `json:"failure_class,omitempty"`
+	TerminalReason string `json:"terminal_reason,omitempty"`
+	RequestReplan  bool   `json:"request_replan,omitempty"`
+}
 
 type Runtime struct {
 	logger          *slog.Logger
@@ -49,6 +74,9 @@ type actionLedgerSubject struct {
 	taskID         pgtype.UUID
 	attemptID      pgtype.UUID
 	verificationID pgtype.UUID
+	claimEpoch     int64
+	envSessionID   pgtype.UUID
+	envLeaseEpoch  int64
 }
 
 type actionLedgerObserver struct {
@@ -110,6 +138,12 @@ func (o *actionLedgerObserver) OnToolCallStart(ctx context.Context, observation 
 		return nil
 	}
 	recordID := uuid.New()
+	effectClass := classifyToolEffect(observation.ToolName)
+	if effectClass == "external_irreversible" {
+		if err := o.consumeSideEffectApprovalToken(ctx, observation); err != nil {
+			return err
+		}
+	}
 	inputPayload, err := marshalJSONValue(observation.Input)
 	if err != nil {
 		return fmt.Errorf("marshal action input payload: %w", err)
@@ -122,7 +156,7 @@ func (o *actionLedgerObserver) OnToolCallStart(ctx context.Context, observation 
 			AttemptID:    o.subject.attemptID,
 			ActionKind:   "tool_call",
 			Status:       "running",
-			EffectClass:  classifyToolEffect(observation.ToolName),
+			EffectClass:  effectClass,
 			ToolName:     strings.TrimSpace(observation.ToolName),
 			ToolCallID:   strings.TrimSpace(observation.ToolCallID),
 			InputPayload: inputPayload,
@@ -139,7 +173,7 @@ func (o *actionLedgerObserver) OnToolCallStart(ctx context.Context, observation 
 		VerificationID: o.subject.verificationID,
 		ActionKind:     "tool_call",
 		Status:         "running",
-		EffectClass:    classifyToolEffect(observation.ToolName),
+		EffectClass:    effectClass,
 		ToolName:       strings.TrimSpace(observation.ToolName),
 		ToolCallID:     strings.TrimSpace(observation.ToolCallID),
 		InputPayload:   inputPayload,
@@ -195,6 +229,34 @@ func (o *actionLedgerObserver) OnToolCallFinish(ctx context.Context, observation
 	return nil
 }
 
+func (o *actionLedgerObserver) consumeSideEffectApprovalToken(ctx context.Context, observation agentpkg.ToolCallObservation) error {
+	if !o.subject.attemptID.Valid {
+		return errors.New("external irreversible tool calls are only allowed from task attempts")
+	}
+	if o.subject.claimEpoch <= 0 {
+		return errors.New("external irreversible tool call missing attempt claim fence")
+	}
+	token := approvalTokenFromInput(observation.Input)
+	if token == "" {
+		return fmt.Errorf("external irreversible tool %q requires an approval_token", strings.TrimSpace(observation.ToolName))
+	}
+	_, err := o.queries.ConsumeOrchestrationSideEffectApprovalToken(ctx, sqlc.ConsumeOrchestrationSideEffectApprovalTokenParams{
+		ToolCallID:    strings.TrimSpace(observation.ToolCallID),
+		TokenHash:     sideEffectApprovalTokenHash(token),
+		AttemptID:     o.subject.attemptID,
+		ClaimEpoch:    o.subject.claimEpoch,
+		EnvSessionID:  o.subject.envSessionID,
+		EnvLeaseEpoch: o.subject.envLeaseEpoch,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("external irreversible tool %q approval token is missing, expired, consumed, or fenced to a different attempt/env lease", strings.TrimSpace(observation.ToolName))
+		}
+		return fmt.Errorf("consume side-effect approval token: %w", err)
+	}
+	return nil
+}
+
 func classifyToolEffect(toolName string) string {
 	switch strings.TrimSpace(toolName) {
 	case "read", "list", "bg_status":
@@ -203,11 +265,32 @@ func classifyToolEffect(toolName string) string {
 		return "env_local_mutation"
 	case "web_search", "web_fetch", "browser_observe", "list_email", "read_email", "list_schedule", "get_schedule", "get_contacts", "search_messages", "list_sessions", "list_email_accounts":
 		return "external_read"
-	case "send", "react", "send_email", "browser_action", "browser_remote_session", "create_schedule", "update_schedule", "delete_schedule", "generate_image", "speak":
+	case "send_email":
+		return "external_irreversible"
+	case "send", "react", "browser_action", "browser_remote_session", "create_schedule", "update_schedule", "delete_schedule", "generate_image", "speak":
 		return "external_write"
 	default:
 		return ""
 	}
+}
+
+func approvalTokenFromInput(input any) string {
+	args := mapValue(input)
+	return strings.TrimSpace(stringValue(args["approval_token"]))
+}
+
+func sideEffectApprovalTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
+}
+
+func sideEffectEnvFence(inputManifest map[string]any) (pgtype.UUID, int64) {
+	env := mapValue(inputManifest["captured_env_preconditions"])
+	sessionID := strings.TrimSpace(stringValue(env["session_id"]))
+	if sessionID == "" {
+		return pgtype.UUID{}, 0
+	}
+	return parseUUIDOrZero(sessionID), int64Value(env["lease_epoch"])
 }
 
 func marshalJSONValue(value any) ([]byte, error) {
@@ -484,16 +567,62 @@ func (r *Runtime) ExecuteAttempt(ctx context.Context, attempt orchestration.Task
 	if err != nil {
 		return failAttemptCompletion(completion, "worker_model_resolution_failed", err)
 	}
+	if !cfg.SupportsToolCall {
+		return failAttemptCompletion(completion, "worker_model_resolution_failed", errors.New("worker model must support tool calling"))
+	}
+	envResources, err := r.loadEnvResourceCatalog(ctx, execCtx.Run.TenantID)
+	if err != nil {
+		return failAttemptCompletion(completion, "attempt_context_load_failed", err)
+	}
 	cfg.System = workerSystemPrompt
 	cfg.Messages = []sdk.Message{sdk.UserMessage(buildWorkerPrompt(execCtx))}
-	cfg.ResponseFormat = &sdk.ResponseFormat{Type: sdk.ResponseFormatJSONObject}
+	cfg.ResponseFormat = nil
+	var submittedCompletion *finishAttemptInput
+	artifactIntents := make([]orchestration.AttemptArtifactIntent, 0)
+	addArtifactTool := sdk.Tool{
+		Name:        addAttemptArtifactToolName,
+		Description: "Record one artifact produced by this attempt using flat fields. Call once per artifact before finish_attempt.",
+		Parameters:  addAttemptArtifactSchema(),
+		Execute: func(_ *sdk.ToolExecContext, input any) (any, error) {
+			intent, err := decodeFlatArtifactIntent(toolInputMap(input))
+			if err != nil {
+				return nil, err
+			}
+			artifactIntents = append(artifactIntents, intent)
+			return map[string]any{"accepted": true, "artifact_count": len(artifactIntents)}, nil
+		},
+	}
+	finishAttemptTool := sdk.Tool{
+		Name:        finishAttemptToolName,
+		Description: "Finish the orchestration task attempt using flat fields. Call exactly once after any add_attempt_artifact calls.",
+		Parameters:  finishAttemptSchema(),
+		Execute: func(_ *sdk.ToolExecContext, input any) (any, error) {
+			if submittedCompletion != nil {
+				return nil, errors.New("finish_attempt may only be called once")
+			}
+			completionInput, err := decodeFlatFinishAttemptInput(toolInputMap(input))
+			if err != nil {
+				return nil, err
+			}
+			if _, err := decodeAttemptCompletionPayload(attempt, execCtx.Task, finishAttemptInputPayload(completionInput, artifactIntents), envResources); err != nil {
+				return nil, err
+			}
+			submittedCompletion = &completionInput
+			return map[string]any{"accepted": true}, nil
+		},
+	}
+	cfg.ExtraTools = append(cfg.ExtraTools, newListEnvResourcesTool(envResources), addArtifactTool, finishAttemptTool)
+	envSessionID, envLeaseEpoch := sideEffectEnvFence(execCtx.InputManifest)
 	cfg.ToolCallObserver = newActionLedgerObserver(r.queries, actionLedgerSubject{
-		runID:     execCtx.Run.ID,
-		taskID:    execCtx.Task.ID,
-		attemptID: parseUUIDOrZero(attempt.ID),
+		runID:         execCtx.Run.ID,
+		taskID:        execCtx.Task.ID,
+		attemptID:     parseUUIDOrZero(attempt.ID),
+		claimEpoch:    int64(attempt.ClaimEpoch), //nolint:gosec // claim epochs are persisted as positive BIGINT values.
+		envSessionID:  envSessionID,
+		envLeaseEpoch: envLeaseEpoch,
 	})
 
-	result, err := r.generateWithThinkingTrace(ctx, cfg, func(delta string) {
+	_, err = r.generateWithThinkingTrace(ctx, cfg, func(delta string) {
 		r.recordAttemptThinking(ctx, execCtx, parseUUIDOrZero(attempt.ID), "worker", delta)
 	}, func(delta string) {
 		r.recordAttemptAgentOutput(ctx, execCtx, parseUUIDOrZero(attempt.ID), "worker", delta)
@@ -501,11 +630,10 @@ func (r *Runtime) ExecuteAttempt(ctx context.Context, attempt orchestration.Task
 	if err != nil {
 		return failAttemptCompletion(completion, "worker_generate_failed", err)
 	}
-	payload, err := decodeJSONObjectText(result.Text)
-	if err != nil {
-		return failAttemptCompletion(completion, "worker_response_invalid", err)
+	if submittedCompletion == nil {
+		return failAttemptCompletion(completion, "worker_response_invalid", fmt.Errorf("worker did not call %s", finishAttemptToolName))
 	}
-	parsed, err := decodeAttemptCompletionPayload(attempt, execCtx.Task, payload)
+	parsed, err := decodeAttemptCompletionPayload(attempt, execCtx.Task, finishAttemptInputPayload(*submittedCompletion, artifactIntents), envResources)
 	if err != nil {
 		return failAttemptCompletion(completion, "worker_response_invalid", err)
 	}
@@ -536,16 +664,31 @@ func (r *Runtime) ExecuteVerification(ctx context.Context, verification orchestr
 	if err != nil {
 		return failVerificationCompletion(completion, "verifier_model_resolution_failed", err)
 	}
+	if !cfg.SupportsToolCall {
+		return failVerificationCompletion(completion, "verifier_model_resolution_failed", errors.New("verifier model must support tool calling"))
+	}
 	cfg.System = verifierSystemPrompt
 	cfg.Messages = []sdk.Message{sdk.UserMessage(buildVerifierPrompt(execCtx))}
-	cfg.ResponseFormat = &sdk.ResponseFormat{Type: sdk.ResponseFormatJSONObject}
+	cfg.ResponseFormat = nil
+	var submittedCompletion *finishVerificationInput
+	cfg.ExtraTools = append(cfg.ExtraTools, sdk.NewTool[finishVerificationInput](
+		finishVerificationToolName,
+		"Finish the orchestration task verification. This is the only accepted way to report a verification verdict.",
+		func(_ *sdk.ToolExecContext, input finishVerificationInput) (any, error) {
+			if submittedCompletion != nil {
+				return nil, errors.New("finish_verification may only be called once")
+			}
+			submittedCompletion = &input
+			return map[string]any{"accepted": true}, nil
+		},
+	))
 	cfg.ToolCallObserver = newActionLedgerObserver(r.queries, actionLedgerSubject{
 		runID:          execCtx.Run.ID,
 		taskID:         execCtx.Task.ID,
 		verificationID: parseUUIDOrZero(verification.ID),
 	})
 
-	result, err := r.generateWithThinkingTrace(ctx, cfg, func(delta string) {
+	_, err = r.generateWithThinkingTrace(ctx, cfg, func(delta string) {
 		r.recordVerificationThinking(ctx, execCtx, parseUUIDOrZero(verification.ID), "verifier", delta)
 	}, func(delta string) {
 		r.recordVerificationAgentOutput(ctx, execCtx, parseUUIDOrZero(verification.ID), "verifier", delta)
@@ -553,11 +696,10 @@ func (r *Runtime) ExecuteVerification(ctx context.Context, verification orchestr
 	if err != nil {
 		return failVerificationCompletion(completion, "verifier_generate_failed", err)
 	}
-	payload, err := decodeJSONObjectText(result.Text)
-	if err != nil {
-		return failVerificationCompletion(completion, "verifier_response_invalid", err)
+	if submittedCompletion == nil {
+		return failVerificationCompletion(completion, "verifier_response_invalid", fmt.Errorf("verifier did not call %s", finishVerificationToolName))
 	}
-	parsed, err := decodeVerificationCompletionPayload(verification, execCtx.Task, execCtx.Result, payload)
+	parsed, err := decodeVerificationCompletionPayload(verification, execCtx.Task, execCtx.Result, finishVerificationInputPayload(*submittedCompletion))
 	if err != nil {
 		return failVerificationCompletion(completion, "verifier_response_invalid", err)
 	}
@@ -607,6 +749,7 @@ func (r *Runtime) loadAttemptExecutionContext(ctx context.Context, attempt orche
 					"captured_task_inputs":          decodeJSONObject(manifestRow.CapturedTaskInputs),
 					"captured_artifact_versions":    decodeJSONArrayObjects(manifestRow.CapturedArtifactVersions),
 					"captured_blackboard_revisions": decodeJSONArrayObjects(manifestRow.CapturedBlackboardRevisions),
+					"captured_env_preconditions":    decodeJSONObject(manifestRow.CapturedEnvPreconditions),
 					"projection_hash":               strings.TrimSpace(manifestRow.ProjectionHash),
 				}
 			}
@@ -636,6 +779,7 @@ type verificationExecutionContext struct {
 	Verification       orchestration.TaskVerification
 	VerificationPolicy map[string]any
 	ResultArtifacts    []map[string]any
+	EnvDrift           map[string]any
 }
 
 func (r *Runtime) loadVerificationExecutionContext(ctx context.Context, verification orchestration.TaskVerification) (verificationExecutionContext, error) {
@@ -672,6 +816,10 @@ func (r *Runtime) loadVerificationExecutionContext(ctx context.Context, verifica
 	if err != nil {
 		return verificationExecutionContext{}, fmt.Errorf("load task artifacts: %w", err)
 	}
+	envDrift, err := r.loadEnvDriftContext(ctx, resultRow.AttemptID)
+	if err != nil {
+		return verificationExecutionContext{}, err
+	}
 	return verificationExecutionContext{
 		BotID:              botID,
 		Run:                runRow,
@@ -680,7 +828,76 @@ func (r *Runtime) loadVerificationExecutionContext(ctx context.Context, verifica
 		Verification:       verification,
 		VerificationPolicy: decodeJSONObject(taskRow.VerificationPolicy),
 		ResultArtifacts:    encodeArtifactsForAttempt(artifacts, resultRow.AttemptID),
+		EnvDrift:           envDrift,
 	}, nil
+}
+
+func (r *Runtime) loadEnvDriftContext(ctx context.Context, attemptID pgtype.UUID) (map[string]any, error) {
+	if !attemptID.Valid {
+		return map[string]any{"status": "not_applicable"}, nil
+	}
+	rows, err := r.queries.ListOrchestrationEnvSnapshotsByAttempt(ctx, attemptID)
+	if err != nil {
+		return nil, fmt.Errorf("load env snapshots for drift context: %w", err)
+	}
+	return buildEnvDriftContext(rows), nil
+}
+
+func buildEnvDriftContext(rows []sqlc.OrchestrationEnvSnapshot) map[string]any {
+	if len(rows) == 0 {
+		return map[string]any{"status": "not_applicable", "snapshots": []map[string]any{}}
+	}
+	snapshots := make([]map[string]any, 0, len(rows))
+	var firstPre, lastPost *sqlc.OrchestrationEnvSnapshot
+	periodicCount := 0
+	for i := range rows {
+		row := rows[i]
+		snapshot := map[string]any{
+			"snapshot_id":  row.ID.String(),
+			"session_id":   row.SessionID.String(),
+			"kind":         strings.TrimSpace(row.Kind),
+			"effect_class": strings.TrimSpace(row.EffectClass),
+			"digest":       strings.TrimSpace(row.Digest),
+			"size_bytes":   row.SizeBytes,
+			"runtime_ref":  decodeJSONObject(row.RuntimeRef),
+			"metadata":     decodeJSONObject(row.Metadata),
+			"created_at":   row.CreatedAt.Time,
+		}
+		snapshots = append(snapshots, snapshot)
+		switch strings.TrimSpace(row.Kind) {
+		case "pre_action":
+			if firstPre == nil {
+				firstPre = &row
+			}
+		case "post_action":
+			lastPost = &row
+		case "periodic":
+			periodicCount++
+		}
+	}
+	status := "unknown"
+	beforeDigest := ""
+	afterDigest := ""
+	if firstPre != nil && lastPost != nil {
+		beforeDigest = strings.TrimSpace(firstPre.Digest)
+		afterDigest = strings.TrimSpace(lastPost.Digest)
+		switch {
+		case beforeDigest == "" || afterDigest == "":
+			status = "unknown"
+		case beforeDigest == afterDigest:
+			status = "unchanged"
+		default:
+			status = "changed"
+		}
+	}
+	return map[string]any{
+		"status":         status,
+		"changed":        status == "changed",
+		"before_digest":  beforeDigest,
+		"after_digest":   afterDigest,
+		"periodic_count": periodicCount,
+		"snapshots":      snapshots,
+	}
 }
 
 func (r *Runtime) loadPredecessorContexts(ctx context.Context, taskRow sqlc.OrchestrationTask) ([]map[string]any, error) {
@@ -858,44 +1075,16 @@ const workerSystemPrompt = `You are the execution runtime for a single orchestra
 
 Complete only the current task. Use tools when needed, especially container file and command tools. Prefer real execution over guessing.
 
+If env_preconditions.kind is "browser", use browser_action, browser_observe, or browser_remote_session tools for browser automation. Do not install Playwright or launch a local browser in the workspace unless the browser tools are unavailable and the task explicitly asks for local browser setup.
+
 For human-readable fields such as summary, terminal_reason, artifact summaries, and child task goals, use the same language as the run goal / task goal / user request. Preserve Chinese when the request is Chinese.
 
-Return exactly one JSON object and no markdown. The JSON shape must be:
-{
-  "status": "completed" | "failed",
-  "summary": string,
-  "failure_class": string,
-  "terminal_reason": string,
-  "request_replan": boolean,
-  "artifact_intents": [
-    {
-      "kind": string,
-      "uri": string,
-      "version": string,
-      "digest": string,
-      "content_type": string,
-      "summary": string,
-      "metadata": object
-    }
-  ],
-  "structured_output": object
-}
+If the attempt produces artifacts, call add_attempt_artifact once per artifact before finishing. Use flat fields: kind, uri, version, digest, content_type, summary, metadata_json.
 
-When the task needs a different decomposition or recovery path, set "request_replan": true. You may include replacement tasks in structured_output.child_tasks only when the replacement DAG is obvious; otherwise leave structured_output as context for the replanner.
+Finish by calling the finish_attempt tool exactly once. Use only flat fields: status, summary, failure_class, terminal_reason, request_replan, structured_output_json.
+
+When the task needs a different decomposition or recovery path, set request_replan=true and explain the blocker in summary or structured_output_json. Do not create replacement tasks from the worker; replanning is handled by the replanner.
 Use status="completed" for a replan-only handoff. Use status="failed" with request_replan=true only when this attempt genuinely failed and the replanner should replace the failed subtree.
-Each child task must be an object with:
-{
-  "alias": string,
-  "kind": string,
-  "goal": string,
-  "inputs": object,
-  "depends_on": string[],
-  "worker_profile": string,
-  "priority": number,
-  "retry_policy": object,
-  "verification_policy": object,
-  "blackboard_scope": string
-}
 
 If the task succeeds, use status="completed". If it cannot be completed, use status="failed" with clear failure_class and terminal_reason.`
 
@@ -903,101 +1092,119 @@ const verifierSystemPrompt = `You are the verification runtime for a single orch
 
 Inspect the task goal, verification policy, produced structured output, and artifacts. Use tools only when necessary to validate the result.
 
+If env_drift.status is changed, decide whether that mutation was expected by the task and verification_policy. Reject or request replan when the environment changed outside the task's allowed effect.
+
 For human-readable fields such as summary and terminal_reason, use the same language as the task goal / produced result / user request. Preserve Chinese when the request is Chinese.
 
-Return exactly one JSON object and no markdown. The JSON shape must be:
-{
-  "status": "completed" | "failed",
-  "verdict": "accepted" | "rejected",
-  "summary": string,
-  "failure_class": string,
-  "terminal_reason": string,
-  "request_replan": boolean
-}
+Finish by calling the finish_verification tool exactly once. Use status, verdict, summary, failure_class, terminal_reason, and request_replan fields directly in that tool call.
 
 Use status="completed", verdict="accepted" when the result is valid.
 Use verdict="rejected" when validation fails.
 When verification_policy.on_reject is "retry", use status="failed", verdict="rejected", failure_class="verifier_retryable", and request_replan=false for retryable invalid results.
-Set request_replan=true when the result is rejected and the task should be replaced by a replanned subtree instead of retried or failed. Existing structured_output.child_tasks may be used as a static replacement plan, but it is not required.`
+Set request_replan=true when the result is rejected and the task should be replaced by a replanned subtree instead of retried or failed. Do not create replacement tasks from the verifier; replanning is handled by the replanner.`
 
 func buildWorkerPrompt(execCtx attemptExecutionContext) string {
-	payload := map[string]any{
-		"run": map[string]any{
-			"run_id":           execCtx.Run.ID.String(),
-			"goal":             strings.TrimSpace(execCtx.Run.Goal),
-			"planner_epoch":    execCtx.Run.PlannerEpoch,
-			"lifecycle_status": strings.TrimSpace(execCtx.Run.LifecycleStatus),
-			"source_metadata":  decodeJSONObject(execCtx.Run.SourceMetadata),
-			"requested_output": decodeJSONObject(execCtx.Run.OutputSchema),
-			"run_input":        decodeJSONObject(execCtx.Run.Input),
-			"run_policies":     decodeJSONObject(execCtx.Run.Policies),
-			"control_policy":   decodeJSONObject(execCtx.Run.ControlPolicy),
+	return buildOrchestrationUserPrompt("task_attempt",
+		orchestrationPromptSection{
+			name: "run",
+			value: map[string]any{
+				"run_id":           execCtx.Run.ID.String(),
+				"tenant_id":        strings.TrimSpace(execCtx.Run.TenantID),
+				"owner_subject":    strings.TrimSpace(execCtx.Run.OwnerSubject),
+				"goal":             strings.TrimSpace(execCtx.Run.Goal),
+				"planner_epoch":    execCtx.Run.PlannerEpoch,
+				"lifecycle_status": strings.TrimSpace(execCtx.Run.LifecycleStatus),
+				"source_metadata":  decodeJSONObject(execCtx.Run.SourceMetadata),
+				"requested_output": decodeJSONObject(execCtx.Run.OutputSchema),
+				"run_input":        decodeJSONObject(execCtx.Run.Input),
+				"run_policies":     decodeJSONObject(execCtx.Run.Policies),
+				"control_policy":   decodeJSONObject(execCtx.Run.ControlPolicy),
+			},
 		},
-		"task": map[string]any{
-			"task_id":             execCtx.Task.ID.String(),
-			"goal":                strings.TrimSpace(execCtx.Task.Goal),
-			"kind":                strings.TrimSpace(execCtx.Task.Kind),
-			"worker_profile":      strings.TrimSpace(execCtx.Task.WorkerProfile),
-			"priority":            execCtx.Task.Priority,
-			"inputs":              execCtx.TaskInputs,
-			"retry_policy":        decodeJSONObject(execCtx.Task.RetryPolicy),
-			"verification_policy": decodeJSONObject(execCtx.Task.VerificationPolicy),
-			"blackboard_scope":    strings.TrimSpace(execCtx.Task.BlackboardScope),
-			"planner_epoch":       execCtx.Task.PlannerEpoch,
+		orchestrationPromptSection{
+			name: "task",
+			value: map[string]any{
+				"task_id":             execCtx.Task.ID.String(),
+				"goal":                strings.TrimSpace(execCtx.Task.Goal),
+				"kind":                strings.TrimSpace(execCtx.Task.Kind),
+				"worker_profile":      strings.TrimSpace(execCtx.Task.WorkerProfile),
+				"priority":            execCtx.Task.Priority,
+				"inputs":              execCtx.TaskInputs,
+				"retry_policy":        decodeJSONObject(execCtx.Task.RetryPolicy),
+				"verification_policy": decodeJSONObject(execCtx.Task.VerificationPolicy),
+				"env_preconditions":   decodeJSONObject(execCtx.Task.EnvPreconditions),
+				"blackboard_scope":    strings.TrimSpace(execCtx.Task.BlackboardScope),
+				"planner_epoch":       execCtx.Task.PlannerEpoch,
+			},
 		},
-		"attempt": map[string]any{
-			"attempt_id":          execCtx.Attempt.ID,
-			"attempt_no":          execCtx.Attempt.AttemptNo,
-			"input_manifest":      execCtx.InputManifest,
-			"predecessor_results": execCtx.Predecessors,
+		orchestrationPromptSection{
+			name: "attempt",
+			value: map[string]any{
+				"attempt_id": execCtx.Attempt.ID,
+				"attempt_no": execCtx.Attempt.AttemptNo,
+			},
 		},
-	}
-	return "Execute the following orchestration task.\n\nContext JSON:\n" + mustJSON(payload)
+		orchestrationPromptSection{name: "input_manifest", value: execCtx.InputManifest},
+		orchestrationPromptSection{name: "predecessor_results", value: execCtx.Predecessors},
+	)
 }
 
 func buildVerifierPrompt(execCtx verificationExecutionContext) string {
-	payload := map[string]any{
-		"run": map[string]any{
-			"run_id":           execCtx.Run.ID.String(),
-			"goal":             strings.TrimSpace(execCtx.Run.Goal),
-			"planner_epoch":    execCtx.Run.PlannerEpoch,
-			"lifecycle_status": strings.TrimSpace(execCtx.Run.LifecycleStatus),
+	return buildOrchestrationUserPrompt("task_verification",
+		orchestrationPromptSection{
+			name: "run",
+			value: map[string]any{
+				"run_id":           execCtx.Run.ID.String(),
+				"tenant_id":        strings.TrimSpace(execCtx.Run.TenantID),
+				"owner_subject":    strings.TrimSpace(execCtx.Run.OwnerSubject),
+				"goal":             strings.TrimSpace(execCtx.Run.Goal),
+				"planner_epoch":    execCtx.Run.PlannerEpoch,
+				"lifecycle_status": strings.TrimSpace(execCtx.Run.LifecycleStatus),
+			},
 		},
-		"task": map[string]any{
-			"task_id":             execCtx.Task.ID.String(),
-			"goal":                strings.TrimSpace(execCtx.Task.Goal),
-			"worker_profile":      strings.TrimSpace(execCtx.Task.WorkerProfile),
-			"verification_policy": execCtx.VerificationPolicy,
+		orchestrationPromptSection{
+			name: "task",
+			value: map[string]any{
+				"task_id":             execCtx.Task.ID.String(),
+				"goal":                strings.TrimSpace(execCtx.Task.Goal),
+				"worker_profile":      strings.TrimSpace(execCtx.Task.WorkerProfile),
+				"verification_policy": execCtx.VerificationPolicy,
+			},
 		},
-		"result": map[string]any{
-			"result_id":         execCtx.Result.ID.String(),
-			"attempt_id":        pgUUIDString(execCtx.Result.AttemptID),
-			"status":            strings.TrimSpace(execCtx.Result.Status),
-			"summary":           strings.TrimSpace(execCtx.Result.Summary),
-			"failure_class":     strings.TrimSpace(execCtx.Result.FailureClass),
-			"request_replan":    execCtx.Result.RequestReplan,
-			"artifact_intents":  decodeJSONArrayObjects(execCtx.Result.ArtifactIntents),
-			"structured_output": decodeJSONObject(execCtx.Result.StructuredOutput),
-			"artifacts":         execCtx.ResultArtifacts,
+		orchestrationPromptSection{
+			name: "result",
+			value: map[string]any{
+				"result_id":         execCtx.Result.ID.String(),
+				"attempt_id":        pgUUIDString(execCtx.Result.AttemptID),
+				"status":            strings.TrimSpace(execCtx.Result.Status),
+				"summary":           strings.TrimSpace(execCtx.Result.Summary),
+				"failure_class":     strings.TrimSpace(execCtx.Result.FailureClass),
+				"request_replan":    execCtx.Result.RequestReplan,
+				"artifact_intents":  decodeJSONArrayObjects(execCtx.Result.ArtifactIntents),
+				"structured_output": decodeJSONObject(execCtx.Result.StructuredOutput),
+				"artifacts":         execCtx.ResultArtifacts,
+			},
 		},
-		"verification": map[string]any{
-			"verification_id":  execCtx.Verification.ID,
-			"attempt_no":       execCtx.Verification.AttemptNo,
-			"verifier_profile": strings.TrimSpace(execCtx.Verification.VerifierProfile),
+		orchestrationPromptSection{
+			name: "verification",
+			value: map[string]any{
+				"verification_id":  execCtx.Verification.ID,
+				"attempt_no":       execCtx.Verification.AttemptNo,
+				"verifier_profile": strings.TrimSpace(execCtx.Verification.VerifierProfile),
+			},
 		},
-	}
-	return "Verify the following orchestration task result.\n\nContext JSON:\n" + mustJSON(payload)
+		orchestrationPromptSection{name: "env_drift", value: execCtx.EnvDrift},
+	)
 }
 
-func decodeAttemptCompletionPayload(attempt orchestration.TaskAttempt, taskRow sqlc.OrchestrationTask, payload map[string]any) (orchestration.AttemptCompletion, error) {
+func decodeAttemptCompletionPayload(attempt orchestration.TaskAttempt, taskRow sqlc.OrchestrationTask, payload map[string]any, envResources ...envResourceCatalog) (orchestration.AttemptCompletion, error) {
 	status := normalizeAttemptStatus(payload["status"])
 	if status == "" {
 		return orchestration.AttemptCompletion{}, errors.New("worker response is missing a valid status")
 	}
+	_ = envResources
 	structuredOutput := normalizeObject(mapValue(payload["structured_output"]))
-	if childTasks, ok := payload["child_tasks"].([]any); ok && len(childTasks) > 0 {
-		structuredOutput["child_tasks"] = childTasks
-	}
+	delete(structuredOutput, "child_tasks")
 	summary := strings.TrimSpace(stringValue(payload["summary"]))
 	if summary == "" {
 		summary = strings.TrimSpace(taskRow.Goal)
@@ -1017,6 +1224,207 @@ func decodeAttemptCompletionPayload(attempt orchestration.TaskAttempt, taskRow s
 		RequestReplan:    boolValue(payload["request_replan"]),
 		ArtifactIntents:  decodeAttemptArtifactIntentsFromAny(payload["artifact_intents"]),
 	}, nil
+}
+
+func finishAttemptSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status":                 map[string]any{"type": "string", "enum": []string{orchestration.TaskAttemptStatusCompleted, orchestration.TaskAttemptStatusFailed}},
+			"summary":                map[string]any{"type": "string"},
+			"failure_class":          map[string]any{"type": "string"},
+			"terminal_reason":        map[string]any{"type": "string"},
+			"request_replan":         map[string]any{"type": "boolean"},
+			"structured_output_json": map[string]any{"type": "string", "description": "Optional JSON object encoded as a string. Do not include child_tasks."},
+		},
+		"required":             []string{"status", "summary"},
+		"additionalProperties": false,
+	}
+}
+
+func addAttemptArtifactSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"kind":          map[string]any{"type": "string", "description": "Artifact kind, such as screenshot, file, report, log, or image."},
+			"uri":           map[string]any{"type": "string", "description": "Artifact URI or path."},
+			"version":       map[string]any{"type": "string"},
+			"digest":        map[string]any{"type": "string"},
+			"content_type":  map[string]any{"type": "string", "description": "MIME type when known."},
+			"summary":       map[string]any{"type": "string"},
+			"metadata_json": map[string]any{"type": "string", "description": "Optional metadata JSON object encoded as a string."},
+		},
+		"required":             []string{"kind", "uri", "summary"},
+		"additionalProperties": false,
+	}
+}
+
+func decodeFlatFinishAttemptInput(input map[string]any) (finishAttemptInput, error) {
+	if err := rejectUnknownToolKeys(input, map[string]struct{}{
+		"status":                 {},
+		"summary":                {},
+		"failure_class":          {},
+		"terminal_reason":        {},
+		"request_replan":         {},
+		"structured_output_json": {},
+	}); err != nil {
+		return finishAttemptInput{}, err
+	}
+	out := finishAttemptInput{
+		Status:               toolString(input, "status"),
+		Summary:              toolString(input, "summary"),
+		FailureClass:         toolString(input, "failure_class"),
+		TerminalReason:       toolString(input, "terminal_reason"),
+		RequestReplan:        toolBool(input, "request_replan"),
+		StructuredOutputJSON: toolString(input, "structured_output_json"),
+	}
+	if out.Status == "" {
+		return finishAttemptInput{}, errors.New("status is required")
+	}
+	if out.Summary == "" {
+		return finishAttemptInput{}, errors.New("summary is required")
+	}
+	if _, err := decodeOptionalJSONObjectTextStrict(out.StructuredOutputJSON); err != nil {
+		return finishAttemptInput{}, fmt.Errorf("structured_output_json: %w", err)
+	}
+	return out, nil
+}
+
+func decodeFlatArtifactIntent(input map[string]any) (orchestration.AttemptArtifactIntent, error) {
+	if err := rejectUnknownToolKeys(input, map[string]struct{}{
+		"kind":          {},
+		"uri":           {},
+		"version":       {},
+		"digest":        {},
+		"content_type":  {},
+		"summary":       {},
+		"metadata_json": {},
+	}); err != nil {
+		return orchestration.AttemptArtifactIntent{}, err
+	}
+	metadata, err := decodeOptionalJSONObjectTextStrict(toolString(input, "metadata_json"))
+	if err != nil {
+		return orchestration.AttemptArtifactIntent{}, fmt.Errorf("metadata_json: %w", err)
+	}
+	intent := orchestration.AttemptArtifactIntent{
+		Kind:        toolString(input, "kind"),
+		URI:         toolString(input, "uri"),
+		Version:     toolString(input, "version"),
+		Digest:      toolString(input, "digest"),
+		ContentType: toolString(input, "content_type"),
+		Summary:     toolString(input, "summary"),
+		Metadata:    metadata,
+	}
+	if intent.Kind == "" {
+		return orchestration.AttemptArtifactIntent{}, errors.New("kind is required")
+	}
+	if intent.URI == "" {
+		return orchestration.AttemptArtifactIntent{}, errors.New("uri is required")
+	}
+	if intent.Summary == "" {
+		return orchestration.AttemptArtifactIntent{}, errors.New("summary is required")
+	}
+	return intent, nil
+}
+
+func finishAttemptInputPayload(input finishAttemptInput, artifactIntents []orchestration.AttemptArtifactIntent) map[string]any {
+	return map[string]any{
+		"status":            input.Status,
+		"summary":           input.Summary,
+		"failure_class":     input.FailureClass,
+		"terminal_reason":   input.TerminalReason,
+		"request_replan":    input.RequestReplan,
+		"artifact_intents":  artifactIntentsToAnySlice(artifactIntents),
+		"structured_output": decodeOptionalJSONObjectText(input.StructuredOutputJSON),
+	}
+}
+
+func artifactIntentsToAnySlice(items []orchestration.AttemptArtifactIntent) []any {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, map[string]any{
+			"kind":         item.Kind,
+			"uri":          item.URI,
+			"version":      item.Version,
+			"digest":       item.Digest,
+			"content_type": item.ContentType,
+			"summary":      item.Summary,
+			"metadata":     item.Metadata,
+		})
+	}
+	return out
+}
+
+func toolInputMap(input any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	if value, ok := input.(map[string]any); ok {
+		return value
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		return map[string]any{}
+	}
+	var value map[string]any
+	_ = json.Unmarshal(data, &value)
+	if value == nil {
+		value = map[string]any{}
+	}
+	return value
+}
+
+func rejectUnknownToolKeys(input map[string]any, allowed map[string]struct{}) error {
+	for key := range input {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("unknown field %q", key)
+		}
+	}
+	return nil
+}
+
+func toolString(input map[string]any, key string) string {
+	raw, ok := input[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	if value, ok := raw.(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", raw))
+}
+
+func toolBool(input map[string]any, key string) bool {
+	raw, ok := input[key]
+	if !ok || raw == nil {
+		return false
+	}
+	value, ok := raw.(bool)
+	return ok && value
+}
+
+func decodeOptionalJSONObjectText(raw string) map[string]any {
+	value, err := decodeOptionalJSONObjectTextStrict(raw)
+	if err != nil {
+		return map[string]any{}
+	}
+	return value
+}
+
+func decodeOptionalJSONObjectTextStrict(raw string) (map[string]any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]any{}, nil
+	}
+	value, err := decodeJSONObjectText(raw)
+	if err != nil {
+		return nil, err
+	}
+	delete(value, "child_tasks")
+	return value, nil
 }
 
 func decodeVerificationCompletionPayload(
@@ -1054,6 +1462,17 @@ func decodeVerificationCompletionPayload(
 		TerminalReason: terminalReason,
 		RequestReplan:  boolValue(payload["request_replan"]),
 	}, nil
+}
+
+func finishVerificationInputPayload(input finishVerificationInput) map[string]any {
+	return map[string]any{
+		"status":          input.Status,
+		"verdict":         input.Verdict,
+		"summary":         input.Summary,
+		"failure_class":   input.FailureClass,
+		"terminal_reason": input.TerminalReason,
+		"request_replan":  input.RequestReplan,
+	}
 }
 
 func decodeAttemptArtifactIntentsFromAny(raw any) []orchestration.AttemptArtifactIntent {
@@ -1265,6 +1684,22 @@ func mapValue(raw any) map[string]any {
 func boolValue(raw any) bool {
 	value, _ := raw.(bool)
 	return value
+}
+
+func int64Value(raw any) int64 {
+	switch value := raw.(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func stringValue(raw any) string {

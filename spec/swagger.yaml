@@ -1508,6 +1508,76 @@ definitions:
           type: string
         type: array
     type: object
+  handlers.ContainerImageCapabilities:
+    properties:
+      dockerfile_build:
+        type: boolean
+      reason:
+        type: string
+    type: object
+  handlers.ContainerImageCreateRequest:
+    properties:
+      build_options:
+        additionalProperties: {}
+        type: object
+      dockerfile:
+        type: string
+      image_ref:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+      source_type:
+        type: string
+    required:
+    - image_ref
+    - name
+    - source_type
+    type: object
+  handlers.ContainerImageListPage:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/handlers.ContainerImageView'
+        type: array
+    type: object
+  handlers.ContainerImageView:
+    properties:
+      build_options:
+        additionalProperties: {}
+        type: object
+      builtin:
+        type: boolean
+      created_at:
+        type: string
+      digest:
+        type: string
+      dockerfile:
+        type: string
+      id:
+        type: string
+      image_ref:
+        type: string
+      last_build_error:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+      owner_subject:
+        type: string
+      source_type:
+        type: string
+      status:
+        type: string
+      tenant_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
   handlers.ContainerMemoryMetricsResponse:
     properties:
       limit_bytes:
@@ -1657,8 +1727,12 @@ definitions:
       metadata:
         additionalProperties: {}
         type: object
+      name:
+        type: string
       status:
         type: string
+    required:
+    - name
     type: object
   handlers.EnvResourceView:
     properties:
@@ -3466,6 +3540,8 @@ definitions:
     type: object
   orchestration.RunListItem:
     properties:
+      bot_id:
+        type: string
       created_at:
         type: string
       finished_at:
@@ -9101,6 +9177,113 @@ paths:
       summary: Resolve a human checkpoint
       tags:
       - orchestration
+  /orchestration/container-images:
+    get:
+      description: Return the built-in images and tenant images available for env
+        resources
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ContainerImageListPage'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List orchestration container images
+      tags:
+      - orchestration
+    post:
+      description: Register an existing image ref or Dockerfile build source for env
+        resources
+      parameters:
+      - description: Container image payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ContainerImageCreateRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.ContainerImageView'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Add an orchestration container image
+      tags:
+      - orchestration
+  /orchestration/container-images/{id}:
+    get:
+      description: Return a single tenant image. Built-in images are returned by the
+        list endpoint.
+      parameters:
+      - description: Image ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ContainerImageView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get an orchestration container image
+      tags:
+      - orchestration
+  /orchestration/container-images/capabilities:
+    get:
+      description: Return image build capabilities for the current runtime backend
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ContainerImageCapabilities'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get orchestration image capabilities
+      tags:
+      - orchestration
   /orchestration/env-resources:
     get:
       description: Return every env resource template registered for the caller's
@@ -9159,6 +9342,39 @@ paths:
       tags:
       - orchestration
   /orchestration/env-resources/{id}:
+    delete:
+      description: Delete an unused env resource template. Resources with session
+        history must be archived instead.
+      parameters:
+      - description: Env resource ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete an orchestration env resource
+      tags:
+      - orchestration
     get:
       description: Return a single env resource, scoped to the caller's tenant
       parameters:
@@ -9239,6 +9455,35 @@ paths:
       tags:
       - orchestration
   /orchestration/runs:
+    get:
+      description: List orchestration runs started under the authenticated user
+      parameters:
+      - description: Maximum number of runs
+        in: query
+        name: limit
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/orchestration.RunListPage'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List orchestration runs
+      tags:
+      - orchestration
     post:
       description: Create a new orchestration run under the authenticated user
       parameters:

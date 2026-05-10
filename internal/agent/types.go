@@ -117,6 +117,11 @@ type RunConfig struct {
 	// ToolCallObserver receives start and finish callbacks for every tool call
 	// that actually executes inside the agent loop.
 	ToolCallObserver ToolCallObserver
+
+	// ExtraTools are invocation-scoped tools appended to the bot's normal tool
+	// set. They are useful for internal control flows such as structured
+	// orchestration completions.
+	ExtraTools []sdk.Tool
 }
 
 // GenerateResult holds the result of a non-streaming agent invocation.

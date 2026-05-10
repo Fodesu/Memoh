@@ -132,6 +132,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Sprintf("assemble tools: %v", err)})
 			return
 		}
+		sdkTools = append(sdkTools, cfg.ExtraTools...)
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	if cfg.ToolCallObserver != nil {
@@ -562,6 +563,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (*GenerateResult
 		if err != nil {
 			return nil, fmt.Errorf("assemble tools: %w", err)
 		}
+		sdkTools = append(sdkTools, cfg.ExtraTools...)
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	if cfg.ToolCallObserver != nil {

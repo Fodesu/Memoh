@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -36,11 +37,12 @@ type envCapture struct {
 }
 
 // acquireEnvForDispatch reserves a session and resolves the planner-supplied
-// resource_name when env_preconditions.required=true. The kernel only calls
-// the env manager from inside the candidate loop after the task row is locked
-// FOR UPDATE, so two schedulers cannot acquire two sessions for the same
-// task. The returned *envCapture is nil when the task does not need an env;
-// the dispatch path treats that as the common-case fast path.
+// resource_name when env_preconditions.required=true. Callers must invoke it
+// outside the scheduler write transaction; the env manager persists lease
+// reservations in its own transaction and its FK checks can otherwise wait on
+// task/run locks held by the scheduler. The returned *envCapture is nil when
+// the task does not need an env; the dispatch path treats that as the
+// common-case fast path.
 func (s *Service) acquireEnvForDispatch(ctx context.Context, runRow sqlc.OrchestrationRun, taskRow sqlc.OrchestrationTask, attemptID string, pre EnvPreconditions) (*envCapture, error) {
 	if !pre.Required {
 		return nil, nil
@@ -136,20 +138,39 @@ func (s *Service) bindEnvAndPersistCapture(ctx context.Context, qtx *sqlc.Querie
 		return errors.New("orchestration: env manager became unavailable mid-dispatch")
 	}
 	if capture.BindingID == "" {
-		binding, err := s.envManager.CreateEnvBinding(ctx, EnvCreateBindingRequest{
-			SessionID:  capture.SessionID,
-			LeaseToken: capture.LeaseToken,
-			LeaseEpoch: capture.LeaseEpoch,
-			RunID:      attempt.RunID.String(),
-			TaskID:     attempt.TaskID.String(),
-			AttemptID:  attempt.ID.String(),
-			Purpose:    EnvBindingPurposePrimary,
-			Metadata:   capture.Metadata,
-		})
-		if err != nil {
-			return fmt.Errorf("orchestration: create env binding: %w", err)
+		if txBinder, ok := s.envManager.(interface {
+			CreateEnvBindingInTx(context.Context, *sqlc.Queries, EnvCreateBindingRequest) (EnvBindingHandle, error)
+		}); ok {
+			binding, err := txBinder.CreateEnvBindingInTx(ctx, qtx, EnvCreateBindingRequest{
+				SessionID:  capture.SessionID,
+				LeaseToken: capture.LeaseToken,
+				LeaseEpoch: capture.LeaseEpoch,
+				RunID:      attempt.RunID.String(),
+				TaskID:     attempt.TaskID.String(),
+				AttemptID:  attempt.ID.String(),
+				Purpose:    EnvBindingPurposePrimary,
+				Metadata:   capture.Metadata,
+			})
+			if err != nil {
+				return fmt.Errorf("orchestration: create env binding: %w", err)
+			}
+			capture.BindingID = binding.BindingID
+		} else {
+			binding, err := s.envManager.CreateEnvBinding(ctx, EnvCreateBindingRequest{
+				SessionID:  capture.SessionID,
+				LeaseToken: capture.LeaseToken,
+				LeaseEpoch: capture.LeaseEpoch,
+				RunID:      attempt.RunID.String(),
+				TaskID:     attempt.TaskID.String(),
+				AttemptID:  attempt.ID.String(),
+				Purpose:    EnvBindingPurposePrimary,
+				Metadata:   capture.Metadata,
+			})
+			if err != nil {
+				return fmt.Errorf("orchestration: create env binding: %w", err)
+			}
+			capture.BindingID = binding.BindingID
 		}
-		capture.BindingID = binding.BindingID
 	}
 	if err := qtx.UpdateOrchestrationInputManifestEnvCapture(ctx, sqlc.UpdateOrchestrationInputManifestEnvCaptureParams{
 		ID:                       manifestID,
@@ -170,8 +191,10 @@ func (s *Service) releaseEnvAfterFailedDispatch(ctx context.Context, capture *en
 	if capture == nil || s.envManager == nil {
 		return
 	}
+	cleanupCtx, cancel := envCleanupContext(ctx)
+	defer cancel()
 	if capture.BindingID != "" {
-		if err := s.envManager.ReleaseEnvBinding(ctx, EnvReleaseBindingRequest{
+		if err := s.envManager.ReleaseEnvBinding(cleanupCtx, EnvReleaseBindingRequest{
 			BindingID:  capture.BindingID,
 			LeaseToken: capture.LeaseToken,
 			LeaseEpoch: capture.LeaseEpoch,
@@ -184,7 +207,7 @@ func (s *Service) releaseEnvAfterFailedDispatch(ctx context.Context, capture *en
 			)
 		}
 	}
-	if err := s.envManager.ReleaseEnvSession(ctx, EnvReleaseSessionRequest{
+	if err := s.envManager.ReleaseEnvSession(cleanupCtx, EnvReleaseSessionRequest{
 		SessionID:  capture.SessionID,
 		LeaseToken: capture.LeaseToken,
 		LeaseEpoch: capture.LeaseEpoch,
@@ -198,26 +221,8 @@ func (s *Service) releaseEnvAfterFailedDispatch(ctx context.Context, capture *en
 	}
 }
 
-// releaseEnvForAttemptCommitFailure runs after a dispatch transaction commit
-// itself fails. The attempt row will not exist in Postgres but the env
-// session/binding might. We look up the manifest envelope from in-memory
-// state we already have on the attempt row and ask the env manager to
-// release. The reclaim loop is the safety net if this best-effort release
-// loses the race.
-func (s *Service) releaseEnvForAttemptCommitFailure(ctx context.Context, attempt sqlc.OrchestrationTaskAttempt) {
-	if s.envManager == nil {
-		return
-	}
-	manifestRow, err := s.queries.GetOrchestrationInputManifestByID(ctx, attempt.InputManifestID)
-	if err != nil {
-		// The manifest never made it to storage either; nothing to release.
-		return
-	}
-	capture, ok := decodeCapturedEnvPreconditions(manifestRow.CapturedEnvPreconditions)
-	if !ok {
-		return
-	}
-	s.releaseEnvAfterFailedDispatch(ctx, capture, "dispatch_commit_failed")
+func envCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 }
 
 // envCaptureForHash returns the deterministic projection of env state that

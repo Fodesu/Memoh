@@ -1031,6 +1031,60 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_verification_t
 CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_env_session ON orchestration_action_ledger(env_session_id, started_at, id) WHERE env_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_effect ON orchestration_action_ledger(run_id, effect_class, started_at, id) WHERE effect_class <> '';
 
+-- orchestration_side_effect_approval_tokens: HITL / policy grants for
+-- external_irreversible actions. Tokens are fenced to an attempt claim
+-- epoch and env lease epoch so approvals cannot be replayed across
+-- retries or resumed sessions.
+CREATE TABLE IF NOT EXISTS orchestration_side_effect_approval_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  attempt_id UUID NOT NULL REFERENCES orchestration_task_attempts(id) ON DELETE CASCADE,
+  claim_epoch BIGINT NOT NULL CHECK (claim_epoch > 0),
+  env_session_id UUID,
+  env_lease_epoch BIGINT NOT NULL DEFAULT 0 CHECK (env_lease_epoch >= 0),
+  effect_class TEXT NOT NULL DEFAULT 'external_irreversible' CHECK (effect_class IN ('external_irreversible')),
+  token_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'consumed', 'revoked', 'expired')),
+  approved_by TEXT NOT NULL DEFAULT '',
+  approval_reason TEXT NOT NULL DEFAULT '',
+  tool_call_id TEXT NOT NULL DEFAULT '',
+  consumed_action_id UUID REFERENCES orchestration_action_ledger(id) ON DELETE SET NULL,
+  expires_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT orchestration_side_effect_tokens_hash_unique UNIQUE (token_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_side_effect_tokens_attempt ON orchestration_side_effect_approval_tokens(attempt_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_side_effect_tokens_env ON orchestration_side_effect_approval_tokens(env_session_id, env_lease_epoch, status, id) WHERE env_session_id IS NOT NULL;
+
+-- orchestration_container_images: tenant-scoped image catalog entries
+-- used by env_resources. Registry entries point at an existing image
+-- ref; Dockerfile entries keep the build source until an image builder
+-- turns them into a ready image.
+CREATE TABLE IF NOT EXISTS orchestration_container_images (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id TEXT NOT NULL,
+  owner_subject TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'registry' CHECK (source_type IN ('registry', 'dockerfile')),
+  image_ref TEXT NOT NULL DEFAULT '',
+  dockerfile TEXT NOT NULL DEFAULT '',
+  build_options JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'pending', 'building', 'failed', 'archived')),
+  digest TEXT NOT NULL DEFAULT '',
+  last_build_error TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT orchestration_container_images_tenant_name_unique UNIQUE (tenant_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_container_images_tenant_status
+  ON orchestration_container_images (tenant_id, status, name, id);
+
 -- orchestration_env_resources: leasable env templates (container image,
 -- browser context, etc.) tenant-scoped with capacity and config.
 CREATE TABLE IF NOT EXISTS orchestration_env_resources (
@@ -1305,6 +1359,33 @@ BEGIN
     ALTER TABLE orchestration_action_ledger
       ADD CONSTRAINT orchestration_action_ledger_after_env_snapshot_fk
       FOREIGN KEY (after_env_snapshot_id) REFERENCES orchestration_env_snapshots(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_side_effect_tokens_task_run_fk') THEN
+    ALTER TABLE orchestration_side_effect_approval_tokens
+      ADD CONSTRAINT orchestration_side_effect_tokens_task_run_fk
+      FOREIGN KEY (task_id, run_id) REFERENCES orchestration_tasks(id, run_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_side_effect_tokens_attempt_fk') THEN
+    ALTER TABLE orchestration_side_effect_approval_tokens
+      ADD CONSTRAINT orchestration_side_effect_tokens_attempt_fk
+      FOREIGN KEY (attempt_id, run_id, task_id) REFERENCES orchestration_task_attempts(id, run_id, task_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_side_effect_tokens_env_session_fk') THEN
+    ALTER TABLE orchestration_side_effect_approval_tokens
+      ADD CONSTRAINT orchestration_side_effect_tokens_env_session_fk
+      FOREIGN KEY (env_session_id) REFERENCES orchestration_env_sessions(id) ON DELETE SET NULL;
   END IF;
 END $$;
 

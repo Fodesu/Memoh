@@ -50,6 +50,10 @@ func (p *EmailProvider) Tools(_ context.Context, session SessionContext) ([]sdk.
 					"body":        map[string]any{"type": "string", "description": "Email body content"},
 					"html":        map[string]any{"type": "boolean", "description": "Whether body is HTML (default false)"},
 					"provider_id": map[string]any{"type": "string", "description": "Email provider ID to send from (optional, uses default if omitted)"},
+					"approval_token": map[string]any{
+						"type":        "string",
+						"description": "One-time approval token for orchestration runs that require irreversible side-effect approval.",
+					},
 				},
 				"required": []string{"to", "subject", "body"},
 			},

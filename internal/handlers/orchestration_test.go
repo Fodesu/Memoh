@@ -23,6 +23,7 @@ type fakeOrchestrationService struct {
 	cancelRun             func(context.Context, orchestration.ControlIdentity, string, orchestration.CancelRunRequest) (*orchestration.CancelRunResult, error)
 	getRunSnapshot        func(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunSnapshot, error)
 	getRunSnapshotAtSeq   func(context.Context, orchestration.ControlIdentity, string, uint64) (*orchestration.RunSnapshot, error)
+	listRuns              func(context.Context, orchestration.ControlIdentity, orchestration.ListRunsRequest) (*orchestration.RunListPage, error)
 	listBotRuns           func(context.Context, orchestration.ControlIdentity, string, orchestration.ListBotRunsRequest) (*orchestration.RunListPage, error)
 	getRunInspector       func(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunInspector, error)
 	listRunTasks          func(context.Context, orchestration.ControlIdentity, string, orchestration.ListRunTasksRequest) (*orchestration.TaskPage, error)
@@ -51,6 +52,13 @@ func (f fakeOrchestrationService) GetRunSnapshot(ctx context.Context, caller orc
 
 func (f fakeOrchestrationService) GetRunSnapshotAtSeq(ctx context.Context, caller orchestration.ControlIdentity, runID string, asOfSeq uint64) (*orchestration.RunSnapshot, error) {
 	return f.getRunSnapshotAtSeq(ctx, caller, runID, asOfSeq)
+}
+
+func (f fakeOrchestrationService) ListRuns(ctx context.Context, caller orchestration.ControlIdentity, req orchestration.ListRunsRequest) (*orchestration.RunListPage, error) {
+	if f.listRuns == nil {
+		return &orchestration.RunListPage{}, nil
+	}
+	return f.listRuns(ctx, caller, req)
 }
 
 func (f fakeOrchestrationService) ListBotRuns(ctx context.Context, caller orchestration.ControlIdentity, botID string, req orchestration.ListBotRunsRequest) (*orchestration.RunListPage, error) {

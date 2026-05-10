@@ -307,6 +307,7 @@ type RegisterResourceRequest struct {
 // template.
 type UpdateResourceRequest struct {
 	ID       string
+	Name     string
 	Config   map[string]any
 	Capacity int
 	Status   string

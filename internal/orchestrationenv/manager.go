@@ -173,6 +173,7 @@ func (m *Manager) UpdateResource(ctx context.Context, req UpdateResourceRequest)
 	}
 	row, err := m.queries.UpdateOrchestrationEnvResource(ctx, sqlc.UpdateOrchestrationEnvResourceParams{
 		ID:       pgID,
+		Name:     req.Name,
 		Config:   encodeObject(req.Config),
 		Capacity: int32(req.Capacity), //nolint:gosec // capacity is small and CHECK > 0
 		Status:   req.Status,
@@ -186,6 +187,31 @@ func (m *Manager) UpdateResource(ctx context.Context, req UpdateResourceRequest)
 	}
 	resource := projectResource(row)
 	return &resource, nil
+}
+
+// DeleteResource removes an unused resource template. Resources that
+// have ever allocated sessions stay in place so run history and audit
+// records keep a stable foreign key; callers can archive those instead.
+func (m *Manager) DeleteResource(ctx context.Context, id string) error {
+	pgID, err := db.ParseUUID(strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("%w: invalid resource id", ErrInvalidArgument)
+	}
+	_, err = m.GetResource(ctx, id)
+	if err != nil {
+		return err
+	}
+	count, err := m.queries.CountOrchestrationEnvSessionsByResource(ctx, pgID)
+	if err != nil {
+		return fmt.Errorf("env: count resource sessions: %w", err)
+	}
+	if count > 0 {
+		return ErrResourceInUse
+	}
+	if err := m.queries.DeleteOrchestrationEnvResource(ctx, pgID); err != nil {
+		return fmt.Errorf("env: delete resource: %w", err)
+	}
+	return nil
 }
 
 // ListResources returns every resource for a tenant, alphabetised so
@@ -417,6 +443,17 @@ func (m *Manager) RenewSessionLease(ctx context.Context, req RenewSessionLeaseRe
 // link. Only one active or held binding per session is allowed; the
 // schema enforces it via partial unique index.
 func (m *Manager) CreateBinding(ctx context.Context, req CreateBindingRequest) (*Binding, error) {
+	return m.createBinding(ctx, m.queries, req)
+}
+
+func (m *Manager) CreateBindingInTx(ctx context.Context, qtx *sqlc.Queries, req CreateBindingRequest) (*Binding, error) {
+	if qtx == nil {
+		return nil, fmt.Errorf("%w: queries is required", ErrInvalidArgument)
+	}
+	return m.createBinding(ctx, qtx, req)
+}
+
+func (*Manager) createBinding(ctx context.Context, qtx *sqlc.Queries, req CreateBindingRequest) (*Binding, error) {
 	if err := validateCreateBinding(&req); err != nil {
 		return nil, err
 	}
@@ -425,11 +462,15 @@ func (m *Manager) CreateBinding(ctx context.Context, req CreateBindingRequest) (
 		return nil, fmt.Errorf("%w: invalid session id", ErrInvalidArgument)
 	}
 
-	session, _, err := m.lookupSessionAndBackend(ctx, sessionUUID)
+	sessionRow, err := qtx.GetOrchestrationEnvSessionByIDForUpdate(ctx, sessionUUID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, fmt.Errorf("env: get session: %w", err)
 	}
-	if err := assertLeaseMatches(session, req.LeaseToken, req.LeaseEpoch); err != nil {
+	session := projectSession(sessionRow)
+	if err := assertLeaseMatches(&session, req.LeaseToken, req.LeaseEpoch); err != nil {
 		return nil, err
 	}
 	if isTerminalSessionStatus(session.Status) {
@@ -454,7 +495,7 @@ func (m *Manager) CreateBinding(ctx context.Context, req CreateBindingRequest) (
 	if purpose == "" {
 		purpose = BindingPurposePrimary
 	}
-	row, err := m.queries.CreateOrchestrationEnvBinding(ctx, sqlc.CreateOrchestrationEnvBindingParams{
+	row, err := qtx.CreateOrchestrationEnvBinding(ctx, sqlc.CreateOrchestrationEnvBindingParams{
 		ID:                  idUUID,
 		TenantID:            session.TenantID,
 		RunID:               runUUID,

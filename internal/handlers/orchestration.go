@@ -22,6 +22,7 @@ type orchestrationAPI interface {
 	CancelRun(context.Context, orchestration.ControlIdentity, string, orchestration.CancelRunRequest) (*orchestration.CancelRunResult, error)
 	GetRunSnapshot(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunSnapshot, error)
 	GetRunSnapshotAtSeq(context.Context, orchestration.ControlIdentity, string, uint64) (*orchestration.RunSnapshot, error)
+	ListRuns(context.Context, orchestration.ControlIdentity, orchestration.ListRunsRequest) (*orchestration.RunListPage, error)
 	ListBotRuns(context.Context, orchestration.ControlIdentity, string, orchestration.ListBotRunsRequest) (*orchestration.RunListPage, error)
 	GetRunInspector(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunInspector, error)
 	ListRunTasks(context.Context, orchestration.ControlIdentity, string, orchestration.ListRunTasksRequest) (*orchestration.TaskPage, error)
@@ -53,6 +54,7 @@ func NewOrchestrationHandler(log *slog.Logger, service *orchestration.Service, b
 func (h *OrchestrationHandler) Register(e *echo.Echo) {
 	group := e.Group("/orchestration")
 	group.GET("/bots/:bot_id/runs", h.ListBotRuns)
+	group.GET("/runs", h.ListRuns)
 	group.POST("/runs", h.StartRun)
 	group.POST("/runs/:run_id/cancel", h.CancelRun)
 	group.GET("/runs/:run_id/inspector", h.GetRunInspector)
@@ -142,6 +144,34 @@ func (h *OrchestrationHandler) StartRun(c echo.Context) error {
 		return h.httpError(err)
 	}
 	return c.JSON(http.StatusCreated, handle)
+}
+
+// ListRuns godoc
+// @Summary List orchestration runs
+// @Description List orchestration runs started under the authenticated user
+// @Tags orchestration
+// @Security BearerAuth
+// @Param limit query int false "Maximum number of runs"
+// @Success 200 {object} orchestration.RunListPage
+// @Failure 400 {object} ErrorResponse
+// @Failure 401 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /orchestration/runs [get].
+func (h *OrchestrationHandler) ListRuns(c echo.Context) error {
+	caller, err := controlIdentity(c)
+	if err != nil {
+		return err
+	}
+	var req orchestration.ListRunsRequest
+	req.Limit, err = parsePositiveIntQuery(c, "limit")
+	if err != nil {
+		return err
+	}
+	page, err := h.service.ListRuns(c.Request().Context(), caller, req)
+	if err != nil {
+		return h.httpError(err)
+	}
+	return c.JSON(http.StatusOK, page)
 }
 
 // ListBotRuns godoc

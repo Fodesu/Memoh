@@ -4,9 +4,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	"github.com/memohai/memoh/internal/orchestration"
 )
+
+func testEnvResourceCatalog() envResourceCatalog {
+	return newEnvResourceCatalog([]sqlc.OrchestrationEnvResource{
+		{Name: "browser", Kind: orchestration.EnvPreconditionsKindBrowser, Status: "active"},
+		{Name: "ubuntu-default", Kind: orchestration.EnvPreconditionsKindContainer, Status: "active"},
+	})
+}
 
 func TestDecodeJSONObjectTextStripsCodeFence(t *testing.T) {
 	payload, err := decodeJSONObjectText("```json\n{\"status\":\"completed\",\"summary\":\"ok\"}\n```")
@@ -18,215 +27,162 @@ func TestDecodeJSONObjectTextStripsCodeFence(t *testing.T) {
 	}
 }
 
-func TestDecodeStartRunPlannerPayloadRequiresChildTasks(t *testing.T) {
-	_, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary": "single task",
-	})
-	if err == nil {
-		t.Fatal("decodeStartRunPlannerPayload() error = nil, want missing child_tasks error")
+func TestClassifyToolEffectMarksSendEmailIrreversible(t *testing.T) {
+	if got := classifyToolEffect("send_email"); got != "external_irreversible" {
+		t.Fatalf("classifyToolEffect(send_email) = %q, want external_irreversible", got)
+	}
+	if got := classifyToolEffect("send"); got != "external_write" {
+		t.Fatalf("classifyToolEffect(send) = %q, want external_write", got)
 	}
 }
 
-func TestDecodeStartRunPlannerPayloadRejectsUnknownFields(t *testing.T) {
-	_, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary":     "split",
-		"child_tasks": []any{map[string]any{"goal": "step a", "depends_on_aliases": []any{}}},
-	})
-	if err == nil {
-		t.Fatal("decodeStartRunPlannerPayload() error = nil, want unknown field error")
+func TestSideEffectApprovalTokenHelpers(t *testing.T) {
+	token := " approval-secret "
+	if got := approvalTokenFromInput(map[string]any{"approval_token": token}); got != "approval-secret" {
+		t.Fatalf("approvalTokenFromInput() = %q, want trimmed token", got)
 	}
-}
-
-func TestDecodeStartRunPlannerPayloadValidatesChildTasks(t *testing.T) {
-	plan, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary": "split",
-		"child_tasks": []any{
-			map[string]any{
-				"alias":               "a",
-				"kind":                "step",
-				"goal":                "step a",
-				"inputs":              map[string]any{"x": "1"},
-				"depends_on":          []any{},
-				"worker_profile":      "llm.default",
-				"priority":            float64(2),
-				"retry_policy":        map[string]any{},
-				"verification_policy": map[string]any{"mode": "builtin.basic"},
-				"env_preconditions":   map[string]any{"required": false},
-				"blackboard_scope":    "run.a",
-			},
+	if sideEffectApprovalTokenHash(token) != sideEffectApprovalTokenHash("approval-secret") {
+		t.Fatal("sideEffectApprovalTokenHash() should trim tokens before hashing")
+	}
+	sessionID := "00000000-0000-0000-0000-000000000123"
+	envSessionID, envLeaseEpoch := sideEffectEnvFence(map[string]any{
+		"captured_env_preconditions": map[string]any{
+			"session_id":  sessionID,
+			"lease_epoch": float64(7),
 		},
 	})
-	if err != nil {
-		t.Fatalf("decodeStartRunPlannerPayload() error = %v", err)
-	}
-	if plan.Summary != "split" || len(plan.ChildTasks) != 1 {
-		t.Fatalf("plan = %#v, want summary and one child", plan)
-	}
-	child := plan.ChildTasks[0]
-	if child.Alias != "a" || child.Goal != "step a" || child.Priority != 2 {
-		t.Fatalf("child = %#v, want normalized task fields", child)
-	}
-	if child.VerificationPolicy["mode"] != "builtin.basic" {
-		t.Fatalf("verification policy = %#v, want preserved policy", child.VerificationPolicy)
-	}
-	if child.EnvPreconditions.Required {
-		t.Fatalf("env_preconditions.required = true, want false")
+	if !envSessionID.Valid || envSessionID.String() != sessionID || envLeaseEpoch != 7 {
+		t.Fatalf("sideEffectEnvFence() = (%s,%d), want (%s,7)", envSessionID.String(), envLeaseEpoch, sessionID)
 	}
 }
 
-func TestDecodeStartRunPlannerPayloadAcceptsEnvBoundChildTask(t *testing.T) {
-	plan, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary": "container task",
-		"child_tasks": []any{
-			map[string]any{
-				"goal": "patch repo",
-				"env_preconditions": map[string]any{
-					"required":      true,
-					"kind":          "container",
-					"resource_name": "ubuntu-default",
-					"effect_class":  "internal",
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("decodeStartRunPlannerPayload() error = %v", err)
-	}
-	got := plan.ChildTasks[0].EnvPreconditions
-	if !got.Required || got.Kind != "container" || got.ResourceName != "ubuntu-default" || got.EffectClass != "internal" {
-		t.Fatalf("env_preconditions = %#v, want container/ubuntu-default/internal", got)
-	}
-}
-
-func TestDecodeStartRunPlannerPayloadRejectsMissingEnvPreconditions(t *testing.T) {
-	_, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary": "missing env",
-		"child_tasks": []any{
-			map[string]any{"goal": "step a"},
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "env_preconditions is required") {
-		t.Fatalf("decodeStartRunPlannerPayload() error = %v, want env_preconditions required", err)
-	}
-}
-
-func TestDecodeStartRunPlannerPayloadRejectsInvalidEnvKind(t *testing.T) {
-	_, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary": "bad kind",
-		"child_tasks": []any{
-			map[string]any{
-				"goal": "step a",
-				"env_preconditions": map[string]any{
-					"required":      true,
-					"kind":          "vm",
-					"resource_name": "anything",
-				},
-			},
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "env_preconditions.kind") {
-		t.Fatalf("decodeStartRunPlannerPayload() error = %v, want kind validation error", err)
-	}
-}
-
-func TestDecodeStartRunPlannerPayloadRejectsRequiredWithoutResourceName(t *testing.T) {
-	_, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary": "missing resource",
-		"child_tasks": []any{
-			map[string]any{
-				"goal": "step a",
-				"env_preconditions": map[string]any{
-					"required": true,
-					"kind":     "container",
-				},
-			},
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "resource_name") {
-		t.Fatalf("decodeStartRunPlannerPayload() error = %v, want resource_name required", err)
-	}
-}
-
-func TestDecodeStartRunPlannerPayloadRejectsFractionalPriority(t *testing.T) {
-	_, err := decodeStartRunPlannerPayload(map[string]any{
-		"summary": "split",
-		"child_tasks": []any{
-			map[string]any{
-				"goal":     "step a",
-				"priority": float64(1.5),
-			},
-		},
-	})
-	if err == nil {
-		t.Fatal("decodeStartRunPlannerPayload() error = nil, want fractional priority error")
-	}
-}
-
-func TestDecodeReplanPlannerPayloadUsesStrictChildTaskSchema(t *testing.T) {
-	plan, err := decodeReplanPlannerPayload(map[string]any{
-		"summary": "replace failed task",
-		"child_tasks": []any{
-			map[string]any{
-				"alias":             "replacement",
-				"goal":              "repair and rerun the failed step",
-				"worker_profile":    "llm.default",
-				"depends_on":        []any{},
-				"env_preconditions": map[string]any{"required": false},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("decodeReplanPlannerPayload() error = %v", err)
-	}
-	if plan.Summary != "replace failed task" || len(plan.ChildTasks) != 1 {
-		t.Fatalf("plan = %#v, want summary and one child", plan)
-	}
-	if plan.ChildTasks[0].Alias != "replacement" {
-		t.Fatalf("child alias = %q, want replacement", plan.ChildTasks[0].Alias)
-	}
-}
-
-func TestDecodeReplanPlannerPayloadRejectsLegacyAliases(t *testing.T) {
-	tests := []struct {
-		name string
-		task map[string]any
-	}{
+func TestBuildEnvDriftContextDetectsDigestChanges(t *testing.T) {
+	rows := []sqlc.OrchestrationEnvSnapshot{
 		{
-			name: "id",
-			task: map[string]any{
-				"id":   "legacy",
-				"goal": "repair and rerun the failed step",
-			},
+			ID:          mustPGUUIDForExecTest(t, "00000000-0000-0000-0000-000000000001"),
+			SessionID:   mustPGUUIDForExecTest(t, "00000000-0000-0000-0000-000000000010"),
+			Kind:        "pre_action",
+			EffectClass: "env_local_mutation",
+			Digest:      "before",
+			RuntimeRef:  []byte(`{"ref":"pre"}`),
+			Metadata:    []byte(`{"phase":"before"}`),
 		},
 		{
-			name: "depends_on_aliases",
-			task: map[string]any{
-				"alias":              "replacement",
-				"goal":               "repair and rerun the failed step",
-				"depends_on_aliases": []any{"legacy"},
-			},
+			ID:          mustPGUUIDForExecTest(t, "00000000-0000-0000-0000-000000000002"),
+			SessionID:   mustPGUUIDForExecTest(t, "00000000-0000-0000-0000-000000000010"),
+			Kind:        "periodic",
+			EffectClass: "env_local_mutation",
+			Digest:      "middle",
+		},
+		{
+			ID:          mustPGUUIDForExecTest(t, "00000000-0000-0000-0000-000000000003"),
+			SessionID:   mustPGUUIDForExecTest(t, "00000000-0000-0000-0000-000000000010"),
+			Kind:        "post_action",
+			EffectClass: "env_local_mutation",
+			Digest:      "after",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := decodeReplanPlannerPayload(map[string]any{
-				"summary":     "replace failed task",
-				"child_tasks": []any{tt.task},
-			})
-			if err == nil {
-				t.Fatal("decodeReplanPlannerPayload() error = nil, want legacy field error")
-			}
-		})
+	ctx := buildEnvDriftContext(rows)
+	if ctx["status"] != "changed" || ctx["changed"] != true {
+		t.Fatalf("env drift context = %#v, want changed=true", ctx)
+	}
+	if ctx["before_digest"] != "before" || ctx["after_digest"] != "after" || ctx["periodic_count"] != 1 {
+		t.Fatalf("env drift digest summary = %#v, want before/after plus periodic count", ctx)
+	}
+	snapshots, ok := ctx["snapshots"].([]map[string]any)
+	if !ok || len(snapshots) != 3 {
+		t.Fatalf("snapshots = %#v, want three projected snapshots", ctx["snapshots"])
+	}
+	if snapshots[0]["runtime_ref"].(map[string]any)["ref"] != "pre" {
+		t.Fatalf("runtime_ref = %#v, want decoded ref", snapshots[0]["runtime_ref"])
 	}
 }
 
-func TestDecodeReplanPlannerPayloadRejectsEmptyReplacement(t *testing.T) {
-	_, err := decodeReplanPlannerPayload(map[string]any{
-		"summary":     "no safe replacement",
-		"child_tasks": []any{},
+func TestBuildEnvDriftContextReportsUnchanged(t *testing.T) {
+	ctx := buildEnvDriftContext([]sqlc.OrchestrationEnvSnapshot{
+		{Kind: "pre_action", Digest: "same"},
+		{Kind: "post_action", Digest: "same"},
 	})
-	if err == nil {
-		t.Fatal("decodeReplanPlannerPayload() error = nil, want empty replacement error")
+	if ctx["status"] != "unchanged" || ctx["changed"] != false {
+		t.Fatalf("env drift context = %#v, want unchanged", ctx)
+	}
+}
+
+func TestPlannerToolInputAcceptsBrowserEnvPreconditions(t *testing.T) {
+	task, err := plannerFlatTaskInputToSpec("child_tasks[0]", map[string]any{
+		"alias":             "open",
+		"goal":              "open example.com and report the title",
+		"worker_profile":    orchestration.DefaultRootWorkerProfile,
+		"env_required":      true,
+		"env_kind":          orchestration.EnvPreconditionsKindBrowser,
+		"env_resource_name": "browser",
+		"env_mode":          orchestration.EnvPreconditionsModeContext,
+		"env_effect_class":  orchestration.EnvPreconditionsEffectExternalIdempotent,
+	}, testEnvResourceCatalog(), true)
+	if err != nil {
+		t.Fatalf("plannerFlatTaskInputToSpec() error = %v", err)
+	}
+	if task.WorkerProfile != orchestration.DefaultRootWorkerProfile {
+		t.Fatalf("worker_profile = %q, want %q", task.WorkerProfile, orchestration.DefaultRootWorkerProfile)
+	}
+	if !task.EnvPreconditions.Required || task.EnvPreconditions.Kind != orchestration.EnvPreconditionsKindBrowser || task.EnvPreconditions.ResourceName != "browser" || task.EnvPreconditions.Mode != orchestration.EnvPreconditionsModeContext {
+		t.Fatalf("env_preconditions = %#v, want browser context resource", task.EnvPreconditions)
+	}
+}
+
+func TestPlannerToolInputAcceptsBrowserEnvOnRootTaskWithoutChildren(t *testing.T) {
+	rootTask, err := plannerFlatTaskInputToSpec("root_task", map[string]any{
+		"goal":              "open example.com and report the title",
+		"worker_profile":    orchestration.DefaultRootWorkerProfile,
+		"env_required":      true,
+		"env_kind":          orchestration.EnvPreconditionsKindBrowser,
+		"env_resource_name": "browser",
+	}, testEnvResourceCatalog(), false)
+	if err != nil {
+		t.Fatalf("plannerFlatTaskInputToSpec() error = %v", err)
+	}
+	if !rootTask.EnvPreconditions.Required || rootTask.EnvPreconditions.Kind != orchestration.EnvPreconditionsKindBrowser || rootTask.EnvPreconditions.ResourceName != "browser" || rootTask.EnvPreconditions.Mode != orchestration.EnvPreconditionsModeContext {
+		t.Fatalf("root env_preconditions = %#v, want browser context resource", rootTask.EnvPreconditions)
+	}
+}
+
+func TestPlannerToolInputRejectsUnknownEnvResource(t *testing.T) {
+	_, err := plannerFlatTaskInputToSpec("child_tasks[0]", map[string]any{
+		"alias":             "open",
+		"goal":              "patch repo",
+		"env_required":      true,
+		"env_kind":          orchestration.EnvPreconditionsKindContainer,
+		"env_resource_name": "interactive_browser",
+	}, testEnvResourceCatalog(), true)
+	if err == nil || !strings.Contains(err.Error(), "must reference an existing env resource") {
+		t.Fatalf("plannerFlatTaskInputToSpec error = %v, want unknown env resource rejection", err)
+	}
+}
+
+func TestPlannerToolInputRejectsEnvResourceKindMismatch(t *testing.T) {
+	_, err := plannerFlatTaskInputToSpec("child_tasks[0]", map[string]any{
+		"alias":             "open",
+		"goal":              "open example.com",
+		"env_required":      true,
+		"env_kind":          orchestration.EnvPreconditionsKindBrowser,
+		"env_resource_name": "ubuntu-default",
+	}, testEnvResourceCatalog(), true)
+	if err == nil || !strings.Contains(err.Error(), `has kind "container", not "browser"`) {
+		t.Fatalf("plannerFlatTaskInputToSpec error = %v, want kind mismatch rejection", err)
+	}
+}
+
+func TestPlannerToolInputRejectsBrowserCapableWorkerProfile(t *testing.T) {
+	_, err := plannerFlatTaskInputToSpec("child_tasks[0]", map[string]any{
+		"alias":             "open",
+		"goal":              "open example.com",
+		"worker_profile":    "browser-capable",
+		"env_required":      true,
+		"env_kind":          orchestration.EnvPreconditionsKindBrowser,
+		"env_resource_name": "browser",
+	}, testEnvResourceCatalog(), true)
+	if err == nil || !strings.Contains(err.Error(), "browser access must be declared") {
+		t.Fatalf("plannerFlatTaskInputToSpec() error = %v, want browser-capable rejection", err)
 	}
 }
 
@@ -282,7 +238,156 @@ func TestBuildReplanPlannerPromptIncludesFailureContext(t *testing.T) {
 	}
 }
 
-func TestDecodeAttemptCompletionPayloadPromotesTopLevelChildTasks(t *testing.T) {
+func TestBuildPlannerPromptsUseOrchestrationEnvelope(t *testing.T) {
+	startPrompt := buildStartRunPlannerPrompt(orchestration.StartRunPlanningInput{
+		Run: orchestration.Run{
+			ID:       "run-1",
+			TenantID: "tenant-1",
+			Goal:     "open a page and summarize it",
+			Input:    map[string]any{"url": "https://example.com"},
+		},
+		RootTask: orchestration.Task{
+			ID:            "task-root",
+			Goal:          "open a page and summarize it",
+			Inputs:        map[string]any{"url": "https://example.com"},
+			WorkerProfile: orchestration.DefaultRootWorkerProfile,
+			EnvPreconditions: orchestration.EnvPreconditions{
+				Required: false,
+			},
+		},
+	})
+	for _, expected := range []string{
+		`<orchestration-context kind="start_run_planning">`,
+		"<run>",
+		"<root_task>",
+		"open a page and summarize it",
+		"https://example.com",
+	} {
+		if !strings.Contains(startPrompt, expected) {
+			t.Fatalf("start planner prompt missing %q: %s", expected, startPrompt)
+		}
+	}
+
+	replanPrompt := buildReplanPlannerPrompt(orchestration.ReplanPlanningInput{
+		Run:        orchestration.Run{ID: "run-2", Goal: "repair report", PlannerEpoch: 3},
+		SourceTask: orchestration.Task{ID: "task-2", Goal: "write report"},
+		Reason:     "verification rejected output",
+	})
+	for _, expected := range []string{
+		`<orchestration-context kind="replanning">`,
+		"<source_task>",
+		"<source_attempt>",
+		"<source_result>",
+		"<subtree_tasks>",
+		"<dependencies>",
+		"<injected_hint>",
+		"verification rejected output",
+	} {
+		if !strings.Contains(replanPrompt, expected) {
+			t.Fatalf("replan prompt missing %q: %s", expected, replanPrompt)
+		}
+	}
+}
+
+func TestBuildRuntimePromptsUseOrchestrationEnvelope(t *testing.T) {
+	workerPrompt := buildWorkerPrompt(attemptExecutionContext{
+		Run: sqlc.OrchestrationRun{
+			TenantID:       "tenant-1",
+			OwnerSubject:   "user-1",
+			Goal:           "run shell command",
+			SourceMetadata: []byte(`{"bot_id":"bot-1"}`),
+		},
+		Task: sqlc.OrchestrationTask{
+			Goal:          "print env",
+			Kind:          "step",
+			WorkerProfile: orchestration.DefaultRootWorkerProfile,
+		},
+		Attempt: orchestration.TaskAttempt{ID: "attempt-1", AttemptNo: 1},
+		InputManifest: map[string]any{
+			"captured_env_preconditions": map[string]any{
+				"required": true,
+			},
+		},
+		Predecessors: []map[string]any{{"summary": "prepared"}},
+	})
+	for _, expected := range []string{
+		`<orchestration-context kind="task_attempt">`,
+		"<run>",
+		"<task>",
+		"<attempt>",
+		"<input_manifest>",
+		"<predecessor_results>",
+		"captured_env_preconditions",
+		"prepared",
+	} {
+		if !strings.Contains(workerPrompt, expected) {
+			t.Fatalf("worker prompt missing %q: %s", expected, workerPrompt)
+		}
+	}
+
+	verifierPrompt := buildVerifierPrompt(verificationExecutionContext{
+		Run: sqlc.OrchestrationRun{
+			TenantID:     "tenant-1",
+			OwnerSubject: "user-1",
+			Goal:         "verify result",
+		},
+		Task:         sqlc.OrchestrationTask{Goal: "print env", WorkerProfile: orchestration.DefaultRootWorkerProfile},
+		Result:       sqlc.OrchestrationTaskResult{Status: orchestration.TaskAttemptStatusCompleted, Summary: "done"},
+		Verification: orchestration.TaskVerification{ID: "verification-1", AttemptNo: 1, VerifierProfile: orchestration.DefaultVerifierProfile},
+		EnvDrift:     map[string]any{"status": "unchanged"},
+	})
+	for _, expected := range []string{
+		`<orchestration-context kind="task_verification">`,
+		"<result>",
+		"<verification>",
+		"<env_drift>",
+		"unchanged",
+	} {
+		if !strings.Contains(verifierPrompt, expected) {
+			t.Fatalf("verifier prompt missing %q: %s", expected, verifierPrompt)
+		}
+	}
+}
+
+func TestOrchestrationUserPromptsDoNotUseLegacyContextJSONPrefix(t *testing.T) {
+	prompts := []string{
+		buildStartRunPlannerPrompt(orchestration.StartRunPlanningInput{}),
+		buildReplanPlannerPrompt(orchestration.ReplanPlanningInput{}),
+		buildWorkerPrompt(attemptExecutionContext{}),
+		buildVerifierPrompt(verificationExecutionContext{}),
+	}
+	for index, prompt := range prompts {
+		for _, unexpected := range []string{
+			"Context JSON:",
+			"Execute the following orchestration task.",
+			"Verify the following orchestration task result.",
+		} {
+			if strings.Contains(prompt, unexpected) {
+				t.Fatalf("prompt %d contains legacy prefix %q: %s", index, unexpected, prompt)
+			}
+		}
+	}
+}
+
+func TestPlannerSystemPromptsDoNotDescribeJSONOutput(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"start_run": startRunPlannerSystemPrompt,
+		"replan":    replanPlannerSystemPrompt,
+	} {
+		for _, unexpected := range []string{
+			"JSON",
+			"markdown",
+			"free-form",
+			"child_tasks=[]",
+		} {
+			if strings.Contains(prompt, unexpected) {
+				t.Fatalf("%s planner prompt contains legacy output wording %q: %s", name, unexpected, prompt)
+			}
+		}
+	}
+}
+
+func TestDecodeAttemptCompletionPayloadDoesNotPromoteChildTasks(t *testing.T) {
 	completion, err := decodeAttemptCompletionPayload(
 		orchestration.TaskAttempt{ID: "attempt-1", ClaimToken: "claim-1"},
 		sqlc.OrchestrationTask{Goal: "compute fib"},
@@ -291,7 +396,12 @@ func TestDecodeAttemptCompletionPayloadPromotesTopLevelChildTasks(t *testing.T) 
 			"summary":        "needs decomposition",
 			"request_replan": true,
 			"child_tasks": []any{
-				map[string]any{"goal": "step a"},
+				map[string]any{
+					"goal": "step a",
+					"env_preconditions": map[string]any{
+						"required": false,
+					},
+				},
 			},
 		},
 	)
@@ -301,9 +411,75 @@ func TestDecodeAttemptCompletionPayloadPromotesTopLevelChildTasks(t *testing.T) 
 	if !completion.RequestReplan {
 		t.Fatal("RequestReplan = false, want true")
 	}
-	childTasks, ok := completion.StructuredOutput["child_tasks"].([]any)
-	if !ok || len(childTasks) != 1 {
-		t.Fatalf("structured_output.child_tasks = %#v, want 1 item", completion.StructuredOutput["child_tasks"])
+	if _, ok := completion.StructuredOutput["child_tasks"]; ok {
+		t.Fatalf("structured_output.child_tasks = %#v, want no worker-created replacement tasks", completion.StructuredOutput["child_tasks"])
+	}
+}
+
+func TestFinishAttemptInputPayloadReusesCompletionValidation(t *testing.T) {
+	completion, err := decodeAttemptCompletionPayload(
+		orchestration.TaskAttempt{ID: "attempt-1", ClaimToken: "claim-1"},
+		sqlc.OrchestrationTask{Goal: "open page"},
+		finishAttemptInputPayload(finishAttemptInput{
+			Status:               orchestration.TaskAttemptStatusCompleted,
+			Summary:              "needs browser follow-up",
+			RequestReplan:        true,
+			StructuredOutputJSON: `{"child_tasks":[{"goal":"open example.com"}],"note":"browser follow-up"}`,
+		}, nil),
+		testEnvResourceCatalog(),
+	)
+	if err != nil {
+		t.Fatalf("decodeAttemptCompletionPayload error = %v", err)
+	}
+	if !completion.RequestReplan {
+		t.Fatal("RequestReplan = false, want true")
+	}
+	if _, ok := completion.StructuredOutput["child_tasks"]; ok {
+		t.Fatalf("structured_output.child_tasks = %#v, want no worker-created replacement tasks", completion.StructuredOutput["child_tasks"])
+	}
+	if completion.StructuredOutput["note"] != "browser follow-up" {
+		t.Fatalf("structured_output = %#v, want preserved note", completion.StructuredOutput)
+	}
+}
+
+func TestFlatFinishAttemptCollectsArtifactIntents(t *testing.T) {
+	artifact, err := decodeFlatArtifactIntent(map[string]any{
+		"kind":          "screenshot",
+		"uri":           "/data/screenshots/github.png",
+		"content_type":  "image/png",
+		"summary":       "GitHub screenshot",
+		"metadata_json": `{"bytes":1722214}`,
+	})
+	if err != nil {
+		t.Fatalf("decodeFlatArtifactIntent error = %v", err)
+	}
+	completion, err := decodeAttemptCompletionPayload(
+		orchestration.TaskAttempt{ID: "attempt-1", ClaimToken: "claim-1"},
+		sqlc.OrchestrationTask{Goal: "open page"},
+		finishAttemptInputPayload(finishAttemptInput{
+			Status:  orchestration.TaskAttemptStatusCompleted,
+			Summary: "captured screenshot",
+		}, []orchestration.AttemptArtifactIntent{artifact}),
+	)
+	if err != nil {
+		t.Fatalf("decodeAttemptCompletionPayload error = %v", err)
+	}
+	if len(completion.ArtifactIntents) != 1 {
+		t.Fatalf("ArtifactIntents = %#v, want 1 item", completion.ArtifactIntents)
+	}
+	if completion.ArtifactIntents[0].URI != "/data/screenshots/github.png" || completion.ArtifactIntents[0].Metadata["bytes"] != float64(1722214) {
+		t.Fatalf("ArtifactIntents[0] = %#v, want screenshot metadata", completion.ArtifactIntents[0])
+	}
+}
+
+func TestFlatFinishAttemptRejectsLegacyNestedFields(t *testing.T) {
+	_, err := decodeFlatFinishAttemptInput(map[string]any{
+		"status":           orchestration.TaskAttemptStatusCompleted,
+		"summary":          "done",
+		"artifact_intents": "[]",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("decodeFlatFinishAttemptInput error = %v, want unknown legacy field rejection", err)
 	}
 }
 
@@ -324,4 +500,34 @@ func TestDecodeVerificationCompletionPayloadDefaultsRejectReason(t *testing.T) {
 	if completion.TerminalReason != "result is inconsistent" {
 		t.Fatalf("TerminalReason = %q, want summary fallback", completion.TerminalReason)
 	}
+}
+
+func TestFinishVerificationInputPayloadReusesCompletionValidation(t *testing.T) {
+	completion, err := decodeVerificationCompletionPayload(
+		orchestration.TaskVerification{ID: "verification-1", ClaimToken: "claim-1"},
+		sqlc.OrchestrationTask{Goal: "verify page title"},
+		sqlc.OrchestrationTaskResult{Summary: "worker result"},
+		finishVerificationInputPayload(finishVerificationInput{
+			Status:         orchestration.TaskVerificationStatusFailed,
+			Verdict:        orchestration.VerificationVerdictRejected,
+			Summary:        "title was wrong",
+			FailureClass:   "verifier_retryable",
+			TerminalReason: "expected Example Domain",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("decodeVerificationCompletionPayload error = %v", err)
+	}
+	if completion.Verdict != orchestration.VerificationVerdictRejected || completion.FailureClass != "verifier_retryable" {
+		t.Fatalf("verification completion = %#v, want rejected retryable", completion)
+	}
+}
+
+func mustPGUUIDForExecTest(t *testing.T, raw string) pgtype.UUID {
+	t.Helper()
+	var id pgtype.UUID
+	if err := id.Scan(raw); err != nil {
+		t.Fatalf("parse uuid %q: %v", raw, err)
+	}
+	return id
 }
