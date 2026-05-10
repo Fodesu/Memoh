@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import {
@@ -17,31 +17,25 @@ import {
 } from '@memohai/ui'
 import { toast } from 'vue-sonner'
 import {
-  AlertCircle,
   Bot,
   Boxes,
   CheckCircle2,
   ChevronDown,
-  Clock3,
   Copy,
   Database,
   FileOutput,
   GitMerge,
   LoaderCircle,
-  Maximize2,
   PlayCircle,
   RefreshCw,
   ScanSearch,
   Search,
-  Settings2,
   ShieldCheck,
   Sparkles,
   Square,
   Workflow,
   Wrench,
   X,
-  ZoomIn,
-  ZoomOut,
   type LucideIcon,
 } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
@@ -65,27 +59,23 @@ import {
   formatJsonValue,
   shortId,
   type BotItem,
-  type RunInspectorDependency,
   type RunInspectorExecutionSpan,
   type RunInspectorTask,
   type RunListItem,
 } from './model'
 import { useRunEventStream } from './composables/use-run-event-stream'
+import {
+  buildTaskLevelMapWithRoot,
+  inferTaskNodeKind,
+  type TaskNodeKind,
+} from './composables/use-dag-graph'
+import { useOrchestrationMeta } from './composables/use-orchestration-meta'
+import RunDag from './components/run-dag.vue'
+import RunFlow from './components/run-flow.vue'
 
-type NodeKind = 'trigger' | 'llm' | 'planner' | 'search' | 'tool' | 'memory' | 'merge' | 'verify' | 'output'
+type NodeKind = TaskNodeKind
 type InspectorTab = 'act' | 'config' | 'env' | 'task' | 'inputs' | 'outputs' | 'logs'
-
-interface CanvasNode {
-  task: RunInspectorTask
-  id: string
-  title: string
-  subtitle: string
-  kind: NodeKind
-  status: string
-  level: number
-  x: number
-  y: number
-}
+type RunViewMode = 'dag' | 'flow'
 
 interface EnvSnapshotItem {
   id: string
@@ -95,6 +85,7 @@ interface EnvSnapshotItem {
 }
 
 const { t } = useI18n()
+const { statusMeta } = useOrchestrationMeta()
 const { copyText, isSupported: clipboardSupported } = useClipboard()
 const router = useRouter()
 const route = useRoute()
@@ -108,6 +99,7 @@ const botSearchQuery = ref('')
 const runSearchQuery = ref('')
 const taskSearchQuery = ref('')
 const selectedInspectorTab = ref<InspectorTab>('act')
+const runViewMode = computed<RunViewMode>(() => normalizeRunViewMode(route.query.view))
 const outputRawOpen = ref(false)
 const taskTechnicalOpen = ref(false)
 const expandedLogItemIds = ref<string[]>([])
@@ -117,49 +109,16 @@ const inspectorOpen = ref(true)
 const inspectorWidth = ref(340)
 const stoppingRun = ref(false)
 const resolvingCheckpointId = ref('')
-const canvasZoom = ref(1)
-const canvasViewportRef = ref<HTMLElement | null>(null)
-const canvasWorldRef = ref<HTMLElement | null>(null)
-const minimapViewportRef = ref<HTMLElement | null>(null)
-const viewX = ref(0)
-const viewY = ref(0)
-const viewportWidth = ref(0)
-const viewportHeight = ref(0)
-const isMinimapDragging = ref(false)
-let viewportResizeObserver: ResizeObserver | null = null
-let observedCanvasViewport: HTMLElement | null = null
-let panStart: { clientX: number, clientY: number, viewX: number, viewY: number } | null = null
-let panFrame = 0
-let pendingView: { x: number, y: number } | null = null
-let previousUserSelect = ''
-let bodySelectionLocked = false
-let currentViewX = 0
-let currentViewY = 0
-let currentZoom = 1
 let inspectorSelectionFrame = 0
 let taskScrollFrame = 0
-let zoomFrame = 0
-let zoomCommitTimer = 0
 let inspectorRefreshTimer = 0
 let actRefreshTimer = 0
+let bodySelectionLocked = false
+let previousUserSelect = ''
 let inspectorResizeStart: { clientX: number, width: number } | null = null
 
-const minCanvasZoom = 0.65
-const maxCanvasZoom = 1.5
-const fitViewPadding = 64
 const minInspectorWidth = 280
 const maxInspectorWidth = 560
-
-const laneWidth = 180
-const laneHeaderHeight = 52
-const nodeWidth = 144
-const nodeHeight = 76
-const rowGap = 118
-const graphPaddingX = 280
-const graphPaddingY = 300
-const minimapMaxWidth = 132
-const minimapMaxHeight = 80
-const canvasPanOverscroll = 180
 
 const { data: runPage } = useQuery({
   key: () => ['orchestration-runs'],
@@ -228,7 +187,7 @@ const selectedRunFallback = computed<RunListItem | null>(() => {
     id: run.id,
     goal: run.goal,
     lifecycle_status: run.lifecycle_status,
-    planning_status: run.planning_status,
+    intent_status: run.intent_status,
     root_task_id: run.root_task_id,
     terminal_reason: run.terminal_reason || '',
     created_at: run.created_at,
@@ -265,8 +224,6 @@ const rootTaskId = computed(() => inspector.value?.run.root_task_id ?? '')
 const rootHasChildren = computed(() =>
   rootTaskId.value.length > 0 && dependencies.value.some((edge) => edge.predecessor_task_id === rootTaskId.value),
 )
-const canvasTasks = computed(() => tasks.value)
-const canvasDependencies = computed(() => dependencies.value)
 
 watch(runs, (items) => {
   const routeRunID = typeof route.query.run_id === 'string' ? route.query.run_id.trim() : ''
@@ -288,48 +245,36 @@ watch(runBotItems, (items) => {
   selectedBotId.value = items[0]?.id ?? ''
 }, { immediate: true })
 
-watch(inspector, (value, previous) => {
+watch(inspector, (value) => {
   if (!value) return
-  const shouldInitializeCanvas =
-    !previous ||
-    previous.run.id !== value.run.id ||
-    viewportWidth.value === 0 ||
-    viewportHeight.value === 0
-  const initializeCanvas = () => {
-    if (!shouldInitializeCanvas) return
-    nextTick(() => {
-      setupCanvasViewport()
-      resetCanvasView()
-    })
-  }
   const routeTaskID = typeof route.query.task_id === 'string' ? route.query.task_id.trim() : ''
-  const visibleTaskIDs = new Set(canvasTasks.value.map((task) => task.id))
+  const visibleTaskIDs = new Set(tasks.value.map((task) => task.id))
   if (routeTaskID && visibleTaskIDs.has(routeTaskID)) {
     setSelectedTask(routeTaskID, { immediateInspector: true })
-    initializeCanvas()
     return
   }
   if (selectedTaskId.value && visibleTaskIDs.has(selectedTaskId.value)) {
     if (!inspectedTaskId.value || !visibleTaskIDs.has(inspectedTaskId.value)) {
       inspectedTaskId.value = selectedTaskId.value
     }
-    initializeCanvas()
     return
   }
-  setSelectedTask(value.run.root_task_id || canvasTasks.value[0]?.id || value.tasks[0]?.id || '', { immediateInspector: true })
-  initializeCanvas()
+  setSelectedTask(value.run.root_task_id || tasks.value[0]?.id || value.tasks[0]?.id || '', { immediateInspector: true })
 }, { immediate: true })
 
 watch([selectedBotId, selectedRunId], ([botID, runID]) => {
   const nextQuery: Record<string, string> = {}
   if (botID) nextQuery.bot_id = botID
   if (runID) nextQuery.run_id = runID
+  if (runViewMode.value !== 'dag') nextQuery.view = runViewMode.value
 
   const currentBotQuery = typeof route.query.bot_id === 'string' ? route.query.bot_id : ''
   const currentRunQuery = typeof route.query.run_id === 'string' ? route.query.run_id : ''
+  const currentViewQuery = typeof route.query.view === 'string' ? route.query.view : ''
   if (
     currentBotQuery === (nextQuery.bot_id ?? '') &&
-    currentRunQuery === (nextQuery.run_id ?? '')
+    currentRunQuery === (nextQuery.run_id ?? '') &&
+    currentViewQuery === (nextQuery.view ?? '')
   ) {
     return
   }
@@ -347,17 +292,10 @@ watch(inspectedTaskId, () => {
   taskTechnicalOpen.value = false
 })
 
-watch(canvasViewportRef, () => {
-  setupCanvasViewport()
-  nextTick(resetCanvasView)
-})
-
-watch(selectedRunId, async () => {
+watch(selectedRunId, () => {
   selectedTaskId.value = ''
   inspectedTaskId.value = ''
   selectedInspectorTab.value = 'act'
-  await nextTick()
-  resetCanvasView()
 })
 
 // SSE-driven refresh. While the watch stream is open we skip the poll loop
@@ -384,7 +322,6 @@ const { status: runEventStreamStatus } = useRunEventStream({
 })
 
 onMounted(() => {
-  setupCanvasViewport()
   inspectorRefreshTimer = window.setInterval(() => {
     if (!selectedRunId.value || !isInspectorRunActive()) return
     if (runEventStreamStatus.value === 'open') return
@@ -395,21 +332,12 @@ onMounted(() => {
     if (selectedInspectorTab.value !== 'act') return
     void refetchInspector()
   }, 1000)
-  nextTick(resetCanvasView)
 })
 
 onBeforeUnmount(() => {
-  viewportResizeObserver?.disconnect()
-  panStart = null
   inspectorResizeStart = null
-  isMinimapDragging.value = false
   restoreBodySelectionIfDragging()
-  removePanListeners()
-  removeMinimapListeners()
   removeInspectorResizeListeners()
-  if (panFrame) window.cancelAnimationFrame(panFrame)
-  if (zoomFrame) window.cancelAnimationFrame(zoomFrame)
-  if (zoomCommitTimer) window.clearTimeout(zoomCommitTimer)
   if (inspectorRefreshTimer) window.clearInterval(inspectorRefreshTimer)
   if (actRefreshTimer) window.clearInterval(actRefreshTimer)
   if (streamRefetchTimer !== null) {
@@ -421,7 +349,6 @@ onBeforeUnmount(() => {
 })
 
 const selectedTask = computed(() => tasks.value.find((task) => task.id === inspectedTaskId.value) ?? null)
-const selectedCanvasNode = computed(() => canvasNodes.value.find((node) => node.id === inspectedTaskId.value) ?? null)
 const inspectorSelectionPending = computed(() => selectedTaskId.value !== inspectedTaskId.value)
 const orchestrationGridStyle = computed(() => ({
   gridTemplateColumns: inspectorOpen.value
@@ -552,104 +479,37 @@ const selectedTaskEnvInfo = computed(() => {
   }
 })
 
-const taskLevelMap = computed(() => {
-  if (!rootTaskId.value || canvasTasks.value.length <= 1) {
-    return buildTaskLevels(canvasTasks.value, canvasDependencies.value)
-  }
-
-  const rootTask = canvasTasks.value.find((task) => task.id === rootTaskId.value)
-  if (!rootTask) return buildTaskLevels(canvasTasks.value, canvasDependencies.value)
-
-  const childTasks = canvasTasks.value.filter((task) => task.id !== rootTaskId.value)
-  const childEdges = canvasDependencies.value.filter((edge) =>
-    edge.predecessor_task_id !== rootTaskId.value &&
-    edge.successor_task_id !== rootTaskId.value,
-  )
-  const childLevels = buildTaskLevels(childTasks, childEdges)
-  const levels = new Map<string, number>([[rootTaskId.value, 0]])
-
-  for (const task of childTasks) {
-    levels.set(task.id, (childLevels.get(task.id) ?? 0) + 1)
-  }
-
-  return levels
-})
-const maxLevel = computed(() => Math.max(0, ...Array.from(taskLevelMap.value.values())))
-const stages = computed(() =>
-  Array.from({ length: maxLevel.value + 1 }, (_, index) => ({
-    level: index,
-    label: stageLabel(index),
-  })),
+const taskLevelMap = computed(() =>
+  buildTaskLevelMapWithRoot(tasks.value, dependencies.value, rootTaskId.value),
 )
+const maxLevel = computed(() => Math.max(0, ...Array.from(taskLevelMap.value.values())))
 
 const filteredTasks = computed(() => {
   const q = taskSearchQuery.value.trim().toLowerCase()
   if (!q) return tasks.value
   return tasks.value.filter((task) => {
-    const title = compactTaskTitle(task.goal, task.id).toLowerCase()
-    return title.includes(q) || task.id.toLowerCase().includes(q) || task.status.toLowerCase().includes(q)
+    const title = compactTaskTitle(task.goal ?? '', task.id ?? '').toLowerCase()
+    return (
+      title.includes(q) ||
+      String(task.id ?? '').toLowerCase().includes(q) ||
+      String(task.status ?? '').toLowerCase().includes(q)
+    )
   })
 })
 
-const graphInnerWidth = computed(() => Math.max(laneWidth, stages.value.length * laneWidth))
-const graphInnerHeight = computed(() => {
-  const rowsByLevel = new Map<number, number>()
-  for (const task of canvasTasks.value) {
-    const level = taskLevelMap.value.get(task.id) ?? 0
-    rowsByLevel.set(level, (rowsByLevel.get(level) ?? 0) + 1)
-  }
-  const maxRows = Math.max(1, ...Array.from(rowsByLevel.values()))
-  return Math.max(460, laneHeaderHeight + 80 + (maxRows - 1) * rowGap + nodeHeight + 52)
+const taskHasVerification = (taskID: string) =>
+  verifications.value.some((item) => String(item.task_id ?? '') === taskID)
+
+const selectedNodeKind = computed<NodeKind>(() => {
+  const task = selectedTask.value
+  if (!task || !task.id) return 'llm'
+  const level = taskLevelMap.value.get(task.id) ?? 0
+  return inferTaskNodeKind(task, level, maxLevel.value, rootTaskId.value, taskHasVerification)
 })
-
-const canvasNodes = computed<CanvasNode[]>(() => {
-  const yPositions = buildNodeYPositions(canvasTasks.value, canvasDependencies.value, taskLevelMap.value)
-
-  return canvasTasks.value.map((task) => {
-    const level = taskLevelMap.value.get(task.id) ?? 0
-    const kind = inferNodeKind(task, level)
-
-    return {
-      task,
-      id: task.id,
-      title: compactTaskLabel(task.goal, task.id),
-      subtitle: kindMeta(kind).label,
-      kind,
-      status: task.status,
-      level,
-      x: graphOriginX() + level * laneWidth + Math.max(0, (laneWidth - nodeWidth) / 2),
-      y: yPositions.get(task.id) ?? graphContentTop(),
-    }
-  })
-})
-
-const canvasWidth = computed(() => canvasWidthFor())
-const canvasHeight = computed(() => canvasHeightFor())
-const zoomPercent = computed(() => `${Math.round(canvasZoom.value * 100)}%`)
-const canvasTransform = computed(() =>
-  viewTransform(viewX.value, viewY.value),
-)
-const minimapScale = computed(() => Math.min(
-  minimapMaxWidth / canvasWidth.value,
-  minimapMaxHeight / canvasHeight.value,
-))
-const minimapWidth = computed(() => canvasWidth.value * minimapScale.value)
-const minimapHeight = computed(() => canvasHeight.value * minimapScale.value)
-const minimapViewportStyle = computed(() => ({
-  left: `${viewX.value * minimapScale.value}px`,
-  top: `${viewY.value * minimapScale.value}px`,
-  width: `${viewportWorldWidthFor(canvasZoom.value) * minimapScale.value}px`,
-  height: `${viewportWorldHeightFor(canvasZoom.value) * minimapScale.value}px`,
-}))
-const minimapGraphStyle = computed(() => ({
-  left: `${graphOriginX() * minimapScale.value}px`,
-  top: `${graphOriginY() * minimapScale.value}px`,
-  width: `${graphInnerWidth.value * minimapScale.value}px`,
-  height: `${graphInnerHeight.value * minimapScale.value}px`,
-}))
-
-watch([canvasWidth, canvasHeight, canvasZoom], () => {
-  constrainView()
+const selectedNodeLevel = computed(() => {
+  const task = selectedTask.value
+  if (!task || !task.id) return 0
+  return taskLevelMap.value.get(task.id) ?? 0
 })
 
 const inspectorTabs = computed(() => [
@@ -662,41 +522,33 @@ const inspectorTabs = computed(() => [
   { key: 'logs' as const, label: t('orchestration.logs') },
 ])
 
-function nodeByID(id: string): CanvasNode | null {
-  return canvasNodes.value.find((node) => node.id === id) ?? null
+function normalizeRunViewMode(value: unknown): RunViewMode {
+  return value === 'flow' ? 'flow' : 'dag'
 }
 
-function edgePath(edge: RunInspectorDependency): string {
-  const source = nodeByID(edge.predecessor_task_id)
-  const target = nodeByID(edge.successor_task_id)
-  if (!source || !target) return ''
-  const x1 = source.x + nodeWidth
-  const y1 = source.y + nodeHeight / 2
-  const x2 = target.x
-  const y2 = target.y + nodeHeight / 2
-  const mid = Math.max(x1 + 32, (x1 + x2) / 2)
-  return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`
-}
-
-function isEdgeActive(edge: RunInspectorDependency): boolean {
-  return edge.predecessor_task_id === selectedTaskId.value || edge.successor_task_id === selectedTaskId.value
-}
-
-function isTaskRelatedToSelection(taskID: string): boolean {
-  if (!selectedTaskId.value) return false
-  if (taskID === selectedTaskId.value) return true
-  return canvasDependencies.value.some((edge) =>
-    (edge.predecessor_task_id === selectedTaskId.value && edge.successor_task_id === taskID) ||
-    (edge.successor_task_id === selectedTaskId.value && edge.predecessor_task_id === taskID),
-  )
+function setRunViewMode(mode: RunViewMode) {
+  if (runViewMode.value === mode) return
+  const nextQuery = { ...route.query }
+  if (mode === 'dag') {
+    delete nextQuery.view
+  } else {
+    nextQuery.view = mode
+  }
+  void router.replace({ query: nextQuery })
 }
 
 function selectTaskFromList(task: RunInspectorTask) {
+  if (!task.id) return
   setSelectedTask(task.id)
 }
 
 function selectTask(taskID: string) {
   setSelectedTask(taskID)
+}
+
+function selectTaskFromDag(taskID: string) {
+  setSelectedTask(taskID, { immediateInspector: true })
+  selectedInspectorTab.value = 'act'
 }
 
 function selectRun(runID: string) {
@@ -747,198 +599,21 @@ function scheduleTaskListScroll(taskID: string) {
 }
 
 function upstreamTasks(taskID: string): RunInspectorTask[] {
-  const ids = canvasDependencies.value
+  const ids = dependencies.value
     .filter((edge) => edge.successor_task_id === taskID)
     .map((edge) => edge.predecessor_task_id)
-  return ids.map((id) => tasks.value.find((task) => task.id === id)).filter(Boolean) as RunInspectorTask[]
+  return ids
+    .map((id) => tasks.value.find((task) => task.id === id))
+    .filter((task): task is RunInspectorTask => Boolean(task))
 }
 
 function downstreamTasks(taskID: string): RunInspectorTask[] {
-  const ids = canvasDependencies.value
+  const ids = dependencies.value
     .filter((edge) => edge.predecessor_task_id === taskID)
     .map((edge) => edge.successor_task_id)
-  return ids.map((id) => tasks.value.find((task) => task.id === id)).filter(Boolean) as RunInspectorTask[]
-}
-
-function graphContentTop() {
-  return graphOriginY() + laneHeaderHeight + 34
-}
-
-function graphContentBottom() {
-  return graphOriginY() + graphInnerHeight.value - nodeHeight - 34
-}
-
-function buildNodeYPositions(
-  taskList: RunInspectorTask[],
-  edges: RunInspectorDependency[],
-  levels: Map<string, number>,
-) {
-  const positions = new Map<string, number>()
-  const tasksByLevel = new Map<number, RunInspectorTask[]>()
-  const incoming = new Map<string, string[]>()
-
-  for (const task of taskList) {
-    const level = levels.get(task.id) ?? 0
-    tasksByLevel.set(level, [...(tasksByLevel.get(level) ?? []), task])
-    incoming.set(task.id, [])
-  }
-
-  for (const edge of edges) {
-    incoming.get(edge.successor_task_id)?.push(edge.predecessor_task_id)
-  }
-
-  const minY = graphContentTop()
-  const maxY = Math.max(minY, graphContentBottom())
-  const levelList = Array.from(tasksByLevel.keys()).sort((a, b) => a - b)
-
-  for (const level of levelList) {
-    const levelTasks = tasksByLevel.get(level) ?? []
-    const proposed = levelTasks.map((task, index) => {
-      const predecessorCenters = (incoming.get(task.id) ?? [])
-        .map((id) => positions.get(id))
-        .filter((value): value is number => typeof value === 'number')
-        .map((y) => y + nodeHeight / 2)
-
-      const preferredY = predecessorCenters.length > 0
-        ? average(predecessorCenters) - nodeHeight / 2
-        : minY + index * rowGap
-
-      return { task, preferredY, index }
-    }).sort((a, b) => a.preferredY - b.preferredY || a.index - b.index)
-
-    let cursorY = minY
-    for (const item of proposed) {
-      const y = Math.min(maxY, Math.max(item.preferredY, cursorY))
-      positions.set(item.task.id, y)
-      cursorY = y + rowGap
-    }
-  }
-
-  return positions
-}
-
-function average(values: number[]) {
-  return values.reduce((sum, value) => sum + value, 0) / values.length
-}
-
-function stageLabel(level: number): string {
-  if (level === 0 && rootHasChildren.value) return t('orchestration.stageRootGoal')
-  const count = canvasTasks.value.filter((task) => (taskLevelMap.value.get(task.id) ?? 0) === level).length
-  return t('orchestration.stageTaskCount', { count })
-}
-
-function inferNodeKind(task: RunInspectorTask, level: number): NodeKind {
-  const text = `${task.goal} ${task.worker_profile ?? ''}`.toLowerCase()
-  if (rootTaskId.value === task.id || level === 0) return 'trigger'
-  if (task.status === 'verifying' || verifications.value.some((item) => String(item.task_id ?? '') === task.id)) return 'verify'
-  if (text.includes('search') || text.includes('web')) return 'search'
-  if (text.includes('memory') || text.includes('blackboard')) return 'memory'
-  if (text.includes('merge') || text.includes('aggregate') || text.includes('combine')) return 'merge'
-  if (level === maxLevel.value || text.includes('output') || text.includes('deliver') || text.includes('final')) return 'output'
-  if (text.includes('plan') || text.includes('decompose')) return 'planner'
-  if (text.includes('tool') || text.includes('api') || text.includes('exec')) return 'tool'
-  return 'llm'
-}
-
-function statusMeta(status: string): { label: string, icon: LucideIcon, dot: string, chip: string, task: string } {
-  switch (status) {
-    case 'created':
-      return {
-        label: t('orchestration.statusPending'),
-        icon: Clock3,
-        dot: 'bg-muted-foreground',
-        chip: 'border-border bg-muted/70 text-muted-foreground',
-        task: 'border-border bg-muted/30',
-      }
-    case 'idle':
-      return {
-        label: t('orchestration.statusIdle'),
-        icon: Clock3,
-        dot: 'bg-muted-foreground',
-        chip: 'border-border bg-muted/70 text-muted-foreground',
-        task: 'border-border bg-muted/30',
-      }
-    case 'active':
-      return {
-        label: t('orchestration.statusActive'),
-        icon: LoaderCircle,
-        dot: 'bg-sky-500',
-        chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-        task: 'border-sky-500/30 bg-sky-500/8',
-      }
-    case 'completed':
-      return {
-        label: t('orchestration.statusSuccess'),
-        icon: CheckCircle2,
-        dot: 'bg-emerald-500',
-        chip: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-        task: 'bg-background',
-      }
-    case 'running':
-      return {
-        label: t('orchestration.statusRunning'),
-        icon: LoaderCircle,
-        dot: 'bg-sky-500',
-        chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-        task: 'border-sky-500/30 bg-sky-500/8',
-      }
-    case 'dispatching':
-      return {
-        label: t('orchestration.statusDispatching'),
-        icon: LoaderCircle,
-        dot: 'bg-sky-500',
-        chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-        task: 'border-sky-500/30 bg-sky-500/8',
-      }
-    case 'verifying':
-      return {
-        label: t('orchestration.statusVerifying'),
-        icon: LoaderCircle,
-        dot: 'bg-sky-500',
-        chip: 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-        task: 'border-sky-500/30 bg-sky-500/8',
-      }
-    case 'waiting_human':
-      return {
-        label: t('orchestration.statusWaitingHuman'),
-        icon: Clock3,
-        dot: 'bg-amber-500',
-        chip: 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-        task: 'border-amber-500/30 bg-amber-500/8',
-      }
-    case 'failed':
-      return {
-        label: t('orchestration.statusFailed'),
-        icon: AlertCircle,
-        dot: 'bg-rose-500',
-        chip: 'border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300',
-        task: 'border-rose-500/30 bg-rose-500/8',
-      }
-    case 'blocked':
-      return {
-        label: t('orchestration.statusBlocked'),
-        icon: AlertCircle,
-        dot: 'bg-rose-500',
-        chip: 'border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300',
-        task: 'border-rose-500/30 bg-rose-500/8',
-      }
-    case 'cancelled':
-      return {
-        label: t('orchestration.statusCancelled'),
-        icon: AlertCircle,
-        dot: 'bg-rose-500',
-        chip: 'border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300',
-        task: 'border-rose-500/30 bg-rose-500/8',
-      }
-    default:
-      return {
-        label: status ? status.replaceAll('_', ' ') : t('orchestration.statusPending'),
-        icon: Clock3,
-        dot: 'bg-muted-foreground',
-        chip: 'border-border bg-muted/70 text-muted-foreground',
-        task: 'border-border bg-muted/30',
-      }
-  }
+  return ids
+    .map((id) => tasks.value.find((task) => task.id === id))
+    .filter((task): task is RunInspectorTask => Boolean(task))
 }
 
 function kindMeta(kind: NodeKind): { label: string, icon: LucideIcon, color: string } {
@@ -1314,347 +989,6 @@ function isInspectorRunActive() {
   return status === 'created' || status === 'running' || status === 'cancelling' || status === 'waiting_human'
 }
 
-function setCanvasZoom(value: number) {
-  currentZoom = clampZoom(value)
-  canvasZoom.value = currentZoom
-  nextTick(constrainView)
-}
-
-function zoomCanvas(delta: number) {
-  applyZoom(currentZoom + delta, { commit: true })
-}
-
-function onViewportWheel(event: WheelEvent) {
-  const delta = event.deltaY > 0 ? -0.08 : 0.08
-  applyZoom(currentZoom + delta, { commit: false })
-}
-
-function resetCanvasView() {
-  setupCanvasViewport()
-  setCanvasZoom(1)
-  nextTick(centerGraphView)
-}
-
-function fitCanvasView() {
-  updateViewportSize()
-  const widthRatio = (viewportWidth.value - fitViewPadding) / graphInnerWidth.value
-  const heightRatio = (viewportHeight.value - fitViewPadding) / graphInnerHeight.value
-  setCanvasZoom(clampZoom(Math.min(widthRatio, heightRatio)))
-  nextTick(centerGraphView)
-}
-
-async function toggleCanvasFullscreen() {
-  const el = canvasViewportRef.value
-  if (!el) return
-  if (document.fullscreenElement) {
-    await document.exitFullscreen()
-    return
-  }
-  await el.requestFullscreen()
-  await new Promise((resolve) => window.setTimeout(resolve, 80))
-  fitCanvasView()
-}
-
-function setupCanvasViewport() {
-  const el = canvasViewportRef.value
-  if (!el) return
-  if (observedCanvasViewport === el) {
-    updateViewportSize()
-    return
-  }
-  viewportResizeObserver?.disconnect()
-  observedCanvasViewport = el
-  viewportResizeObserver = new ResizeObserver(() => {
-    keepGraphPositionOnViewportResize()
-  })
-  viewportResizeObserver.observe(el)
-  updateViewportSize()
-}
-
-function updateViewportSize() {
-  const el = canvasViewportRef.value
-  if (!el) return
-  viewportWidth.value = el.clientWidth
-  viewportHeight.value = el.clientHeight
-}
-
-function constrainView() {
-  updateViewportSize()
-  const next = clampView(viewX.value, viewY.value, currentZoom)
-  setViewPosition(next.x, next.y)
-}
-
-function keepGraphPositionOnViewportResize() {
-  const previousWidth = viewportWidth.value
-  const previousHeight = viewportHeight.value
-  if (previousWidth <= 0 || previousHeight <= 0) {
-    updateViewportSize()
-    constrainView()
-    return
-  }
-
-  const previousGraphOriginX = graphOriginX()
-  const previousGraphOriginY = graphOriginY()
-  const previousViewX = currentViewX
-  const previousViewY = currentViewY
-  updateViewportSize()
-  setViewPosition(
-    previousViewX + graphOriginX() - previousGraphOriginX,
-    previousViewY + graphOriginY() - previousGraphOriginY,
-  )
-}
-
-function clampZoom(value: number) {
-  return Math.min(maxCanvasZoom, Math.max(minCanvasZoom, value))
-}
-
-function viewportWorldWidthFor(zoom: number) {
-  return (viewportWidth.value || canvasWidth.value) / zoom
-}
-
-function viewportWorldHeightFor(zoom: number) {
-  return (viewportHeight.value || canvasHeight.value) / zoom
-}
-
-function canvasWidthFor() {
-  return graphInnerWidth.value + graphWorldPaddingX() * 2
-}
-
-function canvasHeightFor() {
-  return graphInnerHeight.value + graphWorldPaddingY() * 2
-}
-
-function graphWorldPaddingX() {
-  return Math.max(graphPaddingX, (viewportWidth.value || 1120) / minCanvasZoom / 2 + canvasPanOverscroll)
-}
-
-function graphWorldPaddingY() {
-  return Math.max(graphPaddingY, (viewportHeight.value || 700) / minCanvasZoom / 2 + canvasPanOverscroll)
-}
-
-function graphOriginX() {
-  return graphWorldPaddingX()
-}
-
-function graphOriginY() {
-  return graphWorldPaddingY()
-}
-
-function clampView(x: number, y: number, zoom = currentZoom) {
-  const visibleWidth = viewportWorldWidthFor(zoom)
-  const visibleHeight = viewportWorldHeightFor(zoom)
-  const maxX = canvasWidthFor() - visibleWidth
-  const maxY = canvasHeightFor() - visibleHeight
-  const clampAxis = (value: number, max: number) => {
-    if (max < 0) {
-      return max / 2
-    }
-    return Math.min(max, Math.max(0, value))
-  }
-  const result = {
-    x: clampAxis(x, maxX),
-    y: clampAxis(y, maxY),
-  }
-  return result
-}
-
-function viewTransform(x: number, y: number, zoom = canvasZoom.value) {
-  const translateX = Math.round(-x * zoom)
-  const translateY = Math.round(-y * zoom)
-  return `translate3d(${translateX}px, ${translateY}px, 0) scale(${zoom})`
-}
-
-function setCurrentView(x: number, y: number, zoom = currentZoom) {
-  currentViewX = x
-  currentViewY = y
-  currentZoom = zoom
-}
-
-function renderCurrentViewToDom() {
-  if (canvasWorldRef.value) {
-    canvasWorldRef.value.style.transform = viewTransform(currentViewX, currentViewY, currentZoom)
-  }
-  if (minimapViewportRef.value) {
-    minimapViewportRef.value.style.left = `${currentViewX * minimapScale.value}px`
-    minimapViewportRef.value.style.top = `${currentViewY * minimapScale.value}px`
-    minimapViewportRef.value.style.width = `${viewportWorldWidthFor(currentZoom) * minimapScale.value}px`
-    minimapViewportRef.value.style.height = `${viewportWorldHeightFor(currentZoom) * minimapScale.value}px`
-  }
-}
-
-function applyViewToDom(x: number, y: number, zoom = currentZoom) {
-  setCurrentView(x, y, zoom)
-  renderCurrentViewToDom()
-}
-
-function setViewPosition(x: number, y: number) {
-  const next = clampView(x, y, currentZoom)
-  applyViewToDom(next.x, next.y, currentZoom)
-  viewX.value = next.x
-  viewY.value = next.y
-}
-
-function scheduleViewPosition(x: number, y: number) {
-  pendingView = clampView(x, y, currentZoom)
-  if (panFrame) return
-  panFrame = window.requestAnimationFrame(() => {
-    panFrame = 0
-    if (!pendingView) return
-    applyViewToDom(pendingView.x, pendingView.y)
-    pendingView = null
-  })
-}
-
-function applyZoom(value: number, options: { commit: boolean }) {
-  updateViewportSize()
-  const nextZoom = clampZoom(Number(value.toFixed(2)))
-  if (nextZoom === currentZoom) return
-
-  const centerX = currentViewX + viewportWorldWidthFor(currentZoom) / 2
-  const centerY = currentViewY + viewportWorldHeightFor(currentZoom) / 2
-  const next = clampView(
-    centerX - viewportWorldWidthFor(nextZoom) / 2,
-    centerY - viewportWorldHeightFor(nextZoom) / 2,
-    nextZoom,
-  )
-
-  if (zoomFrame) window.cancelAnimationFrame(zoomFrame)
-  setCurrentView(next.x, next.y, nextZoom)
-  zoomFrame = window.requestAnimationFrame(() => {
-    zoomFrame = 0
-    renderCurrentViewToDom()
-  })
-
-  if (options.commit) {
-    commitZoomState(next.x, next.y, nextZoom)
-    return
-  }
-
-  if (zoomCommitTimer) window.clearTimeout(zoomCommitTimer)
-  zoomCommitTimer = window.setTimeout(() => {
-    zoomCommitTimer = 0
-    commitZoomState(currentViewX, currentViewY, currentZoom)
-  }, 120)
-}
-
-function commitZoomState(x: number, y: number, zoom: number) {
-  if (zoomFrame) {
-    window.cancelAnimationFrame(zoomFrame)
-    zoomFrame = 0
-  }
-  if (zoomCommitTimer) {
-    window.clearTimeout(zoomCommitTimer)
-    zoomCommitTimer = 0
-  }
-  const nextZoom = clampZoom(zoom)
-  const next = clampView(x, y, nextZoom)
-  applyViewToDom(next.x, next.y, nextZoom)
-  canvasZoom.value = nextZoom
-  viewX.value = next.x
-  viewY.value = next.y
-}
-
-function centerGraphView() {
-  setViewPosition(defaultGraphViewX(), defaultGraphViewY())
-}
-
-function flushPendingViewPosition() {
-  if (panFrame) {
-    window.cancelAnimationFrame(panFrame)
-    panFrame = 0
-  }
-  if (!pendingView) return
-  applyViewToDom(pendingView.x, pendingView.y)
-  pendingView = null
-}
-
-function defaultGraphViewX() {
-  const visibleWidth = viewportWorldWidthFor(currentZoom)
-  const graphCenterX = graphOriginX() + graphInnerWidth.value / 2
-  return graphCenterX - visibleWidth / 2
-}
-
-function defaultGraphViewY() {
-  const visibleHeight = viewportWorldHeightFor(currentZoom)
-  const graphCenterY = graphOriginY() + graphInnerHeight.value / 2
-  return graphCenterY - visibleHeight / 2
-}
-
-function startViewportPan(event: PointerEvent) {
-  if (event.button !== 0) return
-  if ((event.target as HTMLElement).closest('button,input,select,textarea')) return
-  const target = event.currentTarget as HTMLElement
-  target.classList.remove('cursor-grab')
-  target.classList.add('cursor-grabbing')
-  target.setPointerCapture?.(event.pointerId)
-  lockBodySelection()
-  panStart = {
-    clientX: event.clientX,
-    clientY: event.clientY,
-    viewX: currentViewX,
-    viewY: currentViewY,
-  }
-  window.addEventListener('pointermove', onViewportPan)
-  window.addEventListener('pointerup', stopViewportPan)
-}
-
-function onViewportPan(event: PointerEvent) {
-  if (!panStart) return
-  const nextX = panStart.viewX - (event.clientX - panStart.clientX) / currentZoom
-  const nextY = panStart.viewY - (event.clientY - panStart.clientY) / currentZoom
-  scheduleViewPosition(
-    nextX,
-    nextY,
-  )
-}
-
-function stopViewportPan() {
-  canvasViewportRef.value?.classList.remove('cursor-grabbing')
-  canvasViewportRef.value?.classList.add('cursor-grab')
-  panStart = null
-  flushPendingViewPosition()
-  setViewPosition(currentViewX, currentViewY)
-  restoreBodySelectionIfDragging()
-  removePanListeners()
-}
-
-function removePanListeners() {
-  window.removeEventListener('pointermove', onViewportPan)
-  window.removeEventListener('pointerup', stopViewportPan)
-}
-
-function startMinimapPan(event: PointerEvent) {
-  if (event.button !== 0) return
-  isMinimapDragging.value = true
-  moveViewFromMinimap(event)
-  window.addEventListener('pointermove', moveViewFromMinimap)
-  window.addEventListener('pointerup', stopMinimapPan)
-}
-
-function moveViewFromMinimap(event: PointerEvent) {
-  const minimap = document.getElementById('orchestration-minimap-plane')
-  const rect = minimap?.getBoundingClientRect()
-  if (!rect) return
-  const worldX = (event.clientX - rect.left) / minimapScale.value
-  const worldY = (event.clientY - rect.top) / minimapScale.value
-  scheduleViewPosition(
-    worldX - viewportWorldWidthFor(currentZoom) / 2,
-    worldY - viewportWorldHeightFor(currentZoom) / 2,
-  )
-}
-
-function stopMinimapPan() {
-  isMinimapDragging.value = false
-  flushPendingViewPosition()
-  setViewPosition(currentViewX, currentViewY)
-  removeMinimapListeners()
-}
-
-function removeMinimapListeners() {
-  window.removeEventListener('pointermove', moveViewFromMinimap)
-  window.removeEventListener('pointerup', stopMinimapPan)
-}
-
 function startInspectorResize(event: PointerEvent) {
   if (event.button !== 0) return
   inspectorResizeStart = {
@@ -1684,7 +1018,7 @@ function removeInspectorResizeListeners() {
 }
 
 function restoreBodySelectionIfDragging() {
-  if (bodySelectionLocked && !panStart && !inspectorResizeStart) {
+  if (bodySelectionLocked && !inspectorResizeStart) {
     document.body.style.userSelect = previousUserSelect
     bodySelectionLocked = false
   }
@@ -1705,46 +1039,6 @@ async function copyTextToClipboard(value: string) {
   else toast.error(t('orchestration.copyFailed'))
 }
 
-function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDependency[]) {
-  const byID = new Map(taskList.map((task) => [task.id, task]))
-  const incoming = new Map<string, number>()
-  const outgoing = new Map<string, string[]>()
-
-  for (const task of taskList) {
-    incoming.set(task.id, 0)
-    outgoing.set(task.id, [])
-  }
-
-  for (const edge of edges) {
-    if (!byID.has(edge.predecessor_task_id) || !byID.has(edge.successor_task_id)) continue
-    incoming.set(edge.successor_task_id, (incoming.get(edge.successor_task_id) ?? 0) + 1)
-    outgoing.get(edge.predecessor_task_id)?.push(edge.successor_task_id)
-  }
-
-  const queue = taskList
-    .filter((task) => (incoming.get(task.id) ?? 0) === 0)
-    .map((task) => task.id)
-  const levels = new Map<string, number>()
-
-  for (const id of queue) levels.set(id, 0)
-
-  while (queue.length > 0) {
-    const currentID = queue.shift()!
-    const currentLevel = levels.get(currentID) ?? 0
-
-    for (const nextID of outgoing.get(currentID) ?? []) {
-      levels.set(nextID, Math.max(levels.get(nextID) ?? 0, currentLevel + 1))
-      incoming.set(nextID, (incoming.get(nextID) ?? 0) - 1)
-      if ((incoming.get(nextID) ?? 0) <= 0) queue.push(nextID)
-    }
-  }
-
-  for (const task of taskList) {
-    if (!levels.has(task.id)) levels.set(task.id, 0)
-  }
-
-  return levels
-}
 </script>
 
 <template>
@@ -2020,204 +1314,57 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
         </aside>
 
         <main class="flex min-h-0 flex-col overflow-hidden">
-          <div
-            ref="canvasViewportRef"
-            class="relative min-h-0 flex-1 touch-none overflow-hidden bg-[#fbfaf8] cursor-grab dark:bg-background"
-            @pointerdown="startViewportPan"
-            @wheel.prevent="onViewportWheel"
-          >
+          <div class="relative z-40 flex h-11 shrink-0 items-center justify-between border-b border-border/60 bg-background/80 px-3">
+            <div class="flex items-center gap-2">
+              <Workflow class="size-3.5 text-muted-foreground" />
+              <p class="text-xs font-semibold">
+                {{ runViewMode === 'dag' ? $t('orchestration.taskDag') : $t('orchestration.runFlow') }}
+              </p>
+            </div>
             <div
-              ref="canvasWorldRef"
-              class="absolute left-0 top-0 origin-top-left will-change-transform"
-              :style="{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, transform: canvasTransform }"
+              class="flex rounded-md border border-border bg-background p-0.5 text-[11px] shadow-sm"
+              @pointerdown.stop
+              @mousedown.stop
             >
-              <div class="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,hsl(var(--border))_1px,transparent_0)] bg-[length:24px_24px] opacity-45" />
-              <div
-                class="absolute flex overflow-hidden rounded-xl border border-border/70 shadow-sm"
-                :style="{
-                  left: `${graphOriginX()}px`,
-                  top: `${graphOriginY()}px`,
-                  width: `${graphInnerWidth}px`,
-                  height: `${graphInnerHeight}px`,
-                }"
-              >
-                <div
-                  v-for="stage in stages"
-                  :key="stage.level"
-                  class="border-r border-border/50 bg-background last:border-r-0"
-                  :style="{ width: `${laneWidth}px`, height: `${graphInnerHeight}px` }"
-                >
-                  <div class="flex h-[52px] flex-col items-center justify-center border-b border-border/50 bg-muted/20">
-                    <p class="text-[10px] font-semibold">
-                      L{{ stage.level }}
-                    </p>
-                    <p class="text-[10px] text-muted-foreground">
-                      {{ stage.label }}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <svg
-                class="pointer-events-none absolute inset-0 z-10"
-                :width="canvasWidth"
-                :height="canvasHeight"
-                :viewBox="`0 0 ${canvasWidth} ${canvasHeight}`"
-              >
-                <defs>
-                  <marker
-                    id="orchestration-arrow"
-                    markerWidth="8"
-                    markerHeight="8"
-                    refX="7"
-                    refY="4"
-                    orient="auto"
-                  >
-                    <path
-                      d="M 0 0 L 8 4 L 0 8 z"
-                      class="fill-border"
-                    />
-                  </marker>
-                </defs>
-                <path
-                  v-for="edge in canvasDependencies"
-                  :key="`${edge.predecessor_task_id}-${edge.successor_task_id}`"
-                  :d="edgePath(edge)"
-                  fill="none"
-                  marker-end="url(#orchestration-arrow)"
-                  class="transition-colors"
-                  :class="isEdgeActive(edge) ? 'stroke-foreground/70' : 'stroke-border'"
-                  :stroke-width="isEdgeActive(edge) ? 1.8 : 1.2"
-                />
-              </svg>
-
               <button
-                v-for="node in canvasNodes"
-                :key="node.id"
                 type="button"
-                class="absolute z-20 rounded-lg border bg-card px-2 py-2 text-left shadow-[0_0.7px_0.8px_hsl(var(--foreground)/0.05),0_2.2px_2.8px_-0.5px_hsl(var(--foreground)/0.06),0_6px_10px_-1px_hsl(var(--foreground)/0.07),0_16px_28px_-2px_hsl(var(--foreground)/0.09)] transition-all hover:-translate-y-0.5 hover:shadow-[0_0.9px_1px_hsl(var(--foreground)/0.06),0_3px_4px_-0.5px_hsl(var(--foreground)/0.07),0_9px_14px_-1px_hsl(var(--foreground)/0.09),0_24px_40px_-2.5px_hsl(var(--foreground)/0.11)]"
-                :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${nodeWidth}px`, minHeight: `${nodeHeight}px` }"
-                :class="[
-                  selectedTaskId === node.id ? 'border-primary/50 ring-2 ring-primary/15 shadow-[0_0.8px_1px_hsl(var(--foreground)/0.05),0_3px_5px_-0.5px_hsl(var(--primary)/0.08),0_10px_18px_-1px_hsl(var(--primary)/0.10),0_24px_44px_-3px_hsl(var(--primary)/0.12)]' : 'border-border/70',
-                  selectedTaskId && !isTaskRelatedToSelection(node.id) ? 'opacity-45' : '',
-                ]"
-                @pointerdown.stop="selectTask(node.id)"
-                @click.stop
+                class="inline-flex cursor-pointer items-center gap-1 rounded px-2.5 py-1 transition-colors"
+                :class="runViewMode === 'dag' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
+                :aria-pressed="runViewMode === 'dag'"
+                @click="setRunViewMode('dag')"
               >
-                <div class="flex items-start gap-2">
-                  <span
-                    class="flex size-6 shrink-0 items-center justify-center rounded-md border"
-                    :class="kindMeta(node.kind).color"
-                  >
-                    <component
-                      :is="kindMeta(node.kind).icon"
-                      class="size-3.5"
-                    />
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-xs font-medium">{{ node.title }}</span>
-                    <span class="mt-0.5 block truncate text-[11px] text-muted-foreground">{{ node.subtitle }}</span>
-                  </span>
-                </div>
-                <div class="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span
-                    class="size-1.5 rounded-full"
-                    :class="statusMeta(node.status).dot"
-                  />
-                  {{ statusMeta(node.status).label }}
-                </div>
+                <Workflow class="size-3" />
+                {{ $t('orchestration.taskDag') }}
               </button>
-            </div>
-
-            <div
-              id="orchestration-minimap"
-              class="absolute bottom-4 left-4 z-30 rounded border border-border/70 bg-background/90 p-2 shadow-sm backdrop-blur"
-              :class="isMinimapDragging ? 'cursor-grabbing' : 'cursor-pointer'"
-              :style="{ width: `${minimapWidth + 16}px`, height: `${minimapHeight + 16}px` }"
-              @pointerdown.stop="startMinimapPan"
-            >
-              <div
-                id="orchestration-minimap-plane"
-                class="relative overflow-hidden rounded-sm bg-primary/8"
-                :style="{ width: `${minimapWidth}px`, height: `${minimapHeight}px` }"
-              >
-                <span
-                  class="absolute rounded-sm border border-border/70 bg-background/70"
-                  :style="minimapGraphStyle"
-                />
-                <span
-                  v-for="node in canvasNodes"
-                  :key="`mini-${node.id}`"
-                  class="absolute rounded-sm"
-                  :class="node.id === selectedTaskId ? 'bg-primary' : 'bg-primary/25'"
-                  :style="{
-                    left: `${node.x * minimapScale}px`,
-                    top: `${node.y * minimapScale}px`,
-                    width: `${nodeWidth * minimapScale}px`,
-                    height: `${nodeHeight * minimapScale}px`,
-                  }"
-                />
-                <span
-                  ref="minimapViewportRef"
-                  class="absolute rounded-sm border border-primary bg-primary/10"
-                  :style="minimapViewportStyle"
-                />
-              </div>
-            </div>
-
-            <div class="absolute right-4 top-4 z-30 flex w-fit items-center rounded-md border border-border bg-background shadow-sm">
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-8 rounded-r-none"
-                :title="$t('orchestration.fitView')"
-                @click="fitCanvasView"
-              >
-                <Settings2 class="size-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-8 rounded-none border-l border-border"
-                @click="zoomCanvas(-0.1)"
-              >
-                <ZoomOut class="size-3.5" />
-              </Button>
               <button
-                class="h-8 border-x border-border px-2 text-[11px]"
-                @click="resetCanvasView"
+                type="button"
+                class="inline-flex cursor-pointer items-center gap-1 rounded px-2.5 py-1 transition-colors"
+                :class="runViewMode === 'flow' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
+                :aria-pressed="runViewMode === 'flow'"
+                @click="setRunViewMode('flow')"
               >
-                {{ zoomPercent }}
+                <GitMerge class="size-3" />
+                {{ $t('orchestration.runFlow') }}
               </button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-8 rounded-none"
-                @click="zoomCanvas(0.1)"
-              >
-                <ZoomIn class="size-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-8 rounded-l-none border-l border-border"
-                :title="$t('orchestration.fullscreen')"
-                @click="toggleCanvasFullscreen"
-              >
-                <Maximize2 class="size-3.5" />
-              </Button>
             </div>
-            <Button
-              v-if="!inspectorOpen"
-              variant="outline"
-              size="icon"
-              class="absolute right-4 top-16 z-30 size-8 bg-background shadow-sm"
-              :title="$t('orchestration.nodeInspector')"
-              @click="inspectorOpen = true"
-            >
-              <ScanSearch class="size-3.5" />
-            </Button>
           </div>
+          <RunDag
+            v-if="runViewMode === 'dag'"
+            :inspector="inspector"
+            :selected-task-id="selectedTaskId"
+            :inspector-open="inspectorOpen"
+            @select-task="selectTaskFromDag"
+            @open-inspector="inspectorOpen = true"
+          />
+
+          <RunFlow
+            v-else
+            :inspector="inspector"
+            :selected-task-id="selectedTaskId"
+            :inspector-open="inspectorOpen"
+            @select-task="selectTaskFromDag"
+            @open-inspector="inspectorOpen = true"
+          />
         </main>
 
         <aside
@@ -2247,17 +1394,17 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
 
           <ScrollArea class="min-h-0 flex-1">
             <div
-              v-if="selectedTask && selectedCanvasNode"
+              v-if="selectedTask"
               class="space-y-4 p-4"
               :class="inspectorSelectionPending ? 'opacity-70' : ''"
             >
               <div class="flex items-start gap-3">
                 <span
                   class="flex size-10 items-center justify-center rounded-lg border"
-                  :class="kindMeta(selectedCanvasNode.kind).color"
+                  :class="kindMeta(selectedNodeKind).color"
                 >
                   <component
-                    :is="kindMeta(selectedCanvasNode.kind).icon"
+                    :is="kindMeta(selectedNodeKind).icon"
                     class="size-5"
                   />
                 </span>
@@ -2266,7 +1413,7 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
                     {{ compactTaskTitle(selectedTask.goal, selectedTask.id) }}
                   </p>
                   <p class="text-[11px] text-muted-foreground">
-                    {{ kindMeta(selectedCanvasNode.kind).label }} {{ $t('orchestration.node') }} / L{{ selectedCanvasNode.level }}
+                    {{ kindMeta(selectedNodeKind).label }} {{ $t('orchestration.node') }} / L{{ selectedNodeLevel }}
                   </p>
                 </div>
                 <span
