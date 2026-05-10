@@ -3064,7 +3064,7 @@ definitions:
     type: object
   orchestration.InjectRunHintResult:
     properties:
-      planning_intent_id:
+      orchestration_intent_id:
         type: string
       run_id:
         type: string
@@ -3255,6 +3255,8 @@ definitions:
       input:
         additionalProperties: {}
         type: object
+      intent_status:
+        type: string
       lifecycle_status:
         type: string
       output_schema:
@@ -3264,8 +3266,6 @@ definitions:
         type: string
       planner_epoch:
         type: integer
-      planning_status:
-        type: string
       policies:
         additionalProperties: {}
         type: object
@@ -3391,6 +3391,46 @@ definitions:
       worker_id:
         type: string
     type: object
+  orchestration.RunFlowSpan:
+    properties:
+      action_count:
+        type: integer
+      attempt_id:
+        type: string
+      checkpoint_id:
+        type: string
+      end_seq:
+        type: integer
+      finished_at:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      run_id:
+        type: string
+      start_seq:
+        type: integer
+      started_at:
+        type: string
+      status:
+        type: string
+      summary:
+        type: string
+      task_id:
+        type: string
+      title:
+        type: string
+      tool_names:
+        items:
+          type: string
+        type: array
+      verification_id:
+        type: string
+    type: object
   orchestration.RunHandle:
     properties:
       root_task_id:
@@ -3440,6 +3480,10 @@ definitions:
         items:
           $ref: '#/definitions/orchestration.RunExecutionSpan'
         type: array
+      flow_spans:
+        items:
+          $ref: '#/definitions/orchestration.RunFlowSpan'
+        type: array
       input_manifests:
         items:
           $ref: '#/definitions/orchestration.InputManifest'
@@ -3479,6 +3523,7 @@ definitions:
     - checkpoints
     - dependencies
     - execution_spans
+    - flow_spans
     - input_manifests
     - results
     - run
@@ -3550,9 +3595,9 @@ definitions:
         type: string
       id:
         type: string
-      lifecycle_status:
+      intent_status:
         type: string
-      planning_status:
+      lifecycle_status:
         type: string
       root_task_id:
         type: string

@@ -718,16 +718,16 @@ func (s *Service) CompleteVerification(ctx context.Context, input VerificationCo
 				return nil, err
 			}
 			if !resultRow.AttemptID.Valid {
-				return nil, fmt.Errorf("%w: request_replan requires attempt_id", ErrPlanningIntentInvalid)
+				return nil, fmt.Errorf("%w: request_replan requires attempt_id", ErrOrchestrationIntentInvalid)
 			}
 			attemptRow, err := qtx.GetOrchestrationTaskAttemptByID(ctx, resultRow.AttemptID)
 			if err != nil {
 				return nil, fmt.Errorf("load attempt for verified request_replan: %w", err)
 			}
-			if _, err := s.enqueueReplanPlanningIntent(ctx, qtx, runRow, completedTask, attemptRow, childPlans, "verification.accepted_request_replan"); err != nil {
+			if _, err := s.enqueueReplanOrchestrationIntent(ctx, qtx, runRow, completedTask, attemptRow, childPlans, "verification.accepted_request_replan"); err != nil {
 				return nil, err
 			}
-			if err := s.syncRunPlanningStatus(ctx, qtx, runRow.ID); err != nil {
+			if err := s.syncRunIntentStatus(ctx, qtx, runRow.ID); err != nil {
 				return nil, err
 			}
 			break
@@ -763,7 +763,7 @@ func (s *Service) CompleteVerification(ctx context.Context, input VerificationCo
 			return nil, err
 		}
 		if !resultRow.AttemptID.Valid {
-			return nil, fmt.Errorf("%w: request_replan requires attempt_id", ErrPlanningIntentInvalid)
+			return nil, fmt.Errorf("%w: request_replan requires attempt_id", ErrOrchestrationIntentInvalid)
 		}
 		attemptRow, err := qtx.GetOrchestrationTaskAttemptByID(ctx, resultRow.AttemptID)
 		if err != nil {
@@ -772,13 +772,13 @@ func (s *Service) CompleteVerification(ctx context.Context, input VerificationCo
 			}
 			break
 		}
-		if _, err := s.enqueueReplanPlanningIntent(ctx, qtx, runRow, taskRow, attemptRow, childPlans, "verification.request_replan"); err != nil {
+		if _, err := s.enqueueReplanOrchestrationIntent(ctx, qtx, runRow, taskRow, attemptRow, childPlans, "verification.request_replan"); err != nil {
 			if markErr := s.markRunFailedFromVerificationFailure(ctx, qtx, runRow, failedTask, finalRow); markErr != nil {
 				return nil, markErr
 			}
 			break
 		}
-		if err := s.syncRunPlanningStatus(ctx, qtx, runRow.ID); err != nil {
+		if err := s.syncRunIntentStatus(ctx, qtx, runRow.ID); err != nil {
 			return nil, err
 		}
 	default:

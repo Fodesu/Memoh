@@ -57,7 +57,7 @@ UPDATE orchestration_runs
 SET planner_epoch = planner_epoch + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 func (q *Queries) AdvanceOrchestrationRunPlannerEpoch(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
@@ -68,7 +68,7 @@ func (q *Queries) AdvanceOrchestrationRunPlannerEpoch(ctx context.Context, id pg
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -398,10 +398,10 @@ func (q *Queries) ClaimNextCreatedOrchestrationTaskVerification(ctx context.Cont
 	return i, err
 }
 
-const claimNextOrchestrationPlanningIntent = `-- name: ClaimNextOrchestrationPlanningIntent :one
+const claimNextOrchestrationIntent = `-- name: ClaimNextOrchestrationIntent :one
 WITH next_intent AS (
   SELECT id
-  FROM orchestration_planning_intents
+  FROM orchestration_intents
   WHERE (
       status = 'pending'
       AND (lease_expires_at IS NULL OR lease_expires_at <= clock_timestamp())
@@ -414,7 +414,7 @@ WITH next_intent AS (
   LIMIT 1
   FOR UPDATE SKIP LOCKED
 )
-UPDATE orchestration_planning_intents
+UPDATE orchestration_intents
 SET status = 'processing',
     claim_epoch = claim_epoch + 1,
     claim_token = $1,
@@ -426,15 +426,15 @@ WHERE id = (SELECT id FROM next_intent)
 RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
 `
 
-type ClaimNextOrchestrationPlanningIntentParams struct {
+type ClaimNextOrchestrationIntentParams struct {
 	ClaimToken      string `json:"claim_token"`
 	ClaimedBy       string `json:"claimed_by"`
 	LeaseTtlSeconds int64  `json:"lease_ttl_seconds"`
 }
 
-func (q *Queries) ClaimNextOrchestrationPlanningIntent(ctx context.Context, arg ClaimNextOrchestrationPlanningIntentParams) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, claimNextOrchestrationPlanningIntent, arg.ClaimToken, arg.ClaimedBy, arg.LeaseTtlSeconds)
-	var i OrchestrationPlanningIntent
+func (q *Queries) ClaimNextOrchestrationIntent(ctx context.Context, arg ClaimNextOrchestrationIntentParams) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, claimNextOrchestrationIntent, arg.ClaimToken, arg.ClaimedBy, arg.LeaseTtlSeconds)
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -606,8 +606,8 @@ func (q *Queries) CompleteOrchestrationIdempotencyRecord(ctx context.Context, ar
 	return i, err
 }
 
-const completeOrchestrationPlanningIntent = `-- name: CompleteOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+const completeOrchestrationIntent = `-- name: CompleteOrchestrationIntent :one
+UPDATE orchestration_intents
 SET status = 'completed',
     claim_token = '',
     claimed_by = '',
@@ -621,14 +621,14 @@ WHERE id = $1
 RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
 `
 
-type CompleteOrchestrationPlanningIntentParams struct {
+type CompleteOrchestrationIntentParams struct {
 	ID         pgtype.UUID `json:"id"`
 	ClaimToken string      `json:"claim_token"`
 }
 
-func (q *Queries) CompleteOrchestrationPlanningIntent(ctx context.Context, arg CompleteOrchestrationPlanningIntentParams) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, completeOrchestrationPlanningIntent, arg.ID, arg.ClaimToken)
-	var i OrchestrationPlanningIntent
+func (q *Queries) CompleteOrchestrationIntent(ctx context.Context, arg CompleteOrchestrationIntentParams) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, completeOrchestrationIntent, arg.ID, arg.ClaimToken)
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -789,15 +789,15 @@ func (q *Queries) CountActiveOrchestrationEnvSessionsByResource(ctx context.Cont
 	return active_count, err
 }
 
-const countActiveOrchestrationPlanningIntentsByRun = `-- name: CountActiveOrchestrationPlanningIntentsByRun :one
+const countActiveOrchestrationIntentsByRun = `-- name: CountActiveOrchestrationIntentsByRun :one
 SELECT COUNT(*)
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = $1
   AND status IN ('pending', 'processing')
 `
 
-func (q *Queries) CountActiveOrchestrationPlanningIntentsByRun(ctx context.Context, runID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countActiveOrchestrationPlanningIntentsByRun, runID)
+func (q *Queries) CountActiveOrchestrationIntentsByRun(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveOrchestrationIntentsByRun, runID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1752,8 +1752,8 @@ func (q *Queries) CreateOrchestrationInputManifest(ctx context.Context, arg Crea
 	return i, err
 }
 
-const createOrchestrationPlanningIntent = `-- name: CreateOrchestrationPlanningIntent :one
-INSERT INTO orchestration_planning_intents (
+const createOrchestrationIntent = `-- name: CreateOrchestrationIntent :one
+INSERT INTO orchestration_intents (
   id,
   run_id,
   task_id,
@@ -1774,7 +1774,7 @@ INSERT INTO orchestration_planning_intents (
 ) RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
 `
 
-type CreateOrchestrationPlanningIntentParams struct {
+type CreateOrchestrationIntentParams struct {
 	ID               pgtype.UUID `json:"id"`
 	RunID            pgtype.UUID `json:"run_id"`
 	TaskID           pgtype.UUID `json:"task_id"`
@@ -1785,8 +1785,8 @@ type CreateOrchestrationPlanningIntentParams struct {
 	Payload          []byte      `json:"payload"`
 }
 
-func (q *Queries) CreateOrchestrationPlanningIntent(ctx context.Context, arg CreateOrchestrationPlanningIntentParams) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, createOrchestrationPlanningIntent,
+func (q *Queries) CreateOrchestrationIntent(ctx context.Context, arg CreateOrchestrationIntentParams) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, createOrchestrationIntent,
 		arg.ID,
 		arg.RunID,
 		arg.TaskID,
@@ -1796,7 +1796,7 @@ func (q *Queries) CreateOrchestrationPlanningIntent(ctx context.Context, arg Cre
 		arg.BasePlannerEpoch,
 		arg.Payload,
 	)
-	var i OrchestrationPlanningIntent
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -1864,7 +1864,7 @@ INSERT INTO orchestration_runs (
   tenant_id,
   owner_subject,
   lifecycle_status,
-  planning_status,
+  intent_status,
   status_version,
   planner_epoch,
   last_event_seq,
@@ -1897,7 +1897,7 @@ INSERT INTO orchestration_runs (
   $16,
   $17,
   $18
-) RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+) RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 type CreateOrchestrationRunParams struct {
@@ -1905,7 +1905,7 @@ type CreateOrchestrationRunParams struct {
 	TenantID               string      `json:"tenant_id"`
 	OwnerSubject           string      `json:"owner_subject"`
 	LifecycleStatus        string      `json:"lifecycle_status"`
-	PlanningStatus         string      `json:"planning_status"`
+	IntentStatus           string      `json:"intent_status"`
 	StatusVersion          int64       `json:"status_version"`
 	PlannerEpoch           int64       `json:"planner_epoch"`
 	LastEventSeq           int64       `json:"last_event_seq"`
@@ -1927,7 +1927,7 @@ func (q *Queries) CreateOrchestrationRun(ctx context.Context, arg CreateOrchestr
 		arg.TenantID,
 		arg.OwnerSubject,
 		arg.LifecycleStatus,
-		arg.PlanningStatus,
+		arg.IntentStatus,
 		arg.StatusVersion,
 		arg.PlannerEpoch,
 		arg.LastEventSeq,
@@ -1948,7 +1948,7 @@ func (q *Queries) CreateOrchestrationRun(ctx context.Context, arg CreateOrchestr
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -2523,8 +2523,8 @@ func (q *Queries) DeleteOrchestrationTaskResultByID(ctx context.Context, id pgty
 	return err
 }
 
-const failOrchestrationPlanningIntent = `-- name: FailOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+const failOrchestrationIntent = `-- name: FailOrchestrationIntent :one
+UPDATE orchestration_intents
 SET status = 'failed',
     failure_reason = $1,
     claim_token = '',
@@ -2539,15 +2539,15 @@ WHERE id = $2
 RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
 `
 
-type FailOrchestrationPlanningIntentParams struct {
+type FailOrchestrationIntentParams struct {
 	FailureReason string      `json:"failure_reason"`
 	ID            pgtype.UUID `json:"id"`
 	ClaimToken    string      `json:"claim_token"`
 }
 
-func (q *Queries) FailOrchestrationPlanningIntent(ctx context.Context, arg FailOrchestrationPlanningIntentParams) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, failOrchestrationPlanningIntent, arg.FailureReason, arg.ID, arg.ClaimToken)
-	var i OrchestrationPlanningIntent
+func (q *Queries) FailOrchestrationIntent(ctx context.Context, arg FailOrchestrationIntentParams) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, failOrchestrationIntent, arg.FailureReason, arg.ID, arg.ClaimToken)
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -2580,9 +2580,9 @@ func (q *Queries) GetDatabaseClockTimestamp(ctx context.Context) (interface{}, e
 	return clock_timestamp, err
 }
 
-const getLatestFailedStartRunPlanningIntentByRun = `-- name: GetLatestFailedStartRunPlanningIntentByRun :one
+const getLatestFailedStartRunOrchestrationIntentByRun = `-- name: GetLatestFailedStartRunOrchestrationIntentByRun :one
 SELECT id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = $1
   AND kind = 'start_run'
   AND status = 'failed'
@@ -2590,9 +2590,9 @@ ORDER BY updated_at DESC, id DESC
 LIMIT 1
 `
 
-func (q *Queries) GetLatestFailedStartRunPlanningIntentByRun(ctx context.Context, runID pgtype.UUID) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, getLatestFailedStartRunPlanningIntentByRun, runID)
-	var i OrchestrationPlanningIntent
+func (q *Queries) GetLatestFailedStartRunOrchestrationIntentByRun(ctx context.Context, runID pgtype.UUID) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, getLatestFailedStartRunOrchestrationIntentByRun, runID)
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -3000,15 +3000,15 @@ func (q *Queries) GetOrchestrationInputManifestByID(ctx context.Context, id pgty
 	return i, err
 }
 
-const getOrchestrationPlanningIntentByID = `-- name: GetOrchestrationPlanningIntentByID :one
+const getOrchestrationIntentByID = `-- name: GetOrchestrationIntentByID :one
 SELECT id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE id = $1
 `
 
-func (q *Queries) GetOrchestrationPlanningIntentByID(ctx context.Context, id pgtype.UUID) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, getOrchestrationPlanningIntentByID, id)
-	var i OrchestrationPlanningIntent
+func (q *Queries) GetOrchestrationIntentByID(ctx context.Context, id pgtype.UUID) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, getOrchestrationIntentByID, id)
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -3061,7 +3061,7 @@ func (q *Queries) GetOrchestrationProjectionSnapshotAtOrBeforeSeq(ctx context.Co
 }
 
 const getOrchestrationRunByID = `-- name: GetOrchestrationRunByID :one
-SELECT id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+SELECT id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 FROM orchestration_runs
 WHERE id = $1
 `
@@ -3074,7 +3074,7 @@ func (q *Queries) GetOrchestrationRunByID(ctx context.Context, id pgtype.UUID) (
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -3096,7 +3096,7 @@ func (q *Queries) GetOrchestrationRunByID(ctx context.Context, id pgtype.UUID) (
 }
 
 const getOrchestrationRunByIDForUpdate = `-- name: GetOrchestrationRunByIDForUpdate :one
-SELECT id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+SELECT id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 FROM orchestration_runs
 WHERE id = $1
 FOR UPDATE
@@ -3110,7 +3110,7 @@ func (q *Queries) GetOrchestrationRunByIDForUpdate(ctx context.Context, id pgtyp
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -3501,8 +3501,8 @@ func (q *Queries) GetTerminalOrchestrationVerificationEventByID(ctx context.Cont
 	return i, err
 }
 
-const heartbeatOrchestrationPlanningIntent = `-- name: HeartbeatOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+const heartbeatOrchestrationIntent = `-- name: HeartbeatOrchestrationIntent :one
+UPDATE orchestration_intents
 SET lease_expires_at = clock_timestamp() + ($1::bigint * interval '1 second'),
     last_heartbeat_at = now(),
     updated_at = now()
@@ -3514,15 +3514,15 @@ WHERE id = $2
 RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
 `
 
-type HeartbeatOrchestrationPlanningIntentParams struct {
+type HeartbeatOrchestrationIntentParams struct {
 	LeaseTtlSeconds int64       `json:"lease_ttl_seconds"`
 	ID              pgtype.UUID `json:"id"`
 	ClaimToken      string      `json:"claim_token"`
 }
 
-func (q *Queries) HeartbeatOrchestrationPlanningIntent(ctx context.Context, arg HeartbeatOrchestrationPlanningIntentParams) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, heartbeatOrchestrationPlanningIntent, arg.LeaseTtlSeconds, arg.ID, arg.ClaimToken)
-	var i OrchestrationPlanningIntent
+func (q *Queries) HeartbeatOrchestrationIntent(ctx context.Context, arg HeartbeatOrchestrationIntentParams) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, heartbeatOrchestrationIntent, arg.LeaseTtlSeconds, arg.ID, arg.ClaimToken)
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -4311,9 +4311,9 @@ func (q *Queries) ListExpiredOrchestrationEnvSessions(ctx context.Context, arg L
 	return items, nil
 }
 
-const listExpiredOrchestrationPlanningIntents = `-- name: ListExpiredOrchestrationPlanningIntents :many
+const listExpiredOrchestrationIntents = `-- name: ListExpiredOrchestrationIntents :many
 SELECT id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE status = 'processing'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at <= clock_timestamp()
@@ -4321,15 +4321,15 @@ ORDER BY updated_at ASC, id ASC
 LIMIT $1
 `
 
-func (q *Queries) ListExpiredOrchestrationPlanningIntents(ctx context.Context, limitCount int32) ([]OrchestrationPlanningIntent, error) {
-	rows, err := q.db.Query(ctx, listExpiredOrchestrationPlanningIntents, limitCount)
+func (q *Queries) ListExpiredOrchestrationIntents(ctx context.Context, limitCount int32) ([]OrchestrationIntent, error) {
+	rows, err := q.db.Query(ctx, listExpiredOrchestrationIntents, limitCount)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []OrchestrationPlanningIntent
+	var items []OrchestrationIntent
 	for rows.Next() {
-		var i OrchestrationPlanningIntent
+		var i OrchestrationIntent
 		if err := rows.Scan(
 			&i.ID,
 			&i.RunID,
@@ -4897,7 +4897,7 @@ func (q *Queries) ListOrchestrationRunEvents(ctx context.Context, arg ListOrches
 }
 
 const listOrchestrationRunsByBot = `-- name: ListOrchestrationRunsByBot :many
-SELECT id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+SELECT id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 FROM orchestration_runs
 WHERE tenant_id = $1
   AND owner_subject = $2
@@ -4932,7 +4932,7 @@ func (q *Queries) ListOrchestrationRunsByBot(ctx context.Context, arg ListOrches
 			&i.TenantID,
 			&i.OwnerSubject,
 			&i.LifecycleStatus,
-			&i.PlanningStatus,
+			&i.IntentStatus,
 			&i.StatusVersion,
 			&i.PlannerEpoch,
 			&i.LastEventSeq,
@@ -4961,7 +4961,7 @@ func (q *Queries) ListOrchestrationRunsByBot(ctx context.Context, arg ListOrches
 }
 
 const listOrchestrationRunsByOwner = `-- name: ListOrchestrationRunsByOwner :many
-SELECT id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+SELECT id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 FROM orchestration_runs
 WHERE tenant_id = $1
   AND owner_subject = $2
@@ -4989,7 +4989,7 @@ func (q *Queries) ListOrchestrationRunsByOwner(ctx context.Context, arg ListOrch
 			&i.TenantID,
 			&i.OwnerSubject,
 			&i.LifecycleStatus,
-			&i.PlanningStatus,
+			&i.IntentStatus,
 			&i.StatusVersion,
 			&i.PlannerEpoch,
 			&i.LastEventSeq,
@@ -5458,7 +5458,7 @@ SET lifecycle_status = 'cancelled',
     updated_at = now(),
     finished_at = now()
 WHERE id = $2
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 type MarkOrchestrationRunCancelledParams struct {
@@ -5474,7 +5474,7 @@ func (q *Queries) MarkOrchestrationRunCancelled(ctx context.Context, arg MarkOrc
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -5501,7 +5501,7 @@ SET lifecycle_status = 'cancelling',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 func (q *Queries) MarkOrchestrationRunCancelling(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
@@ -5512,7 +5512,7 @@ func (q *Queries) MarkOrchestrationRunCancelling(ctx context.Context, id pgtype.
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -5540,7 +5540,7 @@ SET lifecycle_status = 'completed',
     updated_at = now(),
     finished_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 func (q *Queries) MarkOrchestrationRunCompleted(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
@@ -5551,7 +5551,7 @@ func (q *Queries) MarkOrchestrationRunCompleted(ctx context.Context, id pgtype.U
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -5591,7 +5591,7 @@ SET lifecycle_status = 'failed',
     updated_at = now(),
     finished_at = now()
 WHERE id = $2
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 type MarkOrchestrationRunFailedParams struct {
@@ -5607,7 +5607,7 @@ func (q *Queries) MarkOrchestrationRunFailed(ctx context.Context, arg MarkOrches
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -5628,24 +5628,24 @@ func (q *Queries) MarkOrchestrationRunFailed(ctx context.Context, arg MarkOrches
 	return i, err
 }
 
-const markOrchestrationRunPlanningActive = `-- name: MarkOrchestrationRunPlanningActive :one
+const markOrchestrationRunIntentActive = `-- name: MarkOrchestrationRunIntentActive :one
 UPDATE orchestration_runs
-SET planning_status = 'active',
+SET intent_status = 'active',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
-func (q *Queries) MarkOrchestrationRunPlanningActive(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
-	row := q.db.QueryRow(ctx, markOrchestrationRunPlanningActive, id)
+func (q *Queries) MarkOrchestrationRunIntentActive(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
+	row := q.db.QueryRow(ctx, markOrchestrationRunIntentActive, id)
 	var i OrchestrationRun
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -5666,24 +5666,24 @@ func (q *Queries) MarkOrchestrationRunPlanningActive(ctx context.Context, id pgt
 	return i, err
 }
 
-const markOrchestrationRunPlanningIdle = `-- name: MarkOrchestrationRunPlanningIdle :one
+const markOrchestrationRunIntentIdle = `-- name: MarkOrchestrationRunIntentIdle :one
 UPDATE orchestration_runs
-SET planning_status = 'idle',
+SET intent_status = 'idle',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
-func (q *Queries) MarkOrchestrationRunPlanningIdle(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
-	row := q.db.QueryRow(ctx, markOrchestrationRunPlanningIdle, id)
+func (q *Queries) MarkOrchestrationRunIntentIdle(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
+	row := q.db.QueryRow(ctx, markOrchestrationRunIntentIdle, id)
 	var i OrchestrationRun
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -5712,7 +5712,7 @@ SET lifecycle_status = 'running',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 func (q *Queries) MarkOrchestrationRunRunning(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
@@ -5723,7 +5723,7 @@ func (q *Queries) MarkOrchestrationRunRunning(ctx context.Context, id pgtype.UUI
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -5750,7 +5750,7 @@ SET lifecycle_status = 'waiting_human',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 func (q *Queries) MarkOrchestrationRunWaitingHuman(ctx context.Context, id pgtype.UUID) (OrchestrationRun, error) {
@@ -5761,7 +5761,7 @@ func (q *Queries) MarkOrchestrationRunWaitingHuman(ctx context.Context, id pgtyp
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,
@@ -6976,8 +6976,8 @@ func (q *Queries) ReleaseOrchestrationTaskVerificationClaim(ctx context.Context,
 	return i, err
 }
 
-const requeueOrchestrationPlanningIntent = `-- name: RequeueOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+const requeueOrchestrationIntent = `-- name: RequeueOrchestrationIntent :one
+UPDATE orchestration_intents
 SET status = 'pending',
     claim_epoch = claim_epoch + 1,
     claim_token = '',
@@ -6993,14 +6993,14 @@ WHERE id = $1
 RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
 `
 
-type RequeueOrchestrationPlanningIntentParams struct {
+type RequeueOrchestrationIntentParams struct {
 	ID         pgtype.UUID `json:"id"`
 	ClaimEpoch int64       `json:"claim_epoch"`
 }
 
-func (q *Queries) RequeueOrchestrationPlanningIntent(ctx context.Context, arg RequeueOrchestrationPlanningIntentParams) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, requeueOrchestrationPlanningIntent, arg.ID, arg.ClaimEpoch)
-	var i OrchestrationPlanningIntent
+func (q *Queries) RequeueOrchestrationIntent(ctx context.Context, arg RequeueOrchestrationIntentParams) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, requeueOrchestrationIntent, arg.ID, arg.ClaimEpoch)
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -7022,8 +7022,8 @@ func (q *Queries) RequeueOrchestrationPlanningIntent(ctx context.Context, arg Re
 	return i, err
 }
 
-const requeueOrchestrationPlanningIntentWithBackoff = `-- name: RequeueOrchestrationPlanningIntentWithBackoff :one
-UPDATE orchestration_planning_intents
+const requeueOrchestrationIntentWithBackoff = `-- name: RequeueOrchestrationIntentWithBackoff :one
+UPDATE orchestration_intents
 SET status = 'pending',
     failure_reason = $1,
     claim_token = '',
@@ -7043,21 +7043,21 @@ WHERE id = $3
 RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
 `
 
-type RequeueOrchestrationPlanningIntentWithBackoffParams struct {
+type RequeueOrchestrationIntentWithBackoffParams struct {
 	FailureReason  string      `json:"failure_reason"`
 	BackoffSeconds int64       `json:"backoff_seconds"`
 	ID             pgtype.UUID `json:"id"`
 	ClaimToken     string      `json:"claim_token"`
 }
 
-func (q *Queries) RequeueOrchestrationPlanningIntentWithBackoff(ctx context.Context, arg RequeueOrchestrationPlanningIntentWithBackoffParams) (OrchestrationPlanningIntent, error) {
-	row := q.db.QueryRow(ctx, requeueOrchestrationPlanningIntentWithBackoff,
+func (q *Queries) RequeueOrchestrationIntentWithBackoff(ctx context.Context, arg RequeueOrchestrationIntentWithBackoffParams) (OrchestrationIntent, error) {
+	row := q.db.QueryRow(ctx, requeueOrchestrationIntentWithBackoff,
 		arg.FailureReason,
 		arg.BackoffSeconds,
 		arg.ID,
 		arg.ClaimToken,
 	)
-	var i OrchestrationPlanningIntent
+	var i OrchestrationIntent
 	err := row.Scan(
 		&i.ID,
 		&i.RunID,
@@ -7622,7 +7622,7 @@ SET input = $1,
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+RETURNING id, tenant_id, owner_subject, lifecycle_status, intent_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
 `
 
 type UpdateOrchestrationRunInputParams struct {
@@ -7638,7 +7638,7 @@ func (q *Queries) UpdateOrchestrationRunInput(ctx context.Context, arg UpdateOrc
 		&i.TenantID,
 		&i.OwnerSubject,
 		&i.LifecycleStatus,
-		&i.PlanningStatus,
+		&i.IntentStatus,
 		&i.StatusVersion,
 		&i.PlannerEpoch,
 		&i.LastEventSeq,

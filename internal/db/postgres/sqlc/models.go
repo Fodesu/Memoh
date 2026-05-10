@@ -586,7 +586,7 @@ type OrchestrationInputManifest struct {
 	CreatedAt                   pgtype.Timestamptz `json:"created_at"`
 }
 
-type OrchestrationPlanningIntent struct {
+type OrchestrationIntent struct {
 	ID               pgtype.UUID        `json:"id"`
 	RunID            pgtype.UUID        `json:"run_id"`
 	TaskID           pgtype.UUID        `json:"task_id"`
@@ -619,7 +619,7 @@ type OrchestrationRun struct {
 	TenantID               string             `json:"tenant_id"`
 	OwnerSubject           string             `json:"owner_subject"`
 	LifecycleStatus        string             `json:"lifecycle_status"`
-	PlanningStatus         string             `json:"planning_status"`
+	IntentStatus           string             `json:"intent_status"`
 	StatusVersion          int64              `json:"status_version"`
 	PlannerEpoch           int64              `json:"planner_epoch"`
 	LastEventSeq           int64              `json:"last_event_seq"`

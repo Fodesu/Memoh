@@ -4,7 +4,7 @@ INSERT INTO orchestration_runs (
   tenant_id,
   owner_subject,
   lifecycle_status,
-  planning_status,
+  intent_status,
   status_version,
   planner_epoch,
   last_event_seq,
@@ -23,7 +23,7 @@ INSERT INTO orchestration_runs (
   sqlc.arg(tenant_id),
   sqlc.arg(owner_subject),
   sqlc.arg(lifecycle_status),
-  sqlc.arg(planning_status),
+  sqlc.arg(intent_status),
   sqlc.arg(status_version),
   sqlc.arg(planner_epoch),
   sqlc.arg(last_event_seq),
@@ -100,17 +100,17 @@ SET lifecycle_status = 'cancelling',
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: MarkOrchestrationRunPlanningActive :one
+-- name: MarkOrchestrationRunIntentActive :one
 UPDATE orchestration_runs
-SET planning_status = 'active',
+SET intent_status = 'active',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: MarkOrchestrationRunPlanningIdle :one
+-- name: MarkOrchestrationRunIntentIdle :one
 UPDATE orchestration_runs
-SET planning_status = 'idle',
+SET intent_status = 'idle',
     status_version = status_version + 1,
     updated_at = now()
 WHERE id = sqlc.arg(id)
@@ -451,8 +451,8 @@ SET status = 'cancelled',
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: CreateOrchestrationPlanningIntent :one
-INSERT INTO orchestration_planning_intents (
+-- name: CreateOrchestrationIntent :one
+INSERT INTO orchestration_intents (
   id,
   run_id,
   task_id,
@@ -472,18 +472,18 @@ INSERT INTO orchestration_planning_intents (
   sqlc.arg(payload)
 ) RETURNING *;
 
--- name: GetOrchestrationPlanningIntentByID :one
+-- name: GetOrchestrationIntentByID :one
 SELECT *
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE id = sqlc.arg(id);
 
 -- name: GetDatabaseClockTimestamp :one
 SELECT clock_timestamp();
 
--- name: ClaimNextOrchestrationPlanningIntent :one
+-- name: ClaimNextOrchestrationIntent :one
 WITH next_intent AS (
   SELECT id
-  FROM orchestration_planning_intents
+  FROM orchestration_intents
   WHERE (
       status = 'pending'
       AND (lease_expires_at IS NULL OR lease_expires_at <= clock_timestamp())
@@ -496,7 +496,7 @@ WITH next_intent AS (
   LIMIT 1
   FOR UPDATE SKIP LOCKED
 )
-UPDATE orchestration_planning_intents
+UPDATE orchestration_intents
 SET status = 'processing',
     claim_epoch = claim_epoch + 1,
     claim_token = sqlc.arg(claim_token),
@@ -507,8 +507,8 @@ SET status = 'processing',
 WHERE id = (SELECT id FROM next_intent)
 RETURNING *;
 
--- name: HeartbeatOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+-- name: HeartbeatOrchestrationIntent :one
+UPDATE orchestration_intents
 SET lease_expires_at = clock_timestamp() + (sqlc.arg(lease_ttl_seconds)::bigint * interval '1 second'),
     last_heartbeat_at = now(),
     updated_at = now()
@@ -519,8 +519,8 @@ WHERE id = sqlc.arg(id)
   AND lease_expires_at > clock_timestamp()
 RETURNING *;
 
--- name: CompleteOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+-- name: CompleteOrchestrationIntent :one
+UPDATE orchestration_intents
 SET status = 'completed',
     claim_token = '',
     claimed_by = '',
@@ -533,8 +533,8 @@ WHERE id = sqlc.arg(id)
   AND lease_expires_at > clock_timestamp()
 RETURNING *;
 
--- name: FailOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+-- name: FailOrchestrationIntent :one
+UPDATE orchestration_intents
 SET status = 'failed',
     failure_reason = sqlc.arg(failure_reason),
     claim_token = '',
@@ -548,32 +548,32 @@ WHERE id = sqlc.arg(id)
   AND lease_expires_at > clock_timestamp()
 RETURNING *;
 
--- name: CountActiveOrchestrationPlanningIntentsByRun :one
+-- name: CountActiveOrchestrationIntentsByRun :one
 SELECT COUNT(*)
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = sqlc.arg(run_id)
   AND status IN ('pending', 'processing');
 
--- name: GetLatestFailedStartRunPlanningIntentByRun :one
+-- name: GetLatestFailedStartRunOrchestrationIntentByRun :one
 SELECT *
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = sqlc.arg(run_id)
   AND kind = 'start_run'
   AND status = 'failed'
 ORDER BY updated_at DESC, id DESC
 LIMIT 1;
 
--- name: ListExpiredOrchestrationPlanningIntents :many
+-- name: ListExpiredOrchestrationIntents :many
 SELECT *
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE status = 'processing'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at <= clock_timestamp()
 ORDER BY updated_at ASC, id ASC
 LIMIT sqlc.arg(limit_count);
 
--- name: RequeueOrchestrationPlanningIntent :one
-UPDATE orchestration_planning_intents
+-- name: RequeueOrchestrationIntent :one
+UPDATE orchestration_intents
 SET status = 'pending',
     claim_epoch = claim_epoch + 1,
     claim_token = '',
@@ -588,8 +588,8 @@ WHERE id = sqlc.arg(id)
   AND lease_expires_at <= clock_timestamp()
 RETURNING *;
 
--- name: RequeueOrchestrationPlanningIntentWithBackoff :one
-UPDATE orchestration_planning_intents
+-- name: RequeueOrchestrationIntentWithBackoff :one
+UPDATE orchestration_intents
 SET status = 'pending',
     failure_reason = sqlc.arg(failure_reason),
     claim_token = '',

@@ -219,7 +219,7 @@ func (p *OrchestrationProvider) executeStatus(ctx context.Context, caller orches
 		"run_id":           snapshot.Run.ID,
 		"goal":             snapshot.Run.Goal,
 		"lifecycle_status": snapshot.Run.LifecycleStatus,
-		"planning_status":  snapshot.Run.PlanningStatus,
+		"intent_status":    snapshot.Run.IntentStatus,
 		"snapshot_seq":     snapshot.SnapshotSeq,
 		"terminal_reason":  snapshot.Run.TerminalReason,
 		"open_checkpoints": openCheckpoints,
@@ -287,10 +287,10 @@ func (p *OrchestrationProvider) executeHint(ctx context.Context, caller orchestr
 		return nil, err
 	}
 	return map[string]any{
-		"run_id":             result.RunID,
-		"planning_intent_id": result.PlanningIntentID,
-		"snapshot_seq":       result.SnapshotSeq,
-		"status_message":     "orchestration hint injected",
+		"run_id":                  result.RunID,
+		"orchestration_intent_id": result.OrchestrationIntentID,
+		"snapshot_seq":            result.SnapshotSeq,
+		"status_message":          "orchestration hint injected",
 	}, nil
 }
 

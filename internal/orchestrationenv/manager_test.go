@@ -157,7 +157,7 @@ func seedRunAndTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenan
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO orchestration_runs
-(id, tenant_id, owner_subject, lifecycle_status, planning_status, root_task_id, created_by)
+(id, tenant_id, owner_subject, lifecycle_status, intent_status, root_task_id, created_by)
 VALUES ($1, $2, 'system', 'created', 'idle', $3, 'system')
 `, runUUID, tenantID, taskUUID); err != nil {
 		t.Fatalf("seed orchestration_run: %v", err)

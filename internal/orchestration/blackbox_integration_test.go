@@ -224,12 +224,12 @@ func TestBlackboxRuntimeHTTPCheckpointResumeSurvivesPlannerEpochDrift(t *testing
 		IdempotencyKey: "start-" + uuid.NewString(),
 	})
 
-	processed, err := h.service.ProcessNextPlanningIntent(h.ctx)
+	processed, err := h.service.ProcessNextOrchestrationIntent(h.ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent(start_run) error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent(start_run) error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent(start_run) = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent(start_run) = false, want true")
 	}
 
 	task := h.waitForTaskStatus(t, handle.RunID, handle.RootTaskID, orch.TaskStatusReady, 5*time.Second)
@@ -261,12 +261,12 @@ func TestBlackboxRuntimeHTTPCheckpointResumeSurvivesPlannerEpochDrift(t *testing
 		t.Fatalf("bump planner epoch: %v", err)
 	}
 
-	processed, err = h.service.ProcessNextPlanningIntent(h.ctx)
+	processed, err = h.service.ProcessNextOrchestrationIntent(h.ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent(checkpoint_resume) error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent(checkpoint_resume) error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent(checkpoint_resume) = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent(checkpoint_resume) = false, want true")
 	}
 
 	h.waitForTaskStatus(t, handle.RunID, handle.RootTaskID, orch.TaskStatusReady, 5*time.Second)
@@ -2082,7 +2082,7 @@ func (h *blackboxHarness) dumpRunDiagnostics(t *testing.T, runID string) {
 	snapshot := h.getSnapshot(t, runID)
 	events := h.listEvents(t, runID)
 	inspector := h.getInspector(t, runID)
-	t.Logf("diagnostic snapshot: lifecycle=%s planning=%s snapshot_seq=%d", snapshot.Run.LifecycleStatus, snapshot.Run.PlanningStatus, snapshot.SnapshotSeq)
+	t.Logf("diagnostic snapshot: lifecycle=%s planning=%s snapshot_seq=%d", snapshot.Run.LifecycleStatus, snapshot.Run.IntentStatus, snapshot.SnapshotSeq)
 	t.Logf("diagnostic events: %#v", events.Items)
 	t.Logf("diagnostic inspector actions=%#v spans=%#v", inspector.ActionRecords, inspector.ExecutionSpans)
 	h.processMu.Lock()

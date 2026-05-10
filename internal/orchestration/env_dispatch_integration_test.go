@@ -203,7 +203,7 @@ func TestIntegrationDispatchAcquiresEnvAndReleasesAfterCompletion(t *testing.T) 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -379,7 +379,7 @@ func TestIntegrationDispatchAcquiresEnvWithoutHoldingTaskLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -442,7 +442,7 @@ func TestIntegrationDispatchSkipsEnvManagerWhenPreconditionsNotRequired(t *testi
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -515,7 +515,7 @@ func TestIntegrationDispatchResumesHeldEnvBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 

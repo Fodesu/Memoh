@@ -123,7 +123,7 @@ func TestOrchestrationToolStatusSummarizesRun(t *testing.T) {
 					ID:              runID,
 					Goal:            "inspect run",
 					LifecycleStatus: orchestration.LifecycleStatusWaitingHuman,
-					PlanningStatus:  orchestration.PlanningStatusIdle,
+					IntentStatus:    orchestration.IntentStatusIdle,
 				},
 				SnapshotSeq: 12,
 			}, nil
@@ -308,9 +308,9 @@ func TestOrchestrationToolHintForwardsRequest(t *testing.T) {
 				t.Fatalf("hint.details = %#v", req.Hint.Details)
 			}
 			return &orchestration.InjectRunHintResult{
-				RunID:            runID,
-				PlanningIntentID: "",
-				SnapshotSeq:      23,
+				RunID:                 runID,
+				OrchestrationIntentID: "",
+				SnapshotSeq:           23,
 			}, nil
 		},
 	}, fakeOrchestrationBotReader{

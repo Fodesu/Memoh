@@ -210,16 +210,16 @@ func mustParsePGUUID(t *testing.T, raw string) pgtype.UUID {
 }
 
 type completionReplaySnapshot struct {
-	EventCount          int
-	PlanningIntentCount int
-	TaskResultCount     int
-	ArtifactCount       int
-	VerificationCount   int
-	RunLifecycleStatus  string
-	RunPlanningStatus   string
-	TaskStatus          string
-	AttemptStatus       string
-	VerificationStatus  string
+	EventCount               int
+	OrchestrationIntentCount int
+	TaskResultCount          int
+	ArtifactCount            int
+	VerificationCount        int
+	RunLifecycleStatus       string
+	RunIntentStatus          string
+	TaskStatus               string
+	AttemptStatus            string
+	VerificationStatus       string
 }
 
 func captureCompletionReplaySnapshot(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID, taskID, attemptID, verificationID string) completionReplaySnapshot {
@@ -230,8 +230,8 @@ func captureCompletionReplaySnapshot(t *testing.T, ctx context.Context, pool *pg
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM orchestration_events WHERE run_id = $1", pgRunID).Scan(&snapshot.EventCount); err != nil {
 		t.Fatalf("count orchestration events: %v", err)
 	}
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM orchestration_planning_intents WHERE run_id = $1", pgRunID).Scan(&snapshot.PlanningIntentCount); err != nil {
-		t.Fatalf("count orchestration planning intents: %v", err)
+	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM orchestration_intents WHERE run_id = $1", pgRunID).Scan(&snapshot.OrchestrationIntentCount); err != nil {
+		t.Fatalf("count orchestration intents: %v", err)
 	}
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM orchestration_task_results WHERE run_id = $1", pgRunID).Scan(&snapshot.TaskResultCount); err != nil {
 		t.Fatalf("count orchestration task results: %v", err)
@@ -242,7 +242,7 @@ func captureCompletionReplaySnapshot(t *testing.T, ctx context.Context, pool *pg
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM orchestration_task_verifications WHERE run_id = $1", pgRunID).Scan(&snapshot.VerificationCount); err != nil {
 		t.Fatalf("count orchestration task verifications: %v", err)
 	}
-	if err := pool.QueryRow(ctx, "SELECT lifecycle_status, planning_status FROM orchestration_runs WHERE id = $1", pgRunID).Scan(&snapshot.RunLifecycleStatus, &snapshot.RunPlanningStatus); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT lifecycle_status, intent_status FROM orchestration_runs WHERE id = $1", pgRunID).Scan(&snapshot.RunLifecycleStatus, &snapshot.RunIntentStatus); err != nil {
 		t.Fatalf("load orchestration run status: %v", err)
 	}
 	if strings.TrimSpace(taskID) != "" {
@@ -271,15 +271,15 @@ func assertCompletionReplaySnapshotUnchanged(t *testing.T, before, after complet
 	}
 }
 
-func processRunPlanningIntent(t *testing.T, ctx context.Context, svc *Service) {
+func processRunOrchestrationIntent(t *testing.T, ctx context.Context, svc *Service) {
 	t.Helper()
 
-	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent() = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent() = false, want true")
 	}
 }
 
@@ -332,13 +332,13 @@ func createIntegrationChildTask(t *testing.T, ctx context.Context, svc *Service,
 	return rawTaskID
 }
 
-func drainRunPlanningIntents(t *testing.T, ctx context.Context, svc *Service) {
+func drainRunOrchestrationIntents(t *testing.T, ctx context.Context, svc *Service) {
 	t.Helper()
 
 	for {
-		processed, err := svc.ProcessNextPlanningIntent(ctx)
+		processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 		if err != nil {
-			t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+			t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 		}
 		if !processed {
 			return
@@ -460,7 +460,7 @@ func TestIntegrationTenantScopedAuthorizationRejectsSameSubjectAcrossTenants(t *
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, otherOwnerCaller.TenantID, otherOwnerCaller.Subject)
@@ -561,7 +561,7 @@ func TestIntegrationGetRunInspectorIncludesExecutionSpansAndInputManifests(t *te
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	rootAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-root",
@@ -602,7 +602,7 @@ func TestIntegrationGetRunInspectorIncludesExecutionSpansAndInputManifests(t *te
 		t.Fatalf("CompleteAttempt(root) error = %v", err)
 	}
 
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	childAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-child",
@@ -623,7 +623,7 @@ func TestIntegrationGetRunInspectorIncludesExecutionSpansAndInputManifests(t *te
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(child) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verify-worker",
@@ -740,6 +740,9 @@ func TestIntegrationGetRunInspectorIncludesExecutionSpansAndInputManifests(t *te
 	if len(inspector.ActionRecords) != 2 {
 		t.Fatalf("len(ActionRecords) = %d, want 2", len(inspector.ActionRecords))
 	}
+	if len(inspector.FlowSpans) < 5 {
+		t.Fatalf("len(FlowSpans) = %d, want at least planning/replan/attempt/verification spans", len(inspector.FlowSpans))
+	}
 
 	var rootSpan, childSpan, verificationSpan *RunExecutionSpan
 	for i := range inspector.ExecutionSpans {
@@ -821,6 +824,33 @@ func TestIntegrationGetRunInspectorIncludesExecutionSpansAndInputManifests(t *te
 	if verificationAction.ToolName != "read" || verificationAction.Status != "completed" {
 		t.Fatalf("verification action record = %#v, want read completed", verificationAction)
 	}
+
+	var planningFlow, replanFlow, rootAttemptFlow, verificationFlow *RunFlowSpan
+	for i := range inspector.FlowSpans {
+		span := &inspector.FlowSpans[i]
+		switch {
+		case span.Kind == "planning":
+			planningFlow = span
+		case span.Kind == "replanning":
+			replanFlow = span
+		case span.Kind == "attempt" && span.AttemptID == rootAttempt.ID:
+			rootAttemptFlow = span
+		case span.Kind == "verification" && span.VerificationID == verification.ID:
+			verificationFlow = span
+		}
+	}
+	if planningFlow == nil || planningFlow.Status != OrchestrationIntentStatusCompleted || planningFlow.StartSeq == 0 || planningFlow.EndSeq == 0 {
+		t.Fatalf("planning flow = %#v, want completed span with seqs", planningFlow)
+	}
+	if replanFlow == nil || replanFlow.Status != OrchestrationIntentStatusCompleted || replanFlow.TaskID == "" {
+		t.Fatalf("replan flow = %#v, want completed task-scoped span", replanFlow)
+	}
+	if rootAttemptFlow == nil || rootAttemptFlow.ActionCount != 1 || !reflect.DeepEqual(rootAttemptFlow.ToolNames, []string{"exec"}) {
+		t.Fatalf("root attempt flow = %#v, want exec action summary", rootAttemptFlow)
+	}
+	if verificationFlow == nil || verificationFlow.ActionCount != 1 || !reflect.DeepEqual(verificationFlow.ToolNames, []string{"read"}) {
+		t.Fatalf("verification flow = %#v, want read action summary", verificationFlow)
+	}
 	for _, entry := range inspector.Timeline {
 		if _, ok := entry.Payload["claim_token"]; ok {
 			t.Fatalf("inspector timeline payload leaked claim_token: %#v", entry.Payload)
@@ -845,7 +875,7 @@ func TestIntegrationGetRunInspectorReportsExpiredAttemptAndWorkerSignals(t *test
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -937,7 +967,7 @@ func TestIntegrationGetRunInspectorReportsExpiredVerificationAndWorkerSignals(t 
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
 		"mode": VerificationModeBuiltinBasic,
 	})
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	attempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-verify-source",
@@ -958,7 +988,7 @@ func TestIntegrationGetRunInspectorReportsExpiredVerificationAndWorkerSignals(t 
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "worker-stale-verification",
@@ -1060,7 +1090,7 @@ func TestIntegrationResolveCheckpointPreservesCheckpointMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1096,7 +1126,7 @@ func TestIntegrationResolveCheckpointPreservesCheckpointMetadata(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ResolveCheckpoint() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	page, err := svc.ListRunCheckpoints(ctx, caller, handle.RunID, ListRunCheckpointsRequest{Limit: 10})
 	if err != nil {
@@ -1156,7 +1186,7 @@ func TestIntegrationCreateHumanCheckpointHidesForeignTaskOnAuthorizedRun(t *test
 	if err != nil {
 		t.Fatalf("StartRun(first) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, firstHandle.RunID)
 
 	secondHandle, err := svc.StartRun(ctx, caller, StartRunRequest{
@@ -1166,7 +1196,7 @@ func TestIntegrationCreateHumanCheckpointHidesForeignTaskOnAuthorizedRun(t *test
 	if err != nil {
 		t.Fatalf("StartRun(second) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, secondHandle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1201,7 +1231,7 @@ func TestIntegrationCreateHumanCheckpointRejectsSecondActiveCheckpointForTask(t 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1273,7 +1303,7 @@ func TestIntegrationCreateHumanCheckpointRejectsTerminalTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1352,7 +1382,7 @@ func TestIntegrationStartRunLaunchesReadyRootTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1416,7 +1446,7 @@ func TestIntegrationStartRunPlannerDecomposesRootTaskIntoInitialDAG(t *testing.T
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1504,7 +1534,7 @@ FOR UPDATE NOWAIT
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1546,7 +1576,7 @@ func TestIntegrationStartRunPlannerAppliesRootTaskEnvPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -1590,12 +1620,12 @@ func TestIntegrationStartRunPlannerErrorDoesNotDispatchRootDraft(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent() processed = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent() processed = false, want true")
 	}
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
@@ -1622,51 +1652,51 @@ func TestIntegrationStartRunPlannerErrorDoesNotDispatchRootDraft(t *testing.T) {
 	var leaseExpiresAt time.Time
 	if err := pool.QueryRow(ctx, `
 SELECT status, failure_reason, lease_expires_at
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = $1
 `, mustParsePGUUID(t, handle.RunID)).Scan(&intentStatus, &failureReason, &leaseExpiresAt); err != nil {
-		t.Fatalf("load planning intent after planner error: %v", err)
+		t.Fatalf("load orchestration intent after planner error: %v", err)
 	}
-	if intentStatus != PlanningIntentStatusPending {
-		t.Fatalf("planning intent status = %q, want %q", intentStatus, PlanningIntentStatusPending)
+	if intentStatus != OrchestrationIntentStatusPending {
+		t.Fatalf("orchestration intent status = %q, want %q", intentStatus, OrchestrationIntentStatusPending)
 	}
 	if !strings.Contains(failureReason, "planner upstream unavailable") {
-		t.Fatalf("planning intent failure_reason = %q, want planner upstream error", failureReason)
+		t.Fatalf("orchestration intent failure_reason = %q, want planner upstream error", failureReason)
 	}
 	if !leaseExpiresAt.After(time.Now().Add(-time.Second)) {
-		t.Fatalf("planning intent lease_expires_at = %s, want future retry backoff", leaseExpiresAt)
+		t.Fatalf("orchestration intent lease_expires_at = %s, want future retry backoff", leaseExpiresAt)
 	}
 
 	var lifecycleStatus string
-	var planningStatus string
+	var runIntentStatus string
 	if err := pool.QueryRow(ctx, `
-SELECT lifecycle_status, planning_status
+SELECT lifecycle_status, intent_status
 FROM orchestration_runs
 WHERE id = $1
-`, mustParsePGUUID(t, handle.RunID)).Scan(&lifecycleStatus, &planningStatus); err != nil {
+`, mustParsePGUUID(t, handle.RunID)).Scan(&lifecycleStatus, &runIntentStatus); err != nil {
 		t.Fatalf("load run after planner error: %v", err)
 	}
 	if lifecycleStatus != LifecycleStatusCreated {
 		t.Fatalf("run lifecycle_status = %q, want %q", lifecycleStatus, LifecycleStatusCreated)
 	}
-	if planningStatus != PlanningStatusIdle {
-		t.Fatalf("run planning_status = %q, want %q", planningStatus, PlanningStatusIdle)
+	if runIntentStatus != IntentStatusIdle {
+		t.Fatalf("run intent_status = %q, want %q", runIntentStatus, IntentStatusIdle)
 	}
 
 	var requeuedEventCount int
-	expectedBackoff := planningIntentTransientBackoff(1)
+	expectedBackoff := orchestrationIntentTransientBackoff(1)
 	if err := pool.QueryRow(ctx, `
 SELECT COUNT(*)
 FROM orchestration_events
 WHERE run_id = $1
-  AND type = 'run.event.planning_intent.requeued'
+  AND type = 'run.event.orchestration_intent.requeued'
   AND payload->>'backoff_seconds' = $2
   AND payload->>'attempt' = '1'
 `, mustParsePGUUID(t, handle.RunID), strconv.FormatInt(int64(expectedBackoff/time.Second), 10)).Scan(&requeuedEventCount); err != nil {
-		t.Fatalf("count planning intent requeued events: %v", err)
+		t.Fatalf("count orchestration intent requeued events: %v", err)
 	}
 	if requeuedEventCount != 1 {
-		t.Fatalf("planning_intent.requeued event count = %d, want 1", requeuedEventCount)
+		t.Fatalf("orchestration_intent.requeued event count = %d, want 1", requeuedEventCount)
 	}
 
 	var readyEventCount int
@@ -1707,13 +1737,13 @@ func TestIntegrationStartRunPlannerTransientErrorExhaustsRetryLimit(t *testing.T
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	for attempt := 1; attempt <= PlanningIntentTransientMaxAttempts; attempt++ {
-		processed, err := svc.ProcessNextPlanningIntent(ctx)
+	for attempt := 1; attempt <= OrchestrationIntentTransientMaxAttempts; attempt++ {
+		processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 		if err != nil {
-			t.Fatalf("ProcessNextPlanningIntent() attempt %d error = %v", attempt, err)
+			t.Fatalf("ProcessNextOrchestrationIntent() attempt %d error = %v", attempt, err)
 		}
 		if !processed {
-			t.Fatalf("ProcessNextPlanningIntent() attempt %d processed = false, want true", attempt)
+			t.Fatalf("ProcessNextOrchestrationIntent() attempt %d processed = false, want true", attempt)
 		}
 
 		var intentStatus string
@@ -1721,27 +1751,27 @@ func TestIntegrationStartRunPlannerTransientErrorExhaustsRetryLimit(t *testing.T
 		var failureReason string
 		if err := pool.QueryRow(ctx, `
 SELECT status, claim_epoch, failure_reason
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = $1
 `, mustParsePGUUID(t, handle.RunID)).Scan(&intentStatus, &claimEpoch, &failureReason); err != nil {
-			t.Fatalf("load planning intent after attempt %d: %v", attempt, err)
+			t.Fatalf("load orchestration intent after attempt %d: %v", attempt, err)
 		}
 		if claimEpoch != int64(attempt) {
-			t.Fatalf("planning intent claim_epoch = %d, want %d", claimEpoch, attempt)
+			t.Fatalf("orchestration intent claim_epoch = %d, want %d", claimEpoch, attempt)
 		}
 
-		if attempt < PlanningIntentTransientMaxAttempts {
-			if intentStatus != PlanningIntentStatusPending {
-				t.Fatalf("planning intent status after attempt %d = %q, want %q", attempt, intentStatus, PlanningIntentStatusPending)
+		if attempt < OrchestrationIntentTransientMaxAttempts {
+			if intentStatus != OrchestrationIntentStatusPending {
+				t.Fatalf("orchestration intent status after attempt %d = %q, want %q", attempt, intentStatus, OrchestrationIntentStatusPending)
 			}
-			expectedBackoff := strconv.FormatInt(int64(planningIntentTransientBackoff(attempt)/time.Second), 10)
+			expectedBackoff := strconv.FormatInt(int64(orchestrationIntentTransientBackoff(attempt)/time.Second), 10)
 			expectedAttempt := strconv.Itoa(attempt)
 			var requeueEventCount int
 			if err := pool.QueryRow(ctx, `
 SELECT COUNT(*)
 FROM orchestration_events
 WHERE run_id = $1
-  AND type = 'run.event.planning_intent.requeued'
+  AND type = 'run.event.orchestration_intent.requeued'
   AND payload->>'attempt' = $2
   AND payload->>'backoff_seconds' = $3
 `, mustParsePGUUID(t, handle.RunID), expectedAttempt, expectedBackoff).Scan(&requeueEventCount); err != nil {
@@ -1751,7 +1781,7 @@ WHERE run_id = $1
 				t.Fatalf("requeue event count for attempt %d = %d, want 1", attempt, requeueEventCount)
 			}
 			if _, err := pool.Exec(ctx, `
-UPDATE orchestration_planning_intents
+UPDATE orchestration_intents
 SET lease_expires_at = now() - interval '1 second'
 WHERE run_id = $1
 `, mustParsePGUUID(t, handle.RunID)); err != nil {
@@ -1760,29 +1790,29 @@ WHERE run_id = $1
 			continue
 		}
 
-		if intentStatus != PlanningIntentStatusFailed {
-			t.Fatalf("planning intent status after final attempt = %q, want %q", intentStatus, PlanningIntentStatusFailed)
+		if intentStatus != OrchestrationIntentStatusFailed {
+			t.Fatalf("orchestration intent status after final attempt = %q, want %q", intentStatus, OrchestrationIntentStatusFailed)
 		}
 		if !strings.Contains(failureReason, "failed after") || !strings.Contains(failureReason, "planner upstream unavailable") {
-			t.Fatalf("planning intent failure_reason = %q, want exhausted upstream error", failureReason)
+			t.Fatalf("orchestration intent failure_reason = %q, want exhausted upstream error", failureReason)
 		}
 	}
 
 	var lifecycleStatus string
-	var planningStatus string
+	var intentStatus string
 	var terminalReason string
 	if err := pool.QueryRow(ctx, `
-SELECT lifecycle_status, planning_status, terminal_reason
+SELECT lifecycle_status, intent_status, terminal_reason
 FROM orchestration_runs
 WHERE id = $1
-`, mustParsePGUUID(t, handle.RunID)).Scan(&lifecycleStatus, &planningStatus, &terminalReason); err != nil {
+`, mustParsePGUUID(t, handle.RunID)).Scan(&lifecycleStatus, &intentStatus, &terminalReason); err != nil {
 		t.Fatalf("load run after retry exhaustion: %v", err)
 	}
 	if lifecycleStatus != LifecycleStatusFailed {
 		t.Fatalf("run lifecycle_status = %q, want %q", lifecycleStatus, LifecycleStatusFailed)
 	}
-	if planningStatus != PlanningStatusIdle {
-		t.Fatalf("run planning_status = %q, want %q", planningStatus, PlanningStatusIdle)
+	if intentStatus != IntentStatusIdle {
+		t.Fatalf("run intent_status = %q, want %q", intentStatus, IntentStatusIdle)
 	}
 	if !strings.Contains(terminalReason, "failed after") {
 		t.Fatalf("run terminal_reason = %q, want retry exhaustion", terminalReason)
@@ -1795,7 +1825,7 @@ FROM orchestration_events
 WHERE run_id = $1
   AND type = 'run.event.failed'
   AND payload->>'max_attempts' = $2
-`, mustParsePGUUID(t, handle.RunID), strconv.Itoa(PlanningIntentTransientMaxAttempts)).Scan(&runFailedEventCount); err != nil {
+`, mustParsePGUUID(t, handle.RunID), strconv.Itoa(OrchestrationIntentTransientMaxAttempts)).Scan(&runFailedEventCount); err != nil {
 		t.Fatalf("count run failed events: %v", err)
 	}
 	if runFailedEventCount != 1 {
@@ -1837,7 +1867,7 @@ func TestIntegrationStartRunPlannerRejectsRuntimeLimitOverflow(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -1853,15 +1883,15 @@ func TestIntegrationStartRunPlannerRejectsRuntimeLimitOverflow(t *testing.T) {
 	var failedIntentCount int
 	if err := pool.QueryRow(ctx, `
 SELECT count(*)
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = $1
   AND status = $2
   AND failure_reason LIKE '%planned child task count%'
-`, mustParsePGUUID(t, handle.RunID), PlanningIntentStatusFailed).Scan(&failedIntentCount); err != nil {
-		t.Fatalf("count failed planning intents: %v", err)
+`, mustParsePGUUID(t, handle.RunID), OrchestrationIntentStatusFailed).Scan(&failedIntentCount); err != nil {
+		t.Fatalf("count failed orchestration intents: %v", err)
 	}
 	if failedIntentCount != 1 {
-		t.Fatalf("failed planning intent count = %d, want 1", failedIntentCount)
+		t.Fatalf("failed orchestration intent count = %d, want 1", failedIntentCount)
 	}
 
 	inspector, err := svc.GetRunInspector(ctx, caller, handle.RunID)
@@ -1888,7 +1918,7 @@ WHERE run_id = $1
 	}
 }
 
-func TestIntegrationFailedStartRunPlanningIntentReadAsFailedRun(t *testing.T) {
+func TestIntegrationFailedStartRunOrchestrationIntentReadAsFailedRun(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
 
@@ -1909,7 +1939,7 @@ func TestIntegrationFailedStartRunPlanningIntentReadAsFailedRun(t *testing.T) {
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
 	if _, err := pool.Exec(ctx, `
-UPDATE orchestration_planning_intents
+UPDATE orchestration_intents
 SET status = $2,
     failure_reason = 'planner rejected root plan',
     claim_token = '',
@@ -1917,18 +1947,18 @@ SET status = $2,
     lease_expires_at = NULL,
     updated_at = now()
 WHERE run_id = $1
-`, mustParsePGUUID(t, handle.RunID), PlanningIntentStatusFailed); err != nil {
-		t.Fatalf("mark planning intent failed: %v", err)
+`, mustParsePGUUID(t, handle.RunID), OrchestrationIntentStatusFailed); err != nil {
+		t.Fatalf("mark orchestration intent failed: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 UPDATE orchestration_runs
 SET lifecycle_status = $2,
-    planning_status = $3,
+    intent_status = $3,
     terminal_reason = '',
     finished_at = NULL,
     updated_at = now()
 WHERE id = $1
-`, mustParsePGUUID(t, handle.RunID), LifecycleStatusCreated, PlanningStatusIdle); err != nil {
+`, mustParsePGUUID(t, handle.RunID), LifecycleStatusCreated, IntentStatusIdle); err != nil {
 		t.Fatalf("restore legacy pending-looking run: %v", err)
 	}
 
@@ -1939,11 +1969,11 @@ WHERE id = $1
 	if inspector.Run.LifecycleStatus != LifecycleStatusFailed {
 		t.Fatalf("inspector run lifecycle_status = %q, want %q", inspector.Run.LifecycleStatus, LifecycleStatusFailed)
 	}
-	if inspector.Run.PlanningStatus != PlanningStatusIdle {
-		t.Fatalf("inspector run planning_status = %q, want %q", inspector.Run.PlanningStatus, PlanningStatusIdle)
+	if inspector.Run.IntentStatus != IntentStatusIdle {
+		t.Fatalf("inspector run intent_status = %q, want %q", inspector.Run.IntentStatus, IntentStatusIdle)
 	}
 	if !strings.Contains(inspector.Run.TerminalReason, "planner rejected root plan") {
-		t.Fatalf("inspector run terminal_reason = %q, want failed planning intent reason", inspector.Run.TerminalReason)
+		t.Fatalf("inspector run terminal_reason = %q, want failed orchestration intent reason", inspector.Run.TerminalReason)
 	}
 
 	runPage, err := svc.ListRuns(ctx, caller, ListRunsRequest{Limit: 10})
@@ -1958,7 +1988,7 @@ WHERE id = $1
 		t.Fatalf("listed run lifecycle_status = %q, want %q", listedRun.LifecycleStatus, LifecycleStatusFailed)
 	}
 	if !strings.Contains(listedRun.TerminalReason, "planner rejected root plan") {
-		t.Fatalf("listed run terminal_reason = %q, want failed planning intent reason", listedRun.TerminalReason)
+		t.Fatalf("listed run terminal_reason = %q, want failed orchestration intent reason", listedRun.TerminalReason)
 	}
 }
 
@@ -1979,7 +2009,7 @@ func TestIntegrationSchedulerAndAttemptLifecycleCompletesRootTask(t *testing.T) 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2017,7 +2047,7 @@ func TestIntegrationSchedulerAndAttemptLifecycleCompletesRootTask(t *testing.T) 
 	if completedAttempt.Status != TaskAttemptStatusCompleted {
 		t.Fatalf("completed attempt status = %q, want %q", completedAttempt.Status, TaskAttemptStatusCompleted)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -2068,7 +2098,7 @@ func TestIntegrationAttemptCompletionRequestReplanCreatesReadyChildTasks(t *test
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2112,14 +2142,14 @@ func TestIntegrationAttemptCompletionRequestReplanCreatesReadyChildTasks(t *test
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(request_replan) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	intermediateSnapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
 		t.Fatalf("GetRunSnapshot(intermediate) error = %v", err)
 	}
-	if intermediateSnapshot.Run.PlanningStatus != PlanningStatusActive {
-		t.Fatalf("intermediate planning_status = %q, want %q", intermediateSnapshot.Run.PlanningStatus, PlanningStatusActive)
+	if intermediateSnapshot.Run.IntentStatus != IntentStatusActive {
+		t.Fatalf("intermediate intent_status = %q, want %q", intermediateSnapshot.Run.IntentStatus, IntentStatusActive)
 	}
 	intermediateTasks, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -2138,18 +2168,18 @@ func TestIntegrationAttemptCompletionRequestReplanCreatesReadyChildTasks(t *test
 	var pendingReplanCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE run_id = $1
 		  AND kind = $2
 		  AND status = $3
-	`, pgRunID, PlanningIntentKindReplan, PlanningIntentStatusPending).Scan(&pendingReplanCount); err != nil {
+	`, pgRunID, OrchestrationIntentKindReplan, OrchestrationIntentStatusPending).Scan(&pendingReplanCount); err != nil {
 		t.Fatalf("query pending replan intents: %v", err)
 	}
 	if pendingReplanCount != 1 {
 		t.Fatalf("pending replan intent count = %d, want 1", pendingReplanCount)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -2158,8 +2188,8 @@ func TestIntegrationAttemptCompletionRequestReplanCreatesReadyChildTasks(t *test
 	if snapshot.Run.LifecycleStatus != LifecycleStatusRunning {
 		t.Fatalf("run lifecycle_status = %q, want %q", snapshot.Run.LifecycleStatus, LifecycleStatusRunning)
 	}
-	if snapshot.Run.PlanningStatus != PlanningStatusIdle {
-		t.Fatalf("run planning_status = %q, want %q", snapshot.Run.PlanningStatus, PlanningStatusIdle)
+	if snapshot.Run.IntentStatus != IntentStatusIdle {
+		t.Fatalf("run intent_status = %q, want %q", snapshot.Run.IntentStatus, IntentStatusIdle)
 	}
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
@@ -2211,7 +2241,7 @@ func TestIntegrationCompleteAttemptReplayReturnsTerminalAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2289,7 +2319,7 @@ func TestIntegrationCompleteFailedAttemptReplayValidatesTerminalIdentity(t *test
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2361,7 +2391,7 @@ func TestIntegrationCompleteAttemptRejectsConflictingTerminalReplay(t *testing.T
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2398,11 +2428,11 @@ func TestIntegrationCompleteAttemptRejectsConflictingTerminalReplay(t *testing.T
 	var attemptFinalizeCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE run_id = $1
 		  AND task_id = $2
 		  AND kind = $3
-	`, mustParsePGUUID(t, handle.RunID), mustParsePGUUID(t, handle.RootTaskID), PlanningIntentKindAttemptFinalize).Scan(&attemptFinalizeCount); err != nil {
+	`, mustParsePGUUID(t, handle.RunID), mustParsePGUUID(t, handle.RootTaskID), OrchestrationIntentKindAttemptFinalize).Scan(&attemptFinalizeCount); err != nil {
 		t.Fatalf("count attempt finalize intents: %v", err)
 	}
 	if attemptFinalizeCount != 1 {
@@ -2427,7 +2457,7 @@ func TestIntegrationCompleteAttemptRejectsLargeIntegerStructuredOutputReplayConf
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2485,7 +2515,7 @@ func TestIntegrationFailedAttemptRequestReplanKeepsRunAliveAndExpandsReplacement
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2527,7 +2557,7 @@ func TestIntegrationFailedAttemptRequestReplanKeepsRunAliveAndExpandsReplacement
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(failed request_replan) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshotAfterFinalize, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -2536,11 +2566,11 @@ func TestIntegrationFailedAttemptRequestReplanKeepsRunAliveAndExpandsReplacement
 	if snapshotAfterFinalize.Run.LifecycleStatus != LifecycleStatusRunning {
 		t.Fatalf("run lifecycle_status after failed request_replan = %q, want %q", snapshotAfterFinalize.Run.LifecycleStatus, LifecycleStatusRunning)
 	}
-	if snapshotAfterFinalize.Run.PlanningStatus != PlanningStatusActive {
-		t.Fatalf("run planning_status after failed request_replan = %q, want %q", snapshotAfterFinalize.Run.PlanningStatus, PlanningStatusActive)
+	if snapshotAfterFinalize.Run.IntentStatus != IntentStatusActive {
+		t.Fatalf("run intent_status after failed request_replan = %q, want %q", snapshotAfterFinalize.Run.IntentStatus, IntentStatusActive)
 	}
 
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -2588,7 +2618,7 @@ func TestIntegrationFailedAttemptRequestReplanKeepsRunAliveAndExpandsReplacement
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(replacement) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	finalSnapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -2630,7 +2660,7 @@ func TestIntegrationCompletedAttemptRequestReplanUsesReplannerWhenReplacementPla
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2656,7 +2686,7 @@ func TestIntegrationCompletedAttemptRequestReplanUsesReplannerWhenReplacementPla
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(request_replan without child tasks) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	if replannerInput.SourceTask.ID != handle.RootTaskID {
 		t.Fatalf("replanner source task id = %q, want %q", replannerInput.SourceTask.ID, handle.RootTaskID)
@@ -2714,7 +2744,7 @@ func TestIntegrationFailedAttemptRequestReplanUsesReplannerWhenReplacementPlanMi
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -2742,7 +2772,7 @@ func TestIntegrationFailedAttemptRequestReplanUsesReplannerWhenReplacementPlanMi
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(failed request_replan without child tasks) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	if replannerInput.SourceTask.ID != handle.RootTaskID {
 		t.Fatalf("replanner source task id = %q, want %q", replannerInput.SourceTask.ID, handle.RootTaskID)
@@ -2789,7 +2819,7 @@ func TestIntegrationAttemptCompletionWithVerificationPassesRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -2826,7 +2856,7 @@ func TestIntegrationAttemptCompletionWithVerificationPassesRun(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -2905,7 +2935,7 @@ func TestIntegrationCompleteVerificationReplayReturnsTerminalVerification(t *tes
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -2933,7 +2963,7 @@ func TestIntegrationCompleteVerificationReplayReturnsTerminalVerification(t *tes
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -2989,7 +3019,7 @@ func TestIntegrationCompleteVerificationRejectsConflictingTerminalReplay(t *test
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -3015,7 +3045,7 @@ func TestIntegrationCompleteVerificationRejectsConflictingTerminalReplay(t *test
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -3068,7 +3098,7 @@ func TestIntegrationCompleteVerificationRejectsRequestReplanReplayConflict(t *te
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -3102,7 +3132,7 @@ func TestIntegrationCompleteVerificationRejectsRequestReplanReplayConflict(t *te
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -3170,7 +3200,7 @@ func TestIntegrationVerificationRejectFailsTaskAndRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -3204,7 +3234,7 @@ func TestIntegrationVerificationRejectFailsTaskAndRun(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -3271,7 +3301,7 @@ func TestIntegrationKernelRunBarrierResumeAndCompletionManualStateMachine(t *tes
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -3318,7 +3348,7 @@ func TestIntegrationKernelRunBarrierResumeAndCompletionManualStateMachine(t *tes
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -3378,7 +3408,7 @@ func TestIntegrationKernelRunBarrierResumeAndCompletionManualStateMachine(t *tes
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(verify child) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verificationPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -3460,7 +3490,7 @@ func TestIntegrationKernelRunBarrierResumeAndCompletionManualStateMachine(t *tes
 	}); err != nil {
 		t.Fatalf("ResolveCheckpoint() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err = svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -3531,7 +3561,7 @@ func TestIntegrationKernelRunBarrierResumeAndCompletionManualStateMachine(t *tes
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(checkpoint child) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	finalSnapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -3573,7 +3603,7 @@ func TestIntegrationCheckpointResumeIntentDuringCancellationCancelsTaskInsteadOf
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -3602,7 +3632,7 @@ func TestIntegrationCheckpointResumeIntentDuringCancellationCancelsTaskInsteadOf
 		t.Fatalf("CancelRun() error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -3637,7 +3667,7 @@ func TestIntegrationAttemptFinalizeStillTransitionsTaskAfterRunFailure(t *testin
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -3674,7 +3704,7 @@ func TestIntegrationAttemptFinalizeStillTransitionsTaskAfterRunFailure(t *testin
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -3735,8 +3765,8 @@ func TestIntegrationAttemptFinalizeStillTransitionsTaskAfterRunFailure(t *testin
 		t.Fatalf("CompleteAttempt(task b) error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -3778,7 +3808,7 @@ func TestIntegrationVerificationRejectRequestReplanEnqueuesReplan(t *testing.T) 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -3821,7 +3851,7 @@ func TestIntegrationVerificationRejectRequestReplanEnqueuesReplan(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -3860,10 +3890,10 @@ func TestIntegrationVerificationRejectRequestReplanEnqueuesReplan(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetRunSnapshot(intermediate) error = %v", err)
 	}
-	if intermediateSnapshot.Run.PlanningStatus != PlanningStatusActive {
-		t.Fatalf("intermediate planning_status = %q, want %q", intermediateSnapshot.Run.PlanningStatus, PlanningStatusActive)
+	if intermediateSnapshot.Run.IntentStatus != IntentStatusActive {
+		t.Fatalf("intermediate intent_status = %q, want %q", intermediateSnapshot.Run.IntentStatus, IntentStatusActive)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	rootTaskUUID, err := db.ParseUUID(handle.RootTaskID)
 	if err != nil {
@@ -3899,8 +3929,8 @@ func TestIntegrationVerificationRejectRequestReplanEnqueuesReplan(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetRunSnapshot(final) error = %v", err)
 	}
-	if snapshot.Run.PlanningStatus != PlanningStatusIdle {
-		t.Fatalf("final planning_status = %q, want %q", snapshot.Run.PlanningStatus, PlanningStatusIdle)
+	if snapshot.Run.IntentStatus != IntentStatusIdle {
+		t.Fatalf("final intent_status = %q, want %q", snapshot.Run.IntentStatus, IntentStatusIdle)
 	}
 
 	verificationRunID, err := db.ParseUUID(handle.RunID)
@@ -3948,7 +3978,7 @@ func TestIntegrationVerificationRejectRequestReplanEnqueuesReplan(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(replacement) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err = svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -3987,7 +4017,7 @@ func TestIntegrationVerificationRejectRequestReplanUsesReplannerWhenReplacementP
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4015,7 +4045,7 @@ func TestIntegrationVerificationRejectRequestReplanUsesReplannerWhenReplacementP
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -4042,7 +4072,7 @@ func TestIntegrationVerificationRejectRequestReplanUsesReplannerWhenReplacementP
 	}); err != nil {
 		t.Fatalf("CompleteVerification(request_replan without child tasks) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	if replannerInput.SourceTask.ID != handle.RootTaskID {
 		t.Fatalf("replanner source task id = %q, want %q", replannerInput.SourceTask.ID, handle.RootTaskID)
@@ -4089,7 +4119,7 @@ func TestIntegrationProcessNextVerificationExecutesCreatedVerification(t *testin
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4124,7 +4154,7 @@ func TestIntegrationProcessNextVerificationExecutesCreatedVerification(t *testin
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -4203,7 +4233,7 @@ func TestIntegrationVerificationAcceptedRequestReplanEnqueuesReplan(t *testing.T
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4247,7 +4277,7 @@ func TestIntegrationVerificationAcceptedRequestReplanEnqueuesReplan(t *testing.T
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -4276,10 +4306,10 @@ func TestIntegrationVerificationAcceptedRequestReplanEnqueuesReplan(t *testing.T
 	if err != nil {
 		t.Fatalf("GetRunSnapshot(after verification) error = %v", err)
 	}
-	if snapshot.Run.PlanningStatus != PlanningStatusActive {
-		t.Fatalf("planning_status after accepted request_replan = %q, want %q", snapshot.Run.PlanningStatus, PlanningStatusActive)
+	if snapshot.Run.IntentStatus != IntentStatusActive {
+		t.Fatalf("intent_status after accepted request_replan = %q, want %q", snapshot.Run.IntentStatus, IntentStatusActive)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -4319,7 +4349,7 @@ func TestIntegrationCompleteVerificationRejectsUnauthorizedRequestReplan(t *test
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4362,7 +4392,7 @@ func TestIntegrationCompleteVerificationRejectsUnauthorizedRequestReplan(t *test
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -4408,7 +4438,7 @@ func TestIntegrationCompleteVerificationRejectsAcceptedFailedCombination(t *test
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4443,7 +4473,7 @@ func TestIntegrationCompleteVerificationRejectsAcceptedFailedCombination(t *test
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -4486,7 +4516,7 @@ func TestIntegrationVerificationLeaseExpiryRecoveryFailsRunOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4521,7 +4551,7 @@ func TestIntegrationVerificationLeaseExpiryRecoveryFailsRunOnce(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -4621,7 +4651,7 @@ func TestIntegrationInvalidRequestReplanFailsIntentWithoutStrandingRun(t *testin
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4659,7 +4689,7 @@ func TestIntegrationInvalidRequestReplanFailsIntentWithoutStrandingRun(t *testin
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(invalid request_replan) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -4668,8 +4698,8 @@ func TestIntegrationInvalidRequestReplanFailsIntentWithoutStrandingRun(t *testin
 	if snapshot.Run.LifecycleStatus != LifecycleStatusCompleted {
 		t.Fatalf("run lifecycle_status = %q, want %q", snapshot.Run.LifecycleStatus, LifecycleStatusCompleted)
 	}
-	if snapshot.Run.PlanningStatus != PlanningStatusIdle {
-		t.Fatalf("run planning_status = %q, want %q", snapshot.Run.PlanningStatus, PlanningStatusIdle)
+	if snapshot.Run.IntentStatus != IntentStatusIdle {
+		t.Fatalf("run intent_status = %q, want %q", snapshot.Run.IntentStatus, IntentStatusIdle)
 	}
 
 	pgRunID, err := db.ParseUUID(handle.RunID)
@@ -4687,11 +4717,11 @@ func TestIntegrationInvalidRequestReplanFailsIntentWithoutStrandingRun(t *testin
 	var failedIntentCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE run_id = $1
 		  AND kind = $2
 		  AND status = $3
-	`, pgRunID, PlanningIntentKindAttemptFinalize, PlanningIntentStatusFailed).Scan(&failedIntentCount); err != nil {
+	`, pgRunID, OrchestrationIntentKindAttemptFinalize, OrchestrationIntentStatusFailed).Scan(&failedIntentCount); err != nil {
 		t.Fatalf("query failed attempt_finalize intents: %v", err)
 	}
 	if failedIntentCount != 1 {
@@ -4716,7 +4746,7 @@ func TestIntegrationReplanSupersedesOldSubtreeAndOpenCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -4744,7 +4774,7 @@ func TestIntegrationReplanSupersedesOldSubtreeAndOpenCheckpoint(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -4790,13 +4820,13 @@ func TestIntegrationReplanSupersedesOldSubtreeAndOpenCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newPGUUID(replan intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               replanIntentUUID,
 		RunID:            pgRunID,
 		TaskID:           pgSourceTaskID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runRow.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":         handle.RunID,
@@ -4809,9 +4839,9 @@ func TestIntegrationReplanSupersedesOldSubtreeAndOpenCheckpoint(t *testing.T) {
 			},
 		}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent(replan) error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent(replan) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err = svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -4910,7 +4940,7 @@ func TestIntegrationReplanSupersedesOldSubtreeAndOpenCheckpoint(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ResolveCheckpoint(replacement barrier) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	replacementAttempt := dispatchAndClaimTaskForTest(t, ctx, svc, replacementChild.ID, AttemptClaim{
 		WorkerID:        "worker-" + uuid.NewString(),
@@ -4926,8 +4956,8 @@ func TestIntegrationReplanSupersedesOldSubtreeAndOpenCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRunSnapshot() error = %v", err)
 	}
-	if snapshot.Run.PlanningStatus != PlanningStatusIdle {
-		t.Fatalf("run planning_status = %q, want %q", snapshot.Run.PlanningStatus, PlanningStatusIdle)
+	if snapshot.Run.IntentStatus != IntentStatusIdle {
+		t.Fatalf("run intent_status = %q, want %q", snapshot.Run.IntentStatus, IntentStatusIdle)
 	}
 }
 
@@ -4959,7 +4989,7 @@ func TestIntegrationReplanUsesReplannerWhenReplacementPlanMissing(t *testing.T) 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	pgRunID := mustParsePGUUID(t, handle.RunID)
 	pgRootTaskID := mustParsePGUUID(t, handle.RootTaskID)
@@ -4971,13 +5001,13 @@ func TestIntegrationReplanUsesReplannerWhenReplacementPlanMissing(t *testing.T) 
 	if err != nil {
 		t.Fatalf("newPGUUID(replan intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               replanIntentUUID,
 		RunID:            pgRunID,
 		TaskID:           pgRootTaskID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runRow.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":         handle.RunID,
@@ -4985,10 +5015,10 @@ func TestIntegrationReplanUsesReplannerWhenReplacementPlanMissing(t *testing.T) 
 			"reason":         "integration_test.llm_replan",
 		}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent(replan) error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent(replan) error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	if replannerInput.Run.ID != handle.RunID {
 		t.Fatalf("replanner run id = %q, want %q", replannerInput.Run.ID, handle.RunID)
@@ -5047,7 +5077,7 @@ func TestIntegrationReplanRejectsRuntimeLimitOverflowWithoutAdvancingEpoch(t *te
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	pgRunID := mustParsePGUUID(t, handle.RunID)
 	pgRootTaskID := mustParsePGUUID(t, handle.RootTaskID)
@@ -5059,13 +5089,13 @@ func TestIntegrationReplanRejectsRuntimeLimitOverflowWithoutAdvancingEpoch(t *te
 	if err != nil {
 		t.Fatalf("newPGUUID(replan intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               replanIntentUUID,
 		RunID:            pgRunID,
 		TaskID:           pgRootTaskID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runBefore.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":         handle.RunID,
@@ -5079,10 +5109,10 @@ func TestIntegrationReplanRejectsRuntimeLimitOverflowWithoutAdvancingEpoch(t *te
 			},
 		}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent(replan) error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent(replan) error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	runAfter, err := svc.queries.GetOrchestrationRunByID(ctx, pgRunID)
 	if err != nil {
@@ -5105,15 +5135,15 @@ func TestIntegrationReplanRejectsRuntimeLimitOverflowWithoutAdvancingEpoch(t *te
 	var failedIntentCount int
 	if err := pool.QueryRow(ctx, `
 SELECT count(*)
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = $1
   AND status = $2
   AND failure_reason LIKE '%planned child task count%'
-`, pgRunID, PlanningIntentStatusFailed).Scan(&failedIntentCount); err != nil {
-		t.Fatalf("count failed planning intents: %v", err)
+`, pgRunID, OrchestrationIntentStatusFailed).Scan(&failedIntentCount); err != nil {
+		t.Fatalf("count failed orchestration intents: %v", err)
 	}
 	if failedIntentCount != 1 {
-		t.Fatalf("failed planning intent count = %d, want 1", failedIntentCount)
+		t.Fatalf("failed orchestration intent count = %d, want 1", failedIntentCount)
 	}
 }
 
@@ -5143,7 +5173,7 @@ func TestIntegrationReplanRejectsAttemptFromDifferentSourceTask(t *testing.T) {
 	}
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	siblingTaskID := createIntegrationChildTask(t, ctx, svc, handle.RunID, "unrelated sibling task", "run.sibling")
 	_, siblingAttemptUUID, err := newPGUUID()
@@ -5169,13 +5199,13 @@ func TestIntegrationReplanRejectsAttemptFromDifferentSourceTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrchestrationRunByID() error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               replanIntentUUID,
 		RunID:            mustParsePGUUID(t, handle.RunID),
 		TaskID:           mustParsePGUUID(t, handle.RootTaskID),
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runRow.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":         handle.RunID,
@@ -5184,18 +5214,18 @@ func TestIntegrationReplanRejectsAttemptFromDifferentSourceTask(t *testing.T) {
 			"reason":         "integration_test.mismatched_attempt",
 		}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent(replan) error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent(replan) error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	var failedReplanCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE id = $1
 		  AND status = $2
-	`, replanIntentUUID, PlanningIntentStatusFailed).Scan(&failedReplanCount); err != nil {
+	`, replanIntentUUID, OrchestrationIntentStatusFailed).Scan(&failedReplanCount); err != nil {
 		t.Fatalf("query failed replan intent: %v", err)
 	}
 	if failedReplanCount != 1 {
@@ -5222,7 +5252,7 @@ func TestIntegrationReplanInvalidAttemptIDFailsIntentWithoutRetryLoop(t *testing
 	}
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	runRow, err := svc.queries.GetOrchestrationRunByID(ctx, mustParsePGUUID(t, handle.RunID))
 	if err != nil {
@@ -5232,13 +5262,13 @@ func TestIntegrationReplanInvalidAttemptIDFailsIntentWithoutRetryLoop(t *testing
 	if err != nil {
 		t.Fatalf("newPGUUID(replan intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               replanIntentUUID,
 		RunID:            mustParsePGUUID(t, handle.RunID),
 		TaskID:           mustParsePGUUID(t, handle.RootTaskID),
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runRow.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":         handle.RunID,
@@ -5247,18 +5277,18 @@ func TestIntegrationReplanInvalidAttemptIDFailsIntentWithoutRetryLoop(t *testing
 			"reason":         "integration_test.invalid_attempt_id",
 		}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent(replan) error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent(replan) error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	var failedReplanCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE id = $1
 		  AND status = $2
-	`, replanIntentUUID, PlanningIntentStatusFailed).Scan(&failedReplanCount); err != nil {
+	`, replanIntentUUID, OrchestrationIntentStatusFailed).Scan(&failedReplanCount); err != nil {
 		t.Fatalf("query failed malformed replan intent: %v", err)
 	}
 	if failedReplanCount != 1 {
@@ -5283,7 +5313,7 @@ func TestIntegrationReplanRejectsActiveSubtree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -5311,7 +5341,7 @@ func TestIntegrationReplanRejectsActiveSubtree(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -5355,13 +5385,13 @@ func TestIntegrationReplanRejectsActiveSubtree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newPGUUID(replan intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               replanIntentUUID,
 		RunID:            pgRunID,
 		TaskID:           pgSourceTaskID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runRow.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":         handle.RunID,
@@ -5375,16 +5405,16 @@ func TestIntegrationReplanRejectsActiveSubtree(t *testing.T) {
 			},
 		}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent(replan) error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent(replan) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
-	intentRow, err := svc.queries.GetOrchestrationPlanningIntentByID(ctx, replanIntentUUID)
+	intentRow, err := svc.queries.GetOrchestrationIntentByID(ctx, replanIntentUUID)
 	if err != nil {
-		t.Fatalf("GetOrchestrationPlanningIntentByID() error = %v", err)
+		t.Fatalf("GetOrchestrationIntentByID() error = %v", err)
 	}
-	if intentRow.Status != PlanningIntentStatusFailed {
-		t.Fatalf("replan intent status = %q, want %q", intentRow.Status, PlanningIntentStatusFailed)
+	if intentRow.Status != OrchestrationIntentStatusFailed {
+		t.Fatalf("replan intent status = %q, want %q", intentRow.Status, OrchestrationIntentStatusFailed)
 	}
 
 	refreshedTaskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
@@ -5421,7 +5451,7 @@ func TestIntegrationSupersededRunningAttemptIsRejectedAndRecoveredWithoutFailing
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -5521,7 +5551,7 @@ func TestIntegrationDependentChildTaskWaitsForCompletedPredecessor(t *testing.T)
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -5567,7 +5597,7 @@ func TestIntegrationDependentChildTaskWaitsForCompletedPredecessor(t *testing.T)
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -5626,7 +5656,7 @@ func TestIntegrationDependentChildTaskWaitsForCompletedPredecessor(t *testing.T)
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(first child) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	dispatched, err = dispatchNextReadyTaskForTest(ctx, svc)
 	if err != nil {
@@ -5666,7 +5696,7 @@ func TestIntegrationFailedDependencyBlocksSuccessorTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -5705,7 +5735,7 @@ func TestIntegrationFailedDependencyBlocksSuccessorTask(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	dispatched, err = dispatchNextReadyTaskForTest(ctx, svc)
 	if err != nil {
@@ -5737,7 +5767,7 @@ func TestIntegrationFailedDependencyBlocksSuccessorTask(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(first child failed) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -5778,7 +5808,7 @@ func TestIntegrationJoinTaskAutoCompletesAfterPredecessors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -5818,7 +5848,7 @@ func TestIntegrationJoinTaskAutoCompletesAfterPredecessors(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	for i := 0; i < 2; i++ {
 		dispatched, err = dispatchNextReadyTaskForTest(ctx, svc)
@@ -5849,7 +5879,7 @@ func TestIntegrationJoinTaskAutoCompletesAfterPredecessors(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CompleteAttempt(branch %d) error = %v", i+1, err)
 		}
-		processRunPlanningIntent(t, ctx, svc)
+		processRunOrchestrationIntent(t, ctx, svc)
 	}
 
 	dispatched, err = dispatchNextReadyTaskForTest(ctx, svc)
@@ -5938,7 +5968,7 @@ func TestIntegrationCreateHumanCheckpointCanonicalizesIdempotencyKey(t *testing.
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -5997,7 +6027,7 @@ func TestIntegrationCancelRunCancelsWaitingCheckpointRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6084,7 +6114,7 @@ func TestIntegrationCancelRunClaimedAttemptStartConvergesToCancelled(t *testing.
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6142,7 +6172,7 @@ func TestIntegrationCancelRunBindingAttemptStartConvergesToCancelled(t *testing.
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6198,7 +6228,7 @@ func TestIntegrationCancelRunClaimedVerificationWithInjectedPolicyStartConverges
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
 		"mode": VerificationModeBuiltinBasic,
 	})
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	attempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-" + uuid.NewString(),
@@ -6219,7 +6249,7 @@ func TestIntegrationCancelRunClaimedVerificationWithInjectedPolicyStartConverges
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -6268,7 +6298,7 @@ func TestIntegrationCancelRunDispatchingTaskWithCreatedAttemptConvergesImmediate
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6332,7 +6362,7 @@ func TestIntegrationCancelRunRunningAttemptHeartbeatConvergesImmediately(t *test
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6386,7 +6416,7 @@ func TestIntegrationCancelRunRunningAttemptCompletionConvergesImmediately(t *tes
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6453,7 +6483,7 @@ func TestIntegrationCancelRunRunningVerificationWithInjectedPolicyHeartbeatConve
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
 		"mode": VerificationModeBuiltinBasic,
 	})
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	attempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-" + uuid.NewString(),
@@ -6474,7 +6504,7 @@ func TestIntegrationCancelRunRunningVerificationWithInjectedPolicyHeartbeatConve
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -6535,7 +6565,7 @@ func TestIntegrationCancelRunVerifyingTaskWithCreatedVerificationConvergesImmedi
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
 		"mode": VerificationModeBuiltinBasic,
 	})
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	attempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-" + uuid.NewString(),
@@ -6556,7 +6586,7 @@ func TestIntegrationCancelRunVerifyingTaskWithCreatedVerificationConvergesImmedi
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -6632,7 +6662,7 @@ func TestIntegrationCancelRunRunningVerificationWithInjectedPolicyCompletionConv
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
 		"mode": VerificationModeBuiltinBasic,
 	})
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	attempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-" + uuid.NewString(),
@@ -6653,7 +6683,7 @@ func TestIntegrationCancelRunRunningVerificationWithInjectedPolicyCompletionConv
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -6715,7 +6745,7 @@ func TestIntegrationCancelRunAttemptFinalizeIntentConvergesToCancelled(t *testin
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6749,7 +6779,7 @@ func TestIntegrationCancelRunAttemptFinalizeIntentConvergesToCancelled(t *testin
 		t.Fatalf("CancelRun() lifecycle_status = %q, want %q", cancelResult.LifecycleStatus, LifecycleStatusCancelling)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -6767,7 +6797,7 @@ func TestIntegrationCancelRunAttemptFinalizeIntentConvergesToCancelled(t *testin
 	}
 }
 
-func TestIntegrationCancelRunManuallyInsertedStalePlanningIntentConvergesToCancelled(t *testing.T) {
+func TestIntegrationCancelRunManuallyInsertedStaleOrchestrationIntentConvergesToCancelled(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
 
@@ -6778,13 +6808,13 @@ func TestIntegrationCancelRunManuallyInsertedStalePlanningIntentConvergesToCance
 	}
 
 	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
-		Goal:           "cancel run should converge after last stale planning intent fails",
+		Goal:           "cancel run should converge after last stale orchestration intent fails",
 		IdempotencyKey: "start-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6797,17 +6827,17 @@ func TestIntegrationCancelRunManuallyInsertedStalePlanningIntentConvergesToCance
 	if err != nil {
 		t.Fatalf("newPGUUID(intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               intentID,
 		RunID:            pgRunID,
 		TaskID:           pgtype.UUID{},
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindStartRun,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindStartRun,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runRow.PlannerEpoch,
 		Payload:          marshalObject(map[string]any{"source": "test"}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent() error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent() error = %v", err)
 	}
 
 	cancelResult, err := svc.CancelRun(ctx, caller, handle.RunID, CancelRunRequest{
@@ -6820,7 +6850,7 @@ func TestIntegrationCancelRunManuallyInsertedStalePlanningIntentConvergesToCance
 		t.Fatalf("CancelRun() lifecycle_status = %q, want %q", cancelResult.LifecycleStatus, LifecycleStatusCancelling)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -6848,7 +6878,7 @@ func TestIntegrationCancelRunCancelsWaitingHumanVerificationCreatedByRunBarrier(
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -6890,7 +6920,7 @@ func TestIntegrationCancelRunCancelsWaitingHumanVerificationCreatedByRunBarrier(
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -6932,7 +6962,7 @@ func TestIntegrationCancelRunCancelsWaitingHumanVerificationCreatedByRunBarrier(
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(verify child) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	claimedVerification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -7035,7 +7065,7 @@ func TestIntegrationCheckpointMutationResultsExposeStableSnapshotSeq(t *testing.
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7098,7 +7128,7 @@ func TestIntegrationCommitArtifactEmitsCommittedEventAndRefreshesProjection(t *t
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7181,7 +7211,7 @@ func TestIntegrationListRunTasksPaginationUsesStableSnapshotSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7261,7 +7291,7 @@ func TestIntegrationListRunCheckpointsAndArtifactsSupportStableHistoricalPaging(
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7390,7 +7420,7 @@ func TestIntegrationListRunEventsSupportsStableReplayPagination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7468,7 +7498,7 @@ func TestIntegrationListRunEventsContinuationRequiresUntilSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7504,7 +7534,7 @@ func TestIntegrationSnapshotSeqCutsAcrossAllReadModelsConsistently(t *testing.T)
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7649,7 +7679,7 @@ func TestIntegrationCommitArtifactHidesForeignRunTaskAndAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, otherTenantCaller.TenantID, otherTenantCaller.Subject)
@@ -7691,7 +7721,7 @@ func TestIntegrationCommitArtifactHidesForeignRunTaskAndAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun(second) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, secondHandle.RunID)
 
 	if _, err := svc.CommitArtifact(ctx, caller, CommitArtifactRequest{
@@ -7738,7 +7768,7 @@ func TestIntegrationCreateHumanCheckpointIdempotencyCanonicalizesUUIDCase(t *tes
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7790,7 +7820,7 @@ func TestIntegrationCommitArtifactIdempotencyCanonicalizesUUIDCase(t *testing.T)
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7842,7 +7872,7 @@ func TestIntegrationCommitArtifactEventCanonicalizesUUIDPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7904,7 +7934,7 @@ func TestIntegrationRunBlockingCheckpointPausesAndResumesSiblingTasks(t *testing
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -7990,7 +8020,7 @@ func TestIntegrationRunBlockingCheckpointPausesAndResumesSiblingTasks(t *testing
 	}); err != nil {
 		t.Fatalf("ResolveCheckpoint(idempotent retry) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	taskPage, err = svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("ListRunTasks(after resume) error = %v", err)
@@ -8044,7 +8074,7 @@ func TestIntegrationChildTaskFailureFailsRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -8109,7 +8139,7 @@ func TestIntegrationChildTaskFailureFailsRun(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(failed) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -8137,7 +8167,7 @@ func TestIntegrationFailedAttemptRetriesWhenPolicyAllows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskRetryPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{"max_attempts": 2})
@@ -8169,7 +8199,7 @@ func TestIntegrationFailedAttemptRetriesWhenPolicyAllows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(failed) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -8222,7 +8252,7 @@ func TestIntegrationFailedAttemptRetriesWhenPolicyAllows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(retry) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	finalSnapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
 		t.Fatalf("GetRunSnapshot(final) error = %v", err)
@@ -8249,7 +8279,7 @@ func TestIntegrationVerifierRejectRetriesWhenPolicyAllows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskRetryPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{"max_attempts": 2})
@@ -8277,7 +8307,7 @@ func TestIntegrationVerifierRejectRetriesWhenPolicyAllows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	verification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -8357,7 +8387,7 @@ func TestIntegrationVerifierRejectRetriesWhenPolicyAllows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(retry) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	retryVerification, err := svc.ClaimNextVerification(ctx, VerificationClaim{
 		WorkerID:         "verifier-" + uuid.NewString(),
@@ -8408,7 +8438,7 @@ func TestIntegrationRetryBackoffDelaysRedispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskRetryPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -8436,7 +8466,7 @@ func TestIntegrationRetryBackoffDelaysRedispatch(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(failed) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -8489,7 +8519,7 @@ func TestIntegrationAttemptLeaseExpiryIsStrictlyFenced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -8548,7 +8578,7 @@ func TestIntegrationCompleteAttemptRejectsExpiredLeaseAndRecoveryFailsRunOnce(t 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -8647,7 +8677,7 @@ func TestIntegrationExpiredRunningAttemptRetriesWhenPolicyAllows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskRetryPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{"max_attempts": 2})
@@ -8751,7 +8781,7 @@ func TestIntegrationExpiredRunningAttemptRetriesWhenPolicyAllows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(retry) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	finalSnapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
 		t.Fatalf("GetRunSnapshot(final) error = %v", err)
@@ -8778,7 +8808,7 @@ func TestIntegrationStartAttemptEmitsBindingBeforeRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -8853,7 +8883,7 @@ func TestIntegrationStartAttemptReplayPreservesRunningAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -8943,7 +8973,7 @@ func TestIntegrationBindingAttemptHeartbeatAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9047,7 +9077,7 @@ func TestIntegrationStartAttemptRetiresClaimWhenRunBecomesImmutable(t *testing.T
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9133,7 +9163,7 @@ func TestIntegrationStartAttemptAdvancesPersistedBindingToRunning(t *testing.T) 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9188,7 +9218,7 @@ func TestIntegrationStartAttemptRetiresBoundAttemptWhenRunBecomesImmutable(t *te
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9255,7 +9285,7 @@ func TestIntegrationStartAttemptRetiresClaimWhenTaskBecomesImmutable(t *testing.
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9318,7 +9348,7 @@ func TestIntegrationStartAttemptRetiresClaimWhenTaskBecomesImmutable(t *testing.
 	}
 }
 
-func TestIntegrationStalePlanningIntentFailsWithoutMutatingRunOrTask(t *testing.T) {
+func TestIntegrationStaleOrchestrationIntentFailsWithoutMutatingRunOrTask(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
 
@@ -9329,13 +9359,13 @@ func TestIntegrationStalePlanningIntentFailsWithoutMutatingRunOrTask(t *testing.
 	}
 
 	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
-		Goal:           "stale planning intent should fail closed",
+		Goal:           "stale orchestration intent should fail closed",
 		IdempotencyKey: "start-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9355,33 +9385,33 @@ func TestIntegrationStalePlanningIntentFailsWithoutMutatingRunOrTask(t *testing.
 	if err != nil {
 		t.Fatalf("newPGUUID(intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               intentUUID,
 		RunID:            pgRunID,
 		TaskID:           pgTaskID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindStartRun,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindStartRun,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: 1,
 		Payload:          marshalJSON(map[string]any{"reason": "stale-test"}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent() error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent() error = %v", err)
 	}
 
-	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent() = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent() = false, want true")
 	}
 
-	intentRow, err := svc.queries.GetOrchestrationPlanningIntentByID(ctx, intentUUID)
+	intentRow, err := svc.queries.GetOrchestrationIntentByID(ctx, intentUUID)
 	if err != nil {
-		t.Fatalf("GetOrchestrationPlanningIntentByID() error = %v", err)
+		t.Fatalf("GetOrchestrationIntentByID() error = %v", err)
 	}
-	if intentRow.Status != PlanningIntentStatusFailed {
-		t.Fatalf("planning intent status = %q, want %q", intentRow.Status, PlanningIntentStatusFailed)
+	if intentRow.Status != OrchestrationIntentStatusFailed {
+		t.Fatalf("orchestration intent status = %q, want %q", intentRow.Status, OrchestrationIntentStatusFailed)
 	}
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
@@ -9405,17 +9435,17 @@ func TestIntegrationStalePlanningIntentFailsWithoutMutatingRunOrTask(t *testing.
 	}
 	var found bool
 	for _, event := range eventPage.Items {
-		if event.Type != "run.event.planning_status.changed" {
+		if event.Type != "run.event.intent_status.changed" {
 			continue
 		}
 		found = true
 	}
 	if !found {
-		t.Fatal("ListRunEvents() missing run.event.planning_status.changed after stale intent failure")
+		t.Fatal("ListRunEvents() missing run.event.intent_status.changed after stale intent failure")
 	}
 }
 
-func TestIntegrationOrphanedPlanningIntentFailsAndDoesNotLoopUntilLeaseExpiry(t *testing.T) {
+func TestIntegrationOrphanedOrchestrationIntentFailsAndDoesNotLoopUntilLeaseExpiry(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
 
@@ -9426,13 +9456,13 @@ func TestIntegrationOrphanedPlanningIntentFailsAndDoesNotLoopUntilLeaseExpiry(t 
 	}
 
 	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
-		Goal:           "orphaned planning intent should fail immediately",
+		Goal:           "orphaned orchestration intent should fail immediately",
 		IdempotencyKey: "start-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
 	pgRunID, err := db.ParseUUID(handle.RunID)
@@ -9447,48 +9477,48 @@ func TestIntegrationOrphanedPlanningIntentFailsAndDoesNotLoopUntilLeaseExpiry(t 
 	if err != nil {
 		t.Fatalf("newPGUUID(intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               intentUUID,
 		RunID:            pgRunID,
 		TaskID:           pgTaskID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindStartRun,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindStartRun,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: 1,
 		Payload:          marshalJSON(map[string]any{"reason": "orphaned-run-test"}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent() error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent() error = %v", err)
 	}
 	if _, err := pool.Exec(ctx, "DELETE FROM orchestration_runs WHERE id = $1", pgRunID); err != nil {
 		t.Fatalf("delete orchestration run: %v", err)
 	}
 
 	var remainingIntentCount int
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM orchestration_planning_intents WHERE id = $1", intentUUID).Scan(&remainingIntentCount); err != nil {
-		t.Fatalf("query planning intent after run delete: %v", err)
+	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM orchestration_intents WHERE id = $1", intentUUID).Scan(&remainingIntentCount); err != nil {
+		t.Fatalf("query orchestration intent after run delete: %v", err)
 	}
 	if remainingIntentCount != 0 {
-		t.Fatalf("planning intent row count after run delete = %d, want 0", remainingIntentCount)
+		t.Fatalf("orchestration intent row count after run delete = %d, want 0", remainingIntentCount)
 	}
 
-	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 	}
 	if processed {
-		t.Fatal("ProcessNextPlanningIntent() = true, want false")
+		t.Fatal("ProcessNextOrchestrationIntent() = true, want false")
 	}
 
-	processed, err = svc.ProcessNextPlanningIntent(ctx)
+	processed, err = svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent(second) error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent(second) error = %v", err)
 	}
 	if processed {
-		t.Fatal("ProcessNextPlanningIntent(second) = true, want false")
+		t.Fatal("ProcessNextOrchestrationIntent(second) = true, want false")
 	}
 }
 
-func TestIntegrationExpiredProcessingPlanningIntentResumesIdempotently(t *testing.T) {
+func TestIntegrationExpiredProcessingOrchestrationIntentResumesIdempotently(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
 
@@ -9499,13 +9529,13 @@ func TestIntegrationExpiredProcessingPlanningIntentResumesIdempotently(t *testin
 	}
 
 	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
-		Goal:           "expired processing planning intent should fail closed",
+		Goal:           "expired processing orchestration intent should fail closed",
 		IdempotencyKey: "start-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9522,20 +9552,20 @@ func TestIntegrationExpiredProcessingPlanningIntentResumesIdempotently(t *testin
 	if err != nil {
 		t.Fatalf("newPGUUID(intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               intentUUID,
 		RunID:            pgRunID,
 		TaskID:           pgTaskID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindStartRun,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindStartRun,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: 1,
 		Payload:          marshalJSON(map[string]any{"reason": "expired-processing-test"}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent() error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent() error = %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-UPDATE orchestration_planning_intents
+UPDATE orchestration_intents
 SET status = 'processing',
     claim_epoch = 1,
     claim_token = 'stale-claim-token',
@@ -9545,64 +9575,64 @@ SET status = 'processing',
     updated_at = now()
 WHERE id = $1
 `, intentUUID); err != nil {
-		t.Fatalf("mark planning intent processing+expired: %v", err)
+		t.Fatalf("mark orchestration intent processing+expired: %v", err)
 	}
 
-	recovered, err := svc.RecoverExpiredPlanningIntents(ctx)
+	recovered, err := svc.RecoverExpiredOrchestrationIntents(ctx)
 	if err != nil {
-		t.Fatalf("RecoverExpiredPlanningIntents(first) error = %v", err)
+		t.Fatalf("RecoverExpiredOrchestrationIntents(first) error = %v", err)
 	}
 	if recovered != 1 {
-		t.Fatalf("RecoverExpiredPlanningIntents(first) = %d, want 1", recovered)
+		t.Fatalf("RecoverExpiredOrchestrationIntents(first) = %d, want 1", recovered)
 	}
-	recovered, err = svc.RecoverExpiredPlanningIntents(ctx)
+	recovered, err = svc.RecoverExpiredOrchestrationIntents(ctx)
 	if err != nil {
-		t.Fatalf("RecoverExpiredPlanningIntents(second) error = %v", err)
+		t.Fatalf("RecoverExpiredOrchestrationIntents(second) error = %v", err)
 	}
 	if recovered != 0 {
-		t.Fatalf("RecoverExpiredPlanningIntents(second) = %d, want 0", recovered)
+		t.Fatalf("RecoverExpiredOrchestrationIntents(second) = %d, want 0", recovered)
 	}
 
-	intentRow, err := svc.queries.GetOrchestrationPlanningIntentByID(ctx, intentUUID)
+	intentRow, err := svc.queries.GetOrchestrationIntentByID(ctx, intentUUID)
 	if err != nil {
-		t.Fatalf("GetOrchestrationPlanningIntentByID(after recovery) error = %v", err)
+		t.Fatalf("GetOrchestrationIntentByID(after recovery) error = %v", err)
 	}
-	if intentRow.Status != PlanningIntentStatusPending {
-		t.Fatalf("planning intent status after recovery = %q, want %q", intentRow.Status, PlanningIntentStatusPending)
+	if intentRow.Status != OrchestrationIntentStatusPending {
+		t.Fatalf("orchestration intent status after recovery = %q, want %q", intentRow.Status, OrchestrationIntentStatusPending)
 	}
 	if intentRow.ClaimEpoch != 2 {
-		t.Fatalf("planning intent claim_epoch after recovery = %d, want 2", intentRow.ClaimEpoch)
+		t.Fatalf("orchestration intent claim_epoch after recovery = %d, want 2", intentRow.ClaimEpoch)
 	}
 	if strings.TrimSpace(intentRow.ClaimToken) != "" {
-		t.Fatalf("planning intent claim_token after recovery = %q, want empty", intentRow.ClaimToken)
+		t.Fatalf("orchestration intent claim_token after recovery = %q, want empty", intentRow.ClaimToken)
 	}
 	if strings.TrimSpace(intentRow.ClaimedBy) != "" {
-		t.Fatalf("planning intent claimed_by after recovery = %q, want empty", intentRow.ClaimedBy)
+		t.Fatalf("orchestration intent claimed_by after recovery = %q, want empty", intentRow.ClaimedBy)
 	}
 	if intentRow.LeaseExpiresAt.Valid {
-		t.Fatalf("planning intent lease_expires_at after recovery = %v, want null", intentRow.LeaseExpiresAt)
+		t.Fatalf("orchestration intent lease_expires_at after recovery = %v, want null", intentRow.LeaseExpiresAt)
 	}
 	if intentRow.LastHeartbeatAt.Valid {
-		t.Fatalf("planning intent last_heartbeat_at after recovery = %v, want null", intentRow.LastHeartbeatAt)
+		t.Fatalf("orchestration intent last_heartbeat_at after recovery = %v, want null", intentRow.LastHeartbeatAt)
 	}
 
-	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent() = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent() = false, want true")
 	}
 
-	intentRow, err = svc.queries.GetOrchestrationPlanningIntentByID(ctx, intentUUID)
+	intentRow, err = svc.queries.GetOrchestrationIntentByID(ctx, intentUUID)
 	if err != nil {
-		t.Fatalf("GetOrchestrationPlanningIntentByID() error = %v", err)
+		t.Fatalf("GetOrchestrationIntentByID() error = %v", err)
 	}
-	if intentRow.Status != PlanningIntentStatusCompleted {
-		t.Fatalf("planning intent status = %q, want %q", intentRow.Status, PlanningIntentStatusCompleted)
+	if intentRow.Status != OrchestrationIntentStatusCompleted {
+		t.Fatalf("orchestration intent status = %q, want %q", intentRow.Status, OrchestrationIntentStatusCompleted)
 	}
 	if strings.TrimSpace(intentRow.FailureReason) != "" {
-		t.Fatalf("planning intent failure_reason = %q, want empty", intentRow.FailureReason)
+		t.Fatalf("orchestration intent failure_reason = %q, want empty", intentRow.FailureReason)
 	}
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
@@ -9612,8 +9642,8 @@ WHERE id = $1
 	if snapshot.Run.LifecycleStatus != LifecycleStatusRunning {
 		t.Fatalf("run lifecycle_status = %q, want %q", snapshot.Run.LifecycleStatus, LifecycleStatusRunning)
 	}
-	if snapshot.Run.PlanningStatus != PlanningStatusIdle {
-		t.Fatalf("run planning_status = %q, want %q", snapshot.Run.PlanningStatus, PlanningStatusIdle)
+	if snapshot.Run.IntentStatus != IntentStatusIdle {
+		t.Fatalf("run intent_status = %q, want %q", snapshot.Run.IntentStatus, IntentStatusIdle)
 	}
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
@@ -9631,38 +9661,38 @@ WHERE id = $1
 	var foundRequeuedEvent bool
 	var foundCompletedEvent bool
 	for _, event := range eventPage.Items {
-		if event.Type == "run.event.planning_intent.requeued" {
-			if planningIntentID, _ := event.Payload["planning_intent_id"].(string); planningIntentID != intentUUID.String() {
+		if event.Type == "run.event.orchestration_intent.requeued" {
+			if orchestrationIntentID, _ := event.Payload["orchestration_intent_id"].(string); orchestrationIntentID != intentUUID.String() {
 				continue
 			}
-			if kind, _ := event.Payload["kind"].(string); kind != PlanningIntentKindStartRun {
+			if kind, _ := event.Payload["kind"].(string); kind != OrchestrationIntentKindStartRun {
 				continue
 			}
-			if previousStatus, _ := event.Payload["previous_status"].(string); previousStatus != PlanningIntentStatusProcessing {
+			if previousStatus, _ := event.Payload["previous_status"].(string); previousStatus != OrchestrationIntentStatusProcessing {
 				continue
 			}
-			if newStatus, _ := event.Payload["new_status"].(string); newStatus != PlanningIntentStatusPending {
+			if newStatus, _ := event.Payload["new_status"].(string); newStatus != OrchestrationIntentStatusPending {
 				continue
 			}
 			foundRequeuedEvent = true
 			continue
 		}
-		if event.Type != "run.event.planning_intent.completed" {
+		if event.Type != "run.event.orchestration_intent.completed" {
 			continue
 		}
-		if planningIntentID, _ := event.Payload["planning_intent_id"].(string); planningIntentID != intentUUID.String() {
+		if orchestrationIntentID, _ := event.Payload["orchestration_intent_id"].(string); orchestrationIntentID != intentUUID.String() {
 			continue
 		}
-		if kind, _ := event.Payload["kind"].(string); kind == PlanningIntentKindStartRun {
+		if kind, _ := event.Payload["kind"].(string); kind == OrchestrationIntentKindStartRun {
 			foundCompletedEvent = true
 			break
 		}
 	}
 	if !foundCompletedEvent {
-		t.Fatal("ListRunEvents() missing reclaimed planning_intent.completed event")
+		t.Fatal("ListRunEvents() missing reclaimed orchestration_intent.completed event")
 	}
 	if !foundRequeuedEvent {
-		t.Fatal("ListRunEvents() missing planning_intent.requeued event")
+		t.Fatal("ListRunEvents() missing orchestration_intent.requeued event")
 	}
 }
 
@@ -9723,7 +9753,7 @@ func TestIntegrationClaimedAttemptRecoveryRequeuesInsteadOfFailing(t *testing.T)
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9794,7 +9824,7 @@ func TestIntegrationClaimedVerificationRecoveryRequeuesInsteadOfFailing(t *testi
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -9820,7 +9850,7 @@ func TestIntegrationClaimedVerificationRecoveryRequeuesInsteadOfFailing(t *testi
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("ListRunTasks(verifying) error = %v", err)
@@ -9899,7 +9929,7 @@ func TestIntegrationStaleWorkerTakeoverFencesClaimedAttemptLeaseOps(t *testing.T
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -9955,7 +9985,7 @@ func TestIntegrationStaleWorkerTakeoverFencesRunningAttemptCompletion(t *testing
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10021,7 +10051,7 @@ func TestIntegrationStaleWorkerTakeoverFencesVerificationLeaseOps(t *testing.T) 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -10047,7 +10077,7 @@ func TestIntegrationStaleWorkerTakeoverFencesVerificationLeaseOps(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("ListRunTasks(verifying) error = %v", err)
@@ -10111,7 +10141,7 @@ func TestIntegrationStaleWorkerTakeoverFencesRunningVerificationCompletion(t *te
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 	setIntegrationTaskVerificationPolicy(t, ctx, pool, handle.RootTaskID, map[string]any{
@@ -10137,7 +10167,7 @@ func TestIntegrationStaleWorkerTakeoverFencesRunningVerificationCompletion(t *te
 	}); err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("ListRunTasks(verifying) error = %v", err)
@@ -10211,7 +10241,7 @@ func TestIntegrationCheckpointResumeIntentIgnoresPlannerEpochDrift(t *testing.T)
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10248,42 +10278,42 @@ func TestIntegrationCheckpointResumeIntentIgnoresPlannerEpochDrift(t *testing.T)
 	var basePlannerEpoch int64
 	if err := pool.QueryRow(ctx, `
 SELECT id, base_planner_epoch
-FROM orchestration_planning_intents
+FROM orchestration_intents
 WHERE run_id = $1
   AND checkpoint_id = $2
   AND kind = $3
 ORDER BY created_at DESC
 LIMIT 1
-`, pgRunID, pgCheckpointID, PlanningIntentKindCheckpointResume).Scan(&intentID, &basePlannerEpoch); err != nil {
-		t.Fatalf("load checkpoint_resume planning intent: %v", err)
+`, pgRunID, pgCheckpointID, OrchestrationIntentKindCheckpointResume).Scan(&intentID, &basePlannerEpoch); err != nil {
+		t.Fatalf("load checkpoint_resume orchestration intent: %v", err)
 	}
 	if !intentID.Valid {
-		t.Fatal("checkpoint_resume planning intent not found")
+		t.Fatal("checkpoint_resume orchestration intent not found")
 	}
 	if basePlannerEpoch != 1 {
-		t.Fatalf("planning intent base_planner_epoch = %d, want 1", basePlannerEpoch)
+		t.Fatalf("orchestration intent base_planner_epoch = %d, want 1", basePlannerEpoch)
 	}
 	if _, err := pool.Exec(ctx, "UPDATE orchestration_runs SET planner_epoch = planner_epoch + 1, updated_at = now() WHERE id = $1", pgRunID); err != nil {
 		t.Fatalf("bump planner_epoch: %v", err)
 	}
 
-	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent() = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent() = false, want true")
 	}
 
-	intentRow, err := svc.queries.GetOrchestrationPlanningIntentByID(ctx, intentID)
+	intentRow, err := svc.queries.GetOrchestrationIntentByID(ctx, intentID)
 	if err != nil {
-		t.Fatalf("GetOrchestrationPlanningIntentByID() error = %v", err)
+		t.Fatalf("GetOrchestrationIntentByID() error = %v", err)
 	}
 	if resolveResult.SnapshotSeq == 0 {
 		t.Fatal("ResolveCheckpoint() snapshot_seq = 0, want non-zero")
 	}
-	if intentRow.Status != PlanningIntentStatusCompleted {
-		t.Fatalf("planning intent status = %q, want %q", intentRow.Status, PlanningIntentStatusCompleted)
+	if intentRow.Status != OrchestrationIntentStatusCompleted {
+		t.Fatalf("orchestration intent status = %q, want %q", intentRow.Status, OrchestrationIntentStatusCompleted)
 	}
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
@@ -10318,7 +10348,7 @@ func TestIntegrationRunBlockingCheckpointSnapshotIsSelfConsistent(t *testing.T) 
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10428,7 +10458,7 @@ func TestIntegrationRunBlockingCheckpointSnapshotIsSelfConsistent(t *testing.T) 
 		}
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	snapshot, err = svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -10465,7 +10495,7 @@ func TestIntegrationGetRunSnapshotAtSeqReturnsHistoricalRunState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10490,7 +10520,7 @@ func TestIntegrationGetRunSnapshotAtSeqReturnsHistoricalRunState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveCheckpoint() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	currentSnapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
 	if err != nil {
@@ -10531,7 +10561,7 @@ func TestIntegrationGetRunSnapshotAtSeqRejectsMissingHistoricalRunProjection(t *
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10587,7 +10617,7 @@ func TestIntegrationCreateHumanCheckpointRejectsUnsupportedTaskState(t *testing.
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10636,7 +10666,7 @@ func TestIntegrationTimedOutHumanCheckpointUsesDefaultActionAndResumesTask(t *te
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10687,12 +10717,12 @@ func TestIntegrationTimedOutHumanCheckpointUsesDefaultActionAndResumesTask(t *te
 		t.Fatalf("checkpoint resolution = (%q, %q), want (%q, ok)", checkpointRow.ResolvedMode, checkpointRow.ResolvedOptionID, CheckpointResolutionModeSelectOption)
 	}
 
-	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	processed, err := svc.ProcessNextOrchestrationIntent(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+		t.Fatalf("ProcessNextOrchestrationIntent() error = %v", err)
 	}
 	if !processed {
-		t.Fatal("ProcessNextPlanningIntent() = false, want true")
+		t.Fatal("ProcessNextOrchestrationIntent() = false, want true")
 	}
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
@@ -10746,7 +10776,7 @@ func TestIntegrationCreateHumanCheckpointRejectsSecondBarrierOnCapturedTask(t *t
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10853,7 +10883,7 @@ func TestIntegrationCreateHumanCheckpointRejectsRunBarrierWithWaitingSibling(t *
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -10933,7 +10963,7 @@ func TestIntegrationCreateHumanCheckpointPausesRunningSibling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -11049,7 +11079,7 @@ func TestIntegrationCreateHumanCheckpointPausesRunningSibling(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ResolveCheckpoint() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	resumedSibling, err := svc.queries.GetOrchestrationTaskByID(ctx, siblingTaskID)
 	if err != nil {
@@ -11080,7 +11110,7 @@ func TestIntegrationCreateHumanCheckpointPausesManuallyStagedDispatchingSibling(
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -11184,7 +11214,7 @@ func TestIntegrationCreateHumanCheckpointPausesManuallyStagedDispatchingSibling(
 	}); err != nil {
 		t.Fatalf("ResolveCheckpoint() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	resumedSibling, err := svc.queries.GetOrchestrationTaskByID(ctx, siblingTaskID)
 	if err != nil {
@@ -11219,7 +11249,7 @@ func TestIntegrationCreateHumanCheckpointPausesManuallyStagedDispatchingSibling(
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(resumed sibling) error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	completedSibling, err := svc.queries.GetOrchestrationTaskByID(ctx, siblingTaskID)
 	if err != nil {
@@ -11247,7 +11277,7 @@ func TestIntegrationCreateHumanCheckpointRequeuesManuallyStagedVerifyingSibling(
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -11397,7 +11427,7 @@ func TestIntegrationCreateHumanCheckpointRequeuesManuallyStagedVerifyingSibling(
 	}); err != nil {
 		t.Fatalf("ResolveCheckpoint() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	resumedSibling, err := svc.queries.GetOrchestrationTaskByID(ctx, siblingTaskID)
 	if err != nil {
@@ -11462,7 +11492,7 @@ func TestIntegrationCreateHumanCheckpointRejectsDispatchingSiblingWithoutAttempt
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -11529,7 +11559,7 @@ func TestIntegrationCreateHumanCheckpointRejectsRunningSiblingWithoutAttempt(t *
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -11596,7 +11626,7 @@ func TestIntegrationCreateHumanCheckpointRejectsVerifyingSiblingWithoutVerificat
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -11669,7 +11699,7 @@ func TestIntegrationWatchRunStreamsHistoricalAndLiveEvents(t *testing.T) {
 		t.Fatalf("WatchRun() error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	var (
 		seenCreated bool
@@ -11743,7 +11773,7 @@ func TestIntegrationWatchRunDeliversEventsThroughBusOutbox(t *testing.T) {
 		t.Fatalf("WatchRun() error = %v", err)
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	var (
 		seenCreated bool
@@ -11810,7 +11840,7 @@ func TestIntegrationInjectRunHintEnqueuesReplan(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	result, err := svc.InjectRunHint(ctx, caller, handle.RunID, InjectRunHintRequest{
 		Hint: RunHint{
@@ -11842,11 +11872,11 @@ func TestIntegrationInjectRunHintEnqueuesReplan(t *testing.T) {
 	if result.RunID != handle.RunID {
 		t.Fatalf("InjectRunHint().RunID = %q, want %q", result.RunID, handle.RunID)
 	}
-	if strings.TrimSpace(result.PlanningIntentID) == "" {
-		t.Fatal("InjectRunHint().PlanningIntentID is empty")
+	if strings.TrimSpace(result.OrchestrationIntentID) == "" {
+		t.Fatal("InjectRunHint().OrchestrationIntentID is empty")
 	}
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 100})
 	if err != nil {
@@ -11902,7 +11932,7 @@ func TestIntegrationInjectRunHintUsesReplannerWhenReplacementPlanMissing(t *test
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	if _, err := svc.InjectRunHint(ctx, caller, handle.RunID, InjectRunHintRequest{
 		Hint: RunHint{
@@ -11915,7 +11945,7 @@ func TestIntegrationInjectRunHintUsesReplannerWhenReplacementPlanMissing(t *test
 	}); err != nil {
 		t.Fatalf("InjectRunHint() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	if replannerInput.Reason != "replace root via replanner" {
 		t.Fatalf("replanner reason = %q, want hint summary", replannerInput.Reason)
@@ -11956,7 +11986,7 @@ func TestIntegrationInjectRunHintRejectsReplannerOnlyRequestWithoutRuntime(t *te
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	_, err = svc.InjectRunHint(ctx, caller, handle.RunID, InjectRunHintRequest{
 		Hint: RunHint{
@@ -11972,10 +12002,10 @@ func TestIntegrationInjectRunHintRejectsReplannerOnlyRequestWithoutRuntime(t *te
 	var replanIntentCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE run_id = $1
 		  AND kind = $2
-	`, mustParsePGUUID(t, handle.RunID), PlanningIntentKindReplan).Scan(&replanIntentCount); err != nil {
+	`, mustParsePGUUID(t, handle.RunID), OrchestrationIntentKindReplan).Scan(&replanIntentCount); err != nil {
 		t.Fatalf("count replan intents after no-runtime rejection: %v", err)
 	}
 	if replanIntentCount != 0 {
@@ -12004,7 +12034,7 @@ func TestIntegrationInjectRunHintRejectsReplannerOnlyRequestWithoutBotID(t *test
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	_, err = svc.InjectRunHint(ctx, caller, handle.RunID, InjectRunHintRequest{
 		Hint: RunHint{
@@ -12020,10 +12050,10 @@ func TestIntegrationInjectRunHintRejectsReplannerOnlyRequestWithoutBotID(t *test
 	var replanIntentCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE run_id = $1
 		  AND kind = $2
-	`, mustParsePGUUID(t, handle.RunID), PlanningIntentKindReplan).Scan(&replanIntentCount); err != nil {
+	`, mustParsePGUUID(t, handle.RunID), OrchestrationIntentKindReplan).Scan(&replanIntentCount); err != nil {
 		t.Fatalf("count replan intents after no-bot rejection: %v", err)
 	}
 	if replanIntentCount != 0 {
@@ -12048,7 +12078,7 @@ func TestIntegrationInjectRunHintRejectsActiveSubtreeReplan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun() error = %v", err)
 	}
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
@@ -12086,7 +12116,7 @@ func TestIntegrationInjectRunHintRejectsActiveSubtreeReplan(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteAttempt(root request_replan) error = %v", err)
 	}
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
 	if err != nil {
@@ -12134,11 +12164,11 @@ func TestIntegrationInjectRunHintRejectsActiveSubtreeReplan(t *testing.T) {
 	var pendingHintIntentCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM orchestration_planning_intents
+		FROM orchestration_intents
 		WHERE run_id = $1
 		  AND kind = $2
 		  AND status = $3
-	`, mustParsePGUUID(t, handle.RunID), PlanningIntentKindReplan, PlanningIntentStatusPending).Scan(&pendingHintIntentCount); err != nil {
+	`, mustParsePGUUID(t, handle.RunID), OrchestrationIntentKindReplan, OrchestrationIntentStatusPending).Scan(&pendingHintIntentCount); err != nil {
 		t.Fatalf("count pending injected replan intents: %v", err)
 	}
 	if pendingHintIntentCount != 0 {
@@ -12177,8 +12207,8 @@ func TestIntegrationInjectRunHintContextUpdateMergesRunInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InjectRunHint(context_update) error = %v", err)
 	}
-	if result.PlanningIntentID != "" {
-		t.Fatalf("PlanningIntentID = %q, want empty for context_update", result.PlanningIntentID)
+	if result.OrchestrationIntentID != "" {
+		t.Fatalf("OrchestrationIntentID = %q, want empty for context_update", result.OrchestrationIntentID)
 	}
 
 	snapshot, err := svc.GetRunSnapshot(ctx, caller, handle.RunID)
@@ -12226,8 +12256,8 @@ func TestIntegrationInjectRunHintConstraintUpdateMergesTaskInputs(t *testing.T) 
 	if err != nil {
 		t.Fatalf("InjectRunHint(constraint_update) error = %v", err)
 	}
-	if result.PlanningIntentID != "" {
-		t.Fatalf("PlanningIntentID = %q, want empty for constraint_update", result.PlanningIntentID)
+	if result.OrchestrationIntentID != "" {
+		t.Fatalf("OrchestrationIntentID = %q, want empty for constraint_update", result.OrchestrationIntentID)
 	}
 
 	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 100})
@@ -12266,7 +12296,7 @@ func TestIntegrationInjectRunHintConstraintUpdateRejectsCompletedTask(t *testing
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	rootTaskID := mustParsePGUUID(t, handle.RootTaskID)
 	updatedTask, err := svc.queries.MarkOrchestrationTaskCompleted(ctx, sqlc.MarkOrchestrationTaskCompletedParams{
@@ -12312,7 +12342,7 @@ func TestIntegrationRetryTaskMarksFailedTaskReady(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	rootTaskID := mustParsePGUUID(t, handle.RootTaskID)
 	failedTask, err := svc.queries.MarkOrchestrationTaskFailed(ctx, sqlc.MarkOrchestrationTaskFailedParams{
@@ -12398,7 +12428,7 @@ func TestIntegrationRetryTaskRejectsVerifiedFailedTask(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	runUUID := mustParsePGUUID(t, handle.RunID)
 	taskUUID := mustParsePGUUID(t, handle.RootTaskID)
@@ -12477,7 +12507,7 @@ func TestIntegrationRetryTaskRejectsMismatchedRunID(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	rootTaskID := mustParsePGUUID(t, handle.RootTaskID)
 	if _, err := svc.queries.MarkOrchestrationTaskFailed(ctx, sqlc.MarkOrchestrationTaskFailedParams{
@@ -12505,14 +12535,14 @@ func TestIntegrationRetryTaskRejectsMismatchedRunID(t *testing.T) {
 	}
 }
 
-func TestIntegrationRetryTaskRejectsActivePlanningIntent(t *testing.T) {
+func TestIntegrationRetryTaskRejectsActiveOrchestrationIntent(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	caller := ControlIdentity{TenantID: "tenant-retry-active-intent", Subject: "user-retry-active-intent"}
 	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
-		Goal:           "reject retry when run still has active planning intent",
+		Goal:           "reject retry when run still has active orchestration intent",
 		IdempotencyKey: "retry-task-active-intent-start",
 	})
 	if err != nil {
@@ -12521,7 +12551,7 @@ func TestIntegrationRetryTaskRejectsActivePlanningIntent(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	taskUUID := mustParsePGUUID(t, handle.RootTaskID)
 	runUUID := mustParsePGUUID(t, handle.RunID)
@@ -12542,17 +12572,17 @@ func TestIntegrationRetryTaskRejectsActivePlanningIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newPGUUID(intent) error = %v", err)
 	}
-	if _, err := svc.queries.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+	if _, err := svc.queries.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
 		ID:               intentUUID,
 		RunID:            runUUID,
 		TaskID:           taskUUID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: 1,
 		Payload:          marshalObject(map[string]any{"run_id": handle.RunID}),
 	}); err != nil {
-		t.Fatalf("CreateOrchestrationPlanningIntent() error = %v", err)
+		t.Fatalf("CreateOrchestrationIntent() error = %v", err)
 	}
 
 	_, err = svc.RetryTask(ctx, caller, handle.RootTaskID, RetryTaskRequest{
@@ -12561,7 +12591,7 @@ func TestIntegrationRetryTaskRejectsActivePlanningIntent(t *testing.T) {
 		IdempotencyKey: "retry-task-active-intent",
 	})
 	if !errors.Is(err, ErrTaskRetryUnsupported) {
-		t.Fatalf("RetryTask(active planning intent) error = %v, want %v", err, ErrTaskRetryUnsupported)
+		t.Fatalf("RetryTask(active orchestration intent) error = %v, want %v", err, ErrTaskRetryUnsupported)
 	}
 }
 
@@ -12581,7 +12611,7 @@ func TestIntegrationRetryTaskRejectsSiblingActiveAttempt(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	runUUID := mustParsePGUUID(t, handle.RunID)
 	rootTaskUUID := mustParsePGUUID(t, handle.RootTaskID)
@@ -12687,7 +12717,7 @@ func TestIntegrationBlackboardCaptureAndPublish(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 
 	rootAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-bb-root",
@@ -12755,7 +12785,7 @@ func TestIntegrationBlackboardCaptureAndPublish(t *testing.T) {
 		t.Fatalf("root result persistence_class = %q, want %q", rootEntry.Value.PersistenceClass, orchestrationblackboard.PersistenceFromPostgres)
 	}
 
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	producerAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-bb-producer",
@@ -12787,7 +12817,7 @@ func TestIntegrationBlackboardCaptureAndPublish(t *testing.T) {
 		t.Fatalf("blackboard Get(producer result) error = %v", err)
 	}
 
-	drainRunPlanningIntents(t, ctx, svc)
+	drainRunOrchestrationIntents(t, ctx, svc)
 
 	consumerAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-bb-consumer",
@@ -12864,7 +12894,7 @@ func TestIntegrationRebuildBlackboardRecoversAfterStoreWipe(t *testing.T) {
 	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
 	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
 
-	processRunPlanningIntent(t, ctx, svc)
+	processRunOrchestrationIntent(t, ctx, svc)
 	rootAttempt := dispatchAndClaimAttemptForProfiles(t, ctx, svc, AttemptClaim{
 		WorkerID:        "worker-rebuild",
 		ExecutorID:      DefaultWorkerExecutorID,
