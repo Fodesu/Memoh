@@ -735,7 +735,7 @@ CREATE TABLE IF NOT EXISTS orchestration_runs (
   tenant_id TEXT NOT NULL,
   owner_subject TEXT NOT NULL,
   lifecycle_status TEXT NOT NULL CHECK (lifecycle_status IN ('created', 'running', 'waiting_human', 'cancelling', 'completed', 'failed', 'cancelled')),
-  planning_status TEXT NOT NULL CHECK (planning_status IN ('idle', 'active')),
+  intent_status TEXT NOT NULL CHECK (intent_status IN ('idle', 'active')),
   status_version BIGINT NOT NULL DEFAULT 1,
   planner_epoch BIGINT NOT NULL DEFAULT 1,
   last_event_seq BIGINT NOT NULL DEFAULT 0,
@@ -882,8 +882,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_open_run_b
   ON orchestration_human_checkpoints(run_id)
   WHERE blocks_run = TRUE AND status = 'open';
 
--- orchestration_planning_intents: authoritative planner/replanner work queue
-CREATE TABLE IF NOT EXISTS orchestration_planning_intents (
+-- orchestration_intents: authoritative planner/replanner work queue
+CREATE TABLE IF NOT EXISTS orchestration_intents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id UUID NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
   task_id UUID REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
@@ -900,13 +900,13 @@ CREATE TABLE IF NOT EXISTS orchestration_planning_intents (
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT orchestration_planning_intents_checkpoint_requires_task CHECK (checkpoint_id IS NULL OR task_id IS NOT NULL),
-  CONSTRAINT orchestration_planning_intents_id_run_unique UNIQUE (id, run_id)
+  CONSTRAINT orchestration_intents_checkpoint_requires_task CHECK (checkpoint_id IS NULL OR task_id IS NOT NULL),
+  CONSTRAINT orchestration_intents_id_run_unique UNIQUE (id, run_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_orchestration_planning_intents_run_created_at ON orchestration_planning_intents(run_id, created_at, id);
-CREATE INDEX IF NOT EXISTS idx_orchestration_planning_intents_status_created_at ON orchestration_planning_intents(status, created_at, id);
-CREATE INDEX IF NOT EXISTS idx_orchestration_planning_intents_lease_expires_at ON orchestration_planning_intents(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orchestration_intents_run_created_at ON orchestration_intents(run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_intents_status_created_at ON orchestration_intents(status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_intents_lease_expires_at ON orchestration_intents(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
 
 -- orchestration_task_dependencies: authoritative task DAG edges
 CREATE TABLE IF NOT EXISTS orchestration_task_dependencies (
@@ -1418,18 +1418,18 @@ END $$;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_planning_intents_task_run_fk') THEN
-    ALTER TABLE orchestration_planning_intents
-      ADD CONSTRAINT orchestration_planning_intents_task_run_fk
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_intents_task_run_fk') THEN
+    ALTER TABLE orchestration_intents
+      ADD CONSTRAINT orchestration_intents_task_run_fk
       FOREIGN KEY (task_id, run_id) REFERENCES orchestration_tasks(id, run_id) ON DELETE CASCADE;
   END IF;
 END $$;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_planning_intents_checkpoint_run_fk') THEN
-    ALTER TABLE orchestration_planning_intents
-      ADD CONSTRAINT orchestration_planning_intents_checkpoint_run_fk
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_intents_checkpoint_run_fk') THEN
+    ALTER TABLE orchestration_intents
+      ADD CONSTRAINT orchestration_intents_checkpoint_run_fk
       FOREIGN KEY (checkpoint_id, run_id, task_id) REFERENCES orchestration_human_checkpoints(id, run_id, task_id)
       ON DELETE CASCADE;
   END IF;

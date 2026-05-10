@@ -218,8 +218,8 @@ func TestPlannedChildTasksFromSpecsRejectsEmptyGoal(t *testing.T) {
 	_, err := plannedChildTasksFromSpecs([]PlannedTaskSpec{
 		{Alias: "empty-goal"},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("plannedChildTasksFromSpecs(empty goal) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("plannedChildTasksFromSpecs(empty goal) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 }
 
@@ -295,8 +295,8 @@ func TestValidatePlannedChildTasksRejectsCycles(t *testing.T) {
 		{Alias: "a", Goal: "task a", DependsOnAliases: []string{"b"}},
 		{Alias: "b", Goal: "task b", DependsOnAliases: []string{"a"}},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("validatePlannedChildTasks(cycle) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("validatePlannedChildTasks(cycle) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 }
 
@@ -618,8 +618,8 @@ func TestDecodePlannedChildTasksRejectsInvalidSchema(t *testing.T) {
 			t.Parallel()
 
 			_, err := decodePlannedChildTasks(tt.payload)
-			if !errors.Is(err, ErrPlanningIntentInvalid) {
-				t.Fatalf("decodePlannedChildTasks() error = %v, want %v", err, ErrPlanningIntentInvalid)
+			if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+				t.Fatalf("decodePlannedChildTasks() error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 			}
 		})
 	}
@@ -655,8 +655,8 @@ func TestDecodeReplanChildTasksPropagatesInvalidReplacementPlan(t *testing.T) {
 			t.Parallel()
 
 			_, err := decodeReplanChildTasks(tt.payload)
-			if !errors.Is(err, ErrPlanningIntentInvalid) {
-				t.Fatalf("decodeReplanChildTasks() error = %v, want %v", err, ErrPlanningIntentInvalid)
+			if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+				t.Fatalf("decodeReplanChildTasks() error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 			}
 		})
 	}
@@ -820,8 +820,8 @@ func TestValidateRuntimeLimitsRejectInvalidPersistedPolicy(t *testing.T) {
 	err := validateStartRunPlanRuntimeLimits(run, []plannedChildTask{
 		{Alias: "a", Goal: "first"},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("validateStartRunPlanRuntimeLimits(invalid persisted policy) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("validateStartRunPlanRuntimeLimits(invalid persisted policy) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 
 	run.ControlPolicy = marshalJSON(map[string]any{
@@ -830,8 +830,8 @@ func TestValidateRuntimeLimitsRejectInvalidPersistedPolicy(t *testing.T) {
 	err = validateStartRunPlanRuntimeLimits(run, []plannedChildTask{
 		{Alias: "a", Goal: "first"},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("validateStartRunPlanRuntimeLimits(invalid persisted runtime_limits) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("validateStartRunPlanRuntimeLimits(invalid persisted runtime_limits) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 }
 
@@ -853,16 +853,16 @@ func TestValidateStartRunPlanRuntimeLimits(t *testing.T) {
 		{Alias: "b", Goal: "second", DependsOnAliases: []string{"a"}},
 		{Alias: "c", Goal: "third"},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("validateStartRunPlanRuntimeLimits(too many children) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("validateStartRunPlanRuntimeLimits(too many children) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 
 	err = validateStartRunPlanRuntimeLimits(run, []plannedChildTask{
 		{Alias: "a", Goal: "first"},
 		{Alias: "b", Goal: "this goal is intentionally too long"},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("validateStartRunPlanRuntimeLimits(long goal) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("validateStartRunPlanRuntimeLimits(long goal) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 }
 
@@ -908,16 +908,16 @@ func TestValidateReplanRuntimeLimits(t *testing.T) {
 	err := validateReplanRuntimeLimits(run, allTasks[0], allTasks, []plannedChildTask{
 		{Alias: "replacement", Goal: "replacement"},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("validateReplanRuntimeLimits(replan count) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("validateReplanRuntimeLimits(replan count) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 
 	run.PlannerEpoch = 1
 	err = validateReplanRuntimeLimits(run, allTasks[1], allTasks, []plannedChildTask{
 		{Alias: "replacement", Goal: "replacement"},
 	})
-	if !errors.Is(err, ErrPlanningIntentInvalid) {
-		t.Fatalf("validateReplanRuntimeLimits(depth) error = %v, want %v", err, ErrPlanningIntentInvalid)
+	if !errors.Is(err, ErrOrchestrationIntentInvalid) {
+		t.Fatalf("validateReplanRuntimeLimits(depth) error = %v, want %v", err, ErrOrchestrationIntentInvalid)
 	}
 }
 

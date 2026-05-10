@@ -71,7 +71,7 @@ func (r *Runtime) PlanReplan(ctx context.Context, input orchestration.ReplanPlan
 	cfg.Messages = []sdk.Message{sdk.UserMessage(buildReplanPlannerPrompt(input))}
 	plan, err := r.generatePlannerToolPlan(ctx, cfg, plannerSubmitPlanToolName, true, false, envResources)
 	if err != nil {
-		return nil, fmt.Errorf("%w: decode replanner schema: %w", orchestration.ErrPlanningIntentInvalid, err)
+		return nil, fmt.Errorf("%w: decode replanner schema: %w", orchestration.ErrOrchestrationIntentInvalid, err)
 	}
 	return &orchestration.ReplanPlanningResult{
 		Summary:    plan.Summary,

@@ -1830,7 +1830,7 @@ export type OrchestrationInjectRunHintRequest = {
 };
 
 export type OrchestrationInjectRunHintResult = {
-    planning_intent_id?: string;
+    orchestration_intent_id?: string;
     run_id?: string;
     snapshot_seq?: number;
 };
@@ -1945,13 +1945,13 @@ export type OrchestrationRun = {
     input?: {
         [key: string]: unknown;
     };
+    intent_status?: string;
     lifecycle_status?: string;
     output_schema?: {
         [key: string]: unknown;
     };
     owner_subject?: string;
     planner_epoch?: number;
-    planning_status?: string;
     policies?: {
         [key: string]: unknown;
     };
@@ -2026,6 +2026,28 @@ export type OrchestrationRunExecutionSpan = {
     worker_id?: string;
 };
 
+export type OrchestrationRunFlowSpan = {
+    action_count?: number;
+    attempt_id?: string;
+    checkpoint_id?: string;
+    end_seq?: number;
+    finished_at?: string;
+    id?: string;
+    kind?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    run_id?: string;
+    start_seq?: number;
+    started_at?: string;
+    status?: string;
+    summary?: string;
+    task_id?: string;
+    title?: string;
+    tool_names?: Array<string>;
+    verification_id?: string;
+};
+
 export type OrchestrationRunHandle = {
     root_task_id?: string;
     run_id?: string;
@@ -2048,6 +2070,7 @@ export type OrchestrationRunInspector = {
     checkpoints: Array<OrchestrationHumanCheckpoint>;
     dependencies: Array<OrchestrationTaskDependency>;
     execution_spans: Array<OrchestrationRunExecutionSpan>;
+    flow_spans: Array<OrchestrationRunFlowSpan>;
     input_manifests: Array<OrchestrationInputManifest>;
     results: Array<OrchestrationTaskResult>;
     run: OrchestrationRun;
@@ -2083,8 +2106,8 @@ export type OrchestrationRunListItem = {
     finished_at?: string;
     goal?: string;
     id?: string;
+    intent_status?: string;
     lifecycle_status?: string;
-    planning_status?: string;
     root_task_id?: string;
     terminal_reason?: string;
     updated_at?: string;

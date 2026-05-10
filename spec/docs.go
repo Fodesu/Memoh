@@ -15718,7 +15718,7 @@ const docTemplate = `{
         "orchestration.InjectRunHintResult": {
             "type": "object",
             "properties": {
-                "planning_intent_id": {
+                "orchestration_intent_id": {
                     "type": "string"
                 },
                 "run_id": {
@@ -16006,6 +16006,9 @@ const docTemplate = `{
                     "type": "object",
                     "additionalProperties": {}
                 },
+                "intent_status": {
+                    "type": "string"
+                },
                 "lifecycle_status": {
                     "type": "string"
                 },
@@ -16018,9 +16021,6 @@ const docTemplate = `{
                 },
                 "planner_epoch": {
                     "type": "integer"
-                },
-                "planning_status": {
-                    "type": "string"
                 },
                 "policies": {
                     "type": "object",
@@ -16209,6 +16209,66 @@ const docTemplate = `{
                 }
             }
         },
+        "orchestration.RunFlowSpan": {
+            "type": "object",
+            "properties": {
+                "action_count": {
+                    "type": "integer"
+                },
+                "attempt_id": {
+                    "type": "string"
+                },
+                "checkpoint_id": {
+                    "type": "string"
+                },
+                "end_seq": {
+                    "type": "integer"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "start_seq": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "tool_names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "verification_id": {
+                    "type": "string"
+                }
+            }
+        },
         "orchestration.RunHandle": {
             "type": "object",
             "properties": {
@@ -16253,6 +16313,7 @@ const docTemplate = `{
                 "checkpoints",
                 "dependencies",
                 "execution_spans",
+                "flow_spans",
                 "input_manifests",
                 "results",
                 "run",
@@ -16298,6 +16359,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/orchestration.RunExecutionSpan"
+                    }
+                },
+                "flow_spans": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/orchestration.RunFlowSpan"
                     }
                 },
                 "input_manifests": {
@@ -16435,10 +16502,10 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "lifecycle_status": {
+                "intent_status": {
                     "type": "string"
                 },
-                "planning_status": {
+                "lifecycle_status": {
                     "type": "string"
                 },
                 "root_task_id": {

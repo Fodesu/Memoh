@@ -231,7 +231,7 @@ func (s *Service) CreateRun(ctx context.Context, caller ControlIdentity, req Sta
 		TenantID:               caller.TenantID,
 		OwnerSubject:           caller.Subject,
 		LifecycleStatus:        LifecycleStatusCreated,
-		PlanningStatus:         PlanningStatusActive,
+		IntentStatus:           IntentStatusActive,
 		StatusVersion:          1,
 		PlannerEpoch:           1,
 		LastEventSeq:           0,
@@ -314,17 +314,17 @@ func (s *Service) CreateRun(ctx context.Context, caller ControlIdentity, req Sta
 		return RunHandle{}, err
 	}
 
-	planningIntentID, planningIntentUUID, err := newPGUUID()
+	orchestrationIntentID, orchestrationIntentUUID, err := newPGUUID()
 	if err != nil {
 		return RunHandle{}, err
 	}
-	if _, err := qtx.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
-		ID:               planningIntentUUID,
+	if _, err := qtx.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
+		ID:               orchestrationIntentUUID,
 		RunID:            runUUID,
 		TaskID:           rootTaskUUID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindStartRun,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindStartRun,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: runRow.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":     runID,
@@ -334,22 +334,22 @@ func (s *Service) CreateRun(ctx context.Context, caller ControlIdentity, req Sta
 			"created_by": caller.Subject,
 		}),
 	}); err != nil {
-		return RunHandle{}, fmt.Errorf("create orchestration planning intent: %w", err)
+		return RunHandle{}, fmt.Errorf("create orchestration intent: %w", err)
 	}
 	planningEvent, err := s.appendEvent(ctx, qtx, runUUID, eventSpec{
 		TaskID:           rootTaskUUID,
 		CheckpointID:     pgtype.UUID{},
-		AggregateType:    "planning_intent",
-		AggregateID:      planningIntentUUID,
+		AggregateType:    "orchestration_intent",
+		AggregateID:      orchestrationIntentUUID,
 		AggregateVersion: 1,
-		Type:             "run.event.planning_intent.enqueued",
+		Type:             "run.event.orchestration_intent.enqueued",
 		IdempotencyKey:   normalizedIdempotencyKey,
 		Payload: map[string]any{
-			"planning_intent_id": planningIntentID,
-			"run_id":             runID,
-			"task_id":            rootTaskID,
-			"kind":               PlanningIntentKindStartRun,
-			"status":             PlanningIntentStatusPending,
+			"orchestration_intent_id": orchestrationIntentID,
+			"run_id":                  runID,
+			"task_id":                 rootTaskID,
+			"kind":                    OrchestrationIntentKindStartRun,
+			"status":                  OrchestrationIntentStatusPending,
 		},
 	})
 	if err != nil {
@@ -452,22 +452,22 @@ func (*Service) effectiveRunForRead(ctx context.Context, qtx *sqlc.Queries, row 
 	if row.LifecycleStatus != LifecycleStatusCreated {
 		return row, nil
 	}
-	activeIntents, err := qtx.CountActiveOrchestrationPlanningIntentsByRun(ctx, row.ID)
+	activeIntents, err := qtx.CountActiveOrchestrationIntentsByRun(ctx, row.ID)
 	if err != nil {
-		return row, fmt.Errorf("count active planning intents for run read: %w", err)
+		return row, fmt.Errorf("count active orchestration intents for run read: %w", err)
 	}
 	if activeIntents > 0 {
 		return row, nil
 	}
-	failedIntent, err := qtx.GetLatestFailedStartRunPlanningIntentByRun(ctx, row.ID)
+	failedIntent, err := qtx.GetLatestFailedStartRunOrchestrationIntentByRun(ctx, row.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return row, nil
 		}
-		return row, fmt.Errorf("get failed start-run planning intent for run read: %w", err)
+		return row, fmt.Errorf("get failed start-run orchestration intent for run read: %w", err)
 	}
 	row.LifecycleStatus = LifecycleStatusFailed
-	row.PlanningStatus = PlanningStatusIdle
+	row.IntentStatus = IntentStatusIdle
 	row.TerminalReason = strings.TrimSpace(failedIntent.FailureReason)
 	if row.TerminalReason == "" {
 		row.TerminalReason = "start-run planner failed"
@@ -713,6 +713,7 @@ func (s *Service) GetRunInspector(ctx context.Context, caller ControlIdentity, r
 	}
 
 	executionSpans := buildRunExecutionSpans(attemptRows, verificationRows, resultRows, eventRows)
+	flowSpans := buildRunFlowSpans(runSnapshot, executionSpans, checkpoints, actionRecords, eventRows)
 	stuckSignals := buildRunStuckSignals(tasks, attempts, verifications, workers, observedAt.UTC())
 	summary := summarizeRunInspector(tasks, checkpoints, attempts, verifications, workers, stuckSignals)
 
@@ -727,6 +728,7 @@ func (s *Service) GetRunInspector(ctx context.Context, caller ControlIdentity, r
 		Verifications:  verifications,
 		InputManifests: inputManifests,
 		ExecutionSpans: executionSpans,
+		FlowSpans:      flowSpans,
 		ActionRecords:  actionRecords,
 		Checkpoints:    checkpoints,
 		Artifacts:      artifacts,
@@ -1225,8 +1227,8 @@ func (s *Service) InjectRunHint(ctx context.Context, caller ControlIdentity, run
 	}
 
 	var (
-		lastEvent        sqlc.OrchestrationEvent
-		planningIntentID string
+		lastEvent             sqlc.OrchestrationEvent
+		orchestrationIntentID string
 	)
 	switch normalizedHint.Kind {
 	case RunHintKindReplanRequest:
@@ -1242,11 +1244,11 @@ func (s *Service) InjectRunHint(ctx context.Context, caller ControlIdentity, run
 		if err := validateReplanSubtreeIsQuiescent(ctx, qtx, lockedRun.ID, subtreeTaskIDs, allTasks, allDependencies); err != nil {
 			return nil, errors.Join(ErrRunHintUnsupported, err)
 		}
-		planningIntentID, lastEvent, err = s.injectReplanHint(ctx, qtx, lockedRun, lockedTask, normalizedHint, normalizedIdempotencyKey)
+		orchestrationIntentID, lastEvent, err = s.injectReplanHint(ctx, qtx, lockedRun, lockedTask, normalizedHint, normalizedIdempotencyKey)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.syncRunPlanningStatus(ctx, qtx, lockedRun.ID); err != nil {
+		if err := s.syncRunIntentStatus(ctx, qtx, lockedRun.ID); err != nil {
 			return nil, err
 		}
 	case RunHintKindContextUpdate:
@@ -1337,9 +1339,9 @@ func (s *Service) InjectRunHint(ctx context.Context, caller ControlIdentity, run
 	}
 
 	result := InjectRunHintResult{
-		RunID:            normalizedRunID,
-		PlanningIntentID: planningIntentID,
-		SnapshotSeq:      mustUint64FromInt64(lastEvent.Seq, "inject_run_hint.event_seq"),
+		RunID:                 normalizedRunID,
+		OrchestrationIntentID: orchestrationIntentID,
+		SnapshotSeq:           mustUint64FromInt64(lastEvent.Seq, "inject_run_hint.event_seq"),
 	}
 	if _, err := qtx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
 		ResponsePayload: marshalJSON(result),
@@ -1464,11 +1466,11 @@ func (s *Service) RetryTask(ctx context.Context, caller ControlIdentity, taskID 
 	if activeAttempts > 0 {
 		return nil, ErrTaskRetryUnsupported
 	}
-	activePlanningIntents, err := qtx.CountActiveOrchestrationPlanningIntentsByRun(ctx, lockedRun.ID)
+	activeOrchestrationIntents, err := qtx.CountActiveOrchestrationIntentsByRun(ctx, lockedRun.ID)
 	if err != nil {
-		return nil, fmt.Errorf("count active planning intents for retry: %w", err)
+		return nil, fmt.Errorf("count active orchestration intents for retry: %w", err)
 	}
-	if activePlanningIntents > 0 {
+	if activeOrchestrationIntents > 0 {
 		return nil, ErrTaskRetryUnsupported
 	}
 	runAttempts, err := qtx.ListCurrentOrchestrationTaskAttemptsByRun(ctx, lockedRun.ID)
@@ -1585,7 +1587,7 @@ func (s *Service) injectReplanHint(
 	normalizedHint RunHint,
 	idempotencyKey string,
 ) (string, sqlc.OrchestrationEvent, error) {
-	planningIntentID, planningIntentUUID, err := newPGUUID()
+	orchestrationIntentID, orchestrationIntentUUID, err := newPGUUID()
 	if err != nil {
 		return "", sqlc.OrchestrationEvent{}, err
 	}
@@ -1604,41 +1606,41 @@ func (s *Service) injectReplanHint(
 	if replacementPlan, ok := normalizedHint.Details["replacement_plan"].(map[string]any); ok {
 		payload["replacement_plan"] = normalizeObject(replacementPlan)
 	}
-	planningIntent, err := qtx.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
-		ID:               planningIntentUUID,
+	orchestrationIntent, err := qtx.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
+		ID:               orchestrationIntentUUID,
 		RunID:            lockedRun.ID,
 		TaskID:           lockedTask.ID,
 		CheckpointID:     pgtype.UUID{},
-		Kind:             PlanningIntentKindReplan,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindReplan,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: lockedRun.PlannerEpoch,
 		Payload:          marshalJSON(payload),
 	})
 	if err != nil {
-		return "", sqlc.OrchestrationEvent{}, fmt.Errorf("create injected run hint planning intent: %w", err)
+		return "", sqlc.OrchestrationEvent{}, fmt.Errorf("create injected run hint orchestration intent: %w", err)
 	}
 	lastEvent, err := s.appendEvent(ctx, qtx, lockedRun.ID, eventSpec{
 		TaskID:           lockedTask.ID,
 		CheckpointID:     pgtype.UUID{},
-		AggregateType:    "planning_intent",
-		AggregateID:      planningIntent.ID,
+		AggregateType:    "orchestration_intent",
+		AggregateID:      orchestrationIntent.ID,
 		AggregateVersion: 1,
 		IdempotencyKey:   idempotencyKey,
-		Type:             "run.event.planning_intent.enqueued",
+		Type:             "run.event.orchestration_intent.enqueued",
 		Payload: map[string]any{
-			"planning_intent_id": planningIntentID,
-			"run_id":             lockedRun.ID.String(),
-			"task_id":            lockedTask.ID.String(),
-			"kind":               planningIntent.Kind,
-			"status":             planningIntent.Status,
-			"reason":             strings.TrimSpace(normalizedHint.Summary),
-			"hint_kind":          normalizedHint.Kind,
+			"orchestration_intent_id": orchestrationIntentID,
+			"run_id":                  lockedRun.ID.String(),
+			"task_id":                 lockedTask.ID.String(),
+			"kind":                    orchestrationIntent.Kind,
+			"status":                  orchestrationIntent.Status,
+			"reason":                  strings.TrimSpace(normalizedHint.Summary),
+			"hint_kind":               normalizedHint.Kind,
 		},
 	})
 	if err != nil {
 		return "", sqlc.OrchestrationEvent{}, err
 	}
-	return planningIntentID, lastEvent, nil
+	return orchestrationIntentID, lastEvent, nil
 }
 
 func (s *Service) CancelRun(ctx context.Context, caller ControlIdentity, runID string, req CancelRunRequest) (*CancelRunResult, error) {
@@ -1973,17 +1975,17 @@ func (s *Service) ResolveCheckpoint(ctx context.Context, caller ControlIdentity,
 		return nil, err
 	}
 
-	_, planningIntentUUID, err := newPGUUID()
+	_, orchestrationIntentUUID, err := newPGUUID()
 	if err != nil {
 		return nil, err
 	}
-	planningIntent, err := qtx.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
-		ID:               planningIntentUUID,
+	orchestrationIntent, err := qtx.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
+		ID:               orchestrationIntentUUID,
 		RunID:            lockedRun.ID,
 		TaskID:           lockedTask.ID,
 		CheckpointID:     resolvedCheckpoint.ID,
-		Kind:             PlanningIntentKindCheckpointResume,
-		Status:           PlanningIntentStatusPending,
+		Kind:             OrchestrationIntentKindCheckpointResume,
+		Status:           OrchestrationIntentStatusPending,
 		BasePlannerEpoch: lockedRun.PlannerEpoch,
 		Payload: marshalJSON(map[string]any{
 			"run_id":              lockedRun.ID.String(),
@@ -1996,29 +1998,29 @@ func (s *Service) ResolveCheckpoint(ctx context.Context, caller ControlIdentity,
 		}),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create checkpoint resume planning intent: %w", err)
+		return nil, fmt.Errorf("create checkpoint resume orchestration intent: %w", err)
 	}
 	_, err = s.appendEvent(ctx, qtx, lockedRun.ID, eventSpec{
 		TaskID:           lockedTask.ID,
 		CheckpointID:     resolvedCheckpoint.ID,
-		AggregateType:    "planning_intent",
-		AggregateID:      planningIntent.ID,
+		AggregateType:    "orchestration_intent",
+		AggregateID:      orchestrationIntent.ID,
 		AggregateVersion: 1,
-		Type:             "run.event.planning_intent.enqueued",
+		Type:             "run.event.orchestration_intent.enqueued",
 		IdempotencyKey:   normalizedIdempotencyKey,
 		Payload: map[string]any{
-			"planning_intent_id": planningIntent.ID.String(),
-			"run_id":             lockedRun.ID.String(),
-			"task_id":            lockedTask.ID.String(),
-			"checkpoint_id":      resolvedCheckpoint.ID.String(),
-			"kind":               planningIntent.Kind,
-			"status":             planningIntent.Status,
+			"orchestration_intent_id": orchestrationIntent.ID.String(),
+			"run_id":                  lockedRun.ID.String(),
+			"task_id":                 lockedTask.ID.String(),
+			"checkpoint_id":           resolvedCheckpoint.ID.String(),
+			"kind":                    orchestrationIntent.Kind,
+			"status":                  orchestrationIntent.Status,
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := s.syncRunPlanningStatus(ctx, qtx, lockedRun.ID); err != nil {
+	if err := s.syncRunIntentStatus(ctx, qtx, lockedRun.ID); err != nil {
 		return nil, err
 	}
 	lockedRun, err = qtx.GetOrchestrationRunByIDForUpdate(ctx, lockedRun.ID)
@@ -2151,18 +2153,18 @@ func (s *Service) RecoverTimedOutHumanCheckpoints(ctx context.Context) (int, err
 			return recovered, err
 		}
 
-		_, planningIntentUUID, err := newPGUUID()
+		_, orchestrationIntentUUID, err := newPGUUID()
 		if err != nil {
 			_ = tx.Rollback(ctx)
 			return recovered, err
 		}
-		planningIntent, err := qtx.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
-			ID:               planningIntentUUID,
+		orchestrationIntent, err := qtx.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
+			ID:               orchestrationIntentUUID,
 			RunID:            lockedRun.ID,
 			TaskID:           lockedTask.ID,
 			CheckpointID:     timedOutCheckpoint.ID,
-			Kind:             PlanningIntentKindCheckpointResume,
-			Status:           PlanningIntentStatusPending,
+			Kind:             OrchestrationIntentKindCheckpointResume,
+			Status:           OrchestrationIntentStatusPending,
 			BasePlannerEpoch: lockedRun.PlannerEpoch,
 			Payload: marshalJSON(map[string]any{
 				"run_id":              lockedRun.ID.String(),
@@ -2177,29 +2179,29 @@ func (s *Service) RecoverTimedOutHumanCheckpoints(ctx context.Context) (int, err
 		})
 		if err != nil {
 			_ = tx.Rollback(ctx)
-			return recovered, fmt.Errorf("create timeout checkpoint resume planning intent: %w", err)
+			return recovered, fmt.Errorf("create timeout checkpoint resume orchestration intent: %w", err)
 		}
 		if _, err := s.appendEvent(ctx, qtx, lockedRun.ID, eventSpec{
 			TaskID:           lockedTask.ID,
 			CheckpointID:     timedOutCheckpoint.ID,
-			AggregateType:    "planning_intent",
-			AggregateID:      planningIntent.ID,
+			AggregateType:    "orchestration_intent",
+			AggregateID:      orchestrationIntent.ID,
 			AggregateVersion: 1,
-			Type:             "run.event.planning_intent.enqueued",
+			Type:             "run.event.orchestration_intent.enqueued",
 			Payload: map[string]any{
-				"planning_intent_id": planningIntent.ID.String(),
-				"run_id":             lockedRun.ID.String(),
-				"task_id":            lockedTask.ID.String(),
-				"checkpoint_id":      timedOutCheckpoint.ID.String(),
-				"kind":               planningIntent.Kind,
-				"status":             planningIntent.Status,
-				"enqueue_reason":     "checkpoint_timeout",
+				"orchestration_intent_id": orchestrationIntent.ID.String(),
+				"run_id":                  lockedRun.ID.String(),
+				"task_id":                 lockedTask.ID.String(),
+				"checkpoint_id":           timedOutCheckpoint.ID.String(),
+				"kind":                    orchestrationIntent.Kind,
+				"status":                  orchestrationIntent.Status,
+				"enqueue_reason":          "checkpoint_timeout",
 			},
 		}); err != nil {
 			_ = tx.Rollback(ctx)
 			return recovered, err
 		}
-		if err := s.syncRunPlanningStatus(ctx, qtx, lockedRun.ID); err != nil {
+		if err := s.syncRunIntentStatus(ctx, qtx, lockedRun.ID); err != nil {
 			_ = tx.Rollback(ctx)
 			return recovered, err
 		}
@@ -3055,22 +3057,22 @@ func runAcceptsRetry(status string) bool {
 	return runAcceptsExternalMutations(status)
 }
 
-func runAcceptsPlanningIntent(kind, status string, basePlannerEpoch, currentPlannerEpoch int64) bool {
+func runAcceptsOrchestrationIntent(kind, status string, basePlannerEpoch, currentPlannerEpoch int64) bool {
 	if status == LifecycleStatusCancelling {
 		switch kind {
-		case PlanningIntentKindAttemptFinalize, PlanningIntentKindCheckpointResume:
+		case OrchestrationIntentKindAttemptFinalize, OrchestrationIntentKindCheckpointResume:
 			return true
 		default:
 			return false
 		}
 	}
 	if status == LifecycleStatusFailed {
-		return kind == PlanningIntentKindAttemptFinalize
+		return kind == OrchestrationIntentKindAttemptFinalize
 	}
 	if !runAcceptsExternalMutations(status) {
 		return false
 	}
-	if kind == PlanningIntentKindCheckpointResume {
+	if kind == OrchestrationIntentKindCheckpointResume {
 		return true
 	}
 	return basePlannerEpoch == currentPlannerEpoch
@@ -4635,7 +4637,7 @@ func toRun(row sqlc.OrchestrationRun) Run {
 		TenantID:               row.TenantID,
 		OwnerSubject:           row.OwnerSubject,
 		LifecycleStatus:        row.LifecycleStatus,
-		PlanningStatus:         row.PlanningStatus,
+		IntentStatus:           row.IntentStatus,
 		StatusVersion:          mustUint64FromInt64(row.StatusVersion, "run.status_version"),
 		PlannerEpoch:           mustUint64FromInt64(row.PlannerEpoch, "run.planner_epoch"),
 		RootTaskID:             row.RootTaskID.String(),
@@ -4689,7 +4691,7 @@ func toRunListItem(row sqlc.OrchestrationRun) RunListItem {
 		BotID:           stringFromJSONField(row.SourceMetadata, "bot_id"),
 		Goal:            row.Goal,
 		LifecycleStatus: row.LifecycleStatus,
-		PlanningStatus:  row.PlanningStatus,
+		IntentStatus:    row.IntentStatus,
 		RootTaskID:      row.RootTaskID.String(),
 		TerminalReason:  row.TerminalReason,
 		CreatedAt:       db.TimeFromPg(row.CreatedAt),
@@ -5078,6 +5080,259 @@ func buildRunExecutionSpans(
 	})
 
 	return spans
+}
+
+func buildRunFlowSpans(
+	run Run,
+	executionSpans []RunExecutionSpan,
+	checkpoints []HumanCheckpoint,
+	actionRecords []ActionRecord,
+	eventRows []sqlc.OrchestrationEvent,
+) []RunFlowSpan {
+	toolNamesBySubject := make(map[string]map[string]struct{})
+	actionCountBySubject := make(map[string]int)
+	for _, action := range actionRecords {
+		var subjectKey string
+		if action.AttemptID != "" {
+			subjectKey = "attempt:" + action.AttemptID
+		} else if action.VerificationID != "" {
+			subjectKey = "verification:" + action.VerificationID
+		}
+		if subjectKey == "" {
+			continue
+		}
+		actionCountBySubject[subjectKey]++
+		toolName := strings.TrimSpace(action.ToolName)
+		if toolName == "" || toolName == "agent.thinking" || toolName == "agent.output" {
+			continue
+		}
+		if toolNamesBySubject[subjectKey] == nil {
+			toolNamesBySubject[subjectKey] = make(map[string]struct{})
+		}
+		toolNamesBySubject[subjectKey][toolName] = struct{}{}
+	}
+
+	flowSpans := make([]RunFlowSpan, 0, len(executionSpans)+len(checkpoints)+4)
+	intentSpansByID := make(map[string]*RunFlowSpan)
+	for _, eventRow := range eventRows {
+		eventType := strings.TrimSpace(eventRow.Type)
+		if !strings.HasPrefix(eventType, "run.event.orchestration_intent.") {
+			continue
+		}
+		payload := decodeJSONObject(eventRow.Payload)
+		orchestrationIntentID := orchestrationIntentIDFromEvent(eventRow, payload)
+		if orchestrationIntentID == "" {
+			continue
+		}
+		span := intentSpansByID[orchestrationIntentID]
+		if span == nil {
+			flowSpans = append(flowSpans, RunFlowSpan{
+				ID:        "intent:" + orchestrationIntentID,
+				Kind:      flowOrchestrationIntentKind(stringValue(payload["kind"])),
+				Status:    "pending",
+				Title:     flowOrchestrationIntentTitle(stringValue(payload["kind"])),
+				RunID:     run.ID,
+				TaskID:    uuidString(eventRow.TaskID),
+				StartedAt: optionalTime(db.TimeFromPg(eventRow.CreatedAt)),
+				StartSeq:  mustUint64FromInt64(eventRow.Seq, "flow_span.intent.start_seq"),
+				Metadata:  map[string]any{"orchestration_intent_id": orchestrationIntentID},
+			})
+			span = &flowSpans[len(flowSpans)-1]
+			intentSpansByID[orchestrationIntentID] = span
+		}
+		if span.TaskID == "" {
+			span.TaskID = uuidString(eventRow.TaskID)
+		}
+		if checkpointID := uuidString(eventRow.CheckpointID); checkpointID != "" {
+			span.CheckpointID = checkpointID
+		}
+		if kind := flowOrchestrationIntentKind(stringValue(payload["kind"])); kind != "planning" {
+			span.Kind = kind
+			span.Title = flowOrchestrationIntentTitle(stringValue(payload["kind"]))
+		}
+		span.Status = flowIntentStatus(eventType, stringValue(payload["status"]))
+		if eventType != "run.event.orchestration_intent.enqueued" {
+			span.EndSeq = mustUint64FromInt64(eventRow.Seq, "flow_span.intent.end_seq")
+			span.FinishedAt = optionalTime(db.TimeFromPg(eventRow.CreatedAt))
+		}
+		if reason := strings.TrimSpace(stringValue(payload["reason"])); reason != "" {
+			span.Summary = reason
+		}
+		if failureReason := strings.TrimSpace(stringValue(payload["failure_reason"])); failureReason != "" {
+			span.Summary = failureReason
+		}
+		span.Metadata["last_event_type"] = eventType
+	}
+
+	for _, span := range executionSpans {
+		subjectKey := span.Kind + ":" + span.ID
+		flowSpans = append(flowSpans, RunFlowSpan{
+			ID:             span.Kind + ":" + span.ID,
+			Kind:           span.Kind,
+			Status:         span.Status,
+			Title:          flowExecutionTitle(span),
+			Summary:        span.Summary,
+			RunID:          span.RunID,
+			TaskID:         span.TaskID,
+			AttemptID:      flowAttemptID(span),
+			VerificationID: flowVerificationID(span),
+			StartSeq:       executionSpanSortSeq(span),
+			EndSeq:         span.TerminalSeq,
+			StartedAt:      span.StartedAt,
+			FinishedAt:     span.FinishedAt,
+			ActionCount:    actionCountBySubject[subjectKey],
+			ToolNames:      sortedStringSet(toolNamesBySubject[subjectKey]),
+			Metadata: map[string]any{
+				"attempt_no":          span.AttemptNo,
+				"executor_id":         span.ExecutorID,
+				"worker_id":           span.WorkerID,
+				"verifier_profile":    span.VerifierProfile,
+				"failure_class":       span.FailureClass,
+				"terminal_reason":     span.TerminalReason,
+				"related_event_types": span.RelatedEventTypes,
+			},
+		})
+	}
+
+	for _, checkpoint := range checkpoints {
+		flowSpans = append(flowSpans, RunFlowSpan{
+			ID:           "checkpoint:" + checkpoint.ID,
+			Kind:         "checkpoint",
+			Status:       checkpoint.Status,
+			Title:        "Human checkpoint",
+			Summary:      strings.TrimSpace(checkpoint.Question),
+			RunID:        checkpoint.RunID,
+			TaskID:       checkpoint.TaskID,
+			CheckpointID: checkpoint.ID,
+			StartedAt:    optionalTime(checkpoint.CreatedAt),
+			FinishedAt:   checkpoint.ResolvedAt,
+			Metadata: map[string]any{
+				"blocks_run":         checkpoint.BlocksRun,
+				"resolved_mode":      checkpoint.ResolvedMode,
+				"resolved_option_id": checkpoint.ResolvedOptionID,
+			},
+		})
+	}
+
+	sort.SliceStable(flowSpans, func(i, j int) bool {
+		left := runFlowSpanSortKey(flowSpans[i])
+		right := runFlowSpanSortKey(flowSpans[j])
+		if !left.Equal(right) {
+			return left.Before(right)
+		}
+		if flowSpans[i].StartSeq != flowSpans[j].StartSeq {
+			return flowSpans[i].StartSeq < flowSpans[j].StartSeq
+		}
+		return flowSpans[i].ID < flowSpans[j].ID
+	})
+	return flowSpans
+}
+
+func orchestrationIntentIDFromEvent(eventRow sqlc.OrchestrationEvent, payload map[string]any) string {
+	if value := strings.TrimSpace(stringValue(payload["orchestration_intent_id"])); value != "" {
+		return value
+	}
+	return uuidString(eventRow.AggregateID)
+}
+
+func flowOrchestrationIntentKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case OrchestrationIntentKindStartRun:
+		return "planning"
+	case OrchestrationIntentKindReplan:
+		return "replanning"
+	case OrchestrationIntentKindAttemptFinalize:
+		return "attempt_finalize"
+	case OrchestrationIntentKindCheckpointResume:
+		return "checkpoint_resume"
+	default:
+		return "orchestration_intent"
+	}
+}
+
+func flowOrchestrationIntentTitle(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case OrchestrationIntentKindReplan:
+		return "Replan"
+	case OrchestrationIntentKindCheckpointResume:
+		return "Resume checkpoint"
+	case OrchestrationIntentKindAttemptFinalize:
+		return "Finalize attempt"
+	default:
+		return "Plan"
+	}
+}
+
+func flowIntentStatus(eventType string, payloadStatus string) string {
+	switch eventType {
+	case "run.event.orchestration_intent.completed":
+		return "completed"
+	case "run.event.orchestration_intent.failed":
+		return "failed"
+	case "run.event.orchestration_intent.requeued":
+		return "pending"
+	case "run.event.orchestration_intent.enqueued":
+		if strings.TrimSpace(payloadStatus) != "" {
+			return strings.TrimSpace(payloadStatus)
+		}
+		return "pending"
+	default:
+		if strings.TrimSpace(payloadStatus) != "" {
+			return strings.TrimSpace(payloadStatus)
+		}
+		return "running"
+	}
+}
+
+func flowExecutionTitle(span RunExecutionSpan) string {
+	switch span.Kind {
+	case "verification":
+		if span.VerifierProfile != "" {
+			return "Verify " + span.VerifierProfile
+		}
+		return "Verify result"
+	default:
+		if span.AttemptNo > 0 {
+			return fmt.Sprintf("Attempt #%d", span.AttemptNo)
+		}
+		return "Attempt"
+	}
+}
+
+func flowAttemptID(span RunExecutionSpan) string {
+	if span.Kind == "attempt" {
+		return span.ID
+	}
+	return ""
+}
+
+func flowVerificationID(span RunExecutionSpan) string {
+	if span.Kind == "verification" {
+		return span.ID
+	}
+	return ""
+}
+
+func sortedStringSet(items map[string]struct{}) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for item := range items {
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func runFlowSpanSortKey(span RunFlowSpan) time.Time {
+	if span.StartedAt != nil {
+		return *span.StartedAt
+	}
+	if span.FinishedAt != nil {
+		return *span.FinishedAt
+	}
+	return time.Time{}
 }
 
 func executionSpanSortSeq(span RunExecutionSpan) uint64 {

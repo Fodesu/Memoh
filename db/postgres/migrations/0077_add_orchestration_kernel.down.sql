@@ -6,7 +6,7 @@ DROP TABLE IF EXISTS orchestration_workers;
 DROP TABLE IF EXISTS orchestration_idempotency_records;
 DROP TABLE IF EXISTS orchestration_projection_snapshots;
 DROP TABLE IF EXISTS orchestration_events;
-DROP TABLE IF EXISTS orchestration_planning_intents;
+DROP TABLE IF EXISTS orchestration_intents;
 DROP TABLE IF EXISTS orchestration_task_dependencies;
 DROP TABLE IF EXISTS orchestration_artifacts;
 DROP TABLE IF EXISTS orchestration_task_results CASCADE;

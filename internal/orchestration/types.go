@@ -14,52 +14,52 @@ const (
 	LifecycleStatusFailed       = "failed"
 	LifecycleStatusCancelled    = "cancelled"
 
-	PlanningStatusIdle   = "idle"
-	PlanningStatusActive = "active"
+	IntentStatusIdle   = "idle"
+	IntentStatusActive = "active"
 
-	PlanningIntentKindStartRun              = "start_run"
-	PlanningIntentKindCheckpointResume      = "checkpoint_resume"
-	PlanningIntentKindAttemptFinalize       = "attempt_finalize"
-	PlanningIntentKindReplan                = "replan"
-	PlanningIntentStatusPending             = "pending"
-	PlanningIntentStatusProcessing          = "processing"
-	PlanningIntentStatusCompleted           = "completed"
-	PlanningIntentStatusFailed              = "failed"
-	PlanningIntentDefaultLeaseTTL           = 5 * time.Minute
-	PlanningIntentTransientMaxAttempts      = 6
-	PlanningIntentTransientErrorBaseBackoff = 3 * time.Second
-	PlanningIntentTransientErrorMaxBackoff  = 48 * time.Second
-	TaskAttemptStatusCreated                = "created"
-	TaskAttemptStatusClaimed                = "claimed"
-	TaskAttemptStatusBinding                = "binding"
-	TaskAttemptStatusRunning                = "running"
-	TaskAttemptStatusCompleted              = "completed"
-	TaskAttemptStatusFailed                 = "failed"
-	TaskAttemptStatusLost                   = "lost"
-	TaskAttemptDefaultLeaseTTL              = 30 * time.Second
-	TaskVerificationStatusCreated           = "created"
-	TaskVerificationStatusClaimed           = "claimed"
-	TaskVerificationStatusRunning           = "running"
-	TaskVerificationStatusCompleted         = "completed"
-	TaskVerificationStatusFailed            = "failed"
-	TaskVerificationStatusLost              = "lost"
-	TaskVerificationDefaultLeaseTTL         = 30 * time.Second
-	VerificationVerdictAccepted             = "accepted"
-	VerificationVerdictRejected             = "rejected"
-	VerificationModeBuiltinBasic            = "builtin_basic"
-	VerificationRejectActionFailTask        = "fail_task"
-	VerificationRejectActionReplan          = "request_replan"
-	VerificationRejectActionRetry           = "retry"
-	WorkerStatusActive                      = "active"
-	WorkerStatusUnavailable                 = "unavailable"
-	DefaultWorkerExecutorID                 = "builtin.workerd"
-	DefaultWorkerDisplayName                = "Builtin Workerd"
-	DefaultRootWorkerProfile                = "llm.default"
-	BuiltinEchoWorkerProfile                = "builtin.echo"
-	DefaultVerifierExecutorID               = "builtin.verifyd"
-	DefaultVerifierDisplayName              = "Builtin Verifyd"
-	DefaultVerifierProfile                  = "llm.verifier"
-	BuiltinBasicVerifierProfile             = "builtin.basic"
+	OrchestrationIntentKindStartRun              = "start_run"
+	OrchestrationIntentKindCheckpointResume      = "checkpoint_resume"
+	OrchestrationIntentKindAttemptFinalize       = "attempt_finalize"
+	OrchestrationIntentKindReplan                = "replan"
+	OrchestrationIntentStatusPending             = "pending"
+	OrchestrationIntentStatusProcessing          = "processing"
+	OrchestrationIntentStatusCompleted           = "completed"
+	OrchestrationIntentStatusFailed              = "failed"
+	OrchestrationIntentDefaultLeaseTTL           = 5 * time.Minute
+	OrchestrationIntentTransientMaxAttempts      = 6
+	OrchestrationIntentTransientErrorBaseBackoff = 3 * time.Second
+	OrchestrationIntentTransientErrorMaxBackoff  = 48 * time.Second
+	TaskAttemptStatusCreated                     = "created"
+	TaskAttemptStatusClaimed                     = "claimed"
+	TaskAttemptStatusBinding                     = "binding"
+	TaskAttemptStatusRunning                     = "running"
+	TaskAttemptStatusCompleted                   = "completed"
+	TaskAttemptStatusFailed                      = "failed"
+	TaskAttemptStatusLost                        = "lost"
+	TaskAttemptDefaultLeaseTTL                   = 30 * time.Second
+	TaskVerificationStatusCreated                = "created"
+	TaskVerificationStatusClaimed                = "claimed"
+	TaskVerificationStatusRunning                = "running"
+	TaskVerificationStatusCompleted              = "completed"
+	TaskVerificationStatusFailed                 = "failed"
+	TaskVerificationStatusLost                   = "lost"
+	TaskVerificationDefaultLeaseTTL              = 30 * time.Second
+	VerificationVerdictAccepted                  = "accepted"
+	VerificationVerdictRejected                  = "rejected"
+	VerificationModeBuiltinBasic                 = "builtin_basic"
+	VerificationRejectActionFailTask             = "fail_task"
+	VerificationRejectActionReplan               = "request_replan"
+	VerificationRejectActionRetry                = "retry"
+	WorkerStatusActive                           = "active"
+	WorkerStatusUnavailable                      = "unavailable"
+	DefaultWorkerExecutorID                      = "builtin.workerd"
+	DefaultWorkerDisplayName                     = "Builtin Workerd"
+	DefaultRootWorkerProfile                     = "llm.default"
+	BuiltinEchoWorkerProfile                     = "builtin.echo"
+	DefaultVerifierExecutorID                    = "builtin.verifyd"
+	DefaultVerifierDisplayName                   = "Builtin Verifyd"
+	DefaultVerifierProfile                       = "llm.verifier"
+	BuiltinBasicVerifierProfile                  = "builtin.basic"
 
 	TaskStatusCreated      = "created"
 	TaskStatusReady        = "ready"
@@ -397,7 +397,7 @@ type Run struct {
 	TenantID               string         `json:"tenant_id"`
 	OwnerSubject           string         `json:"owner_subject"`
 	LifecycleStatus        string         `json:"lifecycle_status"`
-	PlanningStatus         string         `json:"planning_status"`
+	IntentStatus           string         `json:"intent_status"`
 	StatusVersion          uint64         `json:"status_version"`
 	PlannerEpoch           uint64         `json:"planner_epoch"`
 	RootTaskID             string         `json:"root_task_id"`
@@ -433,7 +433,7 @@ type RunListItem struct {
 	BotID           string     `json:"bot_id,omitempty"`
 	Goal            string     `json:"goal"`
 	LifecycleStatus string     `json:"lifecycle_status"`
-	PlanningStatus  string     `json:"planning_status"`
+	IntentStatus    string     `json:"intent_status"`
 	RootTaskID      string     `json:"root_task_id"`
 	TerminalReason  string     `json:"terminal_reason,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
@@ -483,9 +483,9 @@ type InjectRunHintRequest struct {
 }
 
 type InjectRunHintResult struct {
-	RunID            string `json:"run_id"`
-	PlanningIntentID string `json:"planning_intent_id"`
-	SnapshotSeq      uint64 `json:"snapshot_seq"`
+	RunID                 string `json:"run_id"`
+	OrchestrationIntentID string `json:"orchestration_intent_id"`
+	SnapshotSeq           uint64 `json:"snapshot_seq"`
 }
 
 type RetryTaskRequest struct {
@@ -621,6 +621,7 @@ type RunInspector struct {
 	Verifications  []InspectorVerification `json:"verifications" validate:"required"`
 	InputManifests []InputManifest         `json:"input_manifests" validate:"required"`
 	ExecutionSpans []RunExecutionSpan      `json:"execution_spans" validate:"required"`
+	FlowSpans      []RunFlowSpan           `json:"flow_spans" validate:"required"`
 	ActionRecords  []ActionRecord          `json:"action_records" validate:"required"`
 	Checkpoints    []HumanCheckpoint       `json:"checkpoints" validate:"required"`
 	Artifacts      []Artifact              `json:"artifacts" validate:"required"`
@@ -714,6 +715,26 @@ type RunExecutionSpan struct {
 	RelatedEventTypes  []string       `json:"related_event_types,omitempty"`
 }
 
+type RunFlowSpan struct {
+	ID             string         `json:"id"`
+	Kind           string         `json:"kind"`
+	Status         string         `json:"status"`
+	Title          string         `json:"title"`
+	Summary        string         `json:"summary,omitempty"`
+	RunID          string         `json:"run_id"`
+	TaskID         string         `json:"task_id,omitempty"`
+	AttemptID      string         `json:"attempt_id,omitempty"`
+	VerificationID string         `json:"verification_id,omitempty"`
+	CheckpointID   string         `json:"checkpoint_id,omitempty"`
+	StartSeq       uint64         `json:"start_seq,omitempty"`
+	EndSeq         uint64         `json:"end_seq,omitempty"`
+	StartedAt      *time.Time     `json:"started_at,omitempty"`
+	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
+	ActionCount    int            `json:"action_count"`
+	ToolNames      []string       `json:"tool_names,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+}
+
 type ActionRecord struct {
 	ID                  string     `json:"id"`
 	RunID               string     `json:"run_id"`
@@ -797,7 +818,7 @@ type Task struct {
 	UpdatedAt                time.Time        `json:"updated_at"`
 }
 
-type PlanningIntent struct {
+type OrchestrationIntent struct {
 	ID               string         `json:"id"`
 	RunID            string         `json:"run_id"`
 	TaskID           string         `json:"task_id,omitempty"`
