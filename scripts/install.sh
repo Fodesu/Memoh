@@ -45,7 +45,7 @@ else
   USE_SPARSE_SET=false
 fi
 NETWORK_NAME="${COMPOSE_PROJECT_NAME}_memoh-network"
-PROJECT_CONTAINERS="memoh-postgres memoh-migrate memoh-server memoh-web memoh-sparse memoh-qdrant"
+PROJECT_CONTAINERS="memoh-postgres memoh-nats memoh-migrate memoh-server memoh-orchestrator memoh-verifyd memoh-workerd memoh-web memoh-sparse memoh-qdrant"
 PROJECT_VOLUMES="${COMPOSE_PROJECT_NAME}_postgres_data ${COMPOSE_PROJECT_NAME}_containerd_data ${COMPOSE_PROJECT_NAME}_memoh_data ${COMPOSE_PROJECT_NAME}_server_cni_state ${COMPOSE_PROJECT_NAME}_qdrant_data ${COMPOSE_PROJECT_NAME}_openviking_data"
 
 EXISTING_CONFIG_SOURCE=""

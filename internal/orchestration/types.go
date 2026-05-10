@@ -52,6 +52,8 @@ const (
 	VerificationRejectActionRetry                = "retry"
 	WorkerStatusActive                           = "active"
 	WorkerStatusUnavailable                      = "unavailable"
+	DefaultOrchestratorExecutorID                = "builtin.orchestrator"
+	DefaultOrchestratorDisplayName               = "Builtin Orchestrator"
 	DefaultWorkerExecutorID                      = "builtin.workerd"
 	DefaultWorkerDisplayName                     = "Builtin Workerd"
 	DefaultRootWorkerProfile                     = "llm.default"

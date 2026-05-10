@@ -18,6 +18,7 @@ import (
 )
 
 type orchestrationAPI interface {
+	OrchestratorAvailable(context.Context) (bool, error)
 	StartRun(context.Context, orchestration.ControlIdentity, orchestration.StartRunRequest) (orchestration.RunHandle, error)
 	CancelRun(context.Context, orchestration.ControlIdentity, string, orchestration.CancelRunRequest) (*orchestration.CancelRunResult, error)
 	GetRunSnapshot(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunSnapshot, error)
@@ -94,6 +95,9 @@ func (h *OrchestrationHandler) CancelRun(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
+		return err
+	}
 	result, err := h.service.CancelRun(c.Request().Context(), caller, strings.TrimSpace(c.Param("run_id")), req)
 	if err != nil {
 		return h.httpError(err)
@@ -138,6 +142,9 @@ func (h *OrchestrationHandler) StartRun(c echo.Context) error {
 				return h.httpError(err)
 			}
 		}
+	}
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
+		return err
 	}
 	handle, err := h.service.StartRun(c.Request().Context(), caller, req)
 	if err != nil {
@@ -326,6 +333,9 @@ func (h *OrchestrationHandler) InjectRunHint(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
+		return err
+	}
 	result, err := h.service.InjectRunHint(c.Request().Context(), caller, strings.TrimSpace(c.Param("run_id")), req)
 	if err != nil {
 		return h.httpError(err)
@@ -428,6 +438,9 @@ func (h *OrchestrationHandler) CreateHumanCheckpoint(c echo.Context) error {
 	}
 	req.RunID = runID
 	req.TaskID = taskID
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
+		return err
+	}
 	result, err := h.service.CreateHumanCheckpoint(c.Request().Context(), caller, req)
 	if err != nil {
 		return h.httpError(err)
@@ -585,6 +598,9 @@ func (h *OrchestrationHandler) ResolveCheckpoint(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
+		return err
+	}
 	result, err := h.service.ResolveCheckpoint(c.Request().Context(), caller, strings.TrimSpace(c.Param("checkpoint_id")), req)
 	if err != nil {
 		return h.httpError(err)
@@ -611,6 +627,9 @@ func (h *OrchestrationHandler) ResolveCheckpoint(c echo.Context) error {
 func (h *OrchestrationHandler) RebuildBlackboard(c echo.Context) error {
 	caller, err := controlIdentity(c)
 	if err != nil {
+		return err
+	}
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
 		return err
 	}
 	result, err := h.service.RebuildBlackboard(c.Request().Context(), caller, strings.TrimSpace(c.Param("run_id")))
@@ -645,6 +664,9 @@ func (h *OrchestrationHandler) RetryTask(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	req.ExpectedRunID = strings.TrimSpace(c.Param("run_id"))
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
+		return err
+	}
 	result, err := h.service.RetryTask(c.Request().Context(), caller, strings.TrimSpace(c.Param("task_id")), req)
 	if err != nil {
 		return h.httpError(err)
@@ -718,6 +740,25 @@ func (h *OrchestrationHandler) httpError(err error) error {
 		h.logger.Error("orchestration handler error", slog.String("error", err.Error()))
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal orchestration error")
 	}
+}
+
+func (h *OrchestrationHandler) requireOrchestrator(ctx context.Context) error {
+	if h == nil || h.service == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "orchestration control-plane is not running; start cmd/orchestrator to use orchestration features")
+	}
+	available, err := h.service.OrchestratorAvailable(ctx)
+	if err != nil {
+		logger := h.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Error("orchestration control-plane availability check failed", slog.String("error", err.Error()))
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to check orchestration control-plane")
+	}
+	if !available {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "orchestration control-plane is not running; start cmd/orchestrator to use orchestration features")
+	}
+	return nil
 }
 
 func splitCSVQuery(raw string) []string {

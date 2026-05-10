@@ -75,10 +75,6 @@ func options() fx.Option {
 			provideAudioRegistry,
 			audiopkg.NewService,
 			provideAudioTempStore,
-			provideOrchestrationBus,
-			provideOrchestrationBlackboard,
-			provideOrchestrationOutbox,
-			provideOrchestrationFactConsumer,
 			provideOrchestrationEnvBackends,
 			provideOrchestrationEnvManager,
 			provideOrchestrationEnvKernelAdapter,
@@ -161,7 +157,6 @@ func options() fx.Option {
 		),
 		fx.Invoke(
 			injectToolProviders,
-			configureOrchestrationStartRunPlanner,
 			startRegistrySync,
 			startAudioProviderBootstrap,
 			startMemoryProviderBootstrap,
@@ -175,12 +170,7 @@ func options() fx.Option {
 			startBackgroundTaskCleanup,
 			startAudioTempStoreCleanup,
 			startServer,
-			startOrchestrationRuntime,
-			startOrchestrationOutbox,
-			startOrchestrationFactConsumer,
-			wireOrchestrationBlackboard,
 			wireOrchestrationEnvManager,
-			startOrchestrationEnvReclaim,
 		),
 		fx.WithLogger(func(logger *slog.Logger) fxevent.Logger {
 			return &fxevent.SlogLogger{Logger: logger.With(slog.String("component", "fx"))}

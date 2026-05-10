@@ -88,6 +88,34 @@ services:
     networks:
       - memoh-network
 
+  orchestrator:
+    image: memohai/server:latest
+    container_name: memoh-orchestrator
+    entrypoint: ["/app/orchestrator"]
+    healthcheck:
+      disable: true
+    environment:
+      CONFIG_PATH: /app/config.toml
+    volumes:
+      - ${MEMOH_CONFIG:-./config.toml}:/app/config.toml:ro
+      - containerd_sock:/run/containerd
+      - containerd_data:/var/lib/containerd
+      - server_cni_state:/var/lib/cni
+      - memoh_data:/opt/memoh/data
+      - /etc/cdi:/etc/cdi:ro
+      - /var/run/cdi:/var/run/cdi:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - memoh-network
+
   verifyd:
     image: memohai/server:latest
     container_name: memoh-verifyd
@@ -137,6 +165,7 @@ services:
       - "8082:8082"
     depends_on:
       - server
+      - orchestrator
       - workerd
       - verifyd
     restart: unless-stopped

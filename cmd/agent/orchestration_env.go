@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/fx"
 
 	"github.com/memohai/memoh/internal/config"
 	ctr "github.com/memohai/memoh/internal/container"
@@ -34,17 +31,6 @@ type containerEnvRuntime interface {
 	ctr.WorkloadService
 	ctr.SnapshotService
 }
-
-// envReclaimInterval bounds how often the reclaim sweep runs. Sessions
-// already expire on their lease TTL; the loop exists to drain orphaned
-// rows when a worker crashes between dispatch and release. Half a minute is
-// the same cadence the verification recovery loop uses.
-const envReclaimInterval = 30 * time.Second
-
-// envReclaimMaxRowsPerSweep keeps a single sweep bounded so a backlog of
-// expired sessions does not pin a Postgres connection forever. Producing
-// fresh batches per tick is cheaper than holding a long transaction open.
-const envReclaimMaxRowsPerSweep int32 = 64
 
 // provideOrchestrationEnvBackends builds a backend registry populated with
 // the kinds the deployment can actually serve. A missing container service
@@ -123,60 +109,6 @@ func wireOrchestrationEnvManager(orchestrationService *orchestration.Service, ad
 	orchestrationService.SetEnvManager(adapter)
 	if ttl := envLeaseTTLFromEnv(); ttl > 0 {
 		orchestrationService.SetEnvLeaseTTL(ttl)
-	}
-}
-
-// startOrchestrationEnvReclaim runs the reclaim sweep on a steady cadence
-// for the process lifetime. Reclaim is the safety net for sessions whose
-// holder crashed between dispatch and release; lease TTL and the per-call
-// release path remain the primary cleanup paths.
-func startOrchestrationEnvReclaim(lc fx.Lifecycle, log *slog.Logger, manager *orchestrationenv.Manager) {
-	if manager == nil {
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	lc.Append(fx.Hook{
-		OnStart: func(_ context.Context) error {
-			go runEnvReclaimLoop(ctx, log, manager, done)
-			return nil
-		},
-		OnStop: func(stopCtx context.Context) error {
-			cancel()
-			select {
-			case <-done:
-				return nil
-			case <-stopCtx.Done():
-				log.Warn("orchestration env reclaim loop did not stop in time", slog.Any("error", stopCtx.Err()))
-				return stopCtx.Err()
-			}
-		},
-	})
-}
-
-func runEnvReclaimLoop(ctx context.Context, log *slog.Logger, manager *orchestrationenv.Manager, done chan struct{}) {
-	defer close(done)
-	ticker := time.NewTicker(envReclaimInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			result, err := manager.ReclaimExpiredSessions(ctx, envReclaimMaxRowsPerSweep)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn("orchestration env reclaim sweep failed", slog.Any("error", err))
-				continue
-			}
-			if result.ExpiredSessions > 0 || result.ReleasedBindings > 0 || result.BackendErrors > 0 {
-				log.Info("orchestration env reclaim sweep",
-					slog.Int("scanned", result.ScannedSessions),
-					slog.Int("expired", result.ExpiredSessions),
-					slog.Int("released_bindings", result.ReleasedBindings),
-					slog.Int("backend_errors", result.BackendErrors),
-				)
-			}
-		}
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	stdpath "path"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -84,11 +83,6 @@ import (
 	"github.com/memohai/memoh/internal/network/kubeapi"
 	netoverlay "github.com/memohai/memoh/internal/network/overlay"
 	"github.com/memohai/memoh/internal/orchestration"
-	"github.com/memohai/memoh/internal/orchestrationblackboard"
-	"github.com/memohai/memoh/internal/orchestrationbus"
-	"github.com/memohai/memoh/internal/orchestrationexec"
-	"github.com/memohai/memoh/internal/orchestrationfacts"
-	"github.com/memohai/memoh/internal/orchestrationoutbox"
 	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 	"github.com/memohai/memoh/internal/policy"
 	"github.com/memohai/memoh/internal/providers"
@@ -364,144 +358,6 @@ func provideScheduleSessionCreator(sessionService *sessionpkg.Service) schedule.
 	return &sessionCreatorAdapter{svc: sessionService}
 }
 
-// provideOrchestrationBus wires the orchestration event bus. When NATS is
-// configured (cfg.NATS.URL non-empty) this returns a JetStream-backed bus;
-// otherwise the in-process bus is returned, which is fine for single-process
-// deployments and integration tests.
-func provideOrchestrationBus(lc fx.Lifecycle, log *slog.Logger, cfg config.Config) (orchestrationbus.Bus, error) {
-	bus, err := orchestrationbus.New(context.Background(), log, cfg.NATS)
-	if err != nil {
-		return nil, fmt.Errorf("orchestration bus: %w", err)
-	}
-	lc.Append(fx.Hook{
-		OnStop: func(_ context.Context) error {
-			return bus.Close()
-		},
-	})
-	return bus, nil
-}
-
-// provideOrchestrationBlackboard wires the Stage 2 blackboard runtime view.
-// When NATS is configured the JetStream KV bucket backs it; otherwise an
-// in-memory store is used so single-process deployments and tests stay
-// functional. Postgres remains authoritative; the blackboard never gates a
-// kernel commit.
-func provideOrchestrationBlackboard(lc fx.Lifecycle, log *slog.Logger, cfg config.Config) (orchestrationblackboard.Store, error) {
-	store, err := orchestrationblackboard.New(context.Background(), log, orchestrationblackboard.FactoryConfig{
-		URL:             cfg.NATS.URL,
-		Token:           cfg.NATS.Token,
-		User:            cfg.NATS.User,
-		Password:        cfg.NATS.Password,
-		CredentialsFile: cfg.NATS.CredentialsFile,
-		Replicas:        cfg.NATS.EffectiveStreamReplicas(),
-		ConnectionName:  "memoh-orchestration-blackboard",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("orchestration blackboard: %w", err)
-	}
-	lc.Append(fx.Hook{
-		OnStop: func(_ context.Context) error {
-			return store.Close()
-		},
-	})
-	return store, nil
-}
-
-// wireOrchestrationBlackboard hands the kernel the runtime store. We leave
-// the wiring as an Invoke so absence of a blackboard never breaks the rest
-// of the FX graph.
-func wireOrchestrationBlackboard(orchestrationService *orchestration.Service, store orchestrationblackboard.Store) {
-	if orchestrationService == nil || store == nil {
-		return
-	}
-	orchestrationService.SetBlackboardStore(store)
-}
-
-// provideOrchestrationOutbox wires the run-event outbox dispatcher. It runs
-// alongside the orchestration kernel and bridges committed Postgres events to
-// the bus.
-func provideOrchestrationOutbox(log *slog.Logger, queries *dbsqlc.Queries, bus orchestrationbus.Bus) *orchestrationoutbox.Dispatcher {
-	if queries == nil {
-		return nil
-	}
-	return orchestrationoutbox.New(log, queries, bus, orchestrationoutbox.Config{})
-}
-
-// startOrchestrationOutbox starts the dispatcher loop and stops it on shutdown.
-func startOrchestrationOutbox(lc fx.Lifecycle, log *slog.Logger, dispatcher *orchestrationoutbox.Dispatcher, orchestrationService *orchestration.Service, bus orchestrationbus.Bus) {
-	if dispatcher == nil {
-		return
-	}
-	if orchestrationService != nil {
-		orchestrationService.SetEventCommittedHook(dispatcher.Notify)
-		orchestrationService.SetEventBus(bus)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	lc.Append(fx.Hook{
-		OnStart: func(_ context.Context) error {
-			go func() {
-				defer close(done)
-				dispatcher.Run(ctx)
-			}()
-			return nil
-		},
-		OnStop: func(stopCtx context.Context) error {
-			cancel()
-			select {
-			case <-done:
-				return nil
-			case <-stopCtx.Done():
-				log.Warn("orchestration outbox did not stop in time", slog.Any("error", stopCtx.Err()))
-				return stopCtx.Err()
-			}
-		},
-	})
-}
-
-// provideOrchestrationFactConsumer wires the kernel's fact consumer. It
-// subscribes to every attempt / verification envelope on the bus and checks
-// it against Postgres. Returns nil when queries or the bus are missing so
-// the rest of the FX graph still wires up.
-func provideOrchestrationFactConsumer(log *slog.Logger, queries *dbsqlc.Queries, bus orchestrationbus.Bus) *orchestrationfacts.Consumer {
-	if queries == nil || bus == nil {
-		return nil
-	}
-	return orchestrationfacts.New(log, queries, bus)
-}
-
-// startOrchestrationFactConsumer runs the fact consumer for the process
-// lifetime. Loop errors are logged and dropped; Postgres still owns the
-// state, so a dead consumer does not break the kernel.
-func startOrchestrationFactConsumer(lc fx.Lifecycle, log *slog.Logger, consumer *orchestrationfacts.Consumer) {
-	if consumer == nil {
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	lc.Append(fx.Hook{
-		OnStart: func(_ context.Context) error {
-			go func() {
-				defer close(done)
-				if err := consumer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					log.Warn("orchestration fact consumer exited", slog.Any("error", err))
-				}
-			}()
-			return nil
-		},
-		OnStop: func(stopCtx context.Context) error {
-			cancel()
-			select {
-			case <-done:
-				return nil
-			case <-stopCtx.Done():
-				log.Warn("orchestration fact consumer did not stop in time", slog.Any("error", stopCtx.Err()))
-				return stopCtx.Err()
-			}
-		},
-	})
-}
-
 func provideAgent(log *slog.Logger, provider bridge.Provider) *agentpkg.Agent {
 	return agentpkg.New(agentpkg.Deps{
 		BridgeProvider: provider,
@@ -519,27 +375,6 @@ func injectToolProviders(a *agentpkg.Agent, msgService *message.DBService, provi
 			sp.SetModelCreator(agentpkg.SpawnModelCreatorFunc())
 		}
 	}
-}
-
-func configureOrchestrationStartRunPlanner(
-	log *slog.Logger,
-	queries *dbsqlc.Queries,
-	settingsService *settings.Service,
-	modelsService *models.Service,
-	agent *agentpkg.Agent,
-	rc *boot.RuntimeConfig,
-	orchestrationService *orchestration.Service,
-) {
-	runtime := orchestrationexec.NewRuntime(
-		log,
-		queries,
-		settingsService,
-		modelsService,
-		agent,
-		rc.TimezoneLocation,
-	)
-	orchestrationService.SetStartRunPlanner(runtime)
-	orchestrationService.SetReplanner(runtime)
 }
 
 func provideChatResolver(log *slog.Logger, a *agentpkg.Agent, modelsService *models.Service, queries dbstore.Queries, chatService *conversation.Service, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, memoryRegistry *memprovider.Registry, channelStore *channel.Store, routeService *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *pipelinepkg.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service) *flow.Resolver {
@@ -1089,70 +924,6 @@ func startHeartbeatService(lc fx.Lifecycle, heartbeatService *heartbeat.Service)
 			return heartbeatService.Bootstrap(ctx)
 		},
 	})
-}
-
-func startOrchestrationRuntime(lc fx.Lifecycle, orchestrationService *orchestration.Service) {
-	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	builtinVerifierEnabled := orchestrationBuiltinVerifierEnabled()
-	lc.Append(fx.Hook{
-		OnStart: func(_ context.Context) error {
-			workerCount := 4
-			if builtinVerifierEnabled {
-				workerCount++
-			}
-			wg.Add(workerCount)
-			go func() {
-				defer wg.Done()
-				orchestrationService.RunPlannerLoop(ctx)
-			}()
-			go func() {
-				defer wg.Done()
-				orchestrationService.RunSchedulerLoop(ctx)
-			}()
-			go func() {
-				defer wg.Done()
-				orchestrationService.RunRecoveryLoop(ctx)
-			}()
-			go func() {
-				defer wg.Done()
-				orchestrationService.RunVerificationRecoveryLoop(ctx)
-			}()
-			if builtinVerifierEnabled {
-				go func() {
-					defer wg.Done()
-					orchestrationService.RunVerifierLoop(ctx)
-				}()
-			}
-			return nil
-		},
-		OnStop: func(stopCtx context.Context) error {
-			cancel()
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				wg.Wait()
-			}()
-			select {
-			case <-stopCtx.Done():
-				return stopCtx.Err()
-			case <-done:
-				return nil
-			}
-		},
-	})
-}
-
-func orchestrationBuiltinVerifierEnabled() bool {
-	value := strings.TrimSpace(os.Getenv("MEMOH_ORCHESTRATION_BUILTIN_VERIFYD"))
-	switch strings.ToLower(value) {
-	case "1", "true", "yes", "on":
-		return true
-	case "", "0", "false", "no", "off":
-		return false
-	default:
-		return false
-	}
 }
 
 func wireResolverOutbound(resolver *flow.Resolver, channelManager *channel.Manager) {
