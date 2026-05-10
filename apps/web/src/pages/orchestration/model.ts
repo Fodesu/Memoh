@@ -1,6 +1,7 @@
 import type {
   OrchestrationRunInspector as RunInspectorPayload,
   OrchestrationRunExecutionSpan as RunInspectorExecutionSpan,
+  OrchestrationRunFlowSpan as RunFlowSpan,
   OrchestrationTask as RunInspectorTask,
   OrchestrationTaskDependency as RunInspectorDependency,
   OrchestrationRunListItem as RunListItem,
@@ -14,6 +15,7 @@ export interface BotItem {
 export type {
   RunInspectorDependency,
   RunInspectorExecutionSpan,
+  RunFlowSpan,
   RunInspectorPayload,
   RunInspectorTask,
   RunListItem,
@@ -30,6 +32,36 @@ export function formatDate(value: unknown): string {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+  }).format(date)
+}
+
+export function formatRelativeDate(value: unknown, locale?: string): string {
+  if (typeof value !== 'string' || value.trim() === '') return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+
+  const diffMs = date.getTime() - Date.now()
+  const absMs = Math.abs(diffMs)
+  const minuteMs = 60 * 1000
+  const hourMs = 60 * minuteMs
+  const dayMs = 24 * hourMs
+
+  if (absMs < minuteMs) {
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(0, 'minute')
+  }
+  if (absMs < hourMs) {
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(Math.round(diffMs / minuteMs), 'minute')
+  }
+  if (absMs < dayMs) {
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(Math.round(diffMs / hourMs), 'hour')
+  }
+  if (absMs < 7 * dayMs) {
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(Math.round(diffMs / dayMs), 'day')
+  }
+
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
   }).format(date)
 }
 
