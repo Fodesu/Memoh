@@ -412,6 +412,23 @@ type OrchestrationArtifact struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type OrchestrationContainerImage struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       string             `json:"tenant_id"`
+	OwnerSubject   string             `json:"owner_subject"`
+	Name           string             `json:"name"`
+	SourceType     string             `json:"source_type"`
+	ImageRef       string             `json:"image_ref"`
+	Dockerfile     string             `json:"dockerfile"`
+	BuildOptions   []byte             `json:"build_options"`
+	Status         string             `json:"status"`
+	Digest         string             `json:"digest"`
+	LastBuildError string             `json:"last_build_error"`
+	Metadata       []byte             `json:"metadata"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OrchestrationEnvBinding struct {
 	ID                  pgtype.UUID        `json:"id"`
 	TenantID            string             `json:"tenant_id"`
@@ -619,6 +636,27 @@ type OrchestrationRun struct {
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
 	FinishedAt             pgtype.Timestamptz `json:"finished_at"`
+}
+
+type OrchestrationSideEffectApprovalToken struct {
+	ID               pgtype.UUID        `json:"id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	AttemptID        pgtype.UUID        `json:"attempt_id"`
+	ClaimEpoch       int64              `json:"claim_epoch"`
+	EnvSessionID     pgtype.UUID        `json:"env_session_id"`
+	EnvLeaseEpoch    int64              `json:"env_lease_epoch"`
+	EffectClass      string             `json:"effect_class"`
+	TokenHash        string             `json:"token_hash"`
+	Status           string             `json:"status"`
+	ApprovedBy       string             `json:"approved_by"`
+	ApprovalReason   string             `json:"approval_reason"`
+	ToolCallID       string             `json:"tool_call_id"`
+	ConsumedActionID pgtype.UUID        `json:"consumed_action_id"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt       pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type OrchestrationTask struct {

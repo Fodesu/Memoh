@@ -109,6 +109,78 @@ func (q *Queries) AllocateOrchestrationRunEventSeqs(ctx context.Context, arg All
 	return last_event_seq, err
 }
 
+const applyOrchestrationRootTaskPlan = `-- name: ApplyOrchestrationRootTaskPlan :one
+UPDATE orchestration_tasks
+SET goal = $1,
+    inputs = $2,
+    worker_profile = $3,
+    priority = $4,
+    retry_policy = $5,
+    verification_policy = $6,
+    env_preconditions = $7,
+    blackboard_scope = $8,
+    status_version = status_version + 1,
+    updated_at = now()
+WHERE id = $9
+  AND status = 'created'
+  AND kind = 'root'
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+`
+
+type ApplyOrchestrationRootTaskPlanParams struct {
+	Goal               string      `json:"goal"`
+	Inputs             []byte      `json:"inputs"`
+	WorkerProfile      string      `json:"worker_profile"`
+	Priority           int32       `json:"priority"`
+	RetryPolicy        []byte      `json:"retry_policy"`
+	VerificationPolicy []byte      `json:"verification_policy"`
+	EnvPreconditions   []byte      `json:"env_preconditions"`
+	BlackboardScope    string      `json:"blackboard_scope"`
+	ID                 pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) ApplyOrchestrationRootTaskPlan(ctx context.Context, arg ApplyOrchestrationRootTaskPlanParams) (OrchestrationTask, error) {
+	row := q.db.QueryRow(ctx, applyOrchestrationRootTaskPlan,
+		arg.Goal,
+		arg.Inputs,
+		arg.WorkerProfile,
+		arg.Priority,
+		arg.RetryPolicy,
+		arg.VerificationPolicy,
+		arg.EnvPreconditions,
+		arg.BlackboardScope,
+		arg.ID,
+	)
+	var i OrchestrationTask
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.DecomposedFromTaskID,
+		&i.Kind,
+		&i.Goal,
+		&i.Inputs,
+		&i.PlannerEpoch,
+		&i.SupersededByPlannerEpoch,
+		&i.WorkerProfile,
+		&i.Priority,
+		&i.RetryPolicy,
+		&i.VerificationPolicy,
+		&i.EnvPreconditions,
+		&i.Status,
+		&i.StatusVersion,
+		&i.WaitingCheckpointID,
+		&i.WaitingScope,
+		&i.LatestResultID,
+		&i.ReadyAt,
+		&i.BlockedReason,
+		&i.TerminalReason,
+		&i.BlackboardScope,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const cancelOrchestrationTaskVerification = `-- name: CancelOrchestrationTaskVerification :one
 UPDATE orchestration_task_verifications
 SET status = 'lost',
@@ -638,6 +710,71 @@ func (q *Queries) CompleteOrchestrationVerificationActionRecord(ctx context.Cont
 	return i, err
 }
 
+const consumeOrchestrationSideEffectApprovalToken = `-- name: ConsumeOrchestrationSideEffectApprovalToken :one
+UPDATE orchestration_side_effect_approval_tokens
+SET status = 'consumed',
+    tool_call_id = $1,
+    consumed_action_id = $2,
+    consumed_at = now(),
+    updated_at = now()
+WHERE token_hash = $3
+  AND attempt_id = $4
+  AND claim_epoch = $5
+  AND effect_class = 'external_irreversible'
+  AND status = 'active'
+  AND (expires_at IS NULL OR expires_at > now())
+  AND (
+    ($6::uuid IS NULL AND env_session_id IS NULL)
+    OR env_session_id = $6
+  )
+  AND env_lease_epoch = $7
+RETURNING id, run_id, task_id, attempt_id, claim_epoch, env_session_id, env_lease_epoch, effect_class, token_hash, status, approved_by, approval_reason, tool_call_id, consumed_action_id, expires_at, consumed_at, created_at, updated_at
+`
+
+type ConsumeOrchestrationSideEffectApprovalTokenParams struct {
+	ToolCallID       string      `json:"tool_call_id"`
+	ConsumedActionID pgtype.UUID `json:"consumed_action_id"`
+	TokenHash        string      `json:"token_hash"`
+	AttemptID        pgtype.UUID `json:"attempt_id"`
+	ClaimEpoch       int64       `json:"claim_epoch"`
+	EnvSessionID     pgtype.UUID `json:"env_session_id"`
+	EnvLeaseEpoch    int64       `json:"env_lease_epoch"`
+}
+
+func (q *Queries) ConsumeOrchestrationSideEffectApprovalToken(ctx context.Context, arg ConsumeOrchestrationSideEffectApprovalTokenParams) (OrchestrationSideEffectApprovalToken, error) {
+	row := q.db.QueryRow(ctx, consumeOrchestrationSideEffectApprovalToken,
+		arg.ToolCallID,
+		arg.ConsumedActionID,
+		arg.TokenHash,
+		arg.AttemptID,
+		arg.ClaimEpoch,
+		arg.EnvSessionID,
+		arg.EnvLeaseEpoch,
+	)
+	var i OrchestrationSideEffectApprovalToken
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.ClaimEpoch,
+		&i.EnvSessionID,
+		&i.EnvLeaseEpoch,
+		&i.EffectClass,
+		&i.TokenHash,
+		&i.Status,
+		&i.ApprovedBy,
+		&i.ApprovalReason,
+		&i.ToolCallID,
+		&i.ConsumedActionID,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const countActiveOrchestrationEnvSessionsByResource = `-- name: CountActiveOrchestrationEnvSessionsByResource :one
 SELECT COUNT(*)::BIGINT AS active_count
 FROM orchestration_env_sessions
@@ -737,6 +874,19 @@ func (q *Queries) CountOpenRunBlockingCheckpointsByRun(ctx context.Context, runI
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countOrchestrationEnvSessionsByResource = `-- name: CountOrchestrationEnvSessionsByResource :one
+SELECT COUNT(*)::BIGINT AS session_count
+FROM orchestration_env_sessions
+WHERE resource_id = $1
+`
+
+func (q *Queries) CountOrchestrationEnvSessionsByResource(ctx context.Context, resourceID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOrchestrationEnvSessionsByResource, resourceID)
+	var session_count int64
+	err := row.Scan(&session_count)
+	return session_count, err
 }
 
 const createCompletedOrchestrationAttemptActionRecord = `-- name: CreateCompletedOrchestrationAttemptActionRecord :one
@@ -983,6 +1133,69 @@ func (q *Queries) CreateOrchestrationAttemptActionRecord(ctx context.Context, ar
 		&i.Summary,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createOrchestrationContainerImage = `-- name: CreateOrchestrationContainerImage :one
+INSERT INTO orchestration_container_images (
+  id, tenant_id, owner_subject, name, source_type, image_ref, dockerfile,
+  build_options, status, digest, last_build_error, metadata
+) VALUES (
+  $1, $2, $3, $4,
+  $5, $6, $7,
+  $8, $9, $10,
+  $11, $12
+)
+RETURNING id, tenant_id, owner_subject, name, source_type, image_ref, dockerfile, build_options, status, digest, last_build_error, metadata, created_at, updated_at
+`
+
+type CreateOrchestrationContainerImageParams struct {
+	ID             pgtype.UUID `json:"id"`
+	TenantID       string      `json:"tenant_id"`
+	OwnerSubject   string      `json:"owner_subject"`
+	Name           string      `json:"name"`
+	SourceType     string      `json:"source_type"`
+	ImageRef       string      `json:"image_ref"`
+	Dockerfile     string      `json:"dockerfile"`
+	BuildOptions   []byte      `json:"build_options"`
+	Status         string      `json:"status"`
+	Digest         string      `json:"digest"`
+	LastBuildError string      `json:"last_build_error"`
+	Metadata       []byte      `json:"metadata"`
+}
+
+func (q *Queries) CreateOrchestrationContainerImage(ctx context.Context, arg CreateOrchestrationContainerImageParams) (OrchestrationContainerImage, error) {
+	row := q.db.QueryRow(ctx, createOrchestrationContainerImage,
+		arg.ID,
+		arg.TenantID,
+		arg.OwnerSubject,
+		arg.Name,
+		arg.SourceType,
+		arg.ImageRef,
+		arg.Dockerfile,
+		arg.BuildOptions,
+		arg.Status,
+		arg.Digest,
+		arg.LastBuildError,
+		arg.Metadata,
+	)
+	var i OrchestrationContainerImage
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.OwnerSubject,
+		&i.Name,
+		&i.SourceType,
+		&i.ImageRef,
+		&i.Dockerfile,
+		&i.BuildOptions,
+		&i.Status,
+		&i.Digest,
+		&i.LastBuildError,
+		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1756,6 +1969,86 @@ func (q *Queries) CreateOrchestrationRun(ctx context.Context, arg CreateOrchestr
 	return i, err
 }
 
+const createOrchestrationSideEffectApprovalToken = `-- name: CreateOrchestrationSideEffectApprovalToken :one
+INSERT INTO orchestration_side_effect_approval_tokens (
+  id,
+  run_id,
+  task_id,
+  attempt_id,
+  claim_epoch,
+  env_session_id,
+  env_lease_epoch,
+  token_hash,
+  approved_by,
+  approval_reason,
+  expires_at
+) VALUES (
+  $1,
+  $2,
+  $3,
+  $4,
+  $5,
+  $6,
+  $7,
+  $8,
+  $9,
+  $10,
+  $11
+) RETURNING id, run_id, task_id, attempt_id, claim_epoch, env_session_id, env_lease_epoch, effect_class, token_hash, status, approved_by, approval_reason, tool_call_id, consumed_action_id, expires_at, consumed_at, created_at, updated_at
+`
+
+type CreateOrchestrationSideEffectApprovalTokenParams struct {
+	ID             pgtype.UUID        `json:"id"`
+	RunID          pgtype.UUID        `json:"run_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	AttemptID      pgtype.UUID        `json:"attempt_id"`
+	ClaimEpoch     int64              `json:"claim_epoch"`
+	EnvSessionID   pgtype.UUID        `json:"env_session_id"`
+	EnvLeaseEpoch  int64              `json:"env_lease_epoch"`
+	TokenHash      string             `json:"token_hash"`
+	ApprovedBy     string             `json:"approved_by"`
+	ApprovalReason string             `json:"approval_reason"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateOrchestrationSideEffectApprovalToken(ctx context.Context, arg CreateOrchestrationSideEffectApprovalTokenParams) (OrchestrationSideEffectApprovalToken, error) {
+	row := q.db.QueryRow(ctx, createOrchestrationSideEffectApprovalToken,
+		arg.ID,
+		arg.RunID,
+		arg.TaskID,
+		arg.AttemptID,
+		arg.ClaimEpoch,
+		arg.EnvSessionID,
+		arg.EnvLeaseEpoch,
+		arg.TokenHash,
+		arg.ApprovedBy,
+		arg.ApprovalReason,
+		arg.ExpiresAt,
+	)
+	var i OrchestrationSideEffectApprovalToken
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.ClaimEpoch,
+		&i.EnvSessionID,
+		&i.EnvLeaseEpoch,
+		&i.EffectClass,
+		&i.TokenHash,
+		&i.Status,
+		&i.ApprovedBy,
+		&i.ApprovalReason,
+		&i.ToolCallID,
+		&i.ConsumedActionID,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createOrchestrationTask = `-- name: CreateOrchestrationTask :one
 INSERT INTO orchestration_tasks (
   id,
@@ -2210,6 +2503,16 @@ func (q *Queries) CreateOrchestrationVerificationActionRecord(ctx context.Contex
 	return i, err
 }
 
+const deleteOrchestrationEnvResource = `-- name: DeleteOrchestrationEnvResource :exec
+DELETE FROM orchestration_env_resources
+WHERE id = $1
+`
+
+func (q *Queries) DeleteOrchestrationEnvResource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteOrchestrationEnvResource, id)
+	return err
+}
+
 const deleteOrchestrationTaskResultByID = `-- name: DeleteOrchestrationTaskResultByID :exec
 DELETE FROM orchestration_task_results
 WHERE id = $1
@@ -2277,6 +2580,40 @@ func (q *Queries) GetDatabaseClockTimestamp(ctx context.Context) (interface{}, e
 	return clock_timestamp, err
 }
 
+const getLatestFailedStartRunPlanningIntentByRun = `-- name: GetLatestFailedStartRunPlanningIntentByRun :one
+SELECT id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
+FROM orchestration_planning_intents
+WHERE run_id = $1
+  AND kind = 'start_run'
+  AND status = 'failed'
+ORDER BY updated_at DESC, id DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestFailedStartRunPlanningIntentByRun(ctx context.Context, runID pgtype.UUID) (OrchestrationPlanningIntent, error) {
+	row := q.db.QueryRow(ctx, getLatestFailedStartRunPlanningIntentByRun, runID)
+	var i OrchestrationPlanningIntent
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.TaskID,
+		&i.CheckpointID,
+		&i.Kind,
+		&i.Status,
+		&i.BasePlannerEpoch,
+		&i.ClaimEpoch,
+		&i.ClaimToken,
+		&i.ClaimedBy,
+		&i.LeaseExpiresAt,
+		&i.LastHeartbeatAt,
+		&i.FailureReason,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getNextOrchestrationTaskAttemptNo = `-- name: GetNextOrchestrationTaskAttemptNo :one
 SELECT COALESCE(MAX(attempt_no), 0)::integer + 1 AS next_attempt_no
 FROM orchestration_task_attempts
@@ -2288,6 +2625,34 @@ func (q *Queries) GetNextOrchestrationTaskAttemptNo(ctx context.Context, taskID 
 	var next_attempt_no int32
 	err := row.Scan(&next_attempt_no)
 	return next_attempt_no, err
+}
+
+const getOrchestrationContainerImageByID = `-- name: GetOrchestrationContainerImageByID :one
+SELECT id, tenant_id, owner_subject, name, source_type, image_ref, dockerfile, build_options, status, digest, last_build_error, metadata, created_at, updated_at
+FROM orchestration_container_images
+WHERE id = $1
+`
+
+func (q *Queries) GetOrchestrationContainerImageByID(ctx context.Context, id pgtype.UUID) (OrchestrationContainerImage, error) {
+	row := q.db.QueryRow(ctx, getOrchestrationContainerImageByID, id)
+	var i OrchestrationContainerImage
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.OwnerSubject,
+		&i.Name,
+		&i.SourceType,
+		&i.ImageRef,
+		&i.Dockerfile,
+		&i.BuildOptions,
+		&i.Status,
+		&i.Digest,
+		&i.LastBuildError,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getOrchestrationEnvBindingByID = `-- name: GetOrchestrationEnvBindingByID :one
@@ -4135,6 +4500,48 @@ func (q *Queries) ListOrchestrationArtifactsByTask(ctx context.Context, taskID p
 	return items, nil
 }
 
+const listOrchestrationContainerImagesByTenant = `-- name: ListOrchestrationContainerImagesByTenant :many
+SELECT id, tenant_id, owner_subject, name, source_type, image_ref, dockerfile, build_options, status, digest, last_build_error, metadata, created_at, updated_at
+FROM orchestration_container_images
+WHERE tenant_id = $1
+ORDER BY name ASC, id ASC
+`
+
+func (q *Queries) ListOrchestrationContainerImagesByTenant(ctx context.Context, tenantID string) ([]OrchestrationContainerImage, error) {
+	rows, err := q.db.Query(ctx, listOrchestrationContainerImagesByTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrchestrationContainerImage
+	for rows.Next() {
+		var i OrchestrationContainerImage
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.OwnerSubject,
+			&i.Name,
+			&i.SourceType,
+			&i.ImageRef,
+			&i.Dockerfile,
+			&i.BuildOptions,
+			&i.Status,
+			&i.Digest,
+			&i.LastBuildError,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrchestrationEnvBindingsByAttempt = `-- name: ListOrchestrationEnvBindingsByAttempt :many
 SELECT id, tenant_id, run_id, task_id, attempt_id, session_id, purpose, status, held_for_checkpoint_id, metadata, released_at, created_at, updated_at
 FROM orchestration_env_bindings
@@ -4542,6 +4949,109 @@ func (q *Queries) ListOrchestrationRunsByBot(ctx context.Context, arg ListOrches
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrchestrationRunsByOwner = `-- name: ListOrchestrationRunsByOwner :many
+SELECT id, tenant_id, owner_subject, lifecycle_status, planning_status, status_version, planner_epoch, last_event_seq, root_task_id, goal, input, output_schema, requested_control_policy, control_policy, source_metadata, policies, created_by, terminal_reason, created_at, updated_at, finished_at
+FROM orchestration_runs
+WHERE tenant_id = $1
+  AND owner_subject = $2
+ORDER BY created_at DESC, id DESC
+LIMIT $3
+`
+
+type ListOrchestrationRunsByOwnerParams struct {
+	TenantID     string `json:"tenant_id"`
+	OwnerSubject string `json:"owner_subject"`
+	LimitCount   int32  `json:"limit_count"`
+}
+
+func (q *Queries) ListOrchestrationRunsByOwner(ctx context.Context, arg ListOrchestrationRunsByOwnerParams) ([]OrchestrationRun, error) {
+	rows, err := q.db.Query(ctx, listOrchestrationRunsByOwner, arg.TenantID, arg.OwnerSubject, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrchestrationRun
+	for rows.Next() {
+		var i OrchestrationRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.OwnerSubject,
+			&i.LifecycleStatus,
+			&i.PlanningStatus,
+			&i.StatusVersion,
+			&i.PlannerEpoch,
+			&i.LastEventSeq,
+			&i.RootTaskID,
+			&i.Goal,
+			&i.Input,
+			&i.OutputSchema,
+			&i.RequestedControlPolicy,
+			&i.ControlPolicy,
+			&i.SourceMetadata,
+			&i.Policies,
+			&i.CreatedBy,
+			&i.TerminalReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrchestrationSideEffectApprovalTokensByAttempt = `-- name: ListOrchestrationSideEffectApprovalTokensByAttempt :many
+SELECT id, run_id, task_id, attempt_id, claim_epoch, env_session_id, env_lease_epoch, effect_class, token_hash, status, approved_by, approval_reason, tool_call_id, consumed_action_id, expires_at, consumed_at, created_at, updated_at
+FROM orchestration_side_effect_approval_tokens
+WHERE attempt_id = $1
+ORDER BY created_at ASC, id ASC
+`
+
+func (q *Queries) ListOrchestrationSideEffectApprovalTokensByAttempt(ctx context.Context, attemptID pgtype.UUID) ([]OrchestrationSideEffectApprovalToken, error) {
+	rows, err := q.db.Query(ctx, listOrchestrationSideEffectApprovalTokensByAttempt, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrchestrationSideEffectApprovalToken
+	for rows.Next() {
+		var i OrchestrationSideEffectApprovalToken
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.TaskID,
+			&i.AttemptID,
+			&i.ClaimEpoch,
+			&i.EnvSessionID,
+			&i.EnvLeaseEpoch,
+			&i.EffectClass,
+			&i.TokenHash,
+			&i.Status,
+			&i.ApprovedBy,
+			&i.ApprovalReason,
+			&i.ToolCallID,
+			&i.ConsumedActionID,
+			&i.ExpiresAt,
+			&i.ConsumedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -6512,6 +7022,63 @@ func (q *Queries) RequeueOrchestrationPlanningIntent(ctx context.Context, arg Re
 	return i, err
 }
 
+const requeueOrchestrationPlanningIntentWithBackoff = `-- name: RequeueOrchestrationPlanningIntentWithBackoff :one
+UPDATE orchestration_planning_intents
+SET status = 'pending',
+    failure_reason = $1,
+    claim_token = '',
+    claimed_by = '',
+    lease_expires_at = CASE
+      WHEN $2::bigint > 0
+      THEN clock_timestamp() + ($2::bigint * interval '1 second')
+      ELSE NULL
+    END,
+    last_heartbeat_at = NULL,
+    updated_at = now()
+WHERE id = $3
+  AND status = 'processing'
+  AND claim_token = $4
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at > clock_timestamp()
+RETURNING id, run_id, task_id, checkpoint_id, kind, status, base_planner_epoch, claim_epoch, claim_token, claimed_by, lease_expires_at, last_heartbeat_at, failure_reason, payload, created_at, updated_at
+`
+
+type RequeueOrchestrationPlanningIntentWithBackoffParams struct {
+	FailureReason  string      `json:"failure_reason"`
+	BackoffSeconds int64       `json:"backoff_seconds"`
+	ID             pgtype.UUID `json:"id"`
+	ClaimToken     string      `json:"claim_token"`
+}
+
+func (q *Queries) RequeueOrchestrationPlanningIntentWithBackoff(ctx context.Context, arg RequeueOrchestrationPlanningIntentWithBackoffParams) (OrchestrationPlanningIntent, error) {
+	row := q.db.QueryRow(ctx, requeueOrchestrationPlanningIntentWithBackoff,
+		arg.FailureReason,
+		arg.BackoffSeconds,
+		arg.ID,
+		arg.ClaimToken,
+	)
+	var i OrchestrationPlanningIntent
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.TaskID,
+		&i.CheckpointID,
+		&i.Kind,
+		&i.Status,
+		&i.BasePlannerEpoch,
+		&i.ClaimEpoch,
+		&i.ClaimToken,
+		&i.ClaimedBy,
+		&i.LeaseExpiresAt,
+		&i.LastHeartbeatAt,
+		&i.FailureReason,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const requeueOrchestrationTaskVerification = `-- name: RequeueOrchestrationTaskVerification :one
 UPDATE orchestration_task_verifications
 SET status = 'created',
@@ -6779,6 +7346,50 @@ func (q *Queries) TryCreateOrchestrationIdempotencyRecord(ctx context.Context, a
 	return i, err
 }
 
+const updateOrchestrationContainerImageBuildResult = `-- name: UpdateOrchestrationContainerImageBuildResult :one
+UPDATE orchestration_container_images
+SET status = $1,
+    digest = $2,
+    last_build_error = $3,
+    updated_at = now()
+WHERE id = $4
+RETURNING id, tenant_id, owner_subject, name, source_type, image_ref, dockerfile, build_options, status, digest, last_build_error, metadata, created_at, updated_at
+`
+
+type UpdateOrchestrationContainerImageBuildResultParams struct {
+	Status         string      `json:"status"`
+	Digest         string      `json:"digest"`
+	LastBuildError string      `json:"last_build_error"`
+	ID             pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateOrchestrationContainerImageBuildResult(ctx context.Context, arg UpdateOrchestrationContainerImageBuildResultParams) (OrchestrationContainerImage, error) {
+	row := q.db.QueryRow(ctx, updateOrchestrationContainerImageBuildResult,
+		arg.Status,
+		arg.Digest,
+		arg.LastBuildError,
+		arg.ID,
+	)
+	var i OrchestrationContainerImage
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.OwnerSubject,
+		&i.Name,
+		&i.SourceType,
+		&i.ImageRef,
+		&i.Dockerfile,
+		&i.BuildOptions,
+		&i.Status,
+		&i.Digest,
+		&i.LastBuildError,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateOrchestrationEnvBindingStatus = `-- name: UpdateOrchestrationEnvBindingStatus :one
 UPDATE orchestration_env_bindings
 SET status = $1,
@@ -6827,16 +7438,18 @@ func (q *Queries) UpdateOrchestrationEnvBindingStatus(ctx context.Context, arg U
 
 const updateOrchestrationEnvResource = `-- name: UpdateOrchestrationEnvResource :one
 UPDATE orchestration_env_resources
-SET config = $1,
-    capacity = $2,
-    status = $3,
-    metadata = $4,
+SET name = $1,
+    config = $2,
+    capacity = $3,
+    status = $4,
+    metadata = $5,
     updated_at = now()
-WHERE id = $5
+WHERE id = $6
 RETURNING id, tenant_id, owner_subject, kind, name, config, capacity, status, metadata, created_at, updated_at
 `
 
 type UpdateOrchestrationEnvResourceParams struct {
+	Name     string      `json:"name"`
 	Config   []byte      `json:"config"`
 	Capacity int32       `json:"capacity"`
 	Status   string      `json:"status"`
@@ -6846,6 +7459,7 @@ type UpdateOrchestrationEnvResourceParams struct {
 
 func (q *Queries) UpdateOrchestrationEnvResource(ctx context.Context, arg UpdateOrchestrationEnvResourceParams) (OrchestrationEnvResource, error) {
 	row := q.db.QueryRow(ctx, updateOrchestrationEnvResource,
+		arg.Name,
 		arg.Config,
 		arg.Capacity,
 		arg.Status,

@@ -17,46 +17,49 @@ const (
 	PlanningStatusIdle   = "idle"
 	PlanningStatusActive = "active"
 
-	PlanningIntentKindStartRun         = "start_run"
-	PlanningIntentKindCheckpointResume = "checkpoint_resume"
-	PlanningIntentKindAttemptFinalize  = "attempt_finalize"
-	PlanningIntentKindReplan           = "replan"
-	PlanningIntentStatusPending        = "pending"
-	PlanningIntentStatusProcessing     = "processing"
-	PlanningIntentStatusCompleted      = "completed"
-	PlanningIntentStatusFailed         = "failed"
-	PlanningIntentDefaultLeaseTTL      = 30 * time.Second
-	TaskAttemptStatusCreated           = "created"
-	TaskAttemptStatusClaimed           = "claimed"
-	TaskAttemptStatusBinding           = "binding"
-	TaskAttemptStatusRunning           = "running"
-	TaskAttemptStatusCompleted         = "completed"
-	TaskAttemptStatusFailed            = "failed"
-	TaskAttemptStatusLost              = "lost"
-	TaskAttemptDefaultLeaseTTL         = 30 * time.Second
-	TaskVerificationStatusCreated      = "created"
-	TaskVerificationStatusClaimed      = "claimed"
-	TaskVerificationStatusRunning      = "running"
-	TaskVerificationStatusCompleted    = "completed"
-	TaskVerificationStatusFailed       = "failed"
-	TaskVerificationStatusLost         = "lost"
-	TaskVerificationDefaultLeaseTTL    = 30 * time.Second
-	VerificationVerdictAccepted        = "accepted"
-	VerificationVerdictRejected        = "rejected"
-	VerificationModeBuiltinBasic       = "builtin_basic"
-	VerificationRejectActionFailTask   = "fail_task"
-	VerificationRejectActionReplan     = "request_replan"
-	VerificationRejectActionRetry      = "retry"
-	WorkerStatusActive                 = "active"
-	WorkerStatusUnavailable            = "unavailable"
-	DefaultWorkerExecutorID            = "builtin.workerd"
-	DefaultWorkerDisplayName           = "Builtin Workerd"
-	DefaultRootWorkerProfile           = "llm.default"
-	BuiltinEchoWorkerProfile           = "builtin.echo"
-	DefaultVerifierExecutorID          = "builtin.verifyd"
-	DefaultVerifierDisplayName         = "Builtin Verifyd"
-	DefaultVerifierProfile             = "llm.verifier"
-	BuiltinBasicVerifierProfile        = "builtin.basic"
+	PlanningIntentKindStartRun              = "start_run"
+	PlanningIntentKindCheckpointResume      = "checkpoint_resume"
+	PlanningIntentKindAttemptFinalize       = "attempt_finalize"
+	PlanningIntentKindReplan                = "replan"
+	PlanningIntentStatusPending             = "pending"
+	PlanningIntentStatusProcessing          = "processing"
+	PlanningIntentStatusCompleted           = "completed"
+	PlanningIntentStatusFailed              = "failed"
+	PlanningIntentDefaultLeaseTTL           = 5 * time.Minute
+	PlanningIntentTransientMaxAttempts      = 6
+	PlanningIntentTransientErrorBaseBackoff = 3 * time.Second
+	PlanningIntentTransientErrorMaxBackoff  = 48 * time.Second
+	TaskAttemptStatusCreated                = "created"
+	TaskAttemptStatusClaimed                = "claimed"
+	TaskAttemptStatusBinding                = "binding"
+	TaskAttemptStatusRunning                = "running"
+	TaskAttemptStatusCompleted              = "completed"
+	TaskAttemptStatusFailed                 = "failed"
+	TaskAttemptStatusLost                   = "lost"
+	TaskAttemptDefaultLeaseTTL              = 30 * time.Second
+	TaskVerificationStatusCreated           = "created"
+	TaskVerificationStatusClaimed           = "claimed"
+	TaskVerificationStatusRunning           = "running"
+	TaskVerificationStatusCompleted         = "completed"
+	TaskVerificationStatusFailed            = "failed"
+	TaskVerificationStatusLost              = "lost"
+	TaskVerificationDefaultLeaseTTL         = 30 * time.Second
+	VerificationVerdictAccepted             = "accepted"
+	VerificationVerdictRejected             = "rejected"
+	VerificationModeBuiltinBasic            = "builtin_basic"
+	VerificationRejectActionFailTask        = "fail_task"
+	VerificationRejectActionReplan          = "request_replan"
+	VerificationRejectActionRetry           = "retry"
+	WorkerStatusActive                      = "active"
+	WorkerStatusUnavailable                 = "unavailable"
+	DefaultWorkerExecutorID                 = "builtin.workerd"
+	DefaultWorkerDisplayName                = "Builtin Workerd"
+	DefaultRootWorkerProfile                = "llm.default"
+	BuiltinEchoWorkerProfile                = "builtin.echo"
+	DefaultVerifierExecutorID               = "builtin.verifyd"
+	DefaultVerifierDisplayName              = "Builtin Verifyd"
+	DefaultVerifierProfile                  = "llm.verifier"
+	BuiltinBasicVerifierProfile             = "builtin.basic"
 
 	TaskStatusCreated      = "created"
 	TaskStatusReady        = "ready"
@@ -321,16 +324,16 @@ const (
 const EnvBindingPurposePrimary = "primary"
 
 // EnvPreconditions is the planner-emitted contract that tells the kernel
-// whether a task depends on a leasable runtime environment (a container or a
-// browser session) and, if so, which env_resource it should lease from. The
-// kernel reserves and binds the session before dispatching the task, captures
-// the resolved lease in the dispatch input manifest, and releases (or holds
-// for HITL) the binding when the attempt completes.
+// whether a task depends on a runtime environment and, if so, which
+// env_resource it should allocate from. Browser envs are not necessarily
+// exclusive resources: mode="context" means an isolated Playwright context on a
+// shared browser backend, while mode="exclusive" reserves a dedicated browser
+// session when the backend supports it.
 //
-// Required=false means the task is purely an LLM step and the kernel must not
-// touch the env manager. Required=true demands Kind ∈ {container, browser}
-// and a non-empty ResourceName. Mode and EffectClass are advisory hints used
-// by Stage 3-F (action ledger) and Stage 3-H (approval tokens for irreversible
+// Required=false means the task is purely an LLM/tool step and the kernel must
+// not touch the env manager. Required=true demands Kind ∈ {container, browser}
+// and a non-empty ResourceName. Mode and EffectClass are advisory hints used by
+// Stage 3-F (action ledger) and Stage 3-H (approval tokens for irreversible
 // side effects).
 type EnvPreconditions struct {
 	Required     bool           `json:"required"`
@@ -346,6 +349,11 @@ type EnvPreconditions struct {
 const (
 	EnvPreconditionsKindContainer = "container"
 	EnvPreconditionsKindBrowser   = "browser"
+)
+
+const (
+	EnvPreconditionsModeContext   = "context"
+	EnvPreconditionsModeExclusive = "exclusive"
 )
 
 // EnvPreconditionsEffect* matches orchestrationenv.EffectClass and the
@@ -364,6 +372,7 @@ type StartRunPlanningInput struct {
 
 type StartRunPlanningResult struct {
 	Summary    string            `json:"summary,omitempty"`
+	RootTask   *PlannedTaskSpec  `json:"root_task,omitempty"`
 	ChildTasks []PlannedTaskSpec `json:"child_tasks"`
 }
 
@@ -415,8 +424,13 @@ type ListBotRunsRequest struct {
 	Limit int `json:"limit"`
 }
 
+type ListRunsRequest struct {
+	Limit int `json:"limit"`
+}
+
 type RunListItem struct {
 	ID              string     `json:"id"`
+	BotID           string     `json:"bot_id,omitempty"`
 	Goal            string     `json:"goal"`
 	LifecycleStatus string     `json:"lifecycle_status"`
 	PlanningStatus  string     `json:"planning_status"`
@@ -723,6 +737,32 @@ type ActionRecord struct {
 	FinishedAt          *time.Time `json:"finished_at,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+type CreateSideEffectApprovalTokenRequest struct {
+	AttemptID      string     `json:"attempt_id"`
+	ApprovedBy     string     `json:"approved_by,omitempty"`
+	ApprovalReason string     `json:"approval_reason,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+}
+
+type SideEffectApprovalToken struct {
+	ID             string     `json:"id"`
+	RunID          string     `json:"run_id"`
+	TaskID         string     `json:"task_id"`
+	AttemptID      string     `json:"attempt_id"`
+	ClaimEpoch     uint64     `json:"claim_epoch"`
+	EnvSessionID   string     `json:"env_session_id,omitempty"`
+	EnvLeaseEpoch  int64      `json:"env_lease_epoch"`
+	EffectClass    string     `json:"effect_class"`
+	Token          string     `json:"token,omitempty"`
+	Status         string     `json:"status"`
+	ApprovedBy     string     `json:"approved_by,omitempty"`
+	ApprovalReason string     `json:"approval_reason,omitempty"`
+	ToolCallID     string     `json:"tool_call_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	ConsumedAt     *time.Time `json:"consumed_at,omitempty"`
 }
 
 type CreateHumanCheckpointResult struct {

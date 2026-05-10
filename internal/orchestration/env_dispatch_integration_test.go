@@ -18,21 +18,23 @@ import (
 // kernel only sees the EnvManager interface declared in types.go and the test
 // substitutes a hand-rolled implementation behind that contract.
 type fakeEnvManager struct {
-	mu                sync.Mutex
-	resource          EnvResourceRef
-	getResourceCalls  []string
-	acquireCalls      []EnvAcquireRequest
-	resumeCalls       []EnvResumeBindingRequest
-	createBindingArgs []EnvCreateBindingRequest
-	snapshotCalls     []EnvCaptureSnapshotRequest
-	releaseBinding    []EnvReleaseBindingRequest
-	holdBinding       []EnvHoldBindingRequest
-	releaseSession    []EnvReleaseSessionRequest
-	nextSessionID     string
-	nextLeaseToken    string
-	nextLeaseEpoch    int64
-	nextBindingID     string
-	heldBinding       *EnvHeldBindingRef
+	mu                 sync.Mutex
+	resource           EnvResourceRef
+	getResourceCalls   []string
+	acquireCalls       []EnvAcquireRequest
+	acquireHook        func(context.Context, EnvAcquireRequest) error
+	resumeCalls        []EnvResumeBindingRequest
+	createBindingArgs  []EnvCreateBindingRequest
+	snapshotCalls      []EnvCaptureSnapshotRequest
+	releaseBinding     []EnvReleaseBindingRequest
+	holdBinding        []EnvHoldBindingRequest
+	releaseSession     []EnvReleaseSessionRequest
+	releaseSessionHook func(context.Context, EnvReleaseSessionRequest) error
+	nextSessionID      string
+	nextLeaseToken     string
+	nextLeaseEpoch     int64
+	nextBindingID      string
+	heldBinding        *EnvHeldBindingRef
 }
 
 func (f *fakeEnvManager) GetEnvResourceByName(_ context.Context, _, name string) (EnvResourceRef, error) {
@@ -54,18 +56,30 @@ func (f *fakeEnvManager) GetHeldEnvBindingForTask(_ context.Context, _, _ string
 	return *f.heldBinding, true, nil
 }
 
-func (f *fakeEnvManager) AcquireEnvSession(_ context.Context, req EnvAcquireRequest) (EnvSessionLease, error) {
+func (f *fakeEnvManager) AcquireEnvSession(ctx context.Context, req EnvAcquireRequest) (EnvSessionLease, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.acquireCalls = append(f.acquireCalls, req)
+	sessionID := f.nextSessionID
+	leaseToken := f.nextLeaseToken
+	leaseEpoch := f.nextLeaseEpoch
+	resourceID := f.resource.ID
+	resourceKind := f.resource.Kind
+	resourceName := f.resource.Name
+	hook := f.acquireHook
+	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, req); err != nil {
+			return EnvSessionLease{}, err
+		}
+	}
 	return EnvSessionLease{
-		SessionID:     f.nextSessionID,
-		ResourceID:    f.resource.ID,
-		ResourceKind:  f.resource.Kind,
-		ResourceName:  f.resource.Name,
-		LeaseToken:    f.nextLeaseToken,
-		LeaseEpoch:    f.nextLeaseEpoch,
-		RuntimeHandle: map[string]any{"socket": "/run/memoh/" + f.nextSessionID + ".sock"},
+		SessionID:     sessionID,
+		ResourceID:    resourceID,
+		ResourceKind:  resourceKind,
+		ResourceName:  resourceName,
+		LeaseToken:    leaseToken,
+		LeaseEpoch:    leaseEpoch,
+		RuntimeHandle: map[string]any{"socket": "/run/memoh/" + sessionID + ".sock"},
 	}, nil
 }
 
@@ -111,10 +125,14 @@ func (f *fakeEnvManager) HoldEnvBinding(_ context.Context, req EnvHoldBindingReq
 	return nil
 }
 
-func (f *fakeEnvManager) ReleaseEnvSession(_ context.Context, req EnvReleaseSessionRequest) error {
+func (f *fakeEnvManager) ReleaseEnvSession(ctx context.Context, req EnvReleaseSessionRequest) error {
 	f.mu.Lock()
+	hook := f.releaseSessionHook
 	defer f.mu.Unlock()
 	f.releaseSession = append(f.releaseSession, req)
+	if hook != nil {
+		return hook(ctx, req)
+	}
 	return nil
 }
 
@@ -308,6 +326,96 @@ func TestIntegrationDispatchAcquiresEnvAndReleasesAfterCompletion(t *testing.T) 
 	}
 	if !kinds["env_acquire"] || !kinds["env_release"] {
 		t.Fatalf("action ledger kinds = %v, want env_acquire and env_release", kinds)
+	}
+}
+
+func TestIntegrationDispatchAcquiresEnvWithoutHoldingTaskLock(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	envManager := newFakeEnvManager("shared-browser", "env-resource-"+uuid.NewString(), EnvPreconditionsKindBrowser)
+	envManager.acquireHook = func(ctx context.Context, req EnvAcquireRequest) error {
+		lockCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		tx, err := pool.Begin(lockCtx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback(lockCtx) }()
+		_, err = tx.Exec(lockCtx, `SELECT id FROM orchestration_tasks WHERE id = $1::uuid FOR UPDATE NOWAIT`, req.TaskID)
+		return err
+	}
+	svc.SetEnvManager(envManager)
+
+	svc.SetStartRunPlanner(fixedStartRunPlanner{
+		result: &StartRunPlanningResult{
+			Summary: "browser env task",
+			ChildTasks: []PlannedTaskSpec{
+				{
+					Alias:         "browse",
+					Kind:          "step",
+					Goal:          "open browser",
+					WorkerProfile: DefaultRootWorkerProfile,
+					EnvPreconditions: EnvPreconditions{
+						Required:     true,
+						Kind:         EnvPreconditionsKindBrowser,
+						ResourceName: "shared-browser",
+					},
+				},
+			},
+		},
+	})
+
+	ctx := context.Background()
+	caller := ControlIdentity{
+		TenantID: "tenant-env-lock-" + uuid.NewString(),
+		Subject:  "subject-env-lock-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "use browser env",
+		BotID:          "bot-" + uuid.NewString(),
+		IdempotencyKey: "start-env-lock-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	processRunPlanningIntent(t, ctx, svc)
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	dispatched, err := dispatchNextReadyTaskForTest(ctx, svc)
+	if err != nil {
+		t.Fatalf("DispatchNextReadyTask() error = %v", err)
+	}
+	if !dispatched {
+		t.Fatal("DispatchNextReadyTask() = false, want true")
+	}
+	if got := len(envManager.acquireCalls); got != 1 {
+		t.Fatalf("AcquireEnvSession call count = %d, want 1", got)
+	}
+}
+
+func TestReleaseEnvAfterFailedDispatchUsesCleanupContext(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+	envManager := newFakeEnvManager("shared-browser", "env-resource-"+uuid.NewString(), EnvPreconditionsKindBrowser)
+	envManager.releaseSessionHook = func(ctx context.Context, _ EnvReleaseSessionRequest) error {
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("release context is canceled: %v", err)
+		}
+		return nil
+	}
+	svc.SetEnvManager(envManager)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.releaseEnvAfterFailedDispatch(ctx, &envCapture{
+		SessionID:  envManager.nextSessionID,
+		LeaseToken: envManager.nextLeaseToken,
+		LeaseEpoch: envManager.nextLeaseEpoch,
+	}, "test_cleanup")
+
+	if got := len(envManager.releaseSession); got != 1 {
+		t.Fatalf("ReleaseEnvSession call count = %d, want 1", got)
 	}
 }
 

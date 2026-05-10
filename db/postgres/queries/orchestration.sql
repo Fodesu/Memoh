@@ -59,6 +59,14 @@ WHERE tenant_id = sqlc.arg(tenant_id)
 ORDER BY created_at DESC, id DESC
 LIMIT sqlc.arg(limit_count);
 
+-- name: ListOrchestrationRunsByOwner :many
+SELECT *
+FROM orchestration_runs
+WHERE tenant_id = sqlc.arg(tenant_id)
+  AND owner_subject = sqlc.arg(owner_subject)
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(limit_count);
+
 -- name: AllocateOrchestrationRunEventSeqs :one
 UPDATE orchestration_runs
 SET last_event_seq = last_event_seq + sqlc.arg(delta)::bigint,
@@ -203,6 +211,23 @@ SELECT *
 FROM orchestration_tasks
 WHERE id = sqlc.arg(id)
 FOR UPDATE;
+
+-- name: ApplyOrchestrationRootTaskPlan :one
+UPDATE orchestration_tasks
+SET goal = sqlc.arg(goal),
+    inputs = sqlc.arg(inputs),
+    worker_profile = sqlc.arg(worker_profile),
+    priority = sqlc.arg(priority),
+    retry_policy = sqlc.arg(retry_policy),
+    verification_policy = sqlc.arg(verification_policy),
+    env_preconditions = sqlc.arg(env_preconditions),
+    blackboard_scope = sqlc.arg(blackboard_scope),
+    status_version = status_version + 1,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND status = 'created'
+  AND kind = 'root'
+RETURNING *;
 
 -- name: ListCurrentOrchestrationTasksByRun :many
 SELECT *
@@ -529,6 +554,15 @@ FROM orchestration_planning_intents
 WHERE run_id = sqlc.arg(run_id)
   AND status IN ('pending', 'processing');
 
+-- name: GetLatestFailedStartRunPlanningIntentByRun :one
+SELECT *
+FROM orchestration_planning_intents
+WHERE run_id = sqlc.arg(run_id)
+  AND kind = 'start_run'
+  AND status = 'failed'
+ORDER BY updated_at DESC, id DESC
+LIMIT 1;
+
 -- name: ListExpiredOrchestrationPlanningIntents :many
 SELECT *
 FROM orchestration_planning_intents
@@ -552,6 +586,26 @@ WHERE id = sqlc.arg(id)
   AND claim_epoch = sqlc.arg(claim_epoch)
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at <= clock_timestamp()
+RETURNING *;
+
+-- name: RequeueOrchestrationPlanningIntentWithBackoff :one
+UPDATE orchestration_planning_intents
+SET status = 'pending',
+    failure_reason = sqlc.arg(failure_reason),
+    claim_token = '',
+    claimed_by = '',
+    lease_expires_at = CASE
+      WHEN sqlc.arg(backoff_seconds)::bigint > 0
+      THEN clock_timestamp() + (sqlc.arg(backoff_seconds)::bigint * interval '1 second')
+      ELSE NULL
+    END,
+    last_heartbeat_at = NULL,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND status = 'processing'
+  AND claim_token = sqlc.arg(claim_token)
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at > clock_timestamp()
 RETURNING *;
 
 -- name: CreateOrchestrationInputManifest :one
@@ -767,6 +821,59 @@ WHERE verification_id = sqlc.arg(verification_id)
   AND tool_call_id = sqlc.arg(tool_call_id)
   AND status = 'running'
 RETURNING *;
+
+-- name: CreateOrchestrationSideEffectApprovalToken :one
+INSERT INTO orchestration_side_effect_approval_tokens (
+  id,
+  run_id,
+  task_id,
+  attempt_id,
+  claim_epoch,
+  env_session_id,
+  env_lease_epoch,
+  token_hash,
+  approved_by,
+  approval_reason,
+  expires_at
+) VALUES (
+  sqlc.arg(id),
+  sqlc.arg(run_id),
+  sqlc.arg(task_id),
+  sqlc.arg(attempt_id),
+  sqlc.arg(claim_epoch),
+  sqlc.arg(env_session_id),
+  sqlc.arg(env_lease_epoch),
+  sqlc.arg(token_hash),
+  sqlc.arg(approved_by),
+  sqlc.arg(approval_reason),
+  sqlc.arg(expires_at)
+) RETURNING *;
+
+-- name: ConsumeOrchestrationSideEffectApprovalToken :one
+UPDATE orchestration_side_effect_approval_tokens
+SET status = 'consumed',
+    tool_call_id = sqlc.arg(tool_call_id),
+    consumed_action_id = sqlc.arg(consumed_action_id),
+    consumed_at = now(),
+    updated_at = now()
+WHERE token_hash = sqlc.arg(token_hash)
+  AND attempt_id = sqlc.arg(attempt_id)
+  AND claim_epoch = sqlc.arg(claim_epoch)
+  AND effect_class = 'external_irreversible'
+  AND status = 'active'
+  AND (expires_at IS NULL OR expires_at > now())
+  AND (
+    (sqlc.arg(env_session_id)::uuid IS NULL AND env_session_id IS NULL)
+    OR env_session_id = sqlc.arg(env_session_id)
+  )
+  AND env_lease_epoch = sqlc.arg(env_lease_epoch)
+RETURNING *;
+
+-- name: ListOrchestrationSideEffectApprovalTokensByAttempt :many
+SELECT *
+FROM orchestration_side_effect_approval_tokens
+WHERE attempt_id = sqlc.arg(attempt_id)
+ORDER BY created_at ASC, id ASC;
 
 -- name: ListCurrentOrchestrationActionRecordsByRun :many
 SELECT *
@@ -1510,6 +1617,38 @@ WHERE tenant_id = sqlc.arg(tenant_id)
   AND idempotency_key = sqlc.arg(idempotency_key)
 RETURNING *;
 
+-- name: CreateOrchestrationContainerImage :one
+INSERT INTO orchestration_container_images (
+  id, tenant_id, owner_subject, name, source_type, image_ref, dockerfile,
+  build_options, status, digest, last_build_error, metadata
+) VALUES (
+  sqlc.arg(id), sqlc.arg(tenant_id), sqlc.arg(owner_subject), sqlc.arg(name),
+  sqlc.arg(source_type), sqlc.arg(image_ref), sqlc.arg(dockerfile),
+  sqlc.arg(build_options), sqlc.arg(status), sqlc.arg(digest),
+  sqlc.arg(last_build_error), sqlc.arg(metadata)
+)
+RETURNING *;
+
+-- name: GetOrchestrationContainerImageByID :one
+SELECT *
+FROM orchestration_container_images
+WHERE id = sqlc.arg(id);
+
+-- name: ListOrchestrationContainerImagesByTenant :many
+SELECT *
+FROM orchestration_container_images
+WHERE tenant_id = sqlc.arg(tenant_id)
+ORDER BY name ASC, id ASC;
+
+-- name: UpdateOrchestrationContainerImageBuildResult :one
+UPDATE orchestration_container_images
+SET status = sqlc.arg(status),
+    digest = sqlc.arg(digest),
+    last_build_error = sqlc.arg(last_build_error),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
 -- name: CreateOrchestrationEnvResource :one
 INSERT INTO orchestration_env_resources (
   id, tenant_id, owner_subject, kind, name, config, capacity, status, metadata
@@ -1538,13 +1677,23 @@ ORDER BY name ASC, id ASC;
 
 -- name: UpdateOrchestrationEnvResource :one
 UPDATE orchestration_env_resources
-SET config = sqlc.arg(config),
+SET name = sqlc.arg(name),
+    config = sqlc.arg(config),
     capacity = sqlc.arg(capacity),
     status = sqlc.arg(status),
     metadata = sqlc.arg(metadata),
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
+
+-- name: CountOrchestrationEnvSessionsByResource :one
+SELECT COUNT(*)::BIGINT AS session_count
+FROM orchestration_env_sessions
+WHERE resource_id = sqlc.arg(resource_id);
+
+-- name: DeleteOrchestrationEnvResource :exec
+DELETE FROM orchestration_env_resources
+WHERE id = sqlc.arg(id);
 
 -- name: CountActiveOrchestrationEnvSessionsByResource :one
 SELECT COUNT(*)::BIGINT AS active_count

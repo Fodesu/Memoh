@@ -20,6 +20,7 @@ import (
 	emailpkg "github.com/memohai/memoh/internal/email"
 	"github.com/memohai/memoh/internal/handlers"
 	"github.com/memohai/memoh/internal/heartbeat"
+	"github.com/memohai/memoh/internal/imagebuild"
 	"github.com/memohai/memoh/internal/mcp"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	"github.com/memohai/memoh/internal/message/event"
@@ -81,6 +82,7 @@ func options() fx.Option {
 			provideOrchestrationEnvBackends,
 			provideOrchestrationEnvManager,
 			provideOrchestrationEnvKernelAdapter,
+			imagebuild.NewService,
 			orchestration.NewService,
 			emailpkg.NewDBOAuthTokenStore,
 			provideEmailRegistry,
@@ -153,6 +155,7 @@ func options() fx.Option {
 			provideServerHandler(handlers.NewSupermarketHandler),
 			provideServerHandler(handlers.NewOrchestrationHandler),
 			provideServerHandler(handlers.NewEnvResourceHandler),
+			provideServerHandler(handlers.NewContainerImageHandler),
 			provideServerHandler(provideWebHandler),
 			provideServer,
 		),

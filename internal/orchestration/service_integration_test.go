@@ -35,6 +35,12 @@ func (p fixedStartRunPlanner) PlanStartRun(context.Context, StartRunPlanningInpu
 	return p.result, p.err
 }
 
+type startRunPlannerFunc func(context.Context, StartRunPlanningInput) (*StartRunPlanningResult, error)
+
+func (f startRunPlannerFunc) PlanStartRun(ctx context.Context, input StartRunPlanningInput) (*StartRunPlanningResult, error) {
+	return f(ctx, input)
+}
+
 type fixedReplanner struct {
 	result *ReplanPlanningResult
 	err    error
@@ -275,6 +281,15 @@ func processRunPlanningIntent(t *testing.T, ctx context.Context, svc *Service) {
 	if !processed {
 		t.Fatal("ProcessNextPlanningIntent() = false, want true")
 	}
+}
+
+func findRunListItem(items []RunListItem, runID string) *RunListItem {
+	for i := range items {
+		if items[i].ID == runID {
+			return &items[i]
+		}
+	}
+	return nil
 }
 
 func createIntegrationChildTask(t *testing.T, ctx context.Context, svc *Service, runID string, goal string, blackboardScope string) string {
@@ -1458,6 +1473,336 @@ func TestIntegrationStartRunPlannerDecomposesRootTaskIntoInitialDAG(t *testing.T
 	}
 }
 
+func TestIntegrationStartRunPlannerRunsWithoutHoldingTaskLock(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	var lockCheckErr error
+	svc.SetStartRunPlanner(startRunPlannerFunc(func(ctx context.Context, input StartRunPlanningInput) (*StartRunPlanningResult, error) {
+		var taskID pgtype.UUID
+		lockCheckErr = pool.QueryRow(ctx, `
+SELECT id
+FROM orchestration_tasks
+WHERE id = $1
+FOR UPDATE NOWAIT
+`, mustParsePGUUID(t, input.RootTask.ID)).Scan(&taskID)
+		return &StartRunPlanningResult{
+			Summary: "no decomposition",
+		}, nil
+	}))
+
+	caller := ControlIdentity{
+		TenantID: "tenant-plan-lock-" + uuid.NewString(),
+		Subject:  "subject-plan-lock-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "planner should not hold task lock",
+		BotID:          "bot-" + uuid.NewString(),
+		IdempotencyKey: "start-plan-lock-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	processRunPlanningIntent(t, ctx, svc)
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	if lockCheckErr != nil {
+		t.Fatalf("planner observed locked root task: %v", lockCheckErr)
+	}
+}
+
+func TestIntegrationStartRunPlannerAppliesRootTaskEnvPlan(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	svc.SetStartRunPlanner(fixedStartRunPlanner{
+		result: &StartRunPlanningResult{
+			Summary: "execute the root task in browser env",
+			RootTask: &PlannedTaskSpec{
+				Goal:          "open github.com and capture a screenshot",
+				WorkerProfile: DefaultRootWorkerProfile,
+				EnvPreconditions: EnvPreconditions{
+					Required:     true,
+					Kind:         EnvPreconditionsKindBrowser,
+					ResourceName: "browser",
+				},
+			},
+			ChildTasks: []PlannedTaskSpec{},
+		},
+	})
+
+	ctx := context.Background()
+	caller := ControlIdentity{
+		TenantID: "tenant-root-env-" + uuid.NewString(),
+		Subject:  "subject-root-env-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "use browser environment to open github.com and capture a screenshot",
+		BotID:          "bot-" + uuid.NewString(),
+		IdempotencyKey: "start-root-env-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	processRunPlanningIntent(t, ctx, svc)
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListRunTasks() error = %v", err)
+	}
+	if len(taskPage.Items) != 1 {
+		t.Fatalf("ListRunTasks() len = %d, want 1", len(taskPage.Items))
+	}
+	rootTask := taskPage.Items[0]
+	if rootTask.Status != TaskStatusReady {
+		t.Fatalf("root task status = %q, want %q", rootTask.Status, TaskStatusReady)
+	}
+	if !rootTask.EnvPreconditions.Required || rootTask.EnvPreconditions.Kind != EnvPreconditionsKindBrowser || rootTask.EnvPreconditions.ResourceName != "browser" {
+		t.Fatalf("root env_preconditions = %#v, want browser resource", rootTask.EnvPreconditions)
+	}
+}
+
+func TestIntegrationStartRunPlannerErrorDoesNotDispatchRootDraft(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	svc.SetStartRunPlanner(fixedStartRunPlanner{
+		err: errors.New("planner upstream unavailable"),
+	})
+
+	ctx := context.Background()
+	caller := ControlIdentity{
+		TenantID: "tenant-root-plan-error-" + uuid.NewString(),
+		Subject:  "subject-root-plan-error-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "use browser environment to open github.com and capture a screenshot",
+		BotID:          "bot-" + uuid.NewString(),
+		IdempotencyKey: "start-root-plan-error-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	processed, err := svc.ProcessNextPlanningIntent(ctx)
+	if err != nil {
+		t.Fatalf("ProcessNextPlanningIntent() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("ProcessNextPlanningIntent() processed = false, want true")
+	}
+
+	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListRunTasks() error = %v", err)
+	}
+	if len(taskPage.Items) != 1 {
+		t.Fatalf("ListRunTasks() len = %d, want 1", len(taskPage.Items))
+	}
+	if taskPage.Items[0].Status != TaskStatusCreated {
+		t.Fatalf("root task status = %q, want %q", taskPage.Items[0].Status, TaskStatusCreated)
+	}
+
+	attempts, err := svc.queries.ListCurrentOrchestrationTaskAttemptsByRun(ctx, mustParsePGUUID(t, handle.RunID))
+	if err != nil {
+		t.Fatalf("ListCurrentOrchestrationTaskAttemptsByRun() error = %v", err)
+	}
+	if len(attempts) != 0 {
+		t.Fatalf("attempt count = %d, want 0", len(attempts))
+	}
+
+	var intentStatus string
+	var failureReason string
+	var leaseExpiresAt time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT status, failure_reason, lease_expires_at
+FROM orchestration_planning_intents
+WHERE run_id = $1
+`, mustParsePGUUID(t, handle.RunID)).Scan(&intentStatus, &failureReason, &leaseExpiresAt); err != nil {
+		t.Fatalf("load planning intent after planner error: %v", err)
+	}
+	if intentStatus != PlanningIntentStatusPending {
+		t.Fatalf("planning intent status = %q, want %q", intentStatus, PlanningIntentStatusPending)
+	}
+	if !strings.Contains(failureReason, "planner upstream unavailable") {
+		t.Fatalf("planning intent failure_reason = %q, want planner upstream error", failureReason)
+	}
+	if !leaseExpiresAt.After(time.Now().Add(-time.Second)) {
+		t.Fatalf("planning intent lease_expires_at = %s, want future retry backoff", leaseExpiresAt)
+	}
+
+	var lifecycleStatus string
+	var planningStatus string
+	if err := pool.QueryRow(ctx, `
+SELECT lifecycle_status, planning_status
+FROM orchestration_runs
+WHERE id = $1
+`, mustParsePGUUID(t, handle.RunID)).Scan(&lifecycleStatus, &planningStatus); err != nil {
+		t.Fatalf("load run after planner error: %v", err)
+	}
+	if lifecycleStatus != LifecycleStatusCreated {
+		t.Fatalf("run lifecycle_status = %q, want %q", lifecycleStatus, LifecycleStatusCreated)
+	}
+	if planningStatus != PlanningStatusIdle {
+		t.Fatalf("run planning_status = %q, want %q", planningStatus, PlanningStatusIdle)
+	}
+
+	var requeuedEventCount int
+	expectedBackoff := planningIntentTransientBackoff(1)
+	if err := pool.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM orchestration_events
+WHERE run_id = $1
+  AND type = 'run.event.planning_intent.requeued'
+  AND payload->>'backoff_seconds' = $2
+  AND payload->>'attempt' = '1'
+`, mustParsePGUUID(t, handle.RunID), strconv.FormatInt(int64(expectedBackoff/time.Second), 10)).Scan(&requeuedEventCount); err != nil {
+		t.Fatalf("count planning intent requeued events: %v", err)
+	}
+	if requeuedEventCount != 1 {
+		t.Fatalf("planning_intent.requeued event count = %d, want 1", requeuedEventCount)
+	}
+
+	var readyEventCount int
+	if err := pool.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM orchestration_events
+WHERE run_id = $1
+  AND type = 'run.event.task.ready'
+`, mustParsePGUUID(t, handle.RunID)).Scan(&readyEventCount); err != nil {
+		t.Fatalf("count task ready events: %v", err)
+	}
+	if readyEventCount != 0 {
+		t.Fatalf("task.ready event count = %d, want 0", readyEventCount)
+	}
+}
+
+func TestIntegrationStartRunPlannerTransientErrorExhaustsRetryLimit(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	svc.SetStartRunPlanner(fixedStartRunPlanner{
+		err: errors.New("planner upstream unavailable"),
+	})
+
+	ctx := context.Background()
+	caller := ControlIdentity{
+		TenantID: "tenant-root-plan-retry-" + uuid.NewString(),
+		Subject:  "subject-root-plan-retry-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "use browser environment to open github.com and capture a screenshot",
+		BotID:          "bot-" + uuid.NewString(),
+		IdempotencyKey: "start-root-plan-retry-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	for attempt := 1; attempt <= PlanningIntentTransientMaxAttempts; attempt++ {
+		processed, err := svc.ProcessNextPlanningIntent(ctx)
+		if err != nil {
+			t.Fatalf("ProcessNextPlanningIntent() attempt %d error = %v", attempt, err)
+		}
+		if !processed {
+			t.Fatalf("ProcessNextPlanningIntent() attempt %d processed = false, want true", attempt)
+		}
+
+		var intentStatus string
+		var claimEpoch int64
+		var failureReason string
+		if err := pool.QueryRow(ctx, `
+SELECT status, claim_epoch, failure_reason
+FROM orchestration_planning_intents
+WHERE run_id = $1
+`, mustParsePGUUID(t, handle.RunID)).Scan(&intentStatus, &claimEpoch, &failureReason); err != nil {
+			t.Fatalf("load planning intent after attempt %d: %v", attempt, err)
+		}
+		if claimEpoch != int64(attempt) {
+			t.Fatalf("planning intent claim_epoch = %d, want %d", claimEpoch, attempt)
+		}
+
+		if attempt < PlanningIntentTransientMaxAttempts {
+			if intentStatus != PlanningIntentStatusPending {
+				t.Fatalf("planning intent status after attempt %d = %q, want %q", attempt, intentStatus, PlanningIntentStatusPending)
+			}
+			expectedBackoff := strconv.FormatInt(int64(planningIntentTransientBackoff(attempt)/time.Second), 10)
+			expectedAttempt := strconv.Itoa(attempt)
+			var requeueEventCount int
+			if err := pool.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM orchestration_events
+WHERE run_id = $1
+  AND type = 'run.event.planning_intent.requeued'
+  AND payload->>'attempt' = $2
+  AND payload->>'backoff_seconds' = $3
+`, mustParsePGUUID(t, handle.RunID), expectedAttempt, expectedBackoff).Scan(&requeueEventCount); err != nil {
+				t.Fatalf("count requeue event for attempt %d: %v", attempt, err)
+			}
+			if requeueEventCount != 1 {
+				t.Fatalf("requeue event count for attempt %d = %d, want 1", attempt, requeueEventCount)
+			}
+			if _, err := pool.Exec(ctx, `
+UPDATE orchestration_planning_intents
+SET lease_expires_at = now() - interval '1 second'
+WHERE run_id = $1
+`, mustParsePGUUID(t, handle.RunID)); err != nil {
+				t.Fatalf("expire backoff after attempt %d: %v", attempt, err)
+			}
+			continue
+		}
+
+		if intentStatus != PlanningIntentStatusFailed {
+			t.Fatalf("planning intent status after final attempt = %q, want %q", intentStatus, PlanningIntentStatusFailed)
+		}
+		if !strings.Contains(failureReason, "failed after") || !strings.Contains(failureReason, "planner upstream unavailable") {
+			t.Fatalf("planning intent failure_reason = %q, want exhausted upstream error", failureReason)
+		}
+	}
+
+	var lifecycleStatus string
+	var planningStatus string
+	var terminalReason string
+	if err := pool.QueryRow(ctx, `
+SELECT lifecycle_status, planning_status, terminal_reason
+FROM orchestration_runs
+WHERE id = $1
+`, mustParsePGUUID(t, handle.RunID)).Scan(&lifecycleStatus, &planningStatus, &terminalReason); err != nil {
+		t.Fatalf("load run after retry exhaustion: %v", err)
+	}
+	if lifecycleStatus != LifecycleStatusFailed {
+		t.Fatalf("run lifecycle_status = %q, want %q", lifecycleStatus, LifecycleStatusFailed)
+	}
+	if planningStatus != PlanningStatusIdle {
+		t.Fatalf("run planning_status = %q, want %q", planningStatus, PlanningStatusIdle)
+	}
+	if !strings.Contains(terminalReason, "failed after") {
+		t.Fatalf("run terminal_reason = %q, want retry exhaustion", terminalReason)
+	}
+
+	var runFailedEventCount int
+	if err := pool.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM orchestration_events
+WHERE run_id = $1
+  AND type = 'run.event.failed'
+  AND payload->>'max_attempts' = $2
+`, mustParsePGUUID(t, handle.RunID), strconv.Itoa(PlanningIntentTransientMaxAttempts)).Scan(&runFailedEventCount); err != nil {
+		t.Fatalf("count run failed events: %v", err)
+	}
+	if runFailedEventCount != 1 {
+		t.Fatalf("run.event.failed event count = %d, want 1", runFailedEventCount)
+	}
+}
+
 func TestIntegrationStartRunPlannerRejectsRuntimeLimitOverflow(t *testing.T) {
 	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
 	defer cleanup()
@@ -1517,6 +1862,103 @@ WHERE run_id = $1
 	}
 	if failedIntentCount != 1 {
 		t.Fatalf("failed planning intent count = %d, want 1", failedIntentCount)
+	}
+
+	inspector, err := svc.GetRunInspector(ctx, caller, handle.RunID)
+	if err != nil {
+		t.Fatalf("GetRunInspector() error = %v", err)
+	}
+	if inspector.Run.LifecycleStatus != LifecycleStatusFailed {
+		t.Fatalf("inspector run lifecycle_status = %q, want %q", inspector.Run.LifecycleStatus, LifecycleStatusFailed)
+	}
+	if !strings.Contains(inspector.Run.TerminalReason, "planned child task count") {
+		t.Fatalf("inspector run terminal_reason = %q, want planner failure", inspector.Run.TerminalReason)
+	}
+
+	runPage, err := svc.ListRuns(ctx, caller, ListRunsRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	listedRun := findRunListItem(runPage.Items, handle.RunID)
+	if listedRun == nil {
+		t.Fatalf("ListRuns() did not include run %s", handle.RunID)
+	}
+	if listedRun.LifecycleStatus != LifecycleStatusFailed {
+		t.Fatalf("listed run lifecycle_status = %q, want %q", listedRun.LifecycleStatus, LifecycleStatusFailed)
+	}
+}
+
+func TestIntegrationFailedStartRunPlanningIntentReadAsFailedRun(t *testing.T) {
+	svc, pool, cleanup := setupOrchestrationIntegrationTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	caller := ControlIdentity{
+		TenantID: "tenant-legacy-plan-failed-" + uuid.NewString(),
+		Subject:  "subject-legacy-plan-failed-" + uuid.NewString(),
+	}
+	handle, err := svc.StartRun(ctx, caller, StartRunRequest{
+		Goal:           "legacy planner failure should not look pending",
+		BotID:          "bot-" + uuid.NewString(),
+		IdempotencyKey: "legacy-plan-failed-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	defer cleanupOrchestrationIntegrationRun(t, ctx, pool, handle.RunID)
+	defer cleanupOrchestrationIntegrationIdempotency(t, ctx, pool, caller.TenantID, caller.Subject)
+
+	if _, err := pool.Exec(ctx, `
+UPDATE orchestration_planning_intents
+SET status = $2,
+    failure_reason = 'planner rejected root plan',
+    claim_token = '',
+    claimed_by = '',
+    lease_expires_at = NULL,
+    updated_at = now()
+WHERE run_id = $1
+`, mustParsePGUUID(t, handle.RunID), PlanningIntentStatusFailed); err != nil {
+		t.Fatalf("mark planning intent failed: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE orchestration_runs
+SET lifecycle_status = $2,
+    planning_status = $3,
+    terminal_reason = '',
+    finished_at = NULL,
+    updated_at = now()
+WHERE id = $1
+`, mustParsePGUUID(t, handle.RunID), LifecycleStatusCreated, PlanningStatusIdle); err != nil {
+		t.Fatalf("restore legacy pending-looking run: %v", err)
+	}
+
+	inspector, err := svc.GetRunInspector(ctx, caller, handle.RunID)
+	if err != nil {
+		t.Fatalf("GetRunInspector() error = %v", err)
+	}
+	if inspector.Run.LifecycleStatus != LifecycleStatusFailed {
+		t.Fatalf("inspector run lifecycle_status = %q, want %q", inspector.Run.LifecycleStatus, LifecycleStatusFailed)
+	}
+	if inspector.Run.PlanningStatus != PlanningStatusIdle {
+		t.Fatalf("inspector run planning_status = %q, want %q", inspector.Run.PlanningStatus, PlanningStatusIdle)
+	}
+	if !strings.Contains(inspector.Run.TerminalReason, "planner rejected root plan") {
+		t.Fatalf("inspector run terminal_reason = %q, want failed planning intent reason", inspector.Run.TerminalReason)
+	}
+
+	runPage, err := svc.ListRuns(ctx, caller, ListRunsRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	listedRun := findRunListItem(runPage.Items, handle.RunID)
+	if listedRun == nil {
+		t.Fatalf("ListRuns() did not include run %s", handle.RunID)
+	}
+	if listedRun.LifecycleStatus != LifecycleStatusFailed {
+		t.Fatalf("listed run lifecycle_status = %q, want %q", listedRun.LifecycleStatus, LifecycleStatusFailed)
+	}
+	if !strings.Contains(listedRun.TerminalReason, "planner rejected root plan") {
+		t.Fatalf("listed run terminal_reason = %q, want failed planning intent reason", listedRun.TerminalReason)
 	}
 }
 

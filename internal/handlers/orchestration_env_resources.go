@@ -18,6 +18,7 @@ import (
 type envResourceAPI interface {
 	RegisterResource(ctx context.Context, req orchestrationenv.RegisterResourceRequest) (*orchestrationenv.Resource, error)
 	UpdateResource(ctx context.Context, req orchestrationenv.UpdateResourceRequest) (*orchestrationenv.Resource, error)
+	DeleteResource(ctx context.Context, id string) error
 	GetResource(ctx context.Context, id string) (*orchestrationenv.Resource, error)
 	ListResources(ctx context.Context, tenantID string) ([]orchestrationenv.Resource, error)
 }
@@ -48,6 +49,7 @@ func (h *EnvResourceHandler) Register(e *echo.Echo) {
 	group.POST("", h.RegisterEnvResource)
 	group.GET("/:id", h.GetEnvResource)
 	group.PATCH("/:id", h.UpdateEnvResource)
+	group.DELETE("/:id", h.DeleteEnvResource)
 }
 
 // EnvResourceView is the JSON projection returned by the admin API.
@@ -82,6 +84,7 @@ type EnvResourceCreateRequest struct {
 
 // EnvResourceUpdateRequest is the admin payload for PATCH.
 type EnvResourceUpdateRequest struct {
+	Name     string         `json:"name" validate:"required"`
 	Capacity int            `json:"capacity"`
 	Config   map[string]any `json:"config"`
 	Metadata map[string]any `json:"metadata"`
@@ -222,6 +225,7 @@ func (h *EnvResourceHandler) UpdateEnvResource(c echo.Context) error {
 	}
 	updated, err := h.api.UpdateResource(c.Request().Context(), orchestrationenv.UpdateResourceRequest{
 		ID:       id,
+		Name:     strings.TrimSpace(req.Name),
 		Config:   req.Config,
 		Capacity: req.Capacity,
 		Status:   strings.TrimSpace(req.Status),
@@ -233,6 +237,40 @@ func (h *EnvResourceHandler) UpdateEnvResource(c echo.Context) error {
 	return c.JSON(http.StatusOK, projectEnvResourceView(*updated))
 }
 
+// DeleteEnvResource godoc
+// @Summary Delete an orchestration env resource
+// @Description Delete an unused env resource template. Resources with session history must be archived instead.
+// @Tags orchestration
+// @Security BearerAuth
+// @Param id path string true "Env resource ID"
+// @Success 204
+// @Failure 401 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /orchestration/env-resources/{id} [delete].
+func (h *EnvResourceHandler) DeleteEnvResource(c echo.Context) error {
+	caller, err := controlIdentity(c)
+	if err != nil {
+		return err
+	}
+	if h.api == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "env resource not found")
+	}
+	id := strings.TrimSpace(c.Param("id"))
+	current, err := h.api.GetResource(c.Request().Context(), id)
+	if err != nil {
+		return h.envHTTPError(err)
+	}
+	if current.TenantID != caller.TenantID {
+		return echo.NewHTTPError(http.StatusNotFound, "env resource not found")
+	}
+	if err := h.api.DeleteResource(c.Request().Context(), id); err != nil {
+		return h.envHTTPError(err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (h *EnvResourceHandler) envHTTPError(err error) error {
 	switch {
 	case err == nil:
@@ -241,6 +279,8 @@ func (h *EnvResourceHandler) envHTTPError(err error) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	case errors.Is(err, orchestrationenv.ErrResourceNotFound):
 		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, orchestrationenv.ErrResourceInUse):
+		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	default:
 		h.logger.Error("orchestration env resource handler error", slog.String("error", err.Error()))
 		return echo.NewHTTPError(http.StatusInternalServerError, "internal orchestration env error")

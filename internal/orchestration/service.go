@@ -163,6 +163,10 @@ func (s *Service) notifyEventCommitted() { //nolint:unused // wired in follow-up
 }
 
 func (s *Service) StartRun(ctx context.Context, caller ControlIdentity, req StartRunRequest) (RunHandle, error) {
+	return s.CreateRun(ctx, caller, req)
+}
+
+func (s *Service) CreateRun(ctx context.Context, caller ControlIdentity, req StartRunRequest) (RunHandle, error) {
 	var err error
 	caller, err = normalizeControlIdentity(caller)
 	if err != nil {
@@ -406,9 +410,71 @@ func (s *Service) ListBotRuns(ctx context.Context, caller ControlIdentity, botID
 	}
 	items := make([]RunListItem, 0, len(rows))
 	for _, row := range rows {
+		row, err = s.effectiveRunForRead(ctx, s.queries, row)
+		if err != nil {
+			return nil, err
+		}
 		items = append(items, toRunListItem(row))
 	}
 	return &RunListPage{Items: items}, nil
+}
+
+func (s *Service) ListRuns(ctx context.Context, caller ControlIdentity, req ListRunsRequest) (*RunListPage, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	limitCount, err := int32FromInt(normalizedListLimit(req.Limit), "run list limit")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListOrchestrationRunsByOwner(ctx, sqlc.ListOrchestrationRunsByOwnerParams{
+		TenantID:     caller.TenantID,
+		OwnerSubject: caller.Subject,
+		LimitCount:   limitCount,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration runs: %w", err)
+	}
+	items := make([]RunListItem, 0, len(rows))
+	for _, row := range rows {
+		row, err = s.effectiveRunForRead(ctx, s.queries, row)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, toRunListItem(row))
+	}
+	return &RunListPage{Items: items}, nil
+}
+
+func (*Service) effectiveRunForRead(ctx context.Context, qtx *sqlc.Queries, row sqlc.OrchestrationRun) (sqlc.OrchestrationRun, error) {
+	if row.LifecycleStatus != LifecycleStatusCreated {
+		return row, nil
+	}
+	activeIntents, err := qtx.CountActiveOrchestrationPlanningIntentsByRun(ctx, row.ID)
+	if err != nil {
+		return row, fmt.Errorf("count active planning intents for run read: %w", err)
+	}
+	if activeIntents > 0 {
+		return row, nil
+	}
+	failedIntent, err := qtx.GetLatestFailedStartRunPlanningIntentByRun(ctx, row.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return row, nil
+		}
+		return row, fmt.Errorf("get failed start-run planning intent for run read: %w", err)
+	}
+	row.LifecycleStatus = LifecycleStatusFailed
+	row.PlanningStatus = PlanningStatusIdle
+	row.TerminalReason = strings.TrimSpace(failedIntent.FailureReason)
+	if row.TerminalReason == "" {
+		row.TerminalReason = "start-run planner failed"
+	}
+	row.FinishedAt = failedIntent.UpdatedAt
+	row.UpdatedAt = failedIntent.UpdatedAt
+	return row, nil
 }
 
 func (s *Service) GetRunSnapshotAtSeq(ctx context.Context, caller ControlIdentity, runID string, asOfSeq uint64) (*RunSnapshot, error) {
@@ -479,6 +545,10 @@ func (s *Service) GetRunInspector(ctx context.Context, caller ControlIdentity, r
 	}
 	if err := authorizeRun(caller, row); err != nil {
 		return nil, ErrRunNotFound
+	}
+	row, err = s.effectiveRunForRead(ctx, qtx, row)
+	if err != nil {
+		return nil, err
 	}
 	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
 	if err != nil {
@@ -4616,6 +4686,7 @@ func toTask(row sqlc.OrchestrationTask) Task {
 func toRunListItem(row sqlc.OrchestrationRun) RunListItem {
 	return RunListItem{
 		ID:              row.ID.String(),
+		BotID:           stringFromJSONField(row.SourceMetadata, "bot_id"),
 		Goal:            row.Goal,
 		LifecycleStatus: row.LifecycleStatus,
 		PlanningStatus:  row.PlanningStatus,
@@ -4625,6 +4696,18 @@ func toRunListItem(row sqlc.OrchestrationRun) RunListItem {
 		UpdatedAt:       db.TimeFromPg(row.UpdatedAt),
 		FinishedAt:      optionalTime(db.TimeFromPg(row.FinishedAt)),
 	}
+}
+
+func stringFromJSONField(raw []byte, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	value, _ := obj[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func toTaskDependency(row sqlc.OrchestrationTaskDependency) TaskDependency {

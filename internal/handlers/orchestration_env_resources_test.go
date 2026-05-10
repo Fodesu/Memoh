@@ -22,6 +22,7 @@ type fakeEnvResourceAPI struct {
 	updated     []orchestrationenv.UpdateResourceRequest
 	getCalls    []string
 	listCalls   []string
+	deleteCalls []string
 	registerOut *orchestrationenv.Resource
 	updateOut   *orchestrationenv.Resource
 	getOut      *orchestrationenv.Resource
@@ -30,6 +31,7 @@ type fakeEnvResourceAPI struct {
 	updateErr   error
 	getErr      error
 	listErr     error
+	deleteErr   error
 }
 
 func (f *fakeEnvResourceAPI) RegisterResource(_ context.Context, req orchestrationenv.RegisterResourceRequest) (*orchestrationenv.Resource, error) {
@@ -40,6 +42,11 @@ func (f *fakeEnvResourceAPI) RegisterResource(_ context.Context, req orchestrati
 func (f *fakeEnvResourceAPI) UpdateResource(_ context.Context, req orchestrationenv.UpdateResourceRequest) (*orchestrationenv.Resource, error) {
 	f.updated = append(f.updated, req)
 	return f.updateOut, f.updateErr
+}
+
+func (f *fakeEnvResourceAPI) DeleteResource(_ context.Context, id string) error {
+	f.deleteCalls = append(f.deleteCalls, id)
+	return f.deleteErr
 }
 
 func (f *fakeEnvResourceAPI) GetResource(_ context.Context, id string) (*orchestrationenv.Resource, error) {
@@ -68,10 +75,11 @@ func TestEnvResourceHandlerRegistersRoutes(t *testing.T) {
 	handler.Register(e)
 
 	want := map[string]string{
-		http.MethodGet + " " + "/orchestration/env-resources":       "",
-		http.MethodPost + " " + "/orchestration/env-resources":      "",
-		http.MethodGet + " " + "/orchestration/env-resources/:id":   "",
-		http.MethodPatch + " " + "/orchestration/env-resources/:id": "",
+		http.MethodGet + " " + "/orchestration/env-resources":        "",
+		http.MethodPost + " " + "/orchestration/env-resources":       "",
+		http.MethodGet + " " + "/orchestration/env-resources/:id":    "",
+		http.MethodPatch + " " + "/orchestration/env-resources/:id":  "",
+		http.MethodDelete + " " + "/orchestration/env-resources/:id": "",
 	}
 	for _, route := range e.Routes() {
 		key := route.Method + " " + route.Path

@@ -35,4 +35,5 @@ var (
 	ErrSessionTerminal    = errors.New("env: session is in a terminal state")
 	ErrBindingTerminal    = errors.New("env: binding is in a terminal state")
 	ErrBackendUnavailable = errors.New("env: backend not registered for kind")
+	ErrResourceInUse      = errors.New("env: resource is in use")
 )

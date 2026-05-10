@@ -246,6 +246,28 @@ func TestPlannedChildTasksFromSpecsNormalizesDefaults(t *testing.T) {
 	}
 }
 
+func TestPlannedChildTasksFromSpecsPreservesBrowserEnv(t *testing.T) {
+	t.Parallel()
+
+	plans, err := plannedChildTasksFromSpecs([]PlannedTaskSpec{
+		{
+			Goal: "open page",
+			EnvPreconditions: EnvPreconditions{
+				Required:     true,
+				Kind:         EnvPreconditionsKindBrowser,
+				ResourceName: "browser",
+				Mode:         EnvPreconditionsModeContext,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("plannedChildTasksFromSpecs() error = %v", err)
+	}
+	if !plans[0].EnvPreconditions.Required || plans[0].EnvPreconditions.Kind != EnvPreconditionsKindBrowser || plans[0].EnvPreconditions.Mode != EnvPreconditionsModeContext {
+		t.Fatalf("env_preconditions = %#v, want browser context env", plans[0].EnvPreconditions)
+	}
+}
+
 func TestNormalizeInjectRunHintRequestRejectsEmptyReplacementPlan(t *testing.T) {
 	t.Parallel()
 
