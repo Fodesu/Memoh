@@ -78,6 +78,7 @@ export interface ChatAssistantTurn {
   platform?: string
   externalMessageId?: string
   streaming: boolean
+  localOnly?: boolean
 }
 
 export interface BackgroundTask {
@@ -627,6 +628,18 @@ export const useChatStore = defineStore('chat', () => {
     if (key) sessionMessageStates.delete(key)
   }
 
+  function isLocalOnlyAssistantTurn(message: ChatMessage): message is ChatAssistantTurn {
+    return message.role === 'assistant' && message.localOnly === true
+  }
+
+  function replaceMessagesPreservingLocalOnly(items: UITurn[]) {
+    const localOnlyTurns = messages.filter(isLocalOnlyAssistantTurn)
+    replaceMessages(items)
+    if (localOnlyTurns.length) {
+      messages.push(...localOnlyTurns)
+    }
+  }
+
   function createCompletionForAssistantTurn(assistantTurn: ChatAssistantTurn): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       pendingAssistantStream = {
@@ -722,11 +735,24 @@ export const useChatStore = defineStore('chat', () => {
     ephemeralAssistantErrors.set(sid, [...current, text].slice(-5))
   }
 
-  function appendAssistantError(session: PendingAssistantStream, errorMessage: string) {
+  function appendAssistantError(session: Pick<PendingAssistantStream, 'assistantTurn'>, errorMessage: string) {
     const text = errorMessage.trim()
     if (!text) return
 
     rememberAssistantError(text)
+    session.assistantTurn.localOnly = true
+
+    for (let index = session.assistantTurn.messages.length - 1; index >= 0; index -= 1) {
+      const current = session.assistantTurn.messages[index]
+      if (current?.type === 'text') {
+        session.assistantTurn.messages[index] = {
+          ...current,
+          content: `${current.content}\n\n**Error:** ${text}`.trim(),
+        }
+        return
+      }
+    }
+
     session.assistantTurn.messages.push({
       id: nextAssistantMessageId(session.assistantTurn),
       type: 'error',
@@ -839,6 +865,8 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         cacheFetchedMessages(bid, sid, normalized, moreOlder)
       }
+      if (currentBotId.value !== bid || sessionId.value !== sid) return
+      replaceMessagesPreservingLocalOnly(turns)
       touchSession(sid)
       const streamStillActive = streamingSessionId.value === sid && pendingAssistantStream && !pendingAssistantStream.done
       if (!streamStillActive && pendingAssistantStream) {
@@ -1346,8 +1374,16 @@ export const useChatStore = defineStore('chat', () => {
         }
       } else if (!isAbort && assistantTurn && stage === 'stream') {
         if (!assistantTurn.messages.some(block => block.type === 'error')) {
-          appendAssistantError({ assistantTurn, done: false, resolve: () => {}, reject: () => {} }, reason)
+          appendAssistantError({ assistantTurn }, reason)
         }
+      }
+      if (!isAbort && assistantTurn) {
+        assistantTurn.localOnly = true
+        assistantTurn.messages = [{
+          id: 0,
+          type: 'text',
+          content: `Failed to send message: ${reason}`,
+        }]
         assistantTurn.streaming = false
       } else if (!isAbort) {
         messages.push({
@@ -1360,6 +1396,7 @@ export const useChatStore = defineStore('chat', () => {
           }],
           timestamp: new Date().toISOString(),
           streaming: false,
+          localOnly: true,
         })
       }
       pendingAssistantStream = null

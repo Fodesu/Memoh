@@ -28,12 +28,67 @@ const routes = [
           breadcrumb: i18nRef('sidebar.chat'),
         },
       },
+    ],
+  },
+  {
+    path: '/orchestration',
+    component: () => import('@/pages/orchestration-section/index.vue'),
+    redirect: '/orchestration/runs',
+    children: [
       {
         name: 'orchestration',
-        path: '/orchestration',
+        path: 'runs',
         component: () => import('@/pages/orchestration/index.vue'),
         meta: {
           breadcrumb: i18nRef('sidebar.orchestration'),
+        },
+      },
+      {
+        name: 'orchestration-env-resources',
+        path: 'env-resources',
+        component: () => import('@/pages/orchestration/env-resources.vue'),
+        meta: {
+          breadcrumb: i18nRef('orchestration.envResources'),
+        },
+      },
+      {
+        name: 'orchestration-env-resources-new',
+        path: 'env-resources/new',
+        component: () => import('@/pages/orchestration/env-resource-new.vue'),
+        meta: {
+          breadcrumb: i18nRef('orchestration.addEnv'),
+        },
+      },
+      {
+        name: 'orchestration-env-resource-detail',
+        path: 'env-resources/:id',
+        component: () => import('@/pages/orchestration/env-resource-detail.vue'),
+        meta: {
+          breadcrumb: i18nRef('orchestration.editEnv'),
+        },
+      },
+      {
+        name: 'orchestration-images',
+        path: 'images',
+        component: () => import('@/pages/orchestration/images.vue'),
+        meta: {
+          breadcrumb: i18nRef('orchestration.images'),
+        },
+      },
+      {
+        name: 'orchestration-images-new',
+        path: 'images/new',
+        component: () => import('@/pages/orchestration/image-new.vue'),
+        meta: {
+          breadcrumb: i18nRef('orchestration.addImage'),
+        },
+      },
+      {
+        name: 'orchestration-image-detail',
+        path: 'images/:id',
+        component: () => import('@/pages/orchestration/image-detail.vue'),
+        meta: {
+          breadcrumb: i18nRef('orchestration.imageDetail'),
         },
       },
     ],
