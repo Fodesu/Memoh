@@ -137,7 +137,7 @@ export function useOrchestrationMeta() {
         return {
           icon: Sparkles,
           label: t('orchestration.flowPlanning'),
-          color: 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+          color: 'border-border bg-background text-foreground',
         }
       case 'replanning':
         return {

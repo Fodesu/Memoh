@@ -621,9 +621,9 @@ function kindMeta(kind: NodeKind): { label: string, icon: LucideIcon, color: str
     case 'trigger':
       return { label: t('orchestration.nodeKindTrigger'), icon: PlayCircle, color: 'text-emerald-600 bg-emerald-500/10 border-emerald-500/20' }
     case 'llm':
-      return { label: t('orchestration.nodeKindLlm'), icon: Bot, color: 'text-violet-600 bg-violet-500/10 border-violet-500/20' }
+      return { label: t('orchestration.nodeKindLlm'), icon: Bot, color: 'border-border bg-background text-foreground' }
     case 'planner':
-      return { label: t('orchestration.nodeKindPlanner'), icon: Sparkles, color: 'text-purple-600 bg-purple-500/10 border-purple-500/20' }
+      return { label: t('orchestration.nodeKindPlanner'), icon: Sparkles, color: 'border-border bg-muted/45 text-foreground' }
     case 'search':
       return { label: t('orchestration.nodeKindSearch'), icon: Search, color: 'text-sky-600 bg-sky-500/10 border-sky-500/20' }
     case 'memory':
@@ -1045,7 +1045,7 @@ async function copyTextToClipboard(value: string) {
   <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
     <header class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4">
       <div class="flex min-w-0 items-center gap-3">
-        <div class="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+        <div class="flex size-8 items-center justify-center rounded-lg border border-border bg-card text-foreground shadow-sm">
           <Workflow class="size-4" />
         </div>
         <div class="min-w-0">
@@ -1084,7 +1084,7 @@ async function copyTextToClipboard(value: string) {
                 :key="bot.id"
                 type="button"
                 class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs hover:bg-muted/60"
-                :class="bot.id === selectedBotId ? 'bg-primary/8 text-primary' : ''"
+                :class="bot.id === selectedBotId ? 'bg-accent text-accent-foreground' : ''"
                 @click="selectBot(bot.id)"
               >
                 <CheckCircle2
@@ -1134,7 +1134,7 @@ async function copyTextToClipboard(value: string) {
                 :key="run.id"
                 type="button"
                 class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs hover:bg-muted/60"
-                :class="run.id === selectedRunId ? 'bg-primary/8 text-primary' : ''"
+                :class="run.id === selectedRunId ? 'bg-accent text-accent-foreground' : ''"
                 @click="selectRun(run.id)"
               >
                 <CheckCircle2
@@ -1274,8 +1274,8 @@ async function copyTextToClipboard(value: string) {
                 type="button"
                 class="w-full rounded-lg px-2.5 py-2 text-left shadow-[0_0.6px_0.7px_hsl(var(--foreground)/0.04),0_1.8px_2.2px_-0.5px_hsl(var(--foreground)/0.05),0_5px_8px_-1px_hsl(var(--foreground)/0.06),0_14px_24px_-2px_hsl(var(--foreground)/0.07)] transition-colors hover:bg-muted/40 hover:shadow-[0_0.7px_0.8px_hsl(var(--foreground)/0.05),0_2.4px_3px_-0.5px_hsl(var(--foreground)/0.06),0_7px_11px_-1px_hsl(var(--foreground)/0.07),0_18px_32px_-2px_hsl(var(--foreground)/0.09)]"
                 :class="[
-                  task.id === selectedTaskId ? 'bg-primary/6 shadow-[0_0.8px_1px_hsl(var(--foreground)/0.05),0_3px_5px_-0.5px_hsl(var(--primary)/0.08),0_10px_18px_-1px_hsl(var(--primary)/0.10),0_24px_44px_-3px_hsl(var(--primary)/0.12)]' : statusMeta(task.status).task,
-                  rootHasChildren && task.id === rootTaskId ? 'bg-primary/4' : '',
+                  task.id === selectedTaskId ? 'border-primary/30 bg-primary/8 shadow-[0_1px_2px_hsl(var(--foreground)/0.06),0_4px_10px_-3px_hsl(var(--primary)/0.22),0_14px_28px_-10px_hsl(var(--primary)/0.28)]' : statusMeta(task.status).task,
+                  rootHasChildren && task.id === rootTaskId && task.id !== selectedTaskId ? 'bg-muted/35' : '',
                 ]"
                 @click="selectTaskFromList(task)"
               >
@@ -1329,7 +1329,7 @@ async function copyTextToClipboard(value: string) {
               <button
                 type="button"
                 class="inline-flex cursor-pointer items-center gap-1 rounded px-2.5 py-1 transition-colors"
-                :class="runViewMode === 'dag' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
+                :class="runViewMode === 'dag' ? 'bg-card font-medium text-foreground shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.14),0_1px_2px_hsl(var(--foreground)/0.08),0_4px_10px_-4px_hsl(var(--foreground)/0.18)]' : 'text-muted-foreground hover:text-foreground'"
                 :aria-pressed="runViewMode === 'dag'"
                 @click="setRunViewMode('dag')"
               >
@@ -1339,7 +1339,7 @@ async function copyTextToClipboard(value: string) {
               <button
                 type="button"
                 class="inline-flex cursor-pointer items-center gap-1 rounded px-2.5 py-1 transition-colors"
-                :class="runViewMode === 'flow' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
+                :class="runViewMode === 'flow' ? 'bg-card font-medium text-foreground shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.14),0_1px_2px_hsl(var(--foreground)/0.08),0_4px_10px_-4px_hsl(var(--foreground)/0.18)]' : 'text-muted-foreground hover:text-foreground'"
                 :aria-pressed="runViewMode === 'flow'"
                 @click="setRunViewMode('flow')"
               >
@@ -1431,7 +1431,7 @@ async function copyTextToClipboard(value: string) {
                   type="button"
                   class="px-2 py-2 transition-colors"
                   :class="selectedInspectorTab === tab.key
-                    ? 'border-b border-primary font-medium text-primary'
+                    ? 'border-b border-foreground font-medium text-foreground'
                     : 'text-muted-foreground hover:text-foreground'"
                   @click="selectedInspectorTab = tab.key"
                 >
@@ -1473,7 +1473,7 @@ async function copyTextToClipboard(value: string) {
                 </p>
                 <div class="rounded-lg border border-border/70 bg-background px-3 py-2">
                   <div class="flex items-center gap-2">
-                    <Search class="size-3.5 text-primary" />
+                    <Search class="size-3.5 text-muted-foreground" />
                     <div class="min-w-0">
                       <p class="truncate text-[11px] font-medium">
                         {{ compactTaskTitle(inspector.run.goal, inspector.run.id) }}
@@ -1680,7 +1680,7 @@ async function copyTextToClipboard(value: string) {
                       <button
                         v-for="task in upstreamTasks(selectedTask.id)"
                         :key="task.id"
-                        class="rounded border border-primary/20 bg-primary/8 px-2 py-0.5 text-primary"
+                        class="rounded border border-border bg-muted/35 px-2 py-0.5 text-foreground"
                         @click="selectTask(task.id)"
                       >
                         {{ compactTaskLabel(task.goal, task.id) }}
@@ -1699,7 +1699,7 @@ async function copyTextToClipboard(value: string) {
                       <button
                         v-for="task in downstreamTasks(selectedTask.id)"
                         :key="task.id"
-                        class="rounded border border-primary/20 bg-primary/8 px-2 py-0.5 text-primary"
+                        class="rounded border border-border bg-muted/35 px-2 py-0.5 text-foreground"
                         @click="selectTask(task.id)"
                       >
                         {{ compactTaskLabel(task.goal, task.id) }}

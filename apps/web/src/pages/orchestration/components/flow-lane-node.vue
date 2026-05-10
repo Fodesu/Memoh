@@ -15,7 +15,7 @@ const laneMeta = computed<{ label: string, icon: LucideIcon, color: string }>(()
       return {
         label: t('orchestration.flowPlanning'),
         icon: Sparkles,
-        color: 'border-violet-500/20 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+        color: 'border-border bg-background text-foreground',
       }
     case 'attempt':
       return {
