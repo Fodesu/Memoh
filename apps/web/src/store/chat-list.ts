@@ -69,6 +69,7 @@ export interface ChatAssistantTurn {
   timestamp: string
   platform?: string
   streaming: boolean
+  localOnly?: boolean
 }
 
 export interface BackgroundTask {
@@ -463,6 +464,18 @@ export const useChatStore = defineStore('chat', () => {
     updateSinceFromMessages(normalized)
   }
 
+  function isLocalOnlyAssistantTurn(message: ChatMessage): message is ChatAssistantTurn {
+    return message.role === 'assistant' && message.localOnly === true
+  }
+
+  function replaceMessagesPreservingLocalOnly(items: UITurn[]) {
+    const localOnlyTurns = messages.filter(isLocalOnlyAssistantTurn)
+    replaceMessages(items)
+    if (localOnlyTurns.length) {
+      messages.push(...localOnlyTurns)
+    }
+  }
+
   function createCompletionForAssistantTurn(assistantTurn: ChatAssistantTurn): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       pendingAssistantStream = {
@@ -542,6 +555,8 @@ export const useChatStore = defineStore('chat', () => {
   function appendAssistantError(session: PendingAssistantStream, errorMessage: string) {
     const text = errorMessage.trim()
     if (!text) return
+
+    session.assistantTurn.localOnly = true
 
     for (let index = session.assistantTurn.messages.length - 1; index >= 0; index -= 1) {
       const current = session.assistantTurn.messages[index]
@@ -641,7 +656,7 @@ export const useChatStore = defineStore('chat', () => {
     refreshPromise = (async () => {
       const turns = await fetchMessagesUI(bid, sid, { limit: PAGE_SIZE })
       if (currentBotId.value !== bid || sessionId.value !== sid) return
-      replaceMessages(turns)
+      replaceMessagesPreservingLocalOnly(turns)
       touchSession(sid)
       const streamStillActive = streamingSessionId.value === sid && pendingAssistantStream && !pendingAssistantStream.done
       if (!streamStillActive && pendingAssistantStream) {
@@ -1063,6 +1078,7 @@ export const useChatStore = defineStore('chat', () => {
       const isAbort = error instanceof Error && error.name === 'AbortError'
       const reason = error instanceof Error ? error.message : 'Unknown error'
       if (!isAbort && assistantTurn) {
+        assistantTurn.localOnly = true
         assistantTurn.messages = [{
           id: 0,
           type: 'text',
@@ -1080,6 +1096,7 @@ export const useChatStore = defineStore('chat', () => {
           }],
           timestamp: new Date().toISOString(),
           streaming: false,
+          localOnly: true,
         })
       }
       pendingAssistantStream = null

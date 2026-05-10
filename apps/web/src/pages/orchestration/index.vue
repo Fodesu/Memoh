@@ -10,7 +10,6 @@ import {
   EmptyMedia,
   EmptyTitle,
   Input,
-  NativeSelect,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -28,8 +27,6 @@ import {
   Database,
   FileOutput,
   GitMerge,
-  Hammer,
-  Library,
   LoaderCircle,
   Maximize2,
   PlayCircle,
@@ -48,16 +45,14 @@ import {
   type LucideIcon,
 } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
-import { storeToRefs } from 'pinia'
 import {
-  getOrchestrationBotsByBotIdRuns,
+  getOrchestrationRuns,
   postOrchestrationCheckpointsByCheckpointIdResolve,
   getOrchestrationRunsByRunIdInspector,
   postOrchestrationRunsByRunIdCancel,
 } from '@memohai/sdk'
 import { useClipboard } from '@/composables/useClipboard'
 import { fetchBots } from '@/composables/api/useChat.chat-api'
-import { useChatSelectionStore } from '@/store/chat-selection'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import {
   compactResultSummary,
@@ -76,7 +71,7 @@ import {
 import { useRunEventStream } from './composables/use-run-event-stream'
 
 type NodeKind = 'trigger' | 'llm' | 'planner' | 'search' | 'tool' | 'memory' | 'merge' | 'verify' | 'output'
-type InspectorTab = 'thinking' | 'config' | 'task' | 'inputs' | 'outputs' | 'logs'
+type InspectorTab = 'thinking' | 'config' | 'env' | 'task' | 'inputs' | 'outputs' | 'logs'
 
 interface CanvasNode {
   task: RunInspectorTask
@@ -98,18 +93,24 @@ interface ThinkingItem {
   status: string
 }
 
+interface EnvSnapshotItem {
+  id: string
+  kind: string
+  actionKind: string
+  createdAt: string
+}
+
 const { t } = useI18n()
 const { copyText, isSupported: clipboardSupported } = useClipboard()
 const router = useRouter()
 const route = useRoute()
 const queryCache = useQueryCache()
-const selectionStore = useChatSelectionStore()
-const { currentBotId } = storeToRefs(selectionStore)
 
-const selectedBotId = ref('')
 const selectedRunId = ref('')
+const selectedBotId = ref('')
 const selectedTaskId = ref('')
 const inspectedTaskId = ref('')
+const botSearchQuery = ref('')
 const runSearchQuery = ref('')
 const taskSearchQuery = ref('')
 const selectedInspectorTab = ref<InspectorTab>('thinking')
@@ -117,6 +118,7 @@ const expandedThinkingItemIds = ref<string[]>([])
 const outputRawOpen = ref(false)
 const taskTechnicalOpen = ref(false)
 const expandedLogItemIds = ref<string[]>([])
+const botSelectOpen = ref(false)
 const runSelectOpen = ref(false)
 const inspectorOpen = ref(true)
 const inspectorWidth = ref(340)
@@ -148,7 +150,7 @@ let zoomCommitTimer = 0
 let inspectorRefreshTimer = 0
 let inspectorResizeStart: { clientX: number, width: number } | null = null
 
-const minCanvasZoom = 0.35
+const minCanvasZoom = 0.65
 const maxCanvasZoom = 1.5
 const fitViewPadding = 64
 const minInspectorWidth = 280
@@ -165,22 +167,20 @@ const minimapMaxWidth = 132
 const minimapMaxHeight = 80
 const canvasPanOverscroll = 180
 
-const { data: bots } = useQuery({
-  key: () => ['orchestration-bots'],
-  query: fetchBots,
-})
-
 const { data: runPage } = useQuery({
-  key: () => ['orchestration-runs', selectedBotId.value],
+  key: () => ['orchestration-runs'],
   query: async () => {
-    const { data } = await getOrchestrationBotsByBotIdRuns({
-      path: { bot_id: selectedBotId.value },
+    const { data } = await getOrchestrationRuns({
       query: { limit: 100 },
       throwOnError: true,
     })
     return data as { items?: RunListItem[] }
   },
-  enabled: () => selectedBotId.value.length > 0,
+})
+
+const { data: bots } = useQuery({
+  key: () => ['orchestration-bots'],
+  query: fetchBots,
 })
 
 const {
@@ -206,7 +206,27 @@ const inspectorErrorMessage = computed(() => {
 })
 
 const botItems = computed(() => (bots.value ?? []) as BotItem[])
-const runs = computed(() => runPage.value?.items ?? [])
+const allRuns = computed(() => runPage.value?.items ?? [])
+const runBotIDs = computed(() => new Set(allRuns.value.map((run) => run.bot_id).filter(Boolean)))
+const runBotItems = computed(() => botItems.value.filter((bot) => bot.id && runBotIDs.value.has(bot.id)))
+const selectedBotLabel = computed(() => {
+  const bot = runBotItems.value.find((item) => item.id === selectedBotId.value)
+  return bot?.display_name || bot?.id || t('orchestration.noRunsTitle')
+})
+const filteredBots = computed(() => {
+  const q = botSearchQuery.value.trim().toLowerCase()
+  if (!q) return runBotItems.value
+  return runBotItems.value.filter((bot) => {
+    const name = (bot.display_name ?? '').toLowerCase()
+    const id = (bot.id ?? '').toLowerCase()
+    return name.includes(q) || id.includes(q)
+  })
+})
+const runs = computed(() => {
+  const items = allRuns.value
+  if (!selectedBotId.value) return []
+  return items.filter((run) => run.bot_id === selectedBotId.value)
+})
 const selectedRunFallback = computed<RunListItem | null>(() => {
   const run = inspector.value?.run
   if (!run || !selectedRunId.value || run.id !== selectedRunId.value) return null
@@ -247,7 +267,6 @@ const artifacts = computed(() => inspector.value?.artifacts ?? [])
 const inputManifests = computed(() => inspector.value?.input_manifests ?? [])
 const executionSpans = computed(() => inspector.value?.execution_spans ?? [])
 const actionRecords = computed(() => inspector.value?.action_records ?? [])
-const workers = computed(() => inspector.value?.workers ?? [])
 const rootTaskId = computed(() => inspector.value?.run.root_task_id ?? '')
 const rootHasChildren = computed(() =>
   rootTaskId.value.length > 0 && dependencies.value.some((edge) => edge.predecessor_task_id === rootTaskId.value),
@@ -255,20 +274,9 @@ const rootHasChildren = computed(() =>
 const canvasTasks = computed(() => tasks.value)
 const canvasDependencies = computed(() => dependencies.value)
 
-watch(botItems, (items) => {
-  const routeBotID = typeof route.query.bot_id === 'string' ? route.query.bot_id.trim() : ''
-  const preferredBotID = routeBotID || (currentBotId.value ?? '').trim()
-  if (preferredBotID && items.some((item) => item.id === preferredBotID)) {
-    selectedBotId.value = preferredBotID
-    return
-  }
-  if (selectedBotId.value && items.some((item) => item.id === selectedBotId.value)) return
-  selectedBotId.value = items[0]?.id ?? ''
-}, { immediate: true })
-
 watch(runs, (items) => {
   const routeRunID = typeof route.query.run_id === 'string' ? route.query.run_id.trim() : ''
-  if (routeRunID) {
+  if (routeRunID && items.some((item) => item.id === routeRunID)) {
     selectedRunId.value = routeRunID
     return
   }
@@ -276,13 +284,15 @@ watch(runs, (items) => {
   selectedRunId.value = items[0]?.id ?? ''
 }, { immediate: true })
 
-watch(selectedBotId, (botID, previousBotID) => {
-  if (!previousBotID || botID === previousBotID) return
+watch(runBotItems, (items) => {
   const routeBotID = typeof route.query.bot_id === 'string' ? route.query.bot_id.trim() : ''
-  if (routeBotID === botID) return
-  selectedRunId.value = ''
-  runSearchQuery.value = ''
-})
+  if (routeBotID && items.some((item) => item.id === routeBotID)) {
+    selectedBotId.value = routeBotID
+    return
+  }
+  if (selectedBotId.value && items.some((item) => item.id === selectedBotId.value)) return
+  selectedBotId.value = items[0]?.id ?? ''
+}, { immediate: true })
 
 watch(inspector, (value, previous) => {
   if (!value) return
@@ -469,8 +479,26 @@ const selectedTaskActionRecords = computed(() => {
 })
 const selectedTaskThinkingItems = computed<ThinkingItem[]>(() => {
   const items: ThinkingItem[] = []
+	let pendingThinkingID = ''
+	let pendingThinkingContent = ''
+	let pendingThinkingStatus = ''
   let pendingOutputID = ''
   let pendingOutputContent = ''
+
+	const flushThinking = () => {
+		const detail = pendingThinkingContent.trim()
+		if (!pendingThinkingID || !detail) return
+		items.push({
+			id: pendingThinkingID,
+			kind: 'reasoning',
+			title: t('orchestration.thinkingReasoning'),
+			detail,
+			status: pendingThinkingStatus || 'running',
+		})
+		pendingThinkingID = ''
+		pendingThinkingContent = ''
+		pendingThinkingStatus = ''
+	}
 
   const flushOutput = () => {
     if (!pendingOutputID) return
@@ -487,6 +515,7 @@ const selectedTaskThinkingItems = computed<ThinkingItem[]>(() => {
 
   for (const action of selectedTaskActionRecords.value) {
     if (action.tool_name === 'agent.output') {
+			flushThinking()
       pendingOutputID ||= action.id || `output-${items.length}`
       pendingOutputContent += formatActivityValue(actionDisplayValue(action))
       continue
@@ -495,16 +524,13 @@ const selectedTaskThinkingItems = computed<ThinkingItem[]>(() => {
     flushOutput()
 
     if (action.tool_name === 'agent.thinking') {
-      items.push({
-        id: action.id || `thinking-${items.length}`,
-        kind: 'reasoning',
-        title: t('orchestration.thinkingReasoning'),
-        detail: activityDetail(action),
-        status: action.status || 'running',
-      })
+			pendingThinkingID ||= action.id || `thinking-${items.length}`
+			pendingThinkingContent += activityDeltaDetail(action)
+			pendingThinkingStatus = String(action.status || pendingThinkingStatus || 'running')
       continue
     }
 
+		flushThinking()
     items.push({
       id: action.id || `tool-${items.length}`,
       kind: 'tool',
@@ -514,6 +540,7 @@ const selectedTaskThinkingItems = computed<ThinkingItem[]>(() => {
     })
   }
 
+	flushThinking()
   flushOutput()
   return items.slice(-30)
 })
@@ -526,6 +553,69 @@ const selectedTaskActions = computed(() =>
     .slice(-20),
 )
 const selectedTaskLatestResult = computed(() => selectedTaskResults.value[0] ?? null)
+const selectedTaskEnvActions = computed(() =>
+  selectedTaskActionRecords.value.filter((item) =>
+    String(item.env_session_id ?? '').trim() !== '' ||
+    String(item.env_binding_id ?? '').trim() !== '' ||
+    String(item.before_env_snapshot_id ?? '').trim() !== '' ||
+    String(item.after_env_snapshot_id ?? '').trim() !== '' ||
+    String(item.action_kind ?? '').startsWith('env_'),
+  ),
+)
+const selectedTaskEnvManifest = computed<Record<string, unknown>>(() => {
+  const manifest = selectedTaskInputManifests.value
+    .slice()
+    .reverse()
+    .find((item) => hasObjectValue((item as Record<string, unknown>).captured_env_preconditions)) as Record<string, unknown> | undefined
+  return recordValue(manifest?.captured_env_preconditions)
+})
+const selectedTaskEnvInfo = computed(() => {
+  const actions = selectedTaskEnvActions.value
+  const manifest = selectedTaskEnvManifest.value
+  const preconditions = recordValue(selectedTask.value?.env_preconditions)
+  const firstPayload = actions.map((item) => envActionPayload(item)).find((payload) => Object.keys(payload).length > 0) ?? {}
+  const firstAction = actions[0]
+  const lastAction = actions[actions.length - 1]
+  const snapshots = buildEnvSnapshots(actions, manifest)
+  const sessionID = firstNonEmptyString(
+    firstAction?.env_session_id,
+    lastAction?.env_session_id,
+    firstPayload.session_id,
+    manifest.session_id,
+  )
+  const bindingID = firstNonEmptyString(
+    firstAction?.env_binding_id,
+    lastAction?.env_binding_id,
+    firstPayload.binding_id,
+    manifest.binding_id,
+  )
+  const beforeSnapshotID = firstNonEmptyString(
+    manifest.before_snapshot_id,
+    ...actions.map((item) => item.before_env_snapshot_id),
+    ...actions.map((item) => envActionPayload(item).before_snapshot),
+  )
+  const afterSnapshotID = firstNonEmptyString(
+    manifest.after_snapshot_id,
+    ...actions.slice().reverse().map((item) => item.after_env_snapshot_id),
+    ...actions.slice().reverse().map((item) => envActionPayload(item).after_snapshot),
+  )
+  return {
+    hasEnv: actions.length > 0 || hasObjectValue(manifest) || preconditions.required === true || hasObjectValue(preconditions),
+    sessionID,
+    bindingID,
+    kind: firstNonEmptyString(firstPayload.kind, manifest.kind, preconditions.kind),
+    resourceName: firstNonEmptyString(firstPayload.resource_name, manifest.resource_name, preconditions.resource_name),
+    mode: firstNonEmptyString(firstPayload.mode, manifest.mode, preconditions.mode),
+    effectClass: firstNonEmptyString(firstAction?.effect_class, firstPayload.effect_class, manifest.effect_class, preconditions.effect_class),
+    leaseEpoch: firstNonEmptyString(firstPayload.lease_epoch, manifest.lease_epoch),
+    leaseToken: firstNonEmptyString(manifest.lease_token),
+    beforeSnapshotID,
+    afterSnapshotID,
+    driftStatus: envDriftStatus(beforeSnapshotID, afterSnapshotID, snapshots.length),
+    snapshots,
+    actions,
+  }
+})
 
 const taskLevelMap = computed(() => {
   if (!rootTaskId.value || canvasTasks.value.length <= 1) {
@@ -627,41 +717,15 @@ watch([canvasWidth, canvasHeight, canvasZoom], () => {
   constrainView()
 })
 
-const libraryItems = computed(() => [
-  { kind: 'trigger' as const, label: kindMeta('trigger').label, count: canvasNodes.value.filter((node) => node.kind === 'trigger').length },
-  { kind: 'llm' as const, label: kindMeta('llm').label, count: canvasNodes.value.filter((node) => node.kind === 'llm' || node.kind === 'planner').length },
-  { kind: 'tool' as const, label: kindMeta('tool').label, count: canvasNodes.value.filter((node) => node.kind === 'tool' || node.kind === 'search').length },
-  { kind: 'memory' as const, label: kindMeta('memory').label, count: canvasNodes.value.filter((node) => node.kind === 'memory').length },
-  { kind: 'merge' as const, label: kindMeta('merge').label, count: canvasNodes.value.filter((node) => node.kind === 'merge').length },
-  { kind: 'verify' as const, label: kindMeta('verify').label, count: canvasNodes.value.filter((node) => node.kind === 'verify').length },
-  { kind: 'output' as const, label: kindMeta('output').label, count: canvasNodes.value.filter((node) => node.kind === 'output').length },
-])
-
 const inspectorTabs = computed(() => [
   { key: 'thinking' as const, label: t('orchestration.thinking') },
   { key: 'config' as const, label: t('orchestration.config') },
+  { key: 'env' as const, label: t('orchestration.env') },
   { key: 'task' as const, label: t('orchestration.taskInfo') },
   { key: 'inputs' as const, label: t('orchestration.inputs') },
   { key: 'outputs' as const, label: t('orchestration.outputs') },
   { key: 'logs' as const, label: t('orchestration.logs') },
 ])
-
-const footerMetrics = computed(() => {
-  const dagTasks = canvasTasks.value
-  const runningCount = dagTasks.filter((task) => ['running', 'dispatching', 'verifying'].includes(task.status)).length
-  const blockedCount = dagTasks.filter((task) => ['failed', 'blocked', 'cancelled'].includes(task.status)).length
-  const pendingCount = dagTasks.filter((task) =>
-    !['completed', 'running', 'dispatching', 'verifying', 'failed', 'blocked', 'cancelled'].includes(task.status),
-  ).length
-  return [
-    { key: 'tasks', label: t('orchestration.tasks'), value: dagTasks.length, icon: Library, className: 'text-primary' },
-    { key: 'done', label: t('orchestration.completedTasks'), value: dagTasks.filter((task) => task.status === 'completed').length, icon: CheckCircle2, className: 'text-emerald-600' },
-    { key: 'running', label: t('orchestration.runningTasks'), value: runningCount, icon: LoaderCircle, className: 'text-sky-600' },
-    { key: 'blocked', label: t('orchestration.blockedTasks'), value: blockedCount, icon: AlertCircle, className: 'text-rose-600' },
-    { key: 'pending', label: t('orchestration.pendingTasks'), value: pendingCount, icon: Clock3, className: 'text-muted-foreground' },
-    { key: 'workers', label: t('orchestration.workers'), value: workers.value.length, icon: Hammer, className: 'text-violet-600' },
-  ]
-})
 
 function nodeByID(id: string): CanvasNode | null {
   return canvasNodes.value.find((node) => node.id === id) ?? null
@@ -703,6 +767,14 @@ function selectTask(taskID: string) {
 function selectRun(runID: string) {
   selectedRunId.value = runID
   runSelectOpen.value = false
+  runSearchQuery.value = ''
+}
+
+function selectBot(botID?: string) {
+  selectedBotId.value = String(botID ?? '').trim()
+  selectedRunId.value = ''
+  botSelectOpen.value = false
+  botSearchQuery.value = ''
   runSearchQuery.value = ''
 }
 
@@ -1002,6 +1074,14 @@ function activityDetail(action: Record<string, unknown>) {
   return ''
 }
 
+function activityDeltaDetail(action: Record<string, unknown>) {
+	const output = action.output_payload as Record<string, unknown> | null | undefined
+	if (output && typeof output === 'object' && typeof output.delta === 'string') {
+		return output.delta
+	}
+	return activityDetail(action)
+}
+
 function formatActivityValue(value: unknown) {
   if (value == null) return ''
   if (typeof value !== 'string') return formatJsonValue(value)
@@ -1063,6 +1143,155 @@ function hasObjectValue(value: unknown) {
   return !!value && typeof value === 'object' && Object.keys(value as Record<string, unknown>).length > 0
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value as Record<string, unknown>
+}
+
+function firstNonEmptyString(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value ?? '').trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function envActionPayload(action: Record<string, unknown>) {
+  const output = recordValue(action.output_payload)
+  const input = recordValue(action.input_payload)
+  return {
+    ...input,
+    ...output,
+  }
+}
+
+function buildEnvSnapshots(actions: Record<string, unknown>[], manifest: Record<string, unknown>) {
+  const items: EnvSnapshotItem[] = []
+  const seen = new Set<string>()
+  const push = (id: unknown, kind: string, action: Record<string, unknown> | null) => {
+    const snapshotID = String(id ?? '').trim()
+    if (!snapshotID || seen.has(`${kind}:${snapshotID}`)) return
+    seen.add(`${kind}:${snapshotID}`)
+    items.push({
+      id: snapshotID,
+      kind,
+      actionKind: String(action?.action_kind ?? action?.tool_name ?? '').trim(),
+      createdAt: String(action?.created_at ?? action?.finished_at ?? '').trim(),
+    })
+  }
+
+  push(manifest.before_snapshot_id, 'pre_action', null)
+  push(manifest.after_snapshot_id, 'post_action', null)
+  for (const action of actions) {
+    const payload = envActionPayload(action)
+    push(action.before_env_snapshot_id ?? payload.before_snapshot, 'pre_action', action)
+    push(action.after_env_snapshot_id ?? payload.after_snapshot, 'post_action', action)
+  }
+  return items
+}
+
+function envDriftStatus(beforeSnapshotID: string, afterSnapshotID: string, snapshotCount: number) {
+  if (beforeSnapshotID && afterSnapshotID) {
+    return beforeSnapshotID === afterSnapshotID ? 'unchanged' : 'changed'
+  }
+  return snapshotCount > 0 ? 'unknown' : 'not_applicable'
+}
+
+function envDriftLabel(status: string) {
+  switch (status) {
+    case 'changed':
+      return t('orchestration.envChanged')
+    case 'unchanged':
+      return t('orchestration.envUnchanged')
+    case 'unknown':
+      return t('orchestration.envChangeUnknown')
+    default:
+      return t('orchestration.envNotUsed')
+  }
+}
+
+function envDriftClass(status: string) {
+  switch (status) {
+    case 'changed':
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+    case 'unchanged':
+      return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    case 'unknown':
+      return 'border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+    default:
+      return 'border-border bg-muted/70 text-muted-foreground'
+  }
+}
+
+function envSnapshotKindLabel(kind: string) {
+  switch (kind) {
+    case 'pre_action':
+      return t('orchestration.envSnapshotBefore')
+    case 'post_action':
+      return t('orchestration.envSnapshotAfter')
+    case 'periodic':
+      return t('orchestration.envSnapshotPeriodic')
+    default:
+      return kind.replaceAll('_', ' ') || '--'
+  }
+}
+
+function envKindLabel(kind: string) {
+  switch (kind) {
+    case 'container':
+      return t('orchestration.envKindContainer')
+    case 'browser':
+      return t('orchestration.envKindBrowser')
+    default:
+      return kind || '--'
+  }
+}
+
+function envActionKindLabel(actionKind: string) {
+  switch (actionKind) {
+    case 'env_acquire':
+      return t('orchestration.envActionReserved')
+    case 'env_release':
+      return t('orchestration.envActionReleased')
+    case 'env_hold':
+      return t('orchestration.envActionHeld')
+    case 'env_resume':
+      return t('orchestration.envActionResumed')
+    default:
+      return actionKind.replaceAll('_', ' ') || '--'
+  }
+}
+
+function envModeLabel(mode: string) {
+  switch (mode) {
+    case 'read':
+    case 'readonly':
+      return t('orchestration.envModeRead')
+    case 'write':
+    case 'readwrite':
+      return t('orchestration.envModeWrite')
+    default:
+      return mode || '--'
+  }
+}
+
+function envEffectLabel(effectClass: string) {
+  switch (effectClass) {
+    case 'env_local_read':
+      return t('orchestration.envEffectLocalRead')
+    case 'env_local_mutation':
+      return t('orchestration.envEffectLocalChange')
+    case 'external_read':
+      return t('orchestration.envEffectExternalRead')
+    case 'external_write':
+      return t('orchestration.envEffectExternalWrite')
+    case 'external_irreversible':
+      return t('orchestration.envEffectExternalIrreversible')
+    default:
+      return effectClass.replaceAll('_', ' ') || '--'
+  }
+}
+
 function newIdempotencyKey(prefix: string) {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
   return `${prefix}-${random}`
@@ -1079,9 +1308,7 @@ async function stopCurrentRun() {
     })
     toast.success(t('orchestration.runStopRequested'))
     await refetchInspector()
-    if (selectedBotId.value) {
-      queryCache.invalidateQueries({ key: ['orchestration-runs', selectedBotId.value] })
-    }
+    queryCache.invalidateQueries({ key: ['orchestration-runs'] })
   } catch (err) {
     toast.error(resolveApiErrorMessage(err, t('orchestration.runStopFailed')))
   } finally {
@@ -1104,9 +1331,7 @@ async function resolveCheckpointOption(checkpointId: string, optionId: string) {
     })
     toast.success(t('orchestration.checkpointResolved'))
     await refetchInspector()
-    if (selectedBotId.value) {
-      queryCache.invalidateQueries({ key: ['orchestration-runs', selectedBotId.value] })
-    }
+    queryCache.invalidateQueries({ key: ['orchestration-runs'] })
   } catch (err) {
     toast.error(resolveApiErrorMessage(err, t('orchestration.checkpointResolveFailed')))
   } finally {
@@ -1115,9 +1340,7 @@ async function resolveCheckpointOption(checkpointId: string, optionId: string) {
 }
 
 function refreshInspector() {
-  if (selectedBotId.value) {
-    queryCache.invalidateQueries({ key: ['orchestration-runs', selectedBotId.value] })
-  }
+  queryCache.invalidateQueries({ key: ['orchestration-runs'] })
   if (selectedRunId.value) {
     queryCache.invalidateQueries({ key: ['orchestration-inspector', selectedRunId.value] })
   }
@@ -1179,8 +1402,7 @@ function setupCanvasViewport() {
   viewportResizeObserver?.disconnect()
   observedCanvasViewport = el
   viewportResizeObserver = new ResizeObserver(() => {
-    updateViewportSize()
-    constrainView()
+    keepGraphPositionOnViewportResize()
   })
   viewportResizeObserver.observe(el)
   updateViewportSize()
@@ -1197,6 +1419,26 @@ function constrainView() {
   updateViewportSize()
   const next = clampView(viewX.value, viewY.value, currentZoom)
   setViewPosition(next.x, next.y)
+}
+
+function keepGraphPositionOnViewportResize() {
+  const previousWidth = viewportWidth.value
+  const previousHeight = viewportHeight.value
+  if (previousWidth <= 0 || previousHeight <= 0) {
+    updateViewportSize()
+    constrainView()
+    return
+  }
+
+  const previousGraphOriginX = graphOriginX()
+  const previousGraphOriginY = graphOriginY()
+  const previousViewX = currentViewX
+  const previousViewY = currentViewY
+  updateViewportSize()
+  setViewPosition(
+    previousViewX + graphOriginX() - previousGraphOriginX,
+    previousViewY + graphOriginY() - previousGraphOriginY,
+  )
 }
 
 function clampZoom(value: number) {
@@ -1254,7 +1496,9 @@ function clampView(x: number, y: number, zoom = currentZoom) {
 }
 
 function viewTransform(x: number, y: number, zoom = canvasZoom.value) {
-  return `translate3d(${-x * zoom}px, ${-y * zoom}px, 0) scale(${zoom})`
+  const translateX = Math.round(-x * zoom)
+  const translateY = Math.round(-y * zoom)
+  return `translate3d(${translateX}px, ${translateY}px, 0) scale(${zoom})`
 }
 
 function setCurrentView(x: number, y: number, zoom = currentZoom) {
@@ -1542,9 +1786,164 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
 
 <template>
   <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
+    <header class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4">
+      <div class="flex min-w-0 items-center gap-3">
+        <div class="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+          <Workflow class="size-4" />
+        </div>
+        <div class="min-w-0">
+          <h1 class="truncate text-sm font-semibold">
+            {{ $t('orchestration.title') }}
+          </h1>
+        </div>
+        <Popover
+          v-if="runBotItems.length > 0"
+          v-model:open="botSelectOpen"
+        >
+          <PopoverTrigger as-child>
+            <Button
+              variant="outline"
+              class="ml-2 h-8 w-48 justify-between gap-2 px-3 text-xs"
+            >
+              <span class="truncate">{{ selectedBotLabel }}</span>
+              <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            class="w-72 p-2"
+            align="start"
+          >
+            <div class="relative">
+              <Search class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="botSearchQuery"
+                :placeholder="$t('orchestration.searchBotsPlaceholder')"
+                class="h-8 pl-7 text-xs"
+              />
+            </div>
+            <div class="mt-2 max-h-72 space-y-1 overflow-y-auto">
+              <button
+                v-for="bot in filteredBots"
+                :key="bot.id"
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs hover:bg-muted/60"
+                :class="bot.id === selectedBotId ? 'bg-primary/8 text-primary' : ''"
+                @click="selectBot(bot.id)"
+              >
+                <CheckCircle2
+                  class="size-3.5 shrink-0"
+                  :class="bot.id === selectedBotId ? 'opacity-100' : 'opacity-0'"
+                />
+                <span class="min-w-0 flex-1 truncate">{{ bot.display_name || bot.id }}</span>
+                <span class="font-mono text-[10px] text-muted-foreground">{{ bot.id ? shortId(bot.id, 8) : '--' }}</span>
+              </button>
+              <div
+                v-if="filteredBots.length === 0"
+                class="px-2 py-6 text-center text-xs text-muted-foreground"
+              >
+                {{ $t('orchestration.noBotsTitle') }}
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+        <Popover
+          v-if="runsWithSelected.length > 0"
+          v-model:open="runSelectOpen"
+        >
+          <PopoverTrigger as-child>
+            <Button
+              variant="outline"
+              class="h-8 w-64 justify-between gap-2 px-3 text-xs"
+            >
+              <span class="truncate">{{ selectedRunLabel }}</span>
+              <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            class="w-72 p-2"
+            align="start"
+          >
+            <div class="relative">
+              <Search class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="runSearchQuery"
+                :placeholder="$t('orchestration.searchRunsPlaceholder')"
+                class="h-8 pl-7 text-xs"
+              />
+            </div>
+            <div class="mt-2 max-h-72 space-y-1 overflow-y-auto">
+              <button
+                v-for="run in filteredRuns"
+                :key="run.id"
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs hover:bg-muted/60"
+                :class="run.id === selectedRunId ? 'bg-primary/8 text-primary' : ''"
+                @click="selectRun(run.id)"
+              >
+                <CheckCircle2
+                  class="size-3.5 shrink-0"
+                  :class="run.id === selectedRunId ? 'opacity-100' : 'opacity-0'"
+                />
+                <span class="min-w-0 flex-1 truncate">{{ runLabel(run) }}</span>
+                <span class="font-mono text-[10px] text-muted-foreground">{{ shortId(run.id, 8) }}</span>
+              </button>
+              <div
+                v-if="filteredRuns.length === 0"
+                class="px-2 py-6 text-center text-xs text-muted-foreground"
+              >
+                {{ $t('orchestration.noRunsTitle') }}
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+        <span
+          v-if="inspector"
+          class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
+          :class="statusMeta(inspector.run.lifecycle_status).chip"
+        >
+          <span
+            class="size-1.5 rounded-full"
+            :class="statusMeta(inspector.run.lifecycle_status).dot"
+          />
+          {{ statusMeta(inspector.run.lifecycle_status).label }}
+        </span>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <Button
+          v-if="inspector"
+          variant="outline"
+          size="sm"
+          class="h-8 gap-1.5 border-rose-500/30 px-2.5 text-xs text-rose-600 hover:bg-rose-500/10 hover:text-rose-700 disabled:border-border disabled:text-muted-foreground"
+          :disabled="!canStopRun || stoppingRun"
+          :title="$t('orchestration.stopRun')"
+          @click="stopCurrentRun"
+        >
+          <LoaderCircle
+            v-if="stoppingRun"
+            class="size-3.5 animate-spin"
+          />
+          <Square
+            v-else
+            class="size-3.5"
+          />
+          <span>{{ $t('orchestration.stopRun') }}</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
+          class="size-8"
+          :title="$t('orchestration.refresh')"
+          @click="refreshInspector"
+        >
+          <RefreshCw class="size-3.5" />
+        </Button>
+      </div>
+    </header>
+
     <Empty
       v-if="botItems.length === 0"
-      class="flex h-full items-center justify-center"
+      class="flex min-h-0 flex-1 items-center justify-center"
     >
       <EmptyHeader>
         <EmptyMedia variant="icon">
@@ -1556,8 +1955,8 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
     </Empty>
 
     <Empty
-      v-else-if="selectedBotId && runs.length === 0"
-      class="flex h-full items-center justify-center"
+      v-else-if="runs.length === 0"
+      class="flex min-h-0 flex-1 items-center justify-center"
     >
       <EmptyHeader>
         <EmptyMedia variant="icon">
@@ -1570,7 +1969,7 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
 
     <Empty
       v-else-if="inspectorStatus === 'error'"
-      class="flex h-full items-center justify-center"
+      class="flex min-h-0 flex-1 items-center justify-center"
     >
       <EmptyHeader>
         <EmptyMedia variant="icon">
@@ -1583,124 +1982,12 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
 
     <div
       v-else-if="!inspector"
-      class="flex h-full items-center justify-center text-sm text-muted-foreground"
+      class="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground"
     >
       {{ inspectorStatus === 'loading' ? $t('orchestration.loadingInspector') : '--' }}
     </div>
 
     <template v-else>
-      <header class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4">
-        <div class="flex min-w-0 items-center gap-3">
-          <div class="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Workflow class="size-4" />
-          </div>
-          <div class="min-w-0">
-            <h1 class="truncate text-sm font-semibold">
-              {{ $t('orchestration.title') }}
-            </h1>
-          </div>
-          <NativeSelect
-            v-model="selectedBotId"
-            class="ml-2 h-8 w-48 text-xs"
-          >
-            <option
-              v-for="bot in botItems"
-              :key="bot.id"
-              :value="bot.id"
-            >
-              {{ bot.display_name || bot.id }}
-            </option>
-          </NativeSelect>
-          <Popover v-model:open="runSelectOpen">
-            <PopoverTrigger as-child>
-              <Button
-                variant="outline"
-                class="h-8 w-64 justify-between gap-2 px-3 text-xs"
-              >
-                <span class="truncate">{{ selectedRunLabel }}</span>
-                <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent
-              class="w-72 p-2"
-              align="start"
-            >
-              <div class="relative">
-                <Search class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  v-model="runSearchQuery"
-                  :placeholder="$t('orchestration.searchRunsPlaceholder')"
-                  class="h-8 pl-7 text-xs"
-                />
-              </div>
-              <div class="mt-2 max-h-72 space-y-1 overflow-y-auto">
-                <button
-                  v-for="run in filteredRuns"
-                  :key="run.id"
-                  type="button"
-                  class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs hover:bg-muted/60"
-                  :class="run.id === selectedRunId ? 'bg-primary/8 text-primary' : ''"
-                  @click="selectRun(run.id)"
-                >
-                  <CheckCircle2
-                    class="size-3.5 shrink-0"
-                    :class="run.id === selectedRunId ? 'opacity-100' : 'opacity-0'"
-                  />
-                  <span class="min-w-0 flex-1 truncate">{{ runLabel(run) }}</span>
-                  <span class="font-mono text-[10px] text-muted-foreground">{{ shortId(run.id, 8) }}</span>
-                </button>
-                <div
-                  v-if="filteredRuns.length === 0"
-                  class="px-2 py-6 text-center text-xs text-muted-foreground"
-                >
-                  {{ $t('orchestration.noRunsTitle') }}
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
-          <span
-            class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
-            :class="statusMeta(inspector.run.lifecycle_status).chip"
-          >
-            <span
-              class="size-1.5 rounded-full"
-              :class="statusMeta(inspector.run.lifecycle_status).dot"
-            />
-            {{ statusMeta(inspector.run.lifecycle_status).label }}
-          </span>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            class="h-8 gap-1.5 border-rose-500/30 px-2.5 text-xs text-rose-600 hover:bg-rose-500/10 hover:text-rose-700 disabled:border-border disabled:text-muted-foreground"
-            :disabled="!canStopRun || stoppingRun"
-            :title="$t('orchestration.stopRun')"
-            @click="stopCurrentRun"
-          >
-            <LoaderCircle
-              v-if="stoppingRun"
-              class="size-3.5 animate-spin"
-            />
-            <Square
-              v-else
-              class="size-3.5"
-            />
-            <span>{{ $t('orchestration.stopRun') }}</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            class="size-8"
-            :title="$t('orchestration.refresh')"
-            @click="refreshInspector"
-          >
-            <RefreshCw class="size-3.5" />
-          </Button>
-        </div>
-      </header>
-
       <div
         class="grid min-h-0 flex-1"
         :style="orchestrationGridStyle"
@@ -1742,10 +2029,10 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
                     :class="task.status === 'running' || task.status === 'dispatching' || task.status === 'verifying' ? 'animate-spin text-sky-600' : ''"
                   />
                   <div class="min-w-0 flex-1">
-                    <p class="line-clamp-2 text-[11px] font-medium leading-snug">
+                    <p class="line-clamp-2 text-xs font-medium leading-normal">
                       {{ compactTaskTitle(task.goal, task.id) }}
                     </p>
-                    <div class="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                    <div class="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                       <span class="inline-flex items-center gap-1">
                         <span
                           class="size-1.5 rounded-full"
@@ -1758,42 +2045,13 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
                     </div>
                     <p
                       v-if="rootHasChildren && task.id === rootTaskId"
-                      class="mt-1 text-[10px] text-muted-foreground"
+                      class="mt-1 text-[11px] text-muted-foreground"
                     >
                       {{ $t('orchestration.rootTaskEntryHint') }}
                     </p>
                   </div>
                 </div>
               </button>
-            </div>
-
-            <div class="border-t border-border/60 p-3">
-              <div class="mb-2 flex items-center justify-between">
-                <p class="text-[11px] font-semibold">
-                  {{ $t('orchestration.nodeLibrary') }}
-                </p>
-                <Library class="size-3.5 text-muted-foreground" />
-              </div>
-              <div class="space-y-1.5">
-                <button
-                  v-for="item in libraryItems"
-                  :key="item.kind"
-                  type="button"
-                  class="flex w-full items-center gap-2 rounded-md border border-border/70 bg-background px-2 py-1.5 text-left text-[11px] hover:bg-muted/30"
-                >
-                  <span
-                    class="flex size-5 items-center justify-center rounded border"
-                    :class="kindMeta(item.kind).color"
-                  >
-                    <component
-                      :is="kindMeta(item.kind).icon"
-                      class="size-3"
-                    />
-                  </span>
-                  <span class="flex-1">{{ item.label }}</span>
-                  <span class="text-[10px] text-muted-foreground tabular-nums">{{ item.count }}</span>
-                </button>
-              </div>
             </div>
           </ScrollArea>
         </aside>
@@ -1894,11 +2152,11 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
                     />
                   </span>
                   <span class="min-w-0 flex-1">
-                    <span class="block truncate text-[11px] font-medium">{{ node.title }}</span>
-                    <span class="mt-0.5 block truncate text-[10px] text-muted-foreground">{{ node.subtitle }}</span>
+                    <span class="block truncate text-xs font-medium">{{ node.title }}</span>
+                    <span class="mt-0.5 block truncate text-[11px] text-muted-foreground">{{ node.subtitle }}</span>
                   </span>
                 </div>
-                <div class="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <div class="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                   <span
                     class="size-1.5 rounded-full"
                     :class="statusMeta(node.status).dot"
@@ -2204,6 +2462,122 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
               </section>
 
               <section
+                v-if="selectedInspectorTab === 'env'"
+                class="space-y-3"
+              >
+                <div
+                  v-if="!selectedTaskEnvInfo.hasEnv"
+                  class="rounded-lg border border-dashed border-border/70 bg-background/60 px-3 py-6 text-center text-[11px] text-muted-foreground"
+                >
+                  {{ $t('orchestration.noEnv') }}
+                </div>
+
+                <template v-else>
+                  <div class="grid grid-cols-2 gap-2 text-[11px]">
+                    <div class="space-y-1">
+                      <p class="text-muted-foreground">
+                        {{ $t('orchestration.envSession') }}
+                      </p>
+                      <div class="h-8 truncate rounded-md border border-border/70 bg-background px-2 py-1.5 font-mono text-[10px]">
+                        {{ selectedTaskEnvInfo.sessionID ? shortId(selectedTaskEnvInfo.sessionID, 18) : '--' }}
+                      </div>
+                    </div>
+                    <div class="space-y-1">
+                      <p class="text-muted-foreground">
+                        {{ $t('orchestration.envBinding') }}
+                      </p>
+                      <div class="h-8 truncate rounded-md border border-border/70 bg-background px-2 py-1.5 font-mono text-[10px]">
+                        {{ selectedTaskEnvInfo.bindingID ? shortId(selectedTaskEnvInfo.bindingID, 18) : '--' }}
+                      </div>
+                    </div>
+                    <div class="space-y-1">
+                      <p class="text-muted-foreground">
+                        {{ $t('orchestration.envLease') }}
+                      </p>
+                      <div class="h-8 truncate rounded-md border border-border/70 bg-background px-2 py-1.5 font-mono text-[10px]">
+                        {{ selectedTaskEnvInfo.leaseEpoch ? $t('orchestration.envLeaseEpoch', { epoch: selectedTaskEnvInfo.leaseEpoch }) : '--' }}
+                      </div>
+                    </div>
+                    <div class="space-y-1">
+                      <p class="text-muted-foreground">
+                        {{ $t('orchestration.envDriftStatus') }}
+                      </p>
+                      <div
+                        class="h-8 rounded-md border px-2 py-1.5 text-[10px]"
+                        :class="envDriftClass(selectedTaskEnvInfo.driftStatus)"
+                      >
+                        {{ envDriftLabel(selectedTaskEnvInfo.driftStatus) }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="rounded-lg border border-border/70 bg-background p-3 text-[11px]">
+                    <div class="mb-2 flex items-center justify-between">
+                      <p class="font-semibold">
+                        {{ $t('orchestration.envBindingDetails') }}
+                      </p>
+                      <span class="rounded border border-border/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {{ envKindLabel(selectedTaskEnvInfo.kind) }}
+                      </span>
+                    </div>
+                    <div class="space-y-1 text-muted-foreground">
+                      <div class="flex justify-between gap-3">
+                        <span>{{ $t('orchestration.envResource') }}</span>
+                        <span class="truncate font-mono">{{ selectedTaskEnvInfo.resourceName || '--' }}</span>
+                      </div>
+                      <div class="flex justify-between gap-3">
+                        <span>{{ $t('orchestration.envMode') }}</span>
+                        <span class="truncate">{{ envModeLabel(selectedTaskEnvInfo.mode) }}</span>
+                      </div>
+                      <div class="flex justify-between gap-3">
+                        <span>{{ $t('orchestration.envEffectClass') }}</span>
+                        <span class="truncate">{{ envEffectLabel(selectedTaskEnvInfo.effectClass) }}</span>
+                      </div>
+                      <div class="flex justify-between gap-3">
+                        <span>{{ $t('orchestration.envLeaseToken') }}</span>
+                        <span class="truncate font-mono">{{ selectedTaskEnvInfo.leaseToken ? shortId(selectedTaskEnvInfo.leaseToken, 18) : '--' }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                      <p class="text-[11px] font-semibold">
+                        {{ $t('orchestration.envSnapshots') }}
+                      </p>
+                      <span class="text-[10px] text-muted-foreground tabular-nums">
+                        {{ selectedTaskEnvInfo.snapshots.length }}
+                      </span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <div
+                        v-for="snapshot in selectedTaskEnvInfo.snapshots"
+                        :key="`${snapshot.kind}:${snapshot.id}`"
+                        class="rounded-lg border border-border/70 bg-background p-2 text-[11px]"
+                      >
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="font-mono text-[10px]">{{ shortId(snapshot.id, 18) }}</span>
+                          <span class="rounded border border-border/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            {{ envSnapshotKindLabel(snapshot.kind) }}
+                          </span>
+                        </div>
+                        <div class="mt-1 flex justify-between gap-3 text-[10px] text-muted-foreground">
+                          <span class="truncate">{{ envActionKindLabel(snapshot.actionKind) }}</span>
+                          <span>{{ formatDate(snapshot.createdAt) }}</span>
+                        </div>
+                      </div>
+                      <p
+                        v-if="selectedTaskEnvInfo.snapshots.length === 0"
+                        class="rounded border border-dashed border-border/60 bg-background/60 px-2 py-2 text-[11px] text-muted-foreground"
+                      >
+                        {{ $t('orchestration.noEnvSnapshots') }}
+                      </p>
+                    </div>
+                  </div>
+                </template>
+              </section>
+
+              <section
                 v-if="selectedInspectorTab === 'task'"
                 class="space-y-2"
               >
@@ -2494,22 +2868,6 @@ function buildTaskLevels(taskList: RunInspectorTask[], edges: RunInspectorDepend
           </ScrollArea>
         </aside>
       </div>
-
-      <footer class="grid h-12 shrink-0 grid-cols-6 border-t border-border/70 bg-background text-[11px]">
-        <div
-          v-for="metric in footerMetrics"
-          :key="metric.key"
-          class="flex items-center gap-2 border-r border-border/60 px-4 last:border-r-0"
-        >
-          <component
-            :is="metric.icon"
-            class="size-3.5"
-            :class="metric.className"
-          />
-          <span class="text-muted-foreground">{{ metric.label }}</span>
-          <span class="font-semibold tabular-nums">{{ metric.value }}</span>
-        </div>
-      </footer>
     </template>
   </div>
 </template>
