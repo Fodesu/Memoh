@@ -249,7 +249,7 @@ func (s *Service) StartVerification(ctx context.Context, verificationID, claimTo
 			}); err != nil {
 				return nil, err
 			}
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}, "run cancelled"); err != nil {
 				return nil, err
 			}
 		} else if row.Status == TaskVerificationStatusClaimed {
@@ -305,7 +305,7 @@ func (s *Service) StartVerification(ctx context.Context, verificationID, claimTo
 			}); err != nil {
 				return nil, err
 			}
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}, "run cancelled"); err != nil {
 				return nil, err
 			}
 		} else if row.Status == TaskVerificationStatusClaimed {
@@ -429,7 +429,7 @@ func (s *Service) HeartbeatVerification(ctx context.Context, input VerificationH
 			if _, err := s.retireVerificationDuringRunCancellation(ctx, qtx, runRow, row); err != nil {
 				return nil, err
 			}
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}, "run cancelled"); err != nil {
 				return nil, err
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -578,7 +578,7 @@ func (s *Service) CompleteVerification(ctx context.Context, input VerificationCo
 			if err != nil {
 				return nil, err
 			}
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}, "run cancelled"); err != nil {
 				return nil, err
 			}
 			if err := tx.Commit(ctx); err != nil {

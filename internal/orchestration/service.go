@@ -493,6 +493,33 @@ func (*Service) effectiveRunForRead(ctx context.Context, qtx *sqlc.Queries, row 
 	return row, nil
 }
 
+func effectiveTasksForRunRead(run Run, tasks []Task) []Task {
+	if run.LifecycleStatus != LifecycleStatusFailed || run.RootTaskID == "" {
+		return tasks
+	}
+	terminalReason := strings.TrimSpace(run.TerminalReason)
+	if terminalReason == "" {
+		terminalReason = "start-run planner failed"
+	}
+	var copied []Task
+	for i := range tasks {
+		if tasks[i].ID != run.RootTaskID || tasks[i].Status != TaskStatusCreated {
+			continue
+		}
+		if copied == nil {
+			copied = append([]Task(nil), tasks...)
+		}
+		copied[i].Status = TaskStatusFailed
+		if strings.TrimSpace(copied[i].TerminalReason) == "" {
+			copied[i].TerminalReason = terminalReason
+		}
+	}
+	if copied != nil {
+		return copied
+	}
+	return tasks
+}
+
 func (s *Service) GetRunSnapshotAtSeq(ctx context.Context, caller ControlIdentity, runID string, asOfSeq uint64) (*RunSnapshot, error) {
 	var err error
 	caller, err = normalizeControlIdentity(caller)
@@ -580,6 +607,7 @@ func (s *Service) GetRunInspector(ctx context.Context, caller ControlIdentity, r
 	for _, taskRow := range taskRows {
 		tasks = append(tasks, toTask(taskRow))
 	}
+	tasks = effectiveTasksForRunRead(runSnapshot, tasks)
 
 	checkpointRows, err := qtx.ListCurrentOrchestrationCheckpointsByRun(ctx, row.ID)
 	if err != nil {
@@ -763,6 +791,10 @@ func (s *Service) ListRunTasks(ctx context.Context, caller ControlIdentity, runI
 	if err != nil {
 		return nil, err
 	}
+	row, err = s.effectiveRunForRead(ctx, s.queries, row)
+	if err != nil {
+		return nil, err
+	}
 	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
 	if err != nil {
 		return nil, err
@@ -776,6 +808,7 @@ func (s *Service) ListRunTasks(ctx context.Context, caller ControlIdentity, runI
 		return nil, err
 	}
 	items = filterCurrentTasks(items)
+	items = effectiveTasksForRunRead(toRun(row), items)
 	items = filterTasks(items, req.Status)
 	pageItems, nextAfter, err := paginateTasks(items, req.After, normalizedListLimit(req.Limit), snapshotSeq, filterHash(req.Status))
 	if err != nil {
@@ -1471,6 +1504,18 @@ func (s *Service) RetryTask(ctx context.Context, caller ControlIdentity, taskID 
 	if !runAcceptsRetry(lockedRun.LifecycleStatus) {
 		return nil, ErrRunImmutable
 	}
+	if failedStartRunIntent, ok, err := retryableStartRunPlanningFailure(ctx, qtx, lockedRun, lockedTask); err != nil {
+		return nil, err
+	} else if ok {
+		result, err := s.retryStartRunPlanning(ctx, qtx, caller, lockedRun, lockedTask, failedStartRunIntent, normalizedTaskID, normalizedIdempotencyKey, requestHash)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit start_run planning retry tx: %w", err)
+		}
+		return result, nil
+	}
 	if taskSuperseded(lockedTask) || lockedTask.Status != TaskStatusFailed {
 		return nil, ErrTaskRetryUnsupported
 	}
@@ -1591,6 +1636,362 @@ func (s *Service) RetryTask(ctx context.Context, caller ControlIdentity, taskID 
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit retry task tx: %w", err)
+	}
+	return &result, nil
+}
+
+func retryableStartRunPlanningFailure(ctx context.Context, qtx *sqlc.Queries, runRow sqlc.OrchestrationRun, taskRow sqlc.OrchestrationTask) (sqlc.OrchestrationIntent, bool, error) {
+	if runRow.LifecycleStatus != LifecycleStatusFailed || taskRow.ID != runRow.RootTaskID || taskSuperseded(taskRow) {
+		return sqlc.OrchestrationIntent{}, false, nil
+	}
+	if taskRow.Status != TaskStatusCreated && taskRow.Status != TaskStatusFailed {
+		return sqlc.OrchestrationIntent{}, false, nil
+	}
+	failedIntent, err := qtx.GetLatestFailedStartRunOrchestrationIntentByRun(ctx, runRow.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.OrchestrationIntent{}, false, nil
+		}
+		return sqlc.OrchestrationIntent{}, false, fmt.Errorf("get failed start-run intent for retry: %w", err)
+	}
+	if failedIntent.TaskID != taskRow.ID {
+		return sqlc.OrchestrationIntent{}, false, nil
+	}
+	return failedIntent, true, nil
+}
+
+func (s *Service) retryStartRunPlanning(
+	ctx context.Context,
+	qtx *sqlc.Queries,
+	caller ControlIdentity,
+	runRow sqlc.OrchestrationRun,
+	taskRow sqlc.OrchestrationTask,
+	failedIntent sqlc.OrchestrationIntent,
+	normalizedTaskID string,
+	normalizedIdempotencyKey string,
+	requestHash string,
+) (*RetryTaskResult, error) {
+	activeIntents, err := qtx.CountActiveOrchestrationIntentsByRun(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("count active orchestration intents for planning retry: %w", err)
+	}
+	if activeIntents > 0 {
+		return nil, ErrTaskRetryUnsupported
+	}
+	activeAttempts, err := qtx.CountActiveOrchestrationTaskAttemptsByTask(ctx, taskRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("count active task attempts for planning retry: %w", err)
+	}
+	if activeAttempts > 0 {
+		return nil, ErrTaskRetryUnsupported
+	}
+	record, replay, err := ensureIdempotencyRecord(ctx, qtx, caller, methodRetryTask, normalizedTaskID, normalizedIdempotencyKey, requestHash)
+	if err != nil {
+		return nil, err
+	}
+	if replay {
+		result, err := decodeRetryTaskResult(record.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		return &result, nil
+	}
+	if taskRow.Status == TaskStatusFailed {
+		resetTask, err := qtx.MarkOrchestrationTaskCreatedForPlanningRetry(ctx, taskRow.ID)
+		if err != nil {
+			return nil, fmt.Errorf("reset root task for planning retry: %w", err)
+		}
+		if _, err := s.appendEvent(ctx, qtx, runRow.ID, eventSpec{
+			TaskID:           resetTask.ID,
+			AggregateType:    "task",
+			AggregateID:      resetTask.ID,
+			AggregateVersion: resetTask.StatusVersion,
+			IdempotencyKey:   normalizedIdempotencyKey,
+			Type:             "run.event.task.created",
+			Payload: map[string]any{
+				"task_id":         resetTask.ID.String(),
+				"run_id":          runRow.ID.String(),
+				"previous_status": taskRow.Status,
+				"new_status":      resetTask.Status,
+				"retry_reason":    "start_run_planning_failed",
+			},
+		}); err != nil {
+			return nil, err
+		}
+		taskRow = resetTask
+	}
+	runningRun, err := qtx.MarkOrchestrationRunRunning(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("mark run running for planning retry: %w", err)
+	}
+	if _, err := s.appendEvent(ctx, qtx, runRow.ID, eventSpec{
+		TaskID:           taskRow.ID,
+		AggregateType:    "run",
+		AggregateID:      runningRun.ID,
+		AggregateVersion: runningRun.StatusVersion,
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Type:             "run.event.running",
+		Payload: map[string]any{
+			"run_id":          runningRun.ID.String(),
+			"previous_status": runRow.LifecycleStatus,
+			"new_status":      runningRun.LifecycleStatus,
+			"entry_reason":    "retry_start_run_planning",
+			"task_id":         taskRow.ID.String(),
+		},
+	}); err != nil {
+		return nil, err
+	}
+	orchestrationIntentID, orchestrationIntentUUID, err := newPGUUID()
+	if err != nil {
+		return nil, err
+	}
+	retryIntent, err := qtx.CreateOrchestrationIntent(ctx, sqlc.CreateOrchestrationIntentParams{
+		ID:               orchestrationIntentUUID,
+		RunID:            runRow.ID,
+		TaskID:           taskRow.ID,
+		CheckpointID:     pgtype.UUID{},
+		Kind:             OrchestrationIntentKindStartRun,
+		Status:           OrchestrationIntentStatusPending,
+		BasePlannerEpoch: runRow.PlannerEpoch,
+		Payload: marshalJSON(map[string]any{
+			"run_id":                  runRow.ID.String(),
+			"task_id":                 taskRow.ID.String(),
+			"reason":                  "retry_start_run_planning",
+			"retry_of_intent_id":      failedIntent.ID.String(),
+			"previous_failure_reason": failedIntent.FailureReason,
+			"idempotency_key":         normalizedIdempotencyKey,
+			"requested_by":            caller.Subject,
+		}),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create planning retry intent: %w", err)
+	}
+	activeRun, err := qtx.MarkOrchestrationRunIntentActive(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("mark run intent active for planning retry: %w", err)
+	}
+	lastEvent, err := s.appendEvent(ctx, qtx, runRow.ID, eventSpec{
+		TaskID:           taskRow.ID,
+		AggregateType:    "orchestration_intent",
+		AggregateID:      retryIntent.ID,
+		AggregateVersion: retryIntent.ClaimEpoch,
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Type:             "run.event.orchestration_intent.enqueued",
+		Payload: map[string]any{
+			"orchestration_intent_id": orchestrationIntentID,
+			"run_id":                  activeRun.ID.String(),
+			"task_id":                 taskRow.ID.String(),
+			"kind":                    retryIntent.Kind,
+			"status":                  retryIntent.Status,
+			"retry_of_intent_id":      failedIntent.ID.String(),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	snapshotSeq, err := uint64FromInt64(lastEvent.Seq, "retry start_run planning event seq")
+	if err != nil {
+		return nil, err
+	}
+	result := RetryTaskResult{
+		TaskID:      normalizedTaskID,
+		RunID:       runRow.ID.String(),
+		SnapshotSeq: snapshotSeq,
+	}
+	if _, err := qtx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(result),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodRetryTask,
+		TargetID:        normalizedTaskID,
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return nil, fmt.Errorf("complete planning retry idempotency: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *Service) CancelTask(ctx context.Context, caller ControlIdentity, taskID string, req CancelTaskRequest) (*CancelTaskResult, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	normalizedTaskID, err := normalizeRequiredUUID(taskID, "task_id")
+	if err != nil {
+		return nil, err
+	}
+	normalizedIdempotencyKey := normalizeIdempotencyKey(req.IdempotencyKey)
+	if normalizedIdempotencyKey == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
+	}
+	requestHash, err := cancelTaskRequestHash(normalizedTaskID, req, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	pgTaskID, err := db.ParseUUID(normalizedTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid task_id", ErrInvalidArgument)
+	}
+	normalizedExpectedRunID := strings.TrimSpace(req.ExpectedRunID)
+	var pgExpectedRunID pgtype.UUID
+	if normalizedExpectedRunID != "" {
+		normalizedExpectedRunID, err = normalizeRequiredUUID(normalizedExpectedRunID, "run_id")
+		if err != nil {
+			return nil, err
+		}
+		pgExpectedRunID, err = db.ParseUUID(normalizedExpectedRunID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid run_id", ErrInvalidArgument)
+		}
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin cancel task tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	qtx := s.queries.WithTx(tx)
+
+	existing, existingFound, err := getIdempotencyRecord(ctx, qtx, caller, methodCancelTask, normalizedTaskID, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if existingFound {
+		if existing.RequestHash != requestHash {
+			return nil, ErrIdempotencyConflict
+		}
+		if existing.State != "completed" {
+			return nil, ErrIdempotencyIncomplete
+		}
+		result, err := decodeCancelTaskResult(existing.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed cancel task tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	taskPreview, err := qtx.GetOrchestrationTaskByID(ctx, pgTaskID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, fmt.Errorf("load task for cancel: %w", err)
+	}
+	if pgExpectedRunID.Valid && taskPreview.RunID != pgExpectedRunID {
+		return nil, ErrTaskNotFound
+	}
+	lockedRun, err := qtx.GetOrchestrationRunByIDForUpdate(ctx, taskPreview.RunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("lock run for cancel task: %w", err)
+	}
+	if err := authorizeRun(caller, lockedRun); err != nil {
+		return nil, ErrTaskNotFound
+	}
+	if lockedRun.LifecycleStatus != LifecycleStatusRunning {
+		return nil, ErrRunImmutable
+	}
+
+	lockedTask, err := qtx.GetOrchestrationTaskByIDForUpdate(ctx, pgTaskID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, fmt.Errorf("lock task for cancel: %w", err)
+	}
+	if lockedTask.RunID != lockedRun.ID || taskSuperseded(lockedTask) {
+		return nil, ErrTaskNotFound
+	}
+	if !taskAcceptsCancel(lockedTask.Status) {
+		return nil, ErrTaskCancelUnsupported
+	}
+
+	record, replay, err := ensureIdempotencyRecord(ctx, qtx, caller, methodCancelTask, normalizedTaskID, normalizedIdempotencyKey, requestHash)
+	if err != nil {
+		return nil, err
+	}
+	if replay {
+		result, err := decodeCancelTaskResult(record.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed cancel task tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	tasks, err := qtx.ListCurrentOrchestrationTasksByRun(ctx, lockedRun.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks for cancel task: %w", err)
+	}
+	dependencies, err := qtx.ListCurrentOrchestrationTaskDependenciesByRun(ctx, lockedRun.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list task dependencies for cancel task: %w", err)
+	}
+	cancelSet := downstreamTaskSet(lockedTask.ID, dependencies)
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "task stopped"
+	}
+	lastEvent := sqlc.OrchestrationEvent{}
+	for _, task := range tasks {
+		if taskSuperseded(task) || !cancelSet[task.ID.String()] || !taskAcceptsCancel(task.Status) {
+			continue
+		}
+		if err := s.cancelOpenCheckpointsForTask(ctx, qtx, lockedRun.ID, task.ID, normalizedIdempotencyKey); err != nil {
+			return nil, err
+		}
+		if err := s.cancelTaskDuringRunCancellation(ctx, qtx, lockedRun, task, pgtype.UUID{}, reason); err != nil {
+			return nil, err
+		}
+	}
+	lockedRun, err = qtx.GetOrchestrationRunByIDForUpdate(ctx, lockedRun.ID)
+	if err != nil {
+		return nil, fmt.Errorf("lock run after cancel task mutations: %w", err)
+	}
+	if terminalEvent, terminal, err := s.maybeMarkRunCompletedAfterTaskTransition(ctx, qtx, lockedRun, lockedTask.ID, pgtype.UUID{}); err != nil {
+		return nil, err
+	} else if terminal {
+		lastEvent = terminalEvent
+		lockedRun, err = qtx.GetOrchestrationRunByIDForUpdate(ctx, lockedRun.ID)
+		if err != nil {
+			return nil, fmt.Errorf("lock run after cancel task completion: %w", err)
+		}
+	}
+	snapshotSeq, err := uint64FromInt64(lockedRun.LastEventSeq, "cancel task event seq")
+	if err != nil {
+		return nil, err
+	}
+	if snapshotSeq == 0 && lastEvent.Seq > 0 {
+		snapshotSeq, err = uint64FromInt64(lastEvent.Seq, "cancel task last event seq")
+		if err != nil {
+			return nil, err
+		}
+	}
+	result := CancelTaskResult{
+		TaskID:      normalizedTaskID,
+		RunID:       lockedRun.ID.String(),
+		SnapshotSeq: snapshotSeq,
+	}
+	if _, err := qtx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(result),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodCancelTask,
+		TargetID:        normalizedTaskID,
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return nil, fmt.Errorf("complete cancel task idempotency: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit cancel task tx: %w", err)
 	}
 	return &result, nil
 }
@@ -1808,7 +2209,7 @@ func (s *Service) CancelRun(ctx context.Context, caller ControlIdentity, runID s
 		case TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
 			continue
 		}
-		if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, task, pgtype.UUID{}); err != nil {
+		if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, task, pgtype.UUID{}, "run cancelled"); err != nil {
 			return nil, err
 		}
 	}
@@ -3147,6 +3548,17 @@ func taskAcceptsConstraintUpdate(status string) bool {
 	}
 }
 
+func taskAcceptsCancel(status string) bool {
+	switch status {
+	case TaskStatusCreated, TaskStatusReady, TaskStatusBlocked, TaskStatusDispatching, TaskStatusRunning, TaskStatusVerifying, TaskStatusWaitingHuman:
+		return true
+	case TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
+		return false
+	default:
+		return false
+	}
+}
+
 func taskSuperseded(task sqlc.OrchestrationTask) bool {
 	return task.SupersededByPlannerEpoch.Valid
 }
@@ -3211,7 +3623,63 @@ func filterCurrentTasks(items []Task) []Task {
 	return filtered
 }
 
-func (s *Service) cancelTaskDuringRunCancellation(ctx context.Context, qtx *sqlc.Queries, runRow sqlc.OrchestrationRun, taskRow sqlc.OrchestrationTask, attemptID pgtype.UUID) error {
+func downstreamTaskSet(rootTaskID pgtype.UUID, dependencies []sqlc.OrchestrationTaskDependency) map[string]bool {
+	selected := map[string]bool{rootTaskID.String(): true}
+	for changed := true; changed; {
+		changed = false
+		for _, dependency := range dependencies {
+			if !selected[dependency.PredecessorTaskID.String()] || selected[dependency.SuccessorTaskID.String()] {
+				continue
+			}
+			selected[dependency.SuccessorTaskID.String()] = true
+			changed = true
+		}
+	}
+	return selected
+}
+
+func (s *Service) cancelOpenCheckpointsForTask(ctx context.Context, qtx *sqlc.Queries, runID, taskID pgtype.UUID, idempotencyKey string) error {
+	checkpoints, err := qtx.ListCurrentOrchestrationCheckpointsByRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("list checkpoints for task cancel: %w", err)
+	}
+	for _, checkpoint := range checkpoints {
+		if checkpoint.TaskID != taskID || checkpoint.Status != CheckpointStatusOpen {
+			continue
+		}
+		cancelledCheckpoint, err := qtx.MarkOrchestrationHumanCheckpointCancelled(ctx, checkpoint.ID)
+		if err != nil {
+			return fmt.Errorf("cancel task checkpoint: %w", err)
+		}
+		if _, err := s.appendEvent(ctx, qtx, runID, eventSpec{
+			TaskID:           cancelledCheckpoint.TaskID,
+			CheckpointID:     cancelledCheckpoint.ID,
+			AggregateType:    "checkpoint",
+			AggregateID:      cancelledCheckpoint.ID,
+			AggregateVersion: cancelledCheckpoint.StatusVersion,
+			Type:             "run.event.hitl.cancelled",
+			IdempotencyKey:   idempotencyKey,
+			Payload: map[string]any{
+				"checkpoint_id":   cancelledCheckpoint.ID.String(),
+				"task_id":         cancelledCheckpoint.TaskID.String(),
+				"previous_status": checkpoint.Status,
+				"new_status":      cancelledCheckpoint.Status,
+				"status":          cancelledCheckpoint.Status,
+				"blocks_run":      cancelledCheckpoint.BlocksRun,
+				"cancel_reason":   "task stopped",
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) cancelTaskDuringRunCancellation(ctx context.Context, qtx *sqlc.Queries, runRow sqlc.OrchestrationRun, taskRow sqlc.OrchestrationTask, attemptID pgtype.UUID, terminalReason string) error {
+	terminalReason = strings.TrimSpace(terminalReason)
+	if terminalReason == "" {
+		terminalReason = "run cancelled"
+	}
 	if taskRow.Status == TaskStatusCancelled {
 		_, _, err := s.maybeMarkRunCompletedAfterTaskTransition(ctx, qtx, runRow, taskRow.ID, attemptID)
 		return err
@@ -3232,7 +3700,7 @@ func (s *Service) cancelTaskDuringRunCancellation(ctx context.Context, qtx *sqlc
 	}
 	cancelledTask, err := qtx.MarkOrchestrationTaskCancelled(ctx, sqlc.MarkOrchestrationTaskCancelledParams{
 		ID:             taskRow.ID,
-		TerminalReason: "run cancelled",
+		TerminalReason: terminalReason,
 	})
 	if err != nil {
 		return fmt.Errorf("cancel task during run cancellation: %w", err)
@@ -3725,6 +4193,20 @@ func cancelRunRequestHash(runID, idempotencyKey string) (string, error) {
 	})
 }
 
+func cancelTaskRequestHash(taskID string, req CancelTaskRequest, idempotencyKey string) (string, error) {
+	return hashJSON(struct {
+		TaskID         string `json:"task_id"`
+		ExpectedRunID  string `json:"expected_run_id"`
+		Reason         string `json:"reason"`
+		IdempotencyKey string `json:"idempotency_key"`
+	}{
+		TaskID:         strings.TrimSpace(taskID),
+		ExpectedRunID:  strings.TrimSpace(req.ExpectedRunID),
+		Reason:         strings.TrimSpace(req.Reason),
+		IdempotencyKey: idempotencyKey,
+	})
+}
+
 func retryTaskRequestHash(taskID string, req RetryTaskRequest, idempotencyKey string) (string, error) {
 	return hashJSON(struct {
 		TaskID         string `json:"task_id"`
@@ -4050,6 +4532,14 @@ func decodeCancelRunResult(raw []byte) (CancelRunResult, error) {
 	var result CancelRunResult
 	if err := unmarshalJSON(raw, &result); err != nil {
 		return CancelRunResult{}, fmt.Errorf("decode idempotent cancel run result: %w", err)
+	}
+	return result, nil
+}
+
+func decodeCancelTaskResult(raw []byte) (CancelTaskResult, error) {
+	var result CancelTaskResult
+	if err := unmarshalJSON(raw, &result); err != nil {
+		return CancelTaskResult{}, fmt.Errorf("decode idempotent cancel task result: %w", err)
 	}
 	return result, nil
 }

@@ -21,6 +21,7 @@ import (
 type fakeOrchestrationService struct {
 	startRun              func(context.Context, orchestration.ControlIdentity, orchestration.StartRunRequest) (orchestration.RunHandle, error)
 	cancelRun             func(context.Context, orchestration.ControlIdentity, string, orchestration.CancelRunRequest) (*orchestration.CancelRunResult, error)
+	cancelTask            func(context.Context, orchestration.ControlIdentity, string, orchestration.CancelTaskRequest) (*orchestration.CancelTaskResult, error)
 	getRunSnapshot        func(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunSnapshot, error)
 	getRunSnapshotAtSeq   func(context.Context, orchestration.ControlIdentity, string, uint64) (*orchestration.RunSnapshot, error)
 	listRuns              func(context.Context, orchestration.ControlIdentity, orchestration.ListRunsRequest) (*orchestration.RunListPage, error)
@@ -52,6 +53,10 @@ func (f fakeOrchestrationService) StartRun(ctx context.Context, caller orchestra
 
 func (f fakeOrchestrationService) CancelRun(ctx context.Context, caller orchestration.ControlIdentity, runID string, req orchestration.CancelRunRequest) (*orchestration.CancelRunResult, error) {
 	return f.cancelRun(ctx, caller, runID, req)
+}
+
+func (f fakeOrchestrationService) CancelTask(ctx context.Context, caller orchestration.ControlIdentity, taskID string, req orchestration.CancelTaskRequest) (*orchestration.CancelTaskResult, error) {
+	return f.cancelTask(ctx, caller, taskID, req)
 }
 
 func (f fakeOrchestrationService) GetRunSnapshot(ctx context.Context, caller orchestration.ControlIdentity, runID string) (*orchestration.RunSnapshot, error) {
@@ -127,6 +132,9 @@ func newNoopOrchestrationService() fakeOrchestrationService {
 		},
 		cancelRun: func(context.Context, orchestration.ControlIdentity, string, orchestration.CancelRunRequest) (*orchestration.CancelRunResult, error) {
 			return &orchestration.CancelRunResult{}, nil
+		},
+		cancelTask: func(context.Context, orchestration.ControlIdentity, string, orchestration.CancelTaskRequest) (*orchestration.CancelTaskResult, error) {
+			return &orchestration.CancelTaskResult{}, nil
 		},
 		getRunSnapshot: func(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunSnapshot, error) {
 			return &orchestration.RunSnapshot{}, nil
@@ -463,6 +471,21 @@ func TestOrchestrationRegisterIncludesTaskRetryRoute(t *testing.T) {
 	t.Fatalf("Register() missing route %s %s", http.MethodPost, want)
 }
 
+func TestOrchestrationRegisterIncludesTaskCancelRoute(t *testing.T) {
+	e := echo.New()
+	handler := &OrchestrationHandler{}
+
+	handler.Register(e)
+
+	want := "/orchestration/runs/:run_id/tasks/:task_id/cancel"
+	for _, route := range e.Routes() {
+		if route.Method == http.MethodPost && route.Path == want {
+			return
+		}
+	}
+	t.Fatalf("Register() missing route %s %s", http.MethodPost, want)
+}
+
 func TestOrchestrationCreateHumanCheckpointRejectsBodyPathMismatch(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/orchestration/runs/run-1/tasks/task-1/checkpoints", strings.NewReader(`{"run_id":"other-run","task_id":"task-1","question":"approve?","idempotency_key":"checkpoint-1","options":[{"id":"ok","kind":"choice","label":"OK"}]}`))
@@ -781,6 +804,49 @@ func TestOrchestrationRetryTaskReturnsResult(t *testing.T) {
 		t.Fatalf("decode body: %v", err)
 	}
 	if body.RunID != "run-1" || body.TaskID != "task-1" || body.SnapshotSeq != 31 {
+		t.Fatalf("response = %+v", body)
+	}
+}
+
+func TestOrchestrationCancelTaskReturnsResult(t *testing.T) {
+	e, rec, req := newAuthedEcho(http.MethodPost, "/orchestration/runs/run-1/tasks/task-1/cancel", `{"reason":"operator stopped task","idempotency_key":"cancel-task-1"}`)
+	var called bool
+	svc := newNoopOrchestrationService()
+	svc.cancelTask = func(_ context.Context, caller orchestration.ControlIdentity, taskID string, req orchestration.CancelTaskRequest) (*orchestration.CancelTaskResult, error) {
+		called = true
+		if caller != (orchestration.ControlIdentity{TenantID: "tenant-123", Subject: "user-123"}) {
+			t.Fatalf("caller = %+v", caller)
+		}
+		if taskID != "task-1" {
+			t.Fatalf("taskID = %q", taskID)
+		}
+		if req.ExpectedRunID != "run-1" {
+			t.Fatalf("expected_run_id = %q, want %q", req.ExpectedRunID, "run-1")
+		}
+		if req.Reason != "operator stopped task" {
+			t.Fatalf("reason = %q", req.Reason)
+		}
+		if req.IdempotencyKey != "cancel-task-1" {
+			t.Fatalf("idempotency_key = %q", req.IdempotencyKey)
+		}
+		return &orchestration.CancelTaskResult{RunID: "run-1", TaskID: taskID, SnapshotSeq: 32}, nil
+	}
+	handler := &OrchestrationHandler{service: svc, logger: slog.New(slog.DiscardHandler)}
+	handler.Register(e)
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /runs/:run_id/tasks/:task_id/cancel status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !called {
+		t.Fatal("CancelTask was not called")
+	}
+	var body orchestration.CancelTaskResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.RunID != "run-1" || body.TaskID != "task-1" || body.SnapshotSeq != 32 {
 		t.Fatalf("response = %+v", body)
 	}
 }

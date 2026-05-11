@@ -1818,6 +1818,20 @@ WHERE id = $1
 		t.Fatalf("run terminal_reason = %q, want retry exhaustion", terminalReason)
 	}
 
+	taskPage, err := svc.ListRunTasks(ctx, caller, handle.RunID, ListRunTasksRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListRunTasks() error = %v", err)
+	}
+	if len(taskPage.Items) != 1 {
+		t.Fatalf("ListRunTasks() len = %d, want root task only", len(taskPage.Items))
+	}
+	if taskPage.Items[0].Status != TaskStatusFailed {
+		t.Fatalf("root task status = %q, want %q", taskPage.Items[0].Status, TaskStatusFailed)
+	}
+	if !strings.Contains(taskPage.Items[0].TerminalReason, "failed after") {
+		t.Fatalf("root task terminal_reason = %q, want retry exhaustion", taskPage.Items[0].TerminalReason)
+	}
+
 	var runFailedEventCount int
 	if err := pool.QueryRow(ctx, `
 SELECT COUNT(*)
@@ -1830,6 +1844,66 @@ WHERE run_id = $1
 	}
 	if runFailedEventCount != 1 {
 		t.Fatalf("run.event.failed event count = %d, want 1", runFailedEventCount)
+	}
+
+	retryResult, err := svc.RetryTask(ctx, caller, taskPage.Items[0].ID, RetryTaskRequest{
+		Reason:         "operator retried failed planner",
+		IdempotencyKey: "retry-root-plan-" + uuid.NewString(),
+		ExpectedRunID:  handle.RunID,
+	})
+	if err != nil {
+		t.Fatalf("RetryTask() planner failure error = %v", err)
+	}
+	if retryResult.RunID != handle.RunID {
+		t.Fatalf("RetryTask() run_id = %q, want %q", retryResult.RunID, handle.RunID)
+	}
+
+	if err := pool.QueryRow(ctx, `
+SELECT lifecycle_status, intent_status, terminal_reason
+FROM orchestration_runs
+WHERE id = $1
+`, mustParsePGUUID(t, handle.RunID)).Scan(&lifecycleStatus, &intentStatus, &terminalReason); err != nil {
+		t.Fatalf("load run after planner retry: %v", err)
+	}
+	if lifecycleStatus != LifecycleStatusRunning {
+		t.Fatalf("run lifecycle_status after planner retry = %q, want %q", lifecycleStatus, LifecycleStatusRunning)
+	}
+	if intentStatus != IntentStatusActive {
+		t.Fatalf("run intent_status after planner retry = %q, want %q", intentStatus, IntentStatusActive)
+	}
+	if terminalReason != "" {
+		t.Fatalf("run terminal_reason after planner retry = %q, want empty", terminalReason)
+	}
+
+	var taskStatus string
+	var taskTerminalReason string
+	if err := pool.QueryRow(ctx, `
+SELECT status, terminal_reason
+FROM orchestration_tasks
+WHERE id = $1
+`, mustParsePGUUID(t, taskPage.Items[0].ID)).Scan(&taskStatus, &taskTerminalReason); err != nil {
+		t.Fatalf("load root task after planner retry: %v", err)
+	}
+	if taskStatus != TaskStatusCreated {
+		t.Fatalf("root task status after planner retry = %q, want %q", taskStatus, TaskStatusCreated)
+	}
+	if taskTerminalReason != "" {
+		t.Fatalf("root task terminal_reason after planner retry = %q, want empty", taskTerminalReason)
+	}
+
+	var pendingStartRunIntentCount int
+	if err := pool.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM orchestration_intents
+WHERE run_id = $1
+  AND kind = 'start_run'
+  AND status = 'pending'
+  AND payload->>'retry_of_intent_id' IS NOT NULL
+`, mustParsePGUUID(t, handle.RunID)).Scan(&pendingStartRunIntentCount); err != nil {
+		t.Fatalf("count pending start_run retry intents: %v", err)
+	}
+	if pendingStartRunIntentCount != 1 {
+		t.Fatalf("pending start_run retry intent count = %d, want 1", pendingStartRunIntentCount)
 	}
 }
 
@@ -1876,8 +1950,11 @@ func TestIntegrationStartRunPlannerRejectsRuntimeLimitOverflow(t *testing.T) {
 	if len(taskPage.Items) != 1 {
 		t.Fatalf("ListRunTasks() len = %d, want root task only", len(taskPage.Items))
 	}
-	if taskPage.Items[0].Status != TaskStatusCreated {
-		t.Fatalf("root task status = %q, want %q", taskPage.Items[0].Status, TaskStatusCreated)
+	if taskPage.Items[0].Status != TaskStatusFailed {
+		t.Fatalf("root task status = %q, want %q", taskPage.Items[0].Status, TaskStatusFailed)
+	}
+	if !strings.Contains(taskPage.Items[0].TerminalReason, "planned child task count") {
+		t.Fatalf("root task terminal_reason = %q, want planner failure", taskPage.Items[0].TerminalReason)
 	}
 
 	var failedIntentCount int

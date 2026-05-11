@@ -6168,6 +6168,53 @@ func (q *Queries) MarkOrchestrationTaskCompleted(ctx context.Context, arg MarkOr
 	return i, err
 }
 
+const markOrchestrationTaskCreatedForPlanningRetry = `-- name: MarkOrchestrationTaskCreatedForPlanningRetry :one
+UPDATE orchestration_tasks
+SET status = 'created',
+    status_version = status_version + 1,
+    waiting_checkpoint_id = NULL,
+    waiting_scope = '',
+    latest_result_id = NULL,
+    blocked_reason = '',
+    terminal_reason = '',
+    ready_at = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, run_id, decomposed_from_task_id, kind, goal, inputs, planner_epoch, superseded_by_planner_epoch, worker_profile, priority, retry_policy, verification_policy, env_preconditions, status, status_version, waiting_checkpoint_id, waiting_scope, latest_result_id, ready_at, blocked_reason, terminal_reason, blackboard_scope, created_at, updated_at
+`
+
+func (q *Queries) MarkOrchestrationTaskCreatedForPlanningRetry(ctx context.Context, id pgtype.UUID) (OrchestrationTask, error) {
+	row := q.db.QueryRow(ctx, markOrchestrationTaskCreatedForPlanningRetry, id)
+	var i OrchestrationTask
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.DecomposedFromTaskID,
+		&i.Kind,
+		&i.Goal,
+		&i.Inputs,
+		&i.PlannerEpoch,
+		&i.SupersededByPlannerEpoch,
+		&i.WorkerProfile,
+		&i.Priority,
+		&i.RetryPolicy,
+		&i.VerificationPolicy,
+		&i.EnvPreconditions,
+		&i.Status,
+		&i.StatusVersion,
+		&i.WaitingCheckpointID,
+		&i.WaitingScope,
+		&i.LatestResultID,
+		&i.ReadyAt,
+		&i.BlockedReason,
+		&i.TerminalReason,
+		&i.BlackboardScope,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const markOrchestrationTaskDependencySuperseded = `-- name: MarkOrchestrationTaskDependencySuperseded :one
 UPDATE orchestration_task_dependencies
 SET superseded_by_planner_epoch = $1,

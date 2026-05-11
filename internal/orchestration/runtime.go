@@ -727,7 +727,7 @@ func (s *Service) processCheckpointResumeOrchestrationIntent(ctx context.Context
 		taskRow.Status == TaskStatusWaitingHuman &&
 		taskRow.WaitingCheckpointID.Valid &&
 		taskRow.WaitingCheckpointID == checkpointRow.ID {
-		if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}); err != nil {
+		if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, pgtype.UUID{}, "run cancelled"); err != nil {
 			return sqlc.OrchestrationEvent{}, err
 		}
 		lastEvent, err = s.appendEvent(ctx, qtx, runRow.ID, eventSpec{
@@ -892,7 +892,7 @@ func (s *Service) processAttemptFinalizeOrchestrationIntent(ctx context.Context,
 
 	var lastEvent sqlc.OrchestrationEvent
 	if runRow.LifecycleStatus == LifecycleStatusCancelling && taskRow.Status == TaskStatusRunning {
-		if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, attemptRow.ID); err != nil {
+		if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, attemptRow.ID, "run cancelled"); err != nil {
 			return sqlc.OrchestrationEvent{}, err
 		}
 		lastEvent, err = s.appendEvent(ctx, qtx, runRow.ID, eventSpec{
@@ -1905,7 +1905,7 @@ func (s *Service) ensureAttemptBinding(ctx context.Context, attemptID pgtype.UUI
 			return fmt.Errorf("retire invalid attempt before binding: %w", retireErr)
 		}
 		if runRow.LifecycleStatus == LifecycleStatusCancelling {
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, retiredAttempt.ID); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, retiredAttempt.ID, "run cancelled"); err != nil {
 				return err
 			}
 		}
@@ -2035,7 +2035,7 @@ func (s *Service) advanceAttemptToRunning(ctx context.Context, attemptID pgtype.
 			return nil, fmt.Errorf("retire invalid bound attempt before running: %w", retireErr)
 		}
 		if runRow.LifecycleStatus == LifecycleStatusCancelling {
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, retiredAttempt.ID); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, retiredAttempt.ID, "run cancelled"); err != nil {
 				return nil, err
 			}
 		}
@@ -2168,7 +2168,7 @@ func (s *Service) HeartbeatAttempt(ctx context.Context, input AttemptHeartbeat) 
 			if err != nil {
 				return nil, err
 			}
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, lostAttempt.ID); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, lostAttempt.ID, "run cancelled"); err != nil {
 				return nil, err
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -2299,7 +2299,7 @@ func (s *Service) CompleteAttempt(ctx context.Context, input AttemptCompletion) 
 			if err != nil {
 				return nil, err
 			}
-			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, lostAttempt.ID); err != nil {
+			if err := s.cancelTaskDuringRunCancellation(ctx, qtx, runRow, taskRow, lostAttempt.ID, "run cancelled"); err != nil {
 				return nil, err
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -3339,6 +3339,11 @@ func (s *Service) markRunFailedFromIntentFailure(ctx context.Context, qtx *sqlc.
 	if terminalReason == "" {
 		terminalReason = "planner retry limit exceeded"
 	}
+	if intent.Kind == OrchestrationIntentKindStartRun && intent.TaskID.Valid {
+		if err := s.markStartRunRootTaskFailedFromIntentFailure(ctx, qtx, runRow, intent.TaskID, terminalReason); err != nil {
+			return err
+		}
+	}
 	failedRun, err := qtx.MarkOrchestrationRunFailed(ctx, sqlc.MarkOrchestrationRunFailedParams{
 		ID:             runRow.ID,
 		TerminalReason: terminalReason,
@@ -3362,6 +3367,43 @@ func (s *Service) markRunFailedFromIntentFailure(ctx context.Context, qtx *sqlc.
 			"kind":                    intent.Kind,
 			"attempt":                 intent.ClaimEpoch,
 			"max_attempts":            OrchestrationIntentTransientMaxAttempts,
+		},
+	})
+	return err
+}
+
+func (s *Service) markStartRunRootTaskFailedFromIntentFailure(ctx context.Context, qtx *sqlc.Queries, runRow sqlc.OrchestrationRun, taskID pgtype.UUID, terminalReason string) error {
+	taskRow, err := qtx.GetOrchestrationTaskByIDForUpdate(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("lock root task after start_run planning failure: %w", err)
+	}
+	if taskRow.RunID != runRow.ID || taskRow.Status == TaskStatusFailed || taskRow.Status == TaskStatusCompleted || taskRow.Status == TaskStatusCancelled {
+		return nil
+	}
+	failedTask, err := qtx.MarkOrchestrationTaskFailed(ctx, sqlc.MarkOrchestrationTaskFailedParams{
+		ID:             taskRow.ID,
+		LatestResultID: pgtype.UUID{},
+		TerminalReason: terminalReason,
+	})
+	if err != nil {
+		return fmt.Errorf("mark root task failed after start_run planning failure: %w", err)
+	}
+	_, err = s.appendEvent(ctx, qtx, runRow.ID, eventSpec{
+		TaskID:           failedTask.ID,
+		AggregateType:    "task",
+		AggregateID:      failedTask.ID,
+		AggregateVersion: failedTask.StatusVersion,
+		Type:             "run.event.task.failed",
+		Payload: map[string]any{
+			"run_id":          runRow.ID.String(),
+			"task_id":         failedTask.ID.String(),
+			"previous_status": taskRow.Status,
+			"new_status":      failedTask.Status,
+			"terminal_reason": failedTask.TerminalReason,
+			"failure_reason":  "orchestration_intent.start_run.failed",
 		},
 	})
 	return err
