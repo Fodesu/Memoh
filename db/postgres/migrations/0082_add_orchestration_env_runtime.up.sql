@@ -1,12 +1,43 @@
--- 0086_add_orchestration_env_runtime
--- Introduce the durable schema for the Stage 3 env session runtime:
--- env_resources describe leasable environment templates, env_sessions
--- track concrete leased instances with lease_epoch fencing, env_lease_
--- reservations carry the admission ticket through reserve/commit/abort,
--- env_bindings map a session to the task/attempt currently using it
--- (including HITL-held cases where the binding outlives a single
--- attempt), and env_snapshots record point-in-time captures keyed by
--- session for pre/post action diff and verifier replay.
+-- 0082_add_orchestration_env_runtime
+-- Add orchestration env runtime tables, env preconditions, action ledger env references, and container image catalog.
+
+CREATE TABLE IF NOT EXISTS orchestration_container_images (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id TEXT NOT NULL,
+  owner_subject TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'registry' CHECK (source_type IN ('registry', 'dockerfile')),
+  image_ref TEXT NOT NULL DEFAULT '',
+  dockerfile TEXT NOT NULL DEFAULT '',
+  build_options JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'pending', 'building', 'failed', 'archived')),
+  digest TEXT NOT NULL DEFAULT '',
+  last_build_error TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT orchestration_container_images_tenant_name_unique UNIQUE (tenant_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_container_images_tenant_status
+  ON orchestration_container_images (tenant_id, status, name, id);
+
+ALTER TABLE orchestration_container_images
+  ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'registry'
+    CHECK (source_type IN ('registry', 'dockerfile'));
+ALTER TABLE orchestration_container_images
+  ADD COLUMN IF NOT EXISTS dockerfile TEXT NOT NULL DEFAULT '';
+ALTER TABLE orchestration_container_images
+  ADD COLUMN IF NOT EXISTS build_options JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE orchestration_container_images
+  ADD COLUMN IF NOT EXISTS digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE orchestration_container_images
+  ADD COLUMN IF NOT EXISTS last_build_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE orchestration_container_images
+  DROP CONSTRAINT IF EXISTS orchestration_container_images_status_check;
+ALTER TABLE orchestration_container_images
+  ADD CONSTRAINT orchestration_container_images_status_check
+  CHECK (status IN ('ready', 'pending', 'building', 'failed', 'archived'));
 
 CREATE TABLE IF NOT EXISTS orchestration_env_resources (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -152,3 +183,83 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_env_snapshots_attempt
 CREATE INDEX IF NOT EXISTS idx_orchestration_env_snapshots_run_kind
   ON orchestration_env_snapshots (run_id, kind, created_at, id)
   WHERE run_id IS NOT NULL;
+
+ALTER TABLE orchestration_tasks
+  ADD COLUMN IF NOT EXISTS env_preconditions JSONB NOT NULL DEFAULT '{"required": false}'::jsonb;
+
+ALTER TABLE orchestration_input_manifests
+  ADD COLUMN IF NOT EXISTS captured_env_preconditions JSONB NOT NULL DEFAULT '{"required": false}'::jsonb;
+
+ALTER TABLE orchestration_action_ledger
+  ADD COLUMN IF NOT EXISTS effect_class TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS env_session_id UUID,
+  ADD COLUMN IF NOT EXISTS env_binding_id UUID,
+  ADD COLUMN IF NOT EXISTS before_env_snapshot_id UUID,
+  ADD COLUMN IF NOT EXISTS after_env_snapshot_id UUID;
+
+ALTER TABLE orchestration_action_ledger
+  DROP CONSTRAINT IF EXISTS orchestration_action_ledger_action_kind_check,
+  ADD CONSTRAINT orchestration_action_ledger_action_kind_check CHECK (
+    action_kind IN ('tool_call', 'env_acquire', 'env_release', 'env_hold', 'env_snapshot')
+  );
+
+ALTER TABLE orchestration_action_ledger
+  DROP CONSTRAINT IF EXISTS orchestration_action_ledger_effect_class_check,
+  ADD CONSTRAINT orchestration_action_ledger_effect_class_check CHECK (
+    effect_class IN ('', 'env_local_read', 'env_local_mutation', 'external_read', 'external_write', 'external_irreversible')
+  );
+
+DROP INDEX IF EXISTS idx_orchestration_action_ledger_attempt_tool_call_unique;
+DROP INDEX IF EXISTS idx_orchestration_action_ledger_verification_tool_call_unique;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_attempt_tool_call_unique
+  ON orchestration_action_ledger(attempt_id, tool_call_id)
+  WHERE attempt_id IS NOT NULL AND action_kind = 'tool_call';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_verification_tool_call_unique
+  ON orchestration_action_ledger(verification_id, tool_call_id)
+  WHERE verification_id IS NOT NULL AND action_kind = 'tool_call';
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_env_session
+  ON orchestration_action_ledger(env_session_id, started_at, id)
+  WHERE env_session_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_effect
+  ON orchestration_action_ledger(run_id, effect_class, started_at, id)
+  WHERE effect_class <> '';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_env_session_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_env_session_fk
+      FOREIGN KEY (env_session_id) REFERENCES orchestration_env_sessions(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_env_binding_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_env_binding_fk
+      FOREIGN KEY (env_binding_id) REFERENCES orchestration_env_bindings(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_before_env_snapshot_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_before_env_snapshot_fk
+      FOREIGN KEY (before_env_snapshot_id) REFERENCES orchestration_env_snapshots(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_after_env_snapshot_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_after_env_snapshot_fk
+      FOREIGN KEY (after_env_snapshot_id) REFERENCES orchestration_env_snapshots(id) ON DELETE SET NULL;
+  END IF;
+END $$;

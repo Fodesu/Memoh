@@ -1,5 +1,10 @@
--- 0081_add_orchestration_kernel
--- Drop the final orchestration kernel tables.
+-- 0081_add_orchestration_core
+-- Drop the orchestration core schema, verifier queue, action ledger, leases, and event outbox index.
+
+DROP TABLE IF EXISTS orchestration_action_ledger;
+DROP TABLE IF EXISTS orchestration_task_verifications;
+DROP INDEX IF EXISTS idx_orchestration_events_unpublished;
+DROP INDEX IF EXISTS idx_orchestration_human_checkpoints_open_run_barrier_unique;
 
 DROP INDEX IF EXISTS idx_orchestration_human_checkpoints_open_timeout;
 DROP TABLE IF EXISTS orchestration_workers;
