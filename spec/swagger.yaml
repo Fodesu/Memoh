@@ -2894,6 +2894,24 @@ definitions:
       snapshot_seq:
         type: integer
     type: object
+  orchestration.CancelTaskRequest:
+    properties:
+      idempotency_key:
+        type: string
+      reason:
+        type: string
+    required:
+    - idempotency_key
+    type: object
+  orchestration.CancelTaskResult:
+    properties:
+      run_id:
+        type: string
+      snapshot_seq:
+        type: integer
+      task_id:
+        type: string
+    type: object
   orchestration.CheckpointDefaultAction:
     properties:
       freeform_input:
@@ -10087,6 +10105,57 @@ paths:
       security:
       - BearerAuth: []
       summary: List orchestration tasks
+      tags:
+      - orchestration
+  /orchestration/runs/{run_id}/tasks/{task_id}/cancel:
+    post:
+      description: Stop an active orchestration task and cancel unfinished downstream
+        tasks
+      parameters:
+      - description: Run ID
+        in: path
+        name: run_id
+        required: true
+        type: string
+      - description: Task ID
+        in: path
+        name: task_id
+        required: true
+        type: string
+      - description: Cancel task request
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/orchestration.CancelTaskRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/orchestration.CancelTaskResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Cancel a task
       tags:
       - orchestration
   /orchestration/runs/{run_id}/tasks/{task_id}/checkpoints:

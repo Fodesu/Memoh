@@ -9,6 +9,7 @@ var (
 	ErrRunNotFound                 = errors.New("orchestration run not found")
 	ErrTaskNotFound                = errors.New("orchestration task not found")
 	ErrTaskImmutable               = errors.New("task does not accept human checkpoint mutation")
+	ErrTaskCancelUnsupported       = errors.New("task does not accept cancel in current state")
 	ErrTaskRetryUnsupported        = errors.New("task does not accept retry in current state")
 	ErrTaskCheckpointUnsupported   = errors.New("task does not support human checkpoint in current state")
 	ErrTaskAlreadyWaitingHuman     = errors.New("task already waiting on a human checkpoint")

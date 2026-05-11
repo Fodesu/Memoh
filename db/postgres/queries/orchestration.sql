@@ -372,6 +372,20 @@ SET status = 'ready',
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
+-- name: MarkOrchestrationTaskCreatedForPlanningRetry :one
+UPDATE orchestration_tasks
+SET status = 'created',
+    status_version = status_version + 1,
+    waiting_checkpoint_id = NULL,
+    waiting_scope = '',
+    latest_result_id = NULL,
+    blocked_reason = '',
+    terminal_reason = '',
+    ready_at = NULL,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
 -- name: MarkOrchestrationTaskBlocked :one
 UPDATE orchestration_tasks
 SET status = 'blocked',

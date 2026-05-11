@@ -119,6 +119,7 @@ const (
 	methodStartRun              = "StartRun"
 	methodCreateHumanCheckpoint = "CreateHumanCheckpoint"
 	methodCancelRun             = "CancelRun"
+	methodCancelTask            = "CancelTask"
 	methodInjectRunHint         = "InjectRunHint"
 	methodCommitArtifact        = "CommitArtifact"
 	methodResolveCheckpoint     = "ResolveCheckpoint"
@@ -455,6 +456,18 @@ type CancelRunResult struct {
 	RunID           string `json:"run_id"`
 	LifecycleStatus string `json:"lifecycle_status"`
 	SnapshotSeq     uint64 `json:"snapshot_seq"`
+}
+
+type CancelTaskRequest struct {
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key" validate:"required"`
+	ExpectedRunID  string `json:"-"`
+}
+
+type CancelTaskResult struct {
+	TaskID      string `json:"task_id"`
+	RunID       string `json:"run_id"`
+	SnapshotSeq uint64 `json:"snapshot_seq"`
 }
 
 type ListRunEventsRequest struct {

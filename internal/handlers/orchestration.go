@@ -21,6 +21,7 @@ type orchestrationAPI interface {
 	OrchestratorAvailable(context.Context) (bool, error)
 	StartRun(context.Context, orchestration.ControlIdentity, orchestration.StartRunRequest) (orchestration.RunHandle, error)
 	CancelRun(context.Context, orchestration.ControlIdentity, string, orchestration.CancelRunRequest) (*orchestration.CancelRunResult, error)
+	CancelTask(context.Context, orchestration.ControlIdentity, string, orchestration.CancelTaskRequest) (*orchestration.CancelTaskResult, error)
 	GetRunSnapshot(context.Context, orchestration.ControlIdentity, string) (*orchestration.RunSnapshot, error)
 	GetRunSnapshotAtSeq(context.Context, orchestration.ControlIdentity, string, uint64) (*orchestration.RunSnapshot, error)
 	ListRuns(context.Context, orchestration.ControlIdentity, orchestration.ListRunsRequest) (*orchestration.RunListPage, error)
@@ -64,6 +65,7 @@ func (h *OrchestrationHandler) Register(e *echo.Echo) {
 	group.POST("/runs/:run_id/hints", h.InjectRunHint)
 	group.GET("/runs/:run_id/watch", h.WatchRun)
 	group.POST("/runs/:run_id/tasks/:task_id/checkpoints", h.CreateHumanCheckpoint)
+	group.POST("/runs/:run_id/tasks/:task_id/cancel", h.CancelTask)
 	group.POST("/runs/:run_id/tasks/:task_id/retry", h.RetryTask)
 	group.GET("/runs/:run_id/checkpoints", h.ListRunCheckpoints)
 	group.GET("/runs/:run_id/artifacts", h.ListRunArtifacts)
@@ -674,6 +676,41 @@ func (h *OrchestrationHandler) RetryTask(c echo.Context) error {
 	return c.JSON(http.StatusOK, result)
 }
 
+// CancelTask godoc
+// @Summary Cancel a task
+// @Description Stop an active orchestration task and cancel unfinished downstream tasks
+// @Tags orchestration
+// @Security BearerAuth
+// @Param run_id path string true "Run ID"
+// @Param task_id path string true "Task ID"
+// @Param payload body orchestration.CancelTaskRequest true "Cancel task request"
+// @Success 200 {object} orchestration.CancelTaskResult
+// @Failure 400 {object} ErrorResponse
+// @Failure 401 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /orchestration/runs/{run_id}/tasks/{task_id}/cancel [post].
+func (h *OrchestrationHandler) CancelTask(c echo.Context) error {
+	caller, err := controlIdentity(c)
+	if err != nil {
+		return err
+	}
+	var req orchestration.CancelTaskRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	req.ExpectedRunID = strings.TrimSpace(c.Param("run_id"))
+	if err := h.requireOrchestrator(c.Request().Context()); err != nil {
+		return err
+	}
+	result, err := h.service.CancelTask(c.Request().Context(), caller, strings.TrimSpace(c.Param("task_id")), req)
+	if err != nil {
+		return h.httpError(err)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
 func controlIdentity(c echo.Context) (orchestration.ControlIdentity, error) {
 	if strings.TrimSpace(c.QueryParam("token")) != "" {
 		return orchestration.ControlIdentity{}, echo.NewHTTPError(http.StatusUnauthorized, "authorization header required")
@@ -729,6 +766,7 @@ func (h *OrchestrationHandler) httpError(err error) error {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, orchestration.ErrRunImmutable),
 		errors.Is(err, orchestration.ErrTaskImmutable),
+		errors.Is(err, orchestration.ErrTaskCancelUnsupported),
 		errors.Is(err, orchestration.ErrTaskRetryUnsupported),
 		errors.Is(err, orchestration.ErrTaskCheckpointUnsupported),
 		errors.Is(err, orchestration.ErrTaskAlreadyWaitingHuman),

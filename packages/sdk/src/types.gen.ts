@@ -1739,6 +1739,17 @@ export type OrchestrationCancelRunResult = {
     snapshot_seq?: number;
 };
 
+export type OrchestrationCancelTaskRequest = {
+    idempotency_key: string;
+    reason?: string;
+};
+
+export type OrchestrationCancelTaskResult = {
+    run_id?: string;
+    snapshot_seq?: number;
+    task_id?: string;
+};
+
 export type OrchestrationCheckpointDefaultAction = {
     freeform_input?: string;
     mode: string;
@@ -9583,6 +9594,59 @@ export type GetOrchestrationRunsByRunIdTasksResponses = {
 };
 
 export type GetOrchestrationRunsByRunIdTasksResponse = GetOrchestrationRunsByRunIdTasksResponses[keyof GetOrchestrationRunsByRunIdTasksResponses];
+
+export type PostOrchestrationRunsByRunIdTasksByTaskIdCancelData = {
+    /**
+     * Cancel task request
+     */
+    body: OrchestrationCancelTaskRequest;
+    path: {
+        /**
+         * Run ID
+         */
+        run_id: string;
+        /**
+         * Task ID
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/orchestration/runs/{run_id}/tasks/{task_id}/cancel';
+};
+
+export type PostOrchestrationRunsByRunIdTasksByTaskIdCancelErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostOrchestrationRunsByRunIdTasksByTaskIdCancelError = PostOrchestrationRunsByRunIdTasksByTaskIdCancelErrors[keyof PostOrchestrationRunsByRunIdTasksByTaskIdCancelErrors];
+
+export type PostOrchestrationRunsByRunIdTasksByTaskIdCancelResponses = {
+    /**
+     * OK
+     */
+    200: OrchestrationCancelTaskResult;
+};
+
+export type PostOrchestrationRunsByRunIdTasksByTaskIdCancelResponse = PostOrchestrationRunsByRunIdTasksByTaskIdCancelResponses[keyof PostOrchestrationRunsByRunIdTasksByTaskIdCancelResponses];
 
 export type PostOrchestrationRunsByRunIdTasksByTaskIdCheckpointsData = {
     /**
