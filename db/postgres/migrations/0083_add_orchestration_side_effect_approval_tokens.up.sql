@@ -1,4 +1,4 @@
--- 0085_add_orchestration_side_effect_approval_tokens
+-- 0083_add_orchestration_side_effect_approval_tokens
 -- Add fenced approval tokens for irreversible orchestration side effects.
 
 CREATE TABLE IF NOT EXISTS orchestration_side_effect_approval_tokens (

@@ -1,5 +1,5 @@
--- 0077_add_orchestration_kernel
--- Add the final orchestration kernel schema, including runtime tables and integrity constraints.
+-- 0081_add_orchestration_core
+-- Add the orchestration core schema, verifier queue, action ledger, leases, and event outbox index.
 
 CREATE TABLE IF NOT EXISTS orchestration_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS orchestration_task_attempts (
   attempt_no INTEGER NOT NULL,
   worker_id TEXT NOT NULL DEFAULT '',
   executor_id TEXT NOT NULL DEFAULT '',
+  worker_lease_token TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN ('created', 'claimed', 'binding', 'running', 'completed', 'failed', 'lost')),
   claim_epoch BIGINT NOT NULL DEFAULT 0,
   claim_token TEXT NOT NULL DEFAULT '',
@@ -429,3 +430,117 @@ BEGIN
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END $$;
+
+CREATE TABLE IF NOT EXISTS orchestration_task_verifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL UNIQUE REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  result_id UUID NOT NULL UNIQUE,
+  attempt_no INTEGER NOT NULL DEFAULT 1,
+  worker_id TEXT NOT NULL DEFAULT '',
+  executor_id TEXT NOT NULL DEFAULT '',
+  worker_lease_token TEXT NOT NULL DEFAULT '',
+  verifier_profile TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('created', 'claimed', 'running', 'completed', 'failed', 'lost')),
+  claim_epoch BIGINT NOT NULL DEFAULT 0,
+  claim_token TEXT NOT NULL DEFAULT '',
+  lease_expires_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  verdict TEXT NOT NULL DEFAULT '' CHECK (verdict IN ('', 'accepted', 'rejected')),
+  summary TEXT NOT NULL DEFAULT '',
+  failure_class TEXT NOT NULL DEFAULT '',
+  terminal_reason TEXT NOT NULL DEFAULT '',
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT orchestration_task_verifications_id_run_task_unique UNIQUE (id, run_id, task_id),
+  CONSTRAINT orchestration_task_verifications_id_run_result_unique UNIQUE (id, run_id, result_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_verifications_run_status ON orchestration_task_verifications(run_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_verifications_claim_queue ON orchestration_task_verifications(status, verifier_profile, created_at, id) WHERE status = 'created';
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_verifications_lease_expiry ON orchestration_task_verifications(lease_expires_at, id) WHERE status IN ('claimed', 'running') AND lease_expires_at IS NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_task_verifications_task_run_fk') THEN
+    ALTER TABLE orchestration_task_verifications
+      ADD CONSTRAINT orchestration_task_verifications_task_run_fk
+      FOREIGN KEY (task_id, run_id) REFERENCES orchestration_tasks(id, run_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_task_verifications_result_fk') THEN
+    ALTER TABLE orchestration_task_verifications
+      ADD CONSTRAINT orchestration_task_verifications_result_fk
+      FOREIGN KEY (result_id, run_id, task_id) REFERENCES orchestration_task_results(id, run_id, task_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_open_run_barrier_unique
+  ON orchestration_human_checkpoints(run_id)
+  WHERE blocks_run = TRUE AND status = 'open';
+
+CREATE TABLE IF NOT EXISTS orchestration_action_ledger (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  attempt_id UUID,
+  verification_id UUID,
+  action_kind TEXT NOT NULL DEFAULT 'tool_call' CHECK (action_kind IN ('tool_call')),
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+  tool_name TEXT NOT NULL DEFAULT '',
+  tool_call_id TEXT NOT NULL DEFAULT '',
+  input_payload JSONB NOT NULL DEFAULT 'null'::jsonb,
+  output_payload JSONB NOT NULL DEFAULT 'null'::jsonb,
+  error_payload JSONB NOT NULL DEFAULT 'null'::jsonb,
+  summary TEXT NOT NULL DEFAULT '',
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT orchestration_action_ledger_exactly_one_subject CHECK (
+    (attempt_id IS NOT NULL AND verification_id IS NULL)
+    OR (attempt_id IS NULL AND verification_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_run_started_at ON orchestration_action_ledger(run_id, started_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_task_started_at ON orchestration_action_ledger(task_id, started_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_attempt_started_at ON orchestration_action_ledger(attempt_id, started_at, id) WHERE attempt_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orchestration_action_ledger_verification_started_at ON orchestration_action_ledger(verification_id, started_at, id) WHERE verification_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_attempt_tool_call_unique ON orchestration_action_ledger(attempt_id, tool_call_id) WHERE attempt_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_action_ledger_verification_tool_call_unique ON orchestration_action_ledger(verification_id, tool_call_id) WHERE verification_id IS NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_task_run_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_task_run_fk
+      FOREIGN KEY (task_id, run_id) REFERENCES orchestration_tasks(id, run_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_attempt_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_attempt_fk
+      FOREIGN KEY (attempt_id, run_id, task_id) REFERENCES orchestration_task_attempts(id, run_id, task_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orchestration_action_ledger_verification_fk') THEN
+    ALTER TABLE orchestration_action_ledger
+      ADD CONSTRAINT orchestration_action_ledger_verification_fk
+      FOREIGN KEY (verification_id, run_id, task_id) REFERENCES orchestration_task_verifications(id, run_id, task_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_events_unpublished
+    ON orchestration_events(run_id, seq) WHERE published_at IS NULL;
