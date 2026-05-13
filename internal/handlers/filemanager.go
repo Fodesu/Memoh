@@ -7,7 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -75,7 +75,7 @@ type fsOpResponse struct {
 
 // resolveContainerPath cleans and validates a container-relative path.
 func resolveContainerPath(rawPath string) (string, error) {
-	cleaned := filepath.Clean("/" + strings.TrimSpace(rawPath))
+	cleaned := path.Clean("/" + strings.ReplaceAll(strings.TrimSpace(rawPath), "\\", "/"))
 	if cleaned == "" {
 		cleaned = "/"
 	}
@@ -86,7 +86,7 @@ func resolveContainerPath(rawPath string) (string, error) {
 }
 
 func isContainerMediaPath(containerPath string) bool {
-	cleaned := filepath.Clean("/" + strings.TrimSpace(containerPath))
+	cleaned := path.Clean("/" + strings.ReplaceAll(strings.TrimSpace(containerPath), "\\", "/"))
 	return cleaned == mediaContainerRoot || strings.HasPrefix(cleaned, mediaContainerRoot+"/")
 }
 
@@ -99,7 +99,7 @@ func (h *ContainerdHandler) getGRPCClient(ctx context.Context, botID string) (*b
 func fsFileInfoFromEntry(containerPath, name string, isDir bool, size int64, mode, modTime string) FSFileInfo {
 	return FSFileInfo{
 		Name:    name,
-		Path:    filepath.Join(containerPath, name),
+		Path:    path.Join(containerPath, name),
 		Size:    size,
 		Mode:    mode,
 		ModTime: modTime,
@@ -164,7 +164,7 @@ func (h *ContainerdHandler) FSStat(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, FSFileInfo{
-		Name:    filepath.Base(containerPath),
+		Name:    path.Base(containerPath),
 		Path:    containerPath,
 		Size:    entry.GetSize(),
 		Mode:    entry.GetMode(),
@@ -217,7 +217,7 @@ func (h *ContainerdHandler) FSList(c echo.Context) error {
 		}
 		fileInfos = append(fileInfos, fsFileInfoFromEntry(
 			containerPath,
-			filepath.Base(e.Path),
+			path.Base(e.Path),
 			e.IsDir,
 			e.Size,
 			e.Mode,
@@ -330,8 +330,8 @@ func (h *ContainerdHandler) FSDownload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read file")
 	}
 
-	fileName := filepath.Base(containerPath)
-	contentType := mime.TypeByExtension(filepath.Ext(fileName))
+	fileName := path.Base(containerPath)
+	contentType := mime.TypeByExtension(path.Ext(fileName))
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
