@@ -100,9 +100,9 @@ jobs:
           - platform: macos-26
             build_cmd: build:mac
           - platform: ubuntu-22.04
-            build_cmd: build:linux
+            build_cmd: build:linux:x64
           - platform: windows-latest
-            build_cmd: build:win
+            build_cmd: build:win:x64
     env:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

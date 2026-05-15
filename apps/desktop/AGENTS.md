@@ -487,8 +487,8 @@ electron-builder so the runtime icon is dereferenceable from disk.
 | `pnpm --filter @memohai/desktop build` | `dist/` installers (current platform) | Runs `scripts/build.mjs`: prepare Qdrant/GStreamer/local-server resources, electron-vite build, then electron-builder |
 | `pnpm --filter @memohai/desktop build:dir` | `dist/<platform>-unpacked/` | Skip installer; smoke-test packaged app |
 | `pnpm --filter @memohai/desktop build:mac` | DMG (arm64 + x64) | Requires darwin |
-| `pnpm --filter @memohai/desktop build:linux` | AppImage + deb + rpm | x64 |
-| `pnpm --filter @memohai/desktop build:win` | NSIS installer | x64 |
+| `pnpm --filter @memohai/desktop build:linux:x64` | AppImage + deb + rpm | x64 |
+| `pnpm --filter @memohai/desktop build:win:x64` | NSIS installer | x64 |
 | `pnpm --filter @memohai/desktop typecheck` | (no output) | Runs `typecheck:node` then `typecheck:web` |
 
 Ports / hosts during dev come from the same `config.toml` the rest of the

@@ -344,6 +344,16 @@ description = "Build signed-capable macOS x64 desktop artifacts"
 dir = "{{config_root}}/apps/desktop"
 run = "pnpm build:mac:x64"
 
+[tasks."desktop:build:linux:x64"]
+description = "Build Linux x64 desktop artifacts"
+dir = "{{config_root}}/apps/desktop"
+run = "pnpm build:linux:x64"
+
+[tasks."desktop:build:win:x64"]
+description = "Build Windows x64 desktop artifacts"
+dir = "{{config_root}}/apps/desktop"
+run = "pnpm build:win:x64"
+
 [tasks."desktop:build:dir"]
 description = "Build unpacked Electron desktop app with bundled local server"
 dir = "{{config_root}}/apps/desktop"
