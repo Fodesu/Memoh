@@ -181,6 +181,8 @@ func (m *Manager) Spawn(
 	m.tasks[taskID] = task
 	m.mu.Unlock()
 
+	m.initializeOutputFile(parentCtx, task, writeFn)
+
 	m.logger.Info("background task spawned",
 		slog.String("task_id", taskID),
 		slog.String("bot_id", botID),
@@ -219,6 +221,8 @@ func (m *Manager) SpawnAdopt(
 	}
 	m.tasks[taskID] = task
 	m.mu.Unlock()
+
+	m.initializeOutputFile(parentCtx, task, writeFn)
 
 	m.logger.Info("background task adopted",
 		slog.String("task_id", taskID),
@@ -291,12 +295,20 @@ func (m *Manager) runAdopt(parentCtx context.Context, task *Task, resultCh <-cha
 	}
 
 	// Write output to log file in container.
-	if writeFn != nil && result.Err == nil {
-		combined := result.Stdout
-		if result.Stderr != "" {
-			combined += "\n--- stderr ---\n" + result.Stderr
+	if writeFn != nil {
+		combined := combineOutput(result.Stdout, result.Stderr)
+		if result.Err != nil {
+			combined = appendLogError(combined, result.Err)
 		}
-		_ = writeFn(context.WithoutCancel(ctx), task.OutputFile, []byte(combined))
+		if combined != "" || result.Err != nil {
+			if err := writeFn(context.WithoutCancel(ctx), task.OutputFile, []byte(combined)); err != nil {
+				m.logger.Warn("background task: write output log failed",
+					slog.String("task_id", task.ID),
+					slog.String("output_file", task.OutputFile),
+					slog.Any("error", err),
+				)
+			}
+		}
 	}
 
 	stdout := result.Stdout
@@ -457,6 +469,55 @@ func ensureOutputDir(ctx context.Context, writeFn WriteFileFunc) error {
 	}
 	// Create a marker file to ensure the directory exists.
 	return writeFn(ctx, OutputLogDir+"/.keep", []byte(""))
+}
+
+func ensureOutputFile(ctx context.Context, writeFn WriteFileFunc, path string) error {
+	if writeFn == nil {
+		return nil
+	}
+	if err := ensureOutputDir(ctx, writeFn); err != nil {
+		return err
+	}
+	return writeFn(ctx, path, []byte(""))
+}
+
+func (m *Manager) initializeOutputFile(parentCtx context.Context, task *Task, writeFn WriteFileFunc) {
+	if writeFn == nil || task == nil || strings.TrimSpace(task.OutputFile) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parentCtx), 5*time.Second)
+	defer cancel()
+	if err := ensureOutputFile(ctx, writeFn, task.OutputFile); err != nil {
+		m.logger.Warn("background task: initialize output log failed",
+			slog.String("task_id", task.ID),
+			slog.String("output_file", task.OutputFile),
+			slog.Any("error", err),
+		)
+	}
+}
+
+func combineOutput(stdout, stderr string) string {
+	if stderr == "" {
+		return stdout
+	}
+	if stdout == "" {
+		return stderr
+	}
+	return stdout + "\n--- stderr ---\n" + stderr
+}
+
+func appendLogError(output string, err error) string {
+	if err == nil {
+		return output
+	}
+	line := fmt.Sprintf("[error] %v\n", err)
+	if output == "" {
+		return line
+	}
+	if strings.HasSuffix(output, "\n") {
+		return output + line
+	}
+	return output + "\n" + line
 }
 
 // Kill cancels a running background task.

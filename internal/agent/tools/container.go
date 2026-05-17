@@ -579,7 +579,13 @@ func (r *backgroundExecStreamReader) run(stream *bridge.ExecStream, cancel conte
 				slog.String("command", truncateStr(r.command, 80)),
 				slog.Any("error", recvErr),
 			)
-			r.resultCh <- background.AdoptResult{Err: recvErr}
+			stdout, stderr, outputRecorded := r.snapshot()
+			r.resultCh <- background.AdoptResult{
+				Stdout:         stdout,
+				Stderr:         stderr,
+				Err:            recvErr,
+				OutputRecorded: outputRecorded,
+			}
 			return
 		}
 		switch msg.GetStream() {
@@ -592,17 +598,19 @@ func (r *backgroundExecStreamReader) run(stream *bridge.ExecStream, cancel conte
 		}
 	}
 
-	r.mu.Lock()
-	stdout := r.stdout.String()
-	stderr := r.stderr.String()
-	outputRecorded := r.outputRecorded
-	r.mu.Unlock()
+	stdout, stderr, outputRecorded := r.snapshot()
 	r.resultCh <- background.AdoptResult{
 		Stdout:         stdout,
 		Stderr:         stderr,
 		ExitCode:       exitCode,
 		OutputRecorded: outputRecorded,
 	}
+}
+
+func (r *backgroundExecStreamReader) snapshot() (stdout, stderr string, outputRecorded bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stdout.String(), r.stderr.String(), r.outputRecorded
 }
 
 func (r *backgroundExecStreamReader) appendChunk(stream, chunk string) {

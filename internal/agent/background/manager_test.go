@@ -2,7 +2,9 @@ package background
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,6 +245,74 @@ func TestDrainNotifications(t *testing.T) {
 	notifications = waitDrain(t, mgr, "bot1", "sess2", 1)
 	if len(notifications) != 1 {
 		t.Errorf("expected 1 notification for bot1/sess2, got %d", len(notifications))
+	}
+}
+
+func TestSpawnAdoptInitializesOutputLogBeforeReturning(t *testing.T) {
+	mgr := New(nil)
+	resultCh := make(chan AdoptResult)
+	writes := make(map[string][]byte)
+	var writesMu sync.Mutex
+	writeFn := func(_ context.Context, path string, data []byte) error {
+		writesMu.Lock()
+		defer writesMu.Unlock()
+		writes[path] = append([]byte(nil), data...)
+		return nil
+	}
+
+	taskID, outputFile := mgr.SpawnAdopt(context.Background(), "bot1", "sess1", "npm install", "/data", "", resultCh, writeFn)
+	if taskID == "" || outputFile == "" {
+		t.Fatalf("expected task id and output file, got %q %q", taskID, outputFile)
+	}
+
+	writesMu.Lock()
+	_, hasDirMarker := writes[OutputLogDir+"/.keep"]
+	initialLog, hasOutputLog := writes[outputFile]
+	writesMu.Unlock()
+	if !hasDirMarker {
+		t.Fatalf("expected output directory marker to be initialized")
+	}
+	if !hasOutputLog {
+		t.Fatalf("expected output log %q to be initialized before SpawnAdopt returns", outputFile)
+	}
+	if len(initialLog) != 0 {
+		t.Fatalf("expected initial output log to be empty, got %q", string(initialLog))
+	}
+
+	resultCh <- AdoptResult{Stdout: "done\n", ExitCode: 0}
+	_ = waitDrain(t, mgr, "bot1", "sess1", 1)
+}
+
+func TestSpawnAdoptWritesOutputLogWhenStreamFails(t *testing.T) {
+	mgr := New(nil)
+	resultCh := make(chan AdoptResult)
+	writes := make(map[string][]byte)
+	var writesMu sync.Mutex
+	writeFn := func(_ context.Context, path string, data []byte) error {
+		writesMu.Lock()
+		defer writesMu.Unlock()
+		writes[path] = append([]byte(nil), data...)
+		return nil
+	}
+
+	_, outputFile := mgr.SpawnAdopt(context.Background(), "bot1", "sess1", "npm test", "/data", "", resultCh, writeFn)
+	resultCh <- AdoptResult{
+		Stdout: "partial stdout\n",
+		Stderr: "partial stderr\n",
+		Err:    errors.New("stream closed"),
+	}
+	notifications := waitDrain(t, mgr, "bot1", "sess1", 1)
+	if notifications[0].Status != TaskFailed {
+		t.Fatalf("expected failed notification, got %s", notifications[0].Status)
+	}
+
+	writesMu.Lock()
+	log := string(writes[outputFile])
+	writesMu.Unlock()
+	for _, want := range []string{"partial stdout", "--- stderr ---", "partial stderr", "[error] stream closed"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("expected output log to contain %q, got:\n%s", want, log)
+		}
 	}
 }
 
