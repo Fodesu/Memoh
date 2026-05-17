@@ -75,11 +75,6 @@ base_url = "http://sparse:8085"
 # Connects to the JetStream-enabled NATS service in devenv/docker-compose.yml.
 url = "nats://nats:4222"
 
-[browser_gateway]
-host = "browser"
-port = 8083
-server_addr = "server:8080"
-
 [web]
 host = "0.0.0.0"
 port = 8082

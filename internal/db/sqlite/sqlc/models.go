@@ -356,6 +356,407 @@ type ModelVariant struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+type OrchestrationActionLedger struct {
+	ID                  string         `json:"id"`
+	RunID               string         `json:"run_id"`
+	TaskID              string         `json:"task_id"`
+	AttemptID           sql.NullString `json:"attempt_id"`
+	VerificationID      sql.NullString `json:"verification_id"`
+	ActionKind          string         `json:"action_kind"`
+	Status              string         `json:"status"`
+	EffectClass         string         `json:"effect_class"`
+	EnvSessionID        sql.NullString `json:"env_session_id"`
+	EnvBindingID        sql.NullString `json:"env_binding_id"`
+	BeforeEnvSnapshotID sql.NullString `json:"before_env_snapshot_id"`
+	AfterEnvSnapshotID  sql.NullString `json:"after_env_snapshot_id"`
+	ToolName            string         `json:"tool_name"`
+	ToolCallID          string         `json:"tool_call_id"`
+	InputPayload        string         `json:"input_payload"`
+	OutputPayload       string         `json:"output_payload"`
+	ErrorPayload        string         `json:"error_payload"`
+	Summary             string         `json:"summary"`
+	StartedAt           string         `json:"started_at"`
+	FinishedAt          sql.NullString `json:"finished_at"`
+	CreatedAt           string         `json:"created_at"`
+	UpdatedAt           string         `json:"updated_at"`
+}
+
+type OrchestrationArtifact struct {
+	ID          string         `json:"id"`
+	RunID       string         `json:"run_id"`
+	TaskID      string         `json:"task_id"`
+	AttemptID   sql.NullString `json:"attempt_id"`
+	Kind        string         `json:"kind"`
+	Uri         string         `json:"uri"`
+	Version     string         `json:"version"`
+	Digest      string         `json:"digest"`
+	ContentType string         `json:"content_type"`
+	Summary     string         `json:"summary"`
+	Metadata    string         `json:"metadata"`
+	CreatedAt   string         `json:"created_at"`
+}
+
+type OrchestrationContainerImage struct {
+	ID             string `json:"id"`
+	TenantID       string `json:"tenant_id"`
+	OwnerSubject   string `json:"owner_subject"`
+	Name           string `json:"name"`
+	SourceType     string `json:"source_type"`
+	ImageRef       string `json:"image_ref"`
+	Dockerfile     string `json:"dockerfile"`
+	BuildOptions   string `json:"build_options"`
+	Status         string `json:"status"`
+	Digest         string `json:"digest"`
+	LastBuildError string `json:"last_build_error"`
+	Metadata       string `json:"metadata"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+type OrchestrationEnvBinding struct {
+	ID                  string         `json:"id"`
+	TenantID            string         `json:"tenant_id"`
+	RunID               string         `json:"run_id"`
+	TaskID              string         `json:"task_id"`
+	AttemptID           sql.NullString `json:"attempt_id"`
+	SessionID           string         `json:"session_id"`
+	Purpose             string         `json:"purpose"`
+	Status              string         `json:"status"`
+	HeldForCheckpointID sql.NullString `json:"held_for_checkpoint_id"`
+	Metadata            string         `json:"metadata"`
+	ReleasedAt          sql.NullString `json:"released_at"`
+	CreatedAt           string         `json:"created_at"`
+	UpdatedAt           string         `json:"updated_at"`
+}
+
+type OrchestrationEnvLeaseReservation struct {
+	ID                 string         `json:"id"`
+	TenantID           string         `json:"tenant_id"`
+	ResourceID         string         `json:"resource_id"`
+	RequesterKind      string         `json:"requester_kind"`
+	RequesterID        string         `json:"requester_id"`
+	RunID              sql.NullString `json:"run_id"`
+	TaskID             sql.NullString `json:"task_id"`
+	AttemptID          sql.NullString `json:"attempt_id"`
+	Priority           int64          `json:"priority"`
+	Status             string         `json:"status"`
+	CommittedSessionID sql.NullString `json:"committed_session_id"`
+	RequestedAt        string         `json:"requested_at"`
+	ExpiresAt          sql.NullString `json:"expires_at"`
+	CommittedAt        sql.NullString `json:"committed_at"`
+	AbortedAt          sql.NullString `json:"aborted_at"`
+	Metadata           string         `json:"metadata"`
+	CreatedAt          string         `json:"created_at"`
+	UpdatedAt          string         `json:"updated_at"`
+}
+
+type OrchestrationEnvResource struct {
+	ID           string `json:"id"`
+	TenantID     string `json:"tenant_id"`
+	OwnerSubject string `json:"owner_subject"`
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	Config       string `json:"config"`
+	Capacity     int64  `json:"capacity"`
+	Status       string `json:"status"`
+	Metadata     string `json:"metadata"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+type OrchestrationEnvSession struct {
+	ID              string         `json:"id"`
+	TenantID        string         `json:"tenant_id"`
+	ResourceID      string         `json:"resource_id"`
+	Status          string         `json:"status"`
+	LeaseHolderKind string         `json:"lease_holder_kind"`
+	LeaseHolderID   string         `json:"lease_holder_id"`
+	LeaseToken      string         `json:"lease_token"`
+	LeaseEpoch      int64          `json:"lease_epoch"`
+	LeaseAcquiredAt string         `json:"lease_acquired_at"`
+	LeaseExpiresAt  sql.NullString `json:"lease_expires_at"`
+	RunID           sql.NullString `json:"run_id"`
+	TaskID          sql.NullString `json:"task_id"`
+	AttemptID       sql.NullString `json:"attempt_id"`
+	RuntimeHandle   string         `json:"runtime_handle"`
+	Metadata        string         `json:"metadata"`
+	ReleasedAt      sql.NullString `json:"released_at"`
+	CreatedAt       string         `json:"created_at"`
+	UpdatedAt       string         `json:"updated_at"`
+}
+
+type OrchestrationEnvSnapshot struct {
+	ID          string         `json:"id"`
+	TenantID    string         `json:"tenant_id"`
+	SessionID   string         `json:"session_id"`
+	RunID       sql.NullString `json:"run_id"`
+	TaskID      sql.NullString `json:"task_id"`
+	AttemptID   sql.NullString `json:"attempt_id"`
+	Kind        string         `json:"kind"`
+	EffectClass string         `json:"effect_class"`
+	RuntimeRef  string         `json:"runtime_ref"`
+	Digest      string         `json:"digest"`
+	SizeBytes   int64          `json:"size_bytes"`
+	Metadata    string         `json:"metadata"`
+	CreatedAt   string         `json:"created_at"`
+}
+
+type OrchestrationEvent struct {
+	ID               string         `json:"id"`
+	RunID            string         `json:"run_id"`
+	TaskID           sql.NullString `json:"task_id"`
+	AttemptID        sql.NullString `json:"attempt_id"`
+	CheckpointID     sql.NullString `json:"checkpoint_id"`
+	Seq              int64          `json:"seq"`
+	AggregateType    string         `json:"aggregate_type"`
+	AggregateID      string         `json:"aggregate_id"`
+	AggregateVersion int64          `json:"aggregate_version"`
+	Type             string         `json:"type"`
+	CausationEventID sql.NullString `json:"causation_event_id"`
+	CorrelationID    string         `json:"correlation_id"`
+	IdempotencyKey   string         `json:"idempotency_key"`
+	Payload          string         `json:"payload"`
+	CreatedAt        string         `json:"created_at"`
+	PublishedAt      sql.NullString `json:"published_at"`
+}
+
+type OrchestrationHumanCheckpoint struct {
+	ID                       string         `json:"id"`
+	RunID                    string         `json:"run_id"`
+	TaskID                   string         `json:"task_id"`
+	BlocksRun                int64          `json:"blocks_run"`
+	PlannerEpoch             int64          `json:"planner_epoch"`
+	SupersededByPlannerEpoch sql.NullInt64  `json:"superseded_by_planner_epoch"`
+	Status                   string         `json:"status"`
+	StatusVersion            int64          `json:"status_version"`
+	Question                 string         `json:"question"`
+	Options                  string         `json:"options"`
+	DefaultAction            string         `json:"default_action"`
+	ResumePolicy             string         `json:"resume_policy"`
+	TimeoutAt                sql.NullString `json:"timeout_at"`
+	ResolvedBy               string         `json:"resolved_by"`
+	ResolvedMode             string         `json:"resolved_mode"`
+	ResolvedOptionID         string         `json:"resolved_option_id"`
+	ResolvedFreeformInput    string         `json:"resolved_freeform_input"`
+	ResolvedAt               sql.NullString `json:"resolved_at"`
+	Metadata                 string         `json:"metadata"`
+	CreatedAt                string         `json:"created_at"`
+	UpdatedAt                string         `json:"updated_at"`
+}
+
+type OrchestrationIdempotencyRecord struct {
+	ID              string `json:"id"`
+	TenantID        string `json:"tenant_id"`
+	CallerSubject   string `json:"caller_subject"`
+	Method          string `json:"method"`
+	TargetID        string `json:"target_id"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	RequestHash     string `json:"request_hash"`
+	State           string `json:"state"`
+	ResponsePayload string `json:"response_payload"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+type OrchestrationInputManifest struct {
+	ID                          string `json:"id"`
+	RunID                       string `json:"run_id"`
+	TaskID                      string `json:"task_id"`
+	CapturedTaskInputs          string `json:"captured_task_inputs"`
+	CapturedArtifactVersions    string `json:"captured_artifact_versions"`
+	CapturedBlackboardRevisions string `json:"captured_blackboard_revisions"`
+	CapturedEnvPreconditions    string `json:"captured_env_preconditions"`
+	ProjectionHash              string `json:"projection_hash"`
+	CreatedAt                   string `json:"created_at"`
+}
+
+type OrchestrationIntent struct {
+	ID               string         `json:"id"`
+	RunID            string         `json:"run_id"`
+	TaskID           sql.NullString `json:"task_id"`
+	CheckpointID     sql.NullString `json:"checkpoint_id"`
+	Kind             string         `json:"kind"`
+	Status           string         `json:"status"`
+	BasePlannerEpoch int64          `json:"base_planner_epoch"`
+	ClaimEpoch       int64          `json:"claim_epoch"`
+	ClaimToken       string         `json:"claim_token"`
+	ClaimedBy        string         `json:"claimed_by"`
+	LeaseExpiresAt   sql.NullString `json:"lease_expires_at"`
+	LastHeartbeatAt  sql.NullString `json:"last_heartbeat_at"`
+	FailureReason    string         `json:"failure_reason"`
+	Payload          string         `json:"payload"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
+}
+
+type OrchestrationProjectionSnapshot struct {
+	ID             string `json:"id"`
+	RunID          string `json:"run_id"`
+	ProjectionKind string `json:"projection_kind"`
+	Seq            int64  `json:"seq"`
+	Payload        string `json:"payload"`
+	CreatedAt      string `json:"created_at"`
+}
+
+type OrchestrationRun struct {
+	ID                     string         `json:"id"`
+	TenantID               string         `json:"tenant_id"`
+	OwnerSubject           string         `json:"owner_subject"`
+	LifecycleStatus        string         `json:"lifecycle_status"`
+	IntentStatus           string         `json:"intent_status"`
+	StatusVersion          int64          `json:"status_version"`
+	PlannerEpoch           int64          `json:"planner_epoch"`
+	LastEventSeq           int64          `json:"last_event_seq"`
+	RootTaskID             string         `json:"root_task_id"`
+	Goal                   string         `json:"goal"`
+	Input                  string         `json:"input"`
+	OutputSchema           string         `json:"output_schema"`
+	RequestedControlPolicy string         `json:"requested_control_policy"`
+	ControlPolicy          string         `json:"control_policy"`
+	SourceMetadata         string         `json:"source_metadata"`
+	Policies               string         `json:"policies"`
+	CreatedBy              string         `json:"created_by"`
+	TerminalReason         string         `json:"terminal_reason"`
+	CreatedAt              string         `json:"created_at"`
+	UpdatedAt              string         `json:"updated_at"`
+	FinishedAt             sql.NullString `json:"finished_at"`
+}
+
+type OrchestrationSideEffectApprovalToken struct {
+	ID               string         `json:"id"`
+	RunID            string         `json:"run_id"`
+	TaskID           string         `json:"task_id"`
+	AttemptID        string         `json:"attempt_id"`
+	ClaimEpoch       int64          `json:"claim_epoch"`
+	EnvSessionID     sql.NullString `json:"env_session_id"`
+	EnvLeaseEpoch    int64          `json:"env_lease_epoch"`
+	EffectClass      string         `json:"effect_class"`
+	TokenHash        string         `json:"token_hash"`
+	Status           string         `json:"status"`
+	ApprovedBy       string         `json:"approved_by"`
+	ApprovalReason   string         `json:"approval_reason"`
+	ToolCallID       string         `json:"tool_call_id"`
+	ConsumedActionID sql.NullString `json:"consumed_action_id"`
+	ExpiresAt        sql.NullString `json:"expires_at"`
+	ConsumedAt       sql.NullString `json:"consumed_at"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
+}
+
+type OrchestrationTask struct {
+	ID                       string         `json:"id"`
+	RunID                    string         `json:"run_id"`
+	DecomposedFromTaskID     sql.NullString `json:"decomposed_from_task_id"`
+	Kind                     string         `json:"kind"`
+	Goal                     string         `json:"goal"`
+	Inputs                   string         `json:"inputs"`
+	PlannerEpoch             int64          `json:"planner_epoch"`
+	SupersededByPlannerEpoch sql.NullInt64  `json:"superseded_by_planner_epoch"`
+	WorkerProfile            string         `json:"worker_profile"`
+	Priority                 int64          `json:"priority"`
+	RetryPolicy              string         `json:"retry_policy"`
+	VerificationPolicy       string         `json:"verification_policy"`
+	EnvPreconditions         string         `json:"env_preconditions"`
+	Status                   string         `json:"status"`
+	StatusVersion            int64          `json:"status_version"`
+	WaitingCheckpointID      sql.NullString `json:"waiting_checkpoint_id"`
+	WaitingScope             string         `json:"waiting_scope"`
+	LatestResultID           sql.NullString `json:"latest_result_id"`
+	ReadyAt                  sql.NullString `json:"ready_at"`
+	BlockedReason            string         `json:"blocked_reason"`
+	TerminalReason           string         `json:"terminal_reason"`
+	BlackboardScope          string         `json:"blackboard_scope"`
+	CreatedAt                string         `json:"created_at"`
+	UpdatedAt                string         `json:"updated_at"`
+}
+
+type OrchestrationTaskAttempt struct {
+	ID               string         `json:"id"`
+	RunID            string         `json:"run_id"`
+	TaskID           string         `json:"task_id"`
+	AttemptNo        int64          `json:"attempt_no"`
+	WorkerID         string         `json:"worker_id"`
+	ExecutorID       string         `json:"executor_id"`
+	WorkerLeaseToken string         `json:"worker_lease_token"`
+	Status           string         `json:"status"`
+	ClaimEpoch       int64          `json:"claim_epoch"`
+	ClaimToken       string         `json:"claim_token"`
+	LeaseExpiresAt   sql.NullString `json:"lease_expires_at"`
+	LastHeartbeatAt  sql.NullString `json:"last_heartbeat_at"`
+	InputManifestID  sql.NullString `json:"input_manifest_id"`
+	ParkCheckpointID sql.NullString `json:"park_checkpoint_id"`
+	FailureClass     string         `json:"failure_class"`
+	TerminalReason   string         `json:"terminal_reason"`
+	StartedAt        sql.NullString `json:"started_at"`
+	FinishedAt       sql.NullString `json:"finished_at"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
+}
+
+type OrchestrationTaskDependency struct {
+	ID                       string        `json:"id"`
+	RunID                    string        `json:"run_id"`
+	PredecessorTaskID        string        `json:"predecessor_task_id"`
+	SuccessorTaskID          string        `json:"successor_task_id"`
+	PlannerEpoch             int64         `json:"planner_epoch"`
+	SupersededByPlannerEpoch sql.NullInt64 `json:"superseded_by_planner_epoch"`
+	CreatedAt                string        `json:"created_at"`
+	UpdatedAt                string        `json:"updated_at"`
+}
+
+type OrchestrationTaskResult struct {
+	ID               string         `json:"id"`
+	RunID            string         `json:"run_id"`
+	TaskID           string         `json:"task_id"`
+	AttemptID        sql.NullString `json:"attempt_id"`
+	Status           string         `json:"status"`
+	Summary          string         `json:"summary"`
+	FailureClass     string         `json:"failure_class"`
+	RequestReplan    int64          `json:"request_replan"`
+	ArtifactIntents  string         `json:"artifact_intents"`
+	StructuredOutput string         `json:"structured_output"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
+}
+
+type OrchestrationTaskVerification struct {
+	ID               string         `json:"id"`
+	RunID            string         `json:"run_id"`
+	TaskID           string         `json:"task_id"`
+	ResultID         string         `json:"result_id"`
+	AttemptNo        int64          `json:"attempt_no"`
+	WorkerID         string         `json:"worker_id"`
+	ExecutorID       string         `json:"executor_id"`
+	WorkerLeaseToken string         `json:"worker_lease_token"`
+	VerifierProfile  string         `json:"verifier_profile"`
+	Status           string         `json:"status"`
+	ClaimEpoch       int64          `json:"claim_epoch"`
+	ClaimToken       string         `json:"claim_token"`
+	LeaseExpiresAt   sql.NullString `json:"lease_expires_at"`
+	LastHeartbeatAt  sql.NullString `json:"last_heartbeat_at"`
+	Verdict          string         `json:"verdict"`
+	Summary          string         `json:"summary"`
+	FailureClass     string         `json:"failure_class"`
+	TerminalReason   string         `json:"terminal_reason"`
+	StartedAt        sql.NullString `json:"started_at"`
+	FinishedAt       sql.NullString `json:"finished_at"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
+}
+
+type OrchestrationWorker struct {
+	ID              string `json:"id"`
+	ExecutorID      string `json:"executor_id"`
+	DisplayName     string `json:"display_name"`
+	Capabilities    string `json:"capabilities"`
+	Status          string `json:"status"`
+	LeaseToken      string `json:"lease_token"`
+	LastHeartbeatAt string `json:"last_heartbeat_at"`
+	LeaseExpiresAt  string `json:"lease_expires_at"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
 type Provider struct {
 	ID         string         `json:"id"`
 	Name       string         `json:"name"`

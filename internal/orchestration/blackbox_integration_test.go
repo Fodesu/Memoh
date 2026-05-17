@@ -1534,7 +1534,6 @@ func setupBlackboxHarness(t *testing.T, opts blackboxHarnessOptions) *blackboxHa
 	}
 	queries := sqlc.New(appPool)
 	storeQueries := postgresstore.NewQueries(queries)
-	accountStore := postgresstore.NewWithPool(appPool, queries)
 	createBlackboxAdminUser(t, queries, "admin", "admin123", "test@memoh.local")
 
 	logger := slog.New(slog.DiscardHandler)

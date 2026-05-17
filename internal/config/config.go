@@ -41,27 +41,26 @@ const (
 )
 
 type Config struct {
-	Log            LogConfig            `toml:"log"`
-	Server         ServerConfig         `toml:"server"`
-	Admin          AdminConfig          `toml:"admin"`
-	Auth           AuthConfig           `toml:"auth"`
-	Timezone       string               `toml:"timezone"`
-	Database       DatabaseConfig       `toml:"database"`
-	Container      ContainerConfig      `toml:"container"`
-	Containerd     ContainerdConfig     `toml:"containerd"`
-	Docker         DockerConfig         `toml:"docker"`
-	Kubernetes     KubernetesConfig     `toml:"kubernetes"`
-	Apple          AppleConfig          `toml:"apple"`
-	Local          LocalConfig          `toml:"local"`
-	Workspace      WorkspaceConfig      `toml:"workspace"`
-	Postgres       PostgresConfig       `toml:"postgres"`
-	SQLite         SQLiteConfig         `toml:"sqlite"`
-	Qdrant         QdrantConfig         `toml:"qdrant"`
-	Sparse         SparseConfig         `toml:"sparse"`
-	NATS           NATSConfig           `toml:"nats"`
-	BrowserGateway BrowserGatewayConfig `toml:"browser_gateway"`
-	Registry       RegistryConfig       `toml:"registry"`
-	Supermarket    SupermarketConfig    `toml:"supermarket"`
+	Log         LogConfig         `toml:"log"`
+	Server      ServerConfig      `toml:"server"`
+	Admin       AdminConfig       `toml:"admin"`
+	Auth        AuthConfig        `toml:"auth"`
+	Timezone    string            `toml:"timezone"`
+	Database    DatabaseConfig    `toml:"database"`
+	Container   ContainerConfig   `toml:"container"`
+	Containerd  ContainerdConfig  `toml:"containerd"`
+	Docker      DockerConfig      `toml:"docker"`
+	Kubernetes  KubernetesConfig  `toml:"kubernetes"`
+	Apple       AppleConfig       `toml:"apple"`
+	Local       LocalConfig       `toml:"local"`
+	Workspace   WorkspaceConfig   `toml:"workspace"`
+	Postgres    PostgresConfig    `toml:"postgres"`
+	SQLite      SQLiteConfig      `toml:"sqlite"`
+	Qdrant      QdrantConfig      `toml:"qdrant"`
+	Sparse      SparseConfig      `toml:"sparse"`
+	NATS        NATSConfig        `toml:"nats"`
+	Registry    RegistryConfig    `toml:"registry"`
+	Supermarket SupermarketConfig `toml:"supermarket"`
 }
 
 type LogConfig struct {
@@ -338,13 +337,6 @@ func (c NATSConfig) EffectiveStreamReplicas() int {
 		return c.StreamReplicas
 	}
 	return 1
-}
-
-// BrowserGatewayConfig keeps backward-compatible parsing for [browser_gateway].
-type BrowserGatewayConfig struct {
-	Host       string `toml:"host"`
-	Port       int    `toml:"port"`
-	ServerAddr string `toml:"server_addr"`
 }
 
 const DefaultProvidersDir = "conf/providers"

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -11,12 +10,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/memohai/memoh/internal/config"
 	ctr "github.com/memohai/memoh/internal/container"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 	"github.com/memohai/memoh/internal/orchestration"
 	"github.com/memohai/memoh/internal/orchestrationenv"
-	envbrowser "github.com/memohai/memoh/internal/orchestrationenv/backend/browser"
 	envcontainer "github.com/memohai/memoh/internal/orchestrationenv/backend/container"
 )
 
@@ -34,10 +31,10 @@ type containerEnvRuntime interface {
 
 // provideOrchestrationEnvBackends builds a backend registry populated with
 // the kinds the deployment can actually serve. A missing container service
-// or browser gateway simply omits its backend; the kernel will then refuse
-// dispatches that demand the unavailable kind, surfacing the misconfiguration
-// at runtime instead of silently allocating against the wrong runtime.
-func provideOrchestrationEnvBackends(log *slog.Logger, cfg config.Config, containerService ctr.Service) (*orchestrationenv.BackendRegistry, error) {
+// simply omits its backend; the kernel will then refuse dispatches that demand
+// the unavailable kind, surfacing the misconfiguration at runtime instead of
+// silently allocating against the wrong runtime.
+func provideOrchestrationEnvBackends(log *slog.Logger, containerService ctr.Service) (*orchestrationenv.BackendRegistry, error) {
 	registry := orchestrationenv.NewBackendRegistry()
 
 	if rt, ok := containerService.(containerEnvRuntime); ok {
@@ -50,19 +47,6 @@ func provideOrchestrationEnvBackends(log *slog.Logger, cfg config.Config, contai
 		log.Info("orchestration env: container service does not satisfy the env runtime surface; skipping container backend")
 	}
 
-	browserBase := strings.TrimSpace(cfg.BrowserGateway.BaseURL())
-	if browserBase != "" {
-		gateway, err := envbrowser.NewHTTPGateway(browserBase, &http.Client{Timeout: 30 * time.Second})
-		if err != nil {
-			log.Warn("orchestration env: browser gateway not available; skipping browser backend", slog.Any("error", err))
-		} else {
-			backend, err := envbrowser.New(gateway, envbrowser.Options{})
-			if err != nil {
-				return nil, fmt.Errorf("orchestration env: browser backend: %w", err)
-			}
-			registry.Register(backend)
-		}
-	}
 	return registry, nil
 }
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -32,7 +31,6 @@ import (
 	"github.com/memohai/memoh/internal/orchestrationblackboard"
 	"github.com/memohai/memoh/internal/orchestrationbus"
 	"github.com/memohai/memoh/internal/orchestrationenv"
-	envbrowser "github.com/memohai/memoh/internal/orchestrationenv/backend/browser"
 	envcontainer "github.com/memohai/memoh/internal/orchestrationenv/backend/container"
 	"github.com/memohai/memoh/internal/orchestrationexec"
 	"github.com/memohai/memoh/internal/orchestrationfacts"
@@ -148,7 +146,7 @@ func run() error {
 	defer func() { _ = blackboard.Close() }()
 	svc.SetBlackboardStore(blackboard)
 
-	envManager, err := buildEnvManager(log, cfg, pool, queries, containerSvc)
+	envManager, err := buildEnvManager(log, pool, queries, containerSvc)
 	if err != nil {
 		return err
 	}
@@ -207,7 +205,7 @@ func run() error {
 	}
 }
 
-func buildEnvManager(log *slog.Logger, cfg config.Config, pool *pgxpool.Pool, queries *dbsqlc.Queries, containerSvc ctr.Service) (*orchestrationenv.Manager, error) {
+func buildEnvManager(log *slog.Logger, pool *pgxpool.Pool, queries *dbsqlc.Queries, containerSvc ctr.Service) (*orchestrationenv.Manager, error) {
 	registry := orchestrationenv.NewBackendRegistry()
 	if rt, ok := containerSvc.(containerEnvRuntime); ok {
 		backend, err := envcontainer.New(rt, envcontainer.Options{})
@@ -217,18 +215,6 @@ func buildEnvManager(log *slog.Logger, cfg config.Config, pool *pgxpool.Pool, qu
 		registry.Register(backend)
 	} else {
 		log.Info("orchestration env: container service does not satisfy env runtime surface; skipping container backend")
-	}
-	if browserBase := strings.TrimSpace(cfg.BrowserGateway.BaseURL()); browserBase != "" {
-		gateway, err := envbrowser.NewHTTPGateway(browserBase, &http.Client{Timeout: 30 * time.Second})
-		if err != nil {
-			log.Warn("orchestration env: browser gateway not available; skipping browser backend", slog.Any("error", err))
-		} else {
-			backend, err := envbrowser.New(gateway, envbrowser.Options{})
-			if err != nil {
-				return nil, fmt.Errorf("orchestration env: browser backend: %w", err)
-			}
-			registry.Register(backend)
-		}
 	}
 	manager, err := orchestrationenv.NewManager(orchestrationenv.Config{
 		Pool:     pool,
