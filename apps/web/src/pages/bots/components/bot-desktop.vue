@@ -41,6 +41,22 @@
       </div>
     </header>
 
+    <!-- Desktop Toggle -->
+    <section class="rounded-md border border-border/60 bg-muted/10 px-4 py-3 flex items-center justify-between gap-4">
+      <div class="space-y-0.5">
+        <Label class="text-xs font-medium text-foreground">{{ $t('bots.settings.desktopEnabled') }}</Label>
+        <p class="text-[10px] leading-snug text-muted-foreground">
+          {{ $t('bots.settings.desktopEnabledDescription') }}
+        </p>
+      </div>
+      <Switch
+        :model-value="settingsForm.display_enabled"
+        :disabled="isSaving"
+        class="shrink-0 scale-90"
+        @update:model-value="(val) => handleToggleDisplay(!!val)"
+      />
+    </section>
+
     <!-- Telemetry Panel (Diagnostics) -->
     <section class="rounded-md border border-border/60 bg-muted/5 overflow-hidden shadow-none flex flex-col">
       <header class="px-4 py-3 border-b border-border/40 flex items-center justify-between bg-muted/10">
@@ -102,22 +118,6 @@
 
     <!-- VNC Viewport -->
     <section class="relative group border border-border/60 bg-black rounded-md overflow-hidden aspect-[4/3] w-full flex flex-col shadow-none">
-      <!-- Hover Overlay Control -->
-      <div class="absolute top-0 inset-x-0 px-4 py-3 opacity-0 group-hover:opacity-100 z-20 backdrop-blur bg-background/95 border-b border-border/60 flex items-center justify-between">
-        <div class="space-y-0.5">
-          <Label class="text-xs font-medium text-foreground">{{ $t('bots.settings.desktopEnabled') }}</Label>
-          <p class="text-[10px] text-muted-foreground">
-            {{ $t('bots.settings.desktopEnabledDescription') }}
-          </p>
-        </div>
-        <Switch
-          :model-value="settingsForm.display_enabled"
-          :disabled="isSaving"
-          class="scale-90"
-          @update:model-value="(val) => handleToggleDisplay(!!val)"
-        />
-      </div>
-
       <!-- Empty State / Preparing State -->
       <div
         v-if="!info.enabled"
