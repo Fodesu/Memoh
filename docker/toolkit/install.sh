@@ -404,19 +404,35 @@ display_bundle_installed() {
   [ -x "$DISPLAY_OUTDIR/root/usr/bin/xterm" ] || return 1
 
   write_display_wrappers
+}
 
-  # The bundle is Linux musl ELF. Skip exec-based smoke checks when assembling
-  # from a non-Linux host (e.g. running install.sh from macOS via Docker); the
-  # wrappers will be exercised inside the workspace container at runtime.
-  if [ "$(uname -s)" != "Linux" ]; then
-    return 0
-  fi
-
-  "$DISPLAY_OUTDIR/bin/Xvnc" -version >/dev/null 2>&1 || return 1
-  "$DISPLAY_OUTDIR/bin/xkbcomp" -version >/dev/null 2>&1 || return 1
-  "$DISPLAY_OUTDIR/bin/xsetroot" -version >/dev/null 2>&1 || return 1
-  "$DISPLAY_OUTDIR/bin/twm" -V >/dev/null 2>&1 || return 1
-  "$DISPLAY_OUTDIR/bin/xterm" -version >/dev/null 2>&1 || return 1
+check_display_bundle_executables() {
+  case "$(uname -s)" in
+    Linux)
+      "$DISPLAY_OUTDIR/bin/Xvnc" -version >/dev/null 2>&1 || return 1
+      "$DISPLAY_OUTDIR/bin/xkbcomp" -version >/dev/null 2>&1 || return 1
+      "$DISPLAY_OUTDIR/bin/xsetroot" -version >/dev/null 2>&1 || return 1
+      "$DISPLAY_OUTDIR/bin/twm" -V >/dev/null 2>&1 || return 1
+      "$DISPLAY_OUTDIR/bin/xterm" -version >/dev/null 2>&1 || return 1
+      ;;
+    *)
+      if ! command -v docker >/dev/null 2>&1; then
+        echo "ERROR: checking the Linux display runtime on $(uname -s) requires docker." >&2
+        return 1
+      fi
+      display_abs="$(cd "$DISPLAY_OUTDIR" && pwd)"
+      docker run --rm \
+        -v "$display_abs:/display:ro" \
+        "alpine:${ALPINE_VERSION}" \
+        sh -eu -c '
+          /display/bin/Xvnc -version >/dev/null 2>&1
+          /display/bin/xkbcomp -version >/dev/null 2>&1
+          /display/bin/xsetroot -version >/dev/null 2>&1
+          /display/bin/twm -V >/dev/null 2>&1
+          /display/bin/xterm -version >/dev/null 2>&1
+        ' || return 1
+      ;;
+  esac
 }
 
 remove_display_bundle() {
@@ -495,6 +511,11 @@ install_display_bundle() {
 
   if ! display_bundle_installed; then
     echo "ERROR: display bundle check failed after installation" >&2
+    exit 1
+  fi
+
+  if ! check_display_bundle_executables; then
+    echo "ERROR: display bundle executable validation failed after installation" >&2
     exit 1
   fi
 
