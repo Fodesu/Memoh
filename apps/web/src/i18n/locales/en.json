@@ -370,7 +370,8 @@
         "connecting": "Connecting desktop...",
         "connected": "Desktop connected",
         "disconnected": "Desktop disconnected",
-        "unavailable": "Desktop unavailable"
+        "unavailable": "Desktop unavailable",
+        "timeout": "Desktop connection timed out"
       },
       "unavailable": {
         "disabled": "Workspace desktop is not enabled",

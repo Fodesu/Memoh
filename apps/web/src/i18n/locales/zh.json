@@ -366,7 +366,8 @@
         "connecting": "正在连接桌面...",
         "connected": "桌面已连接",
         "disconnected": "桌面连接已断开",
-        "unavailable": "桌面不可用"
+        "unavailable": "桌面不可用",
+        "timeout": "桌面连接超时"
       },
       "unavailable": {
         "disabled": "工作区桌面未启用",
