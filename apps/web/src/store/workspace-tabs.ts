@@ -256,6 +256,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function openDisplay() {
     const state = ensureBot(currentBotId.value)
     if (!state) return
+    const existing = state.tabs.find((tab) => tab.type === 'display')
+    if (existing) {
+      commit({ ...state, activeId: existing.id })
+      return
+    }
     const nextCounter = state.displayCounter + 1
     const id = displayTabId(nextCounter)
     const tab: WorkspaceTab = {

@@ -71,7 +71,9 @@
     "categories": "Categories",
     "unsaved": "Unsaved",
     "editJson": "Edit JSON",
-    "actionRequired": "Action Required"
+    "actionRequired": "Action Required",
+    "preview": "Preview",
+    "raw": "Source"
   },
   "auth": {
     "welcome": "Welcome Back",
@@ -79,7 +81,6 @@
     "password": "Password",
     "login": "Sign In",
     "register": "Sign Up",
-    "forgotPassword": "Forgot Password?",
     "logout": "Sign Out",
     "logoutConfirm": "Are you sure you want to sign out?",
     "loginFailed": "Login Failed",
@@ -370,7 +371,8 @@
         "connecting": "Connecting desktop...",
         "connected": "Desktop connected",
         "disconnected": "Desktop disconnected",
-        "unavailable": "Desktop unavailable"
+        "unavailable": "Desktop unavailable",
+        "timeout": "Desktop connection timed out"
       },
       "unavailable": {
         "disabled": "Workspace desktop is not enabled",
