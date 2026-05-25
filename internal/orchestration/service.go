@@ -1,0 +1,4292 @@
+package orchestration
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/memohai/memoh/internal/db"
+	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+)
+
+type Service struct {
+	store                Store
+	queries              Queries
+	logger               *slog.Logger
+	attemptAssignments   AttemptAssignmentPublisher
+	attemptExecutor      AttemptExecutor
+	verificationExecutor VerificationExecutor
+}
+
+func NewService(log *slog.Logger, store Store) *Service {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Service{
+		store:              store,
+		queries:            store.Queries(),
+		logger:             log.With(slog.String("service", "orchestration")),
+		attemptAssignments: noopAttemptAssignmentPublisher{},
+	}
+}
+
+func (s *Service) StartRun(ctx context.Context, caller ControlIdentity, req StartRunRequest) (RunHandle, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return RunHandle{}, err
+	}
+	normalizedGoal := strings.TrimSpace(req.Goal)
+	normalizedIdempotencyKey := normalizeIdempotencyKey(req.IdempotencyKey)
+	if normalizedGoal == "" {
+		return RunHandle{}, fmt.Errorf("%w: goal is required", ErrInvalidArgument)
+	}
+	if normalizedIdempotencyKey == "" {
+		return RunHandle{}, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
+	}
+	sourceMetadata, err := normalizeStartRunSourceMetadata(req)
+	if err != nil {
+		return RunHandle{}, err
+	}
+	req.SourceMetadata = sourceMetadata
+
+	hash, err := startRunRequestHash(req)
+	if err != nil {
+		return RunHandle{}, err
+	}
+
+	tx, err := s.store.BeginTx(ctx)
+	if err != nil {
+		return RunHandle{}, fmt.Errorf("begin orchestration start tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	record, replay, err := ensureIdempotencyRecord(ctx, tx, caller, methodStartRun, "start_run", normalizedIdempotencyKey, hash)
+	if err != nil {
+		return RunHandle{}, err
+	}
+	if replay {
+		handle, err := decodeRunHandle(record.ResponsePayload)
+		if err != nil {
+			return RunHandle{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return RunHandle{}, fmt.Errorf("commit orchestration idempotent start tx: %w", err)
+		}
+		return handle, nil
+	}
+
+	runID, runUUID, err := newPGUUID()
+	if err != nil {
+		return RunHandle{}, err
+	}
+	rootTaskID, rootTaskUUID, err := newPGUUID()
+	if err != nil {
+		return RunHandle{}, err
+	}
+	finalTaskID, finalTaskUUID, err := newPGUUID()
+	if err != nil {
+		return RunHandle{}, err
+	}
+	_, startFinalDependencyUUID, err := newPGUUID()
+	if err != nil {
+		return RunHandle{}, err
+	}
+
+	runRow, err := tx.CreateOrchestrationRun(ctx, sqlc.CreateOrchestrationRunParams{
+		ID:                     runUUID,
+		TenantID:               caller.TenantID,
+		OwnerSubject:           caller.Subject,
+		LifecycleStatus:        LifecycleStatusCreated,
+		PlanningStatus:         PlanningStatusActive,
+		StatusVersion:          1,
+		PlannerEpoch:           1,
+		LastEventSeq:           0,
+		RootTaskID:             rootTaskUUID,
+		Goal:                   normalizedGoal,
+		Input:                  marshalObject(req.Input),
+		RequestedControlPolicy: marshalObject(req.RequestedControlPolicy),
+		ControlPolicy:          marshalJSON(buildPhase1ControlPolicy(caller)),
+		SourceMetadata:         marshalObject(sourceMetadata),
+		Policies:               marshalObject(req.Policies),
+		CreatedBy:              caller.Subject,
+		TerminalReason:         "",
+	})
+	if err != nil {
+		return RunHandle{}, fmt.Errorf("create orchestration run: %w", err)
+	}
+
+	if _, err := s.appendEvent(ctx, tx, runUUID, eventSpec{
+		TaskID:           pgtype.UUID{},
+		CheckpointID:     pgtype.UUID{},
+		AggregateType:    "run",
+		AggregateID:      runUUID,
+		AggregateVersion: runRow.StatusVersion,
+		Type:             "run.event.created",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"run_id":          runID,
+			"root_task_id":    rootTaskID,
+			"planner_epoch":   runRow.PlannerEpoch,
+			"previous_status": "",
+			"new_status":      runRow.LifecycleStatus,
+		},
+	}); err != nil {
+		return RunHandle{}, err
+	}
+
+	taskRow, err := tx.CreateOrchestrationTask(ctx, sqlc.CreateOrchestrationTaskParams{
+		ID:                   rootTaskUUID,
+		RunID:                runUUID,
+		DecomposedFromTaskID: pgtype.UUID{},
+		Kind:                 "root",
+		Role:                 TaskRoleStart,
+		Goal:                 normalizedGoal,
+		Inputs:               marshalObject(req.Input),
+		PlannerEpoch:         1,
+		WorkerProfile:        rootWorkerProfile(req.Input, sourceMetadata),
+		Priority:             0,
+		RetryPolicy:          marshalObject(nil),
+		VerificationPolicy:   marshalObject(nil),
+		Status:               TaskStatusCreated,
+		StatusVersion:        1,
+		WaitingScope:         "",
+		BlockedReason:        "",
+		TerminalReason:       "",
+		BlackboardScope:      "run.root",
+	})
+	if err != nil {
+		return RunHandle{}, fmt.Errorf("create orchestration root task: %w", err)
+	}
+
+	if _, err := s.appendEvent(ctx, tx, runUUID, eventSpec{
+		TaskID:           rootTaskUUID,
+		CheckpointID:     pgtype.UUID{},
+		AggregateType:    "task",
+		AggregateID:      rootTaskUUID,
+		AggregateVersion: taskRow.StatusVersion,
+		Type:             "run.event.task.created",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"task_id":          rootTaskID,
+			"run_id":           runID,
+			"previous_status":  "",
+			"new_status":       taskRow.Status,
+			"planner_epoch":    taskRow.PlannerEpoch,
+			"worker_profile":   taskRow.WorkerProfile,
+			"blackboard_scope": taskRow.BlackboardScope,
+		},
+	}); err != nil {
+		return RunHandle{}, err
+	}
+
+	finalTaskRow, err := tx.CreateOrchestrationTask(ctx, sqlc.CreateOrchestrationTaskParams{
+		ID:                   finalTaskUUID,
+		RunID:                runUUID,
+		DecomposedFromTaskID: pgtype.UUID{},
+		Kind:                 "final",
+		Role:                 TaskRoleFinal,
+		Goal:                 "Synthesize the final run result from the completed upstream task results.",
+		Inputs:               marshalObject(req.Input),
+		PlannerEpoch:         1,
+		WorkerProfile:        DefaultWorkerProfile,
+		Priority:             -1,
+		RetryPolicy:          marshalObject(nil),
+		VerificationPolicy:   marshalObject(nil),
+		Status:               TaskStatusCreated,
+		StatusVersion:        1,
+		WaitingScope:         "",
+		BlockedReason:        "",
+		TerminalReason:       "",
+		BlackboardScope:      "run.final",
+	})
+	if err != nil {
+		return RunHandle{}, fmt.Errorf("create orchestration final task: %w", err)
+	}
+
+	if _, err := s.appendEvent(ctx, tx, runUUID, eventSpec{
+		TaskID:           finalTaskUUID,
+		CheckpointID:     pgtype.UUID{},
+		AggregateType:    "task",
+		AggregateID:      finalTaskUUID,
+		AggregateVersion: finalTaskRow.StatusVersion,
+		Type:             "run.event.task.created",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"task_id":          finalTaskID,
+			"run_id":           runID,
+			"previous_status":  "",
+			"new_status":       finalTaskRow.Status,
+			"planner_epoch":    finalTaskRow.PlannerEpoch,
+			"worker_profile":   finalTaskRow.WorkerProfile,
+			"blackboard_scope": finalTaskRow.BlackboardScope,
+			"role":             finalTaskRow.Role,
+			"depends_on":       []string{rootTaskID},
+		},
+	}); err != nil {
+		return RunHandle{}, err
+	}
+
+	if _, err := tx.CreateOrchestrationTaskDependency(ctx, sqlc.CreateOrchestrationTaskDependencyParams{
+		ID:                       startFinalDependencyUUID,
+		RunID:                    runUUID,
+		PredecessorTaskID:        rootTaskUUID,
+		SuccessorTaskID:          finalTaskUUID,
+		PlannerEpoch:             1,
+		SupersededByPlannerEpoch: pgtype.Int8{},
+	}); err != nil {
+		return RunHandle{}, fmt.Errorf("create orchestration start-final dependency: %w", err)
+	}
+
+	planningIntentID, planningIntentUUID, err := newPGUUID()
+	if err != nil {
+		return RunHandle{}, err
+	}
+	if _, err := tx.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+		ID:               planningIntentUUID,
+		RunID:            runUUID,
+		TaskID:           rootTaskUUID,
+		CheckpointID:     pgtype.UUID{},
+		Kind:             PlanningIntentKindStartRun,
+		Status:           PlanningIntentStatusPending,
+		BasePlannerEpoch: runRow.PlannerEpoch,
+		Payload: marshalJSON(map[string]any{
+			"run_id":     runID,
+			"task_id":    rootTaskID,
+			"reason":     "start_run",
+			"goal":       normalizedGoal,
+			"created_by": caller.Subject,
+		}),
+	}); err != nil {
+		return RunHandle{}, fmt.Errorf("create orchestration planning intent: %w", err)
+	}
+	planningEvent, err := s.appendEvent(ctx, tx, runUUID, eventSpec{
+		TaskID:           rootTaskUUID,
+		CheckpointID:     pgtype.UUID{},
+		AggregateType:    "planning_intent",
+		AggregateID:      planningIntentUUID,
+		AggregateVersion: 1,
+		Type:             "run.event.planning_intent.enqueued",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"planning_intent_id": planningIntentID,
+			"run_id":             runID,
+			"task_id":            rootTaskID,
+			"kind":               PlanningIntentKindStartRun,
+			"status":             PlanningIntentStatusPending,
+		},
+	})
+	if err != nil {
+		return RunHandle{}, err
+	}
+
+	snapshotSeq, err := uint64FromInt64(planningEvent.Seq, "run event seq")
+	if err != nil {
+		return RunHandle{}, err
+	}
+	handle := RunHandle{
+		RunID:       runID,
+		RootTaskID:  rootTaskID,
+		SnapshotSeq: snapshotSeq,
+	}
+	if _, err := tx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(handle),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodStartRun,
+		TargetID:        "start_run",
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return RunHandle{}, fmt.Errorf("complete orchestration start idempotency: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return RunHandle{}, fmt.Errorf("commit orchestration start tx: %w", err)
+	}
+	return handle, nil
+}
+
+func (s *Service) GetRunSnapshot(ctx context.Context, caller ControlIdentity, runID string) (*RunSnapshot, error) {
+	return s.GetRunSnapshotAtSeq(ctx, caller, runID, 0)
+}
+
+func (s *Service) ListBotRuns(ctx context.Context, caller ControlIdentity, botID string, req ListBotRunsRequest) (*RunListPage, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	normalizedBotID, err := normalizeRequiredUUID(botID, "bot id")
+	if err != nil {
+		return nil, err
+	}
+	limitCount, err := int32FromInt(normalizedListLimit(req.Limit), "run list limit")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListOrchestrationRunsByBot(ctx, sqlc.ListOrchestrationRunsByBotParams{
+		TenantID:     caller.TenantID,
+		OwnerSubject: caller.Subject,
+		BotID:        normalizedBotID,
+		LimitCount:   limitCount,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration runs by bot: %w", err)
+	}
+	items := make([]RunListItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, toRunListItem(row))
+	}
+	return &RunListPage{Items: items}, nil
+}
+
+func (s *Service) GetRunSnapshotAtSeq(ctx context.Context, caller ControlIdentity, runID string, asOfSeq uint64) (*RunSnapshot, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.getAuthorizedRun(ctx, caller, runID)
+	if err != nil {
+		return nil, err
+	}
+	lastEventSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
+	if err != nil {
+		return nil, err
+	}
+	resolvedSeq := lastEventSeq
+	if asOfSeq != 0 {
+		if asOfSeq > lastEventSeq {
+			return nil, fmt.Errorf("%w: as_of_seq exceeds current snapshot", ErrInvalidArgument)
+		}
+		resolvedSeq = asOfSeq
+	}
+	runSnapshot, snapshotSeq, err := s.loadRunSnapshot(ctx, row.ID, resolvedSeq)
+	if err != nil {
+		return nil, err
+	}
+	if snapshotSeq == 0 {
+		if asOfSeq != 0 {
+			return nil, fmt.Errorf("%w: run snapshot unavailable at as_of_seq", ErrInvalidArgument)
+		}
+		runSnapshot = toRun(row)
+		snapshotSeq = lastEventSeq
+	}
+	return &RunSnapshot{
+		Run:         runSnapshot,
+		SnapshotSeq: snapshotSeq,
+	}, nil
+}
+
+func (s *Service) GetRunInspector(ctx context.Context, caller ControlIdentity, runID string) (*RunInspector, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	pgRunID, err := db.ParseUUID(runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+
+	tx, err := s.store.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin run inspector tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	row, err := tx.GetOrchestrationRunByID(ctx, pgRunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("get orchestration run: %w", err)
+	}
+	if err := authorizeRun(caller, row); err != nil {
+		return nil, ErrRunNotFound
+	}
+	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
+	if err != nil {
+		return nil, err
+	}
+	runSnapshot := toRun(row)
+
+	taskRows, err := tx.ListCurrentOrchestrationTasksByRun(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list current orchestration tasks: %w", err)
+	}
+	tasks := make([]Task, 0, len(taskRows))
+	for _, taskRow := range taskRows {
+		tasks = append(tasks, toTask(taskRow))
+	}
+
+	checkpointRows, err := tx.ListCurrentOrchestrationCheckpointsByRun(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list current orchestration checkpoints: %w", err)
+	}
+	checkpoints := make([]HumanCheckpoint, 0, len(checkpointRows))
+	for _, checkpointRow := range checkpointRows {
+		checkpoints = append(checkpoints, toHumanCheckpoint(checkpointRow))
+	}
+
+	artifactRows, err := tx.ListCurrentOrchestrationArtifactsByRun(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list current orchestration artifacts: %w", err)
+	}
+	artifacts := make([]Artifact, 0, len(artifactRows))
+	for _, artifactRow := range artifactRows {
+		artifacts = append(artifacts, toArtifact(artifactRow))
+	}
+
+	dependencyRows, err := tx.ListCurrentOrchestrationTaskDependenciesByRun(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration task dependencies: %w", err)
+	}
+	dependencies := make([]TaskDependency, 0, len(dependencyRows))
+	for _, dependencyRow := range dependencyRows {
+		dependencies = append(dependencies, toTaskDependency(dependencyRow))
+	}
+
+	resultRows, err := tx.ListCurrentOrchestrationTaskResultsByRun(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration task results: %w", err)
+	}
+	results := make([]TaskResult, 0, len(resultRows))
+	for _, resultRow := range resultRows {
+		results = append(results, toTaskResult(resultRow))
+	}
+
+	attemptRows, err := tx.ListCurrentOrchestrationTaskAttemptsByRun(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration task attempts: %w", err)
+	}
+	attempts := make([]InspectorAttempt, 0, len(attemptRows))
+	workerIDs := make(map[string]struct{})
+	for _, attemptRow := range attemptRows {
+		attempts = append(attempts, toInspectorAttempt(attemptRow))
+		if workerID := strings.TrimSpace(attemptRow.WorkerID); workerID != "" {
+			workerIDs[workerID] = struct{}{}
+		}
+	}
+
+	inputManifests := make([]InputManifest, 0)
+	if len(attemptRows) > 0 {
+		manifestIDs := make([]string, 0, len(attemptRows))
+		seenManifestIDs := make(map[string]struct{}, len(attemptRows))
+		for _, attemptRow := range attemptRows {
+			manifestID := attemptRow.InputManifestID.String()
+			if manifestID == "" {
+				continue
+			}
+			if _, seen := seenManifestIDs[manifestID]; seen {
+				continue
+			}
+			seenManifestIDs[manifestID] = struct{}{}
+			manifestIDs = append(manifestIDs, manifestID)
+		}
+		sort.Strings(manifestIDs)
+		inputManifests = make([]InputManifest, 0, len(manifestIDs))
+		for _, manifestID := range manifestIDs {
+			pgManifestID, parseErr := db.ParseUUID(manifestID)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse orchestration input manifest id: %w", parseErr)
+			}
+			manifestRow, loadErr := tx.GetOrchestrationInputManifestByID(ctx, pgManifestID)
+			if loadErr != nil {
+				return nil, fmt.Errorf("get orchestration input manifest by id: %w", loadErr)
+			}
+			inputManifests = append(inputManifests, toInputManifest(manifestRow))
+		}
+	}
+
+	verificationRows, err := tx.ListCurrentOrchestrationTaskVerificationsByRun(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration task verifications: %w", err)
+	}
+	verifications := make([]InspectorVerification, 0, len(verificationRows))
+	for _, verificationRow := range verificationRows {
+		verifications = append(verifications, toInspectorVerification(verificationRow))
+		if workerID := strings.TrimSpace(verificationRow.WorkerID); workerID != "" {
+			workerIDs[workerID] = struct{}{}
+		}
+	}
+
+	workers := make([]InspectorWorkerLease, 0, len(workerIDs))
+	if len(workerIDs) > 0 {
+		ids := make([]string, 0, len(workerIDs))
+		for workerID := range workerIDs {
+			ids = append(ids, workerID)
+		}
+		sort.Strings(ids)
+		workerRows, loadErr := tx.ListOrchestrationWorkersByIDs(ctx, ids)
+		if loadErr != nil {
+			return nil, fmt.Errorf("list orchestration workers: %w", loadErr)
+		}
+		workers = make([]InspectorWorkerLease, 0, len(workerRows))
+		for _, workerRow := range workerRows {
+			workers = append(workers, toInspectorWorkerLease(workerRow))
+		}
+	}
+	observedAt, err := tx.DatabaseNow(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	afterSeq := uint64(0)
+	if currentSeq > uint64(maxEventLimit) {
+		afterSeq = currentSeq - uint64(maxEventLimit)
+	}
+	timelineAfterSeq, err := int64FromUint64(afterSeq, "timeline after_seq")
+	if err != nil {
+		return nil, err
+	}
+	timelineUntilSeq, err := int64FromUint64(currentSeq, "timeline until_seq")
+	if err != nil {
+		return nil, err
+	}
+	eventRows, err := tx.ListOrchestrationRunEvents(ctx, sqlc.ListOrchestrationRunEventsParams{
+		RunID:      row.ID,
+		AfterSeq:   timelineAfterSeq,
+		UntilSeq:   timelineUntilSeq,
+		LimitCount: int32(maxEventLimit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration timeline events: %w", err)
+	}
+	timeline := make([]RunTimelineEntry, 0, len(eventRows))
+	for _, eventRow := range eventRows {
+		timeline = append(timeline, toRunTimelineEntry(eventRow))
+	}
+
+	executionSpans := buildRunExecutionSpans(attemptRows, verificationRows, resultRows, eventRows)
+	stuckSignals := buildRunStuckSignals(tasks, attempts, verifications, workers, observedAt.UTC())
+	summary := summarizeRunInspector(tasks, checkpoints, attempts, verifications, workers, stuckSignals)
+
+	return &RunInspector{
+		Run:            runSnapshot,
+		Summary:        summary,
+		StuckSignals:   stuckSignals,
+		Tasks:          tasks,
+		Dependencies:   dependencies,
+		Results:        results,
+		Attempts:       attempts,
+		Verifications:  verifications,
+		InputManifests: inputManifests,
+		ExecutionSpans: executionSpans,
+		Checkpoints:    checkpoints,
+		Artifacts:      artifacts,
+		Workers:        workers,
+		Timeline:       timeline,
+	}, nil
+}
+
+func (s *Service) ListRunTasks(ctx context.Context, caller ControlIdentity, runID string, req ListRunTasksRequest) (*TaskPage, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.getAuthorizedRun(ctx, caller, runID)
+	if err != nil {
+		return nil, err
+	}
+	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
+	if err != nil {
+		return nil, err
+	}
+	asOfSeq, err := resolvePageAsOfSeq(currentSeq, req.AsOfSeq, req.After)
+	if err != nil {
+		return nil, err
+	}
+	items, snapshotSeq, err := s.loadTaskSnapshot(ctx, row.ID, asOfSeq)
+	if err != nil {
+		return nil, err
+	}
+	items = filterTasks(items, req.Status)
+	pageItems, nextAfter, err := paginateTasks(items, req.After, normalizedListLimit(req.Limit), snapshotSeq, filterHash(req.Status))
+	if err != nil {
+		return nil, err
+	}
+	return &TaskPage{
+		Items:       pageItems,
+		NextAfter:   nextAfter,
+		SnapshotSeq: snapshotSeq,
+	}, nil
+}
+
+func (s *Service) ListRunCheckpoints(ctx context.Context, caller ControlIdentity, runID string, req ListRunCheckpointsRequest) (*HumanCheckpointPage, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.getAuthorizedRun(ctx, caller, runID)
+	if err != nil {
+		return nil, err
+	}
+	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
+	if err != nil {
+		return nil, err
+	}
+	asOfSeq, err := resolvePageAsOfSeq(currentSeq, req.AsOfSeq, req.After)
+	if err != nil {
+		return nil, err
+	}
+	items, snapshotSeq, err := s.loadCheckpointSnapshot(ctx, row.ID, asOfSeq)
+	if err != nil {
+		return nil, err
+	}
+	items = filterCheckpoints(items, req.Status)
+	pageItems, nextAfter, err := paginateCheckpoints(items, req.After, normalizedListLimit(req.Limit), snapshotSeq, filterHash(req.Status))
+	if err != nil {
+		return nil, err
+	}
+	return &HumanCheckpointPage{
+		Items:       pageItems,
+		NextAfter:   nextAfter,
+		SnapshotSeq: snapshotSeq,
+	}, nil
+}
+
+func (s *Service) ListRunArtifacts(ctx context.Context, caller ControlIdentity, runID string, req ListRunArtifactsRequest) (*ArtifactPage, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.getAuthorizedRun(ctx, caller, runID)
+	if err != nil {
+		return nil, err
+	}
+	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
+	if err != nil {
+		return nil, err
+	}
+	asOfSeq, err := resolvePageAsOfSeq(currentSeq, req.AsOfSeq, req.After)
+	if err != nil {
+		return nil, err
+	}
+	items, snapshotSeq, err := s.loadArtifactSnapshot(ctx, row.ID, asOfSeq)
+	if err != nil {
+		return nil, err
+	}
+	normalizedTaskID, err := normalizeOptionalUUID(req.TaskID, "task id")
+	if err != nil {
+		return nil, err
+	}
+	items = filterArtifacts(items, normalizedTaskID, req.Kind)
+	pageItems, nextAfter, err := paginateArtifacts(items, req.After, normalizedListLimit(req.Limit), snapshotSeq, filterHash([]string{normalizedTaskID}, req.Kind))
+	if err != nil {
+		return nil, err
+	}
+	return &ArtifactPage{
+		Items:       pageItems,
+		NextAfter:   nextAfter,
+		SnapshotSeq: snapshotSeq,
+	}, nil
+}
+
+func (s *Service) ListRunResults(ctx context.Context, caller ControlIdentity, runID string, req ListRunResultsRequest) (*TaskResultPage, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.getAuthorizedRun(ctx, caller, runID)
+	if err != nil {
+		return nil, err
+	}
+	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
+	if err != nil {
+		return nil, err
+	}
+	asOfSeq, err := resolvePageAsOfSeq(currentSeq, req.AsOfSeq, req.After)
+	if err != nil {
+		return nil, err
+	}
+	items, snapshotSeq, err := s.loadResultSnapshot(ctx, row.ID, asOfSeq)
+	if err != nil {
+		return nil, err
+	}
+	normalizedTaskID, err := normalizeOptionalUUID(req.TaskID, "task id")
+	if err != nil {
+		return nil, err
+	}
+	items = filterResults(items, normalizedTaskID)
+	pageItems, nextAfter, err := paginateResults(items, req.After, normalizedListLimit(req.Limit), snapshotSeq, filterHash([]string{normalizedTaskID}))
+	if err != nil {
+		return nil, err
+	}
+	return &TaskResultPage{
+		Items:       pageItems,
+		NextAfter:   nextAfter,
+		SnapshotSeq: snapshotSeq,
+	}, nil
+}
+
+func (s *Service) ListRunEvents(ctx context.Context, caller ControlIdentity, runID string, req ListRunEventsRequest) (*RunEventPage, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.getAuthorizedRun(ctx, caller, runID)
+	if err != nil {
+		return nil, err
+	}
+	pgRunID, err := db.ParseUUID(runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+	currentSeq, err := uint64FromInt64(row.LastEventSeq, "run last_event_seq")
+	if err != nil {
+		return nil, err
+	}
+	untilSeq, err := resolveEventUntilSeq(currentSeq, req.AfterSeq, req.UntilSeq)
+	if err != nil {
+		return nil, err
+	}
+	afterSeq, err := int64FromUint64(req.AfterSeq, "after_seq")
+	if err != nil {
+		return nil, err
+	}
+	untilSeqInt64, err := int64FromUint64(untilSeq, "until_seq")
+	if err != nil {
+		return nil, err
+	}
+	limitCount, err := int32FromInt(normalizedEventLimit(req.Limit), "event limit")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListOrchestrationRunEvents(ctx, sqlc.ListOrchestrationRunEventsParams{
+		RunID:      pgRunID,
+		AfterSeq:   afterSeq,
+		UntilSeq:   untilSeqInt64,
+		LimitCount: limitCount,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list orchestration events: %w", err)
+	}
+	events := make([]RunEvent, 0, len(rows))
+	for _, item := range rows {
+		events = append(events, toRunEvent(item))
+	}
+	return &RunEventPage{
+		Items:    events,
+		UntilSeq: untilSeq,
+	}, nil
+}
+
+func (s *Service) CancelRun(ctx context.Context, caller ControlIdentity, runID string, req CancelRunRequest) (*CancelRunResult, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	normalizedIdempotencyKey := normalizeIdempotencyKey(req.IdempotencyKey)
+	if normalizedIdempotencyKey == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
+	}
+	pgRunID, err := db.ParseUUID(runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+	normalizedRunID := pgRunID.String()
+	hash, err := cancelRunRequestHash(normalizedRunID, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.store.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin cancel run tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	existing, existingFound, err := getIdempotencyRecord(ctx, tx, caller, methodCancelRun, normalizedRunID, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+
+	runRow, err := tx.GetOrchestrationRunByIDForUpdate(ctx, pgRunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("lock run for cancel: %w", err)
+	}
+	if err := authorizeRun(caller, runRow); err != nil {
+		return nil, ErrRunNotFound
+	}
+	if existingFound {
+		if existing.RequestHash != hash {
+			return nil, ErrIdempotencyConflict
+		}
+		if existing.State != "completed" {
+			return nil, ErrIdempotencyIncomplete
+		}
+		result, err := decodeCancelRunResult(existing.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed cancel run tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	record, replay, err := ensureIdempotencyRecord(ctx, tx, caller, methodCancelRun, normalizedRunID, normalizedIdempotencyKey, hash)
+	if err != nil {
+		return nil, err
+	}
+	if replay {
+		result, err := decodeCancelRunResult(record.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed cancel run tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	switch runRow.LifecycleStatus {
+	case LifecycleStatusCompleted, LifecycleStatusFailed, LifecycleStatusCancelled:
+		return nil, ErrRunImmutable
+	}
+
+	lastEvent := sqlc.OrchestrationEvent{}
+	if runRow.LifecycleStatus != LifecycleStatusCancelling {
+		cancellingRun, err := tx.MarkOrchestrationRunCancelling(ctx, runRow.ID)
+		if err != nil {
+			return nil, fmt.Errorf("mark run cancelling: %w", err)
+		}
+		lastEvent, err = s.appendEvent(ctx, tx, runRow.ID, eventSpec{
+			AggregateType:    "run",
+			AggregateID:      cancellingRun.ID,
+			AggregateVersion: cancellingRun.StatusVersion,
+			Type:             "run.event.cancelling",
+			IdempotencyKey:   normalizedIdempotencyKey,
+			Payload: map[string]any{
+				"run_id":          cancellingRun.ID.String(),
+				"previous_status": runRow.LifecycleStatus,
+				"new_status":      cancellingRun.LifecycleStatus,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		runRow = cancellingRun
+	}
+
+	runAttempts, err := tx.ListCurrentOrchestrationTaskAttemptsByRun(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list run attempts for cancel: %w", err)
+	}
+	runVerifications, err := tx.ListCurrentOrchestrationTaskVerificationsByRun(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list run verifications for cancel: %w", err)
+	}
+	checkpoints, err := tx.ListCurrentOrchestrationCheckpointsByRun(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list checkpoints for cancel: %w", err)
+	}
+	for _, checkpoint := range checkpoints {
+		if checkpoint.Status != CheckpointStatusOpen {
+			continue
+		}
+		cancelledCheckpoint, err := tx.MarkOrchestrationHumanCheckpointCancelled(ctx, checkpoint.ID)
+		if err != nil {
+			return nil, fmt.Errorf("cancel open checkpoint: %w", err)
+		}
+		lastEvent, err = s.appendEvent(ctx, tx, runRow.ID, eventSpec{
+			TaskID:           cancelledCheckpoint.TaskID,
+			CheckpointID:     cancelledCheckpoint.ID,
+			AggregateType:    "checkpoint",
+			AggregateID:      cancelledCheckpoint.ID,
+			AggregateVersion: cancelledCheckpoint.StatusVersion,
+			Type:             "run.event.hitl.cancelled",
+			IdempotencyKey:   normalizedIdempotencyKey,
+			Payload: map[string]any{
+				"checkpoint_id":   cancelledCheckpoint.ID.String(),
+				"task_id":         cancelledCheckpoint.TaskID.String(),
+				"previous_status": checkpoint.Status,
+				"new_status":      cancelledCheckpoint.Status,
+				"status":          cancelledCheckpoint.Status,
+				"blocks_run":      cancelledCheckpoint.BlocksRun,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	tasks, err := tx.ListCurrentOrchestrationTasksByRun(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks for cancel: %w", err)
+	}
+	for _, task := range tasks {
+		if taskSuperseded(task) || !taskCancellableImmediately(task, runAttempts, runVerifications) {
+			continue
+		}
+		if err := s.cancelTaskVerificationsDuringRunCancellation(ctx, tx, runRow.ID, task, runVerifications); err != nil {
+			return nil, err
+		}
+		cancelledTask, err := tx.MarkOrchestrationTaskCancelled(ctx, sqlc.MarkOrchestrationTaskCancelledParams{
+			ID:             task.ID,
+			TerminalReason: "run cancelled",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cancel task: %w", err)
+		}
+		lastEvent, err = s.appendEvent(ctx, tx, runRow.ID, eventSpec{
+			TaskID:           cancelledTask.ID,
+			AggregateType:    "task",
+			AggregateID:      cancelledTask.ID,
+			AggregateVersion: cancelledTask.StatusVersion,
+			Type:             "run.event.task.cancelled",
+			IdempotencyKey:   normalizedIdempotencyKey,
+			Payload: map[string]any{
+				"task_id":         cancelledTask.ID.String(),
+				"previous_status": task.Status,
+				"new_status":      cancelledTask.Status,
+				"terminal_reason": cancelledTask.TerminalReason,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	runRow, err = tx.GetOrchestrationRunByIDForUpdate(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("lock run after cancel mutations: %w", err)
+	}
+	if terminalEvent, terminal, err := s.maybeMarkRunCompletedAfterTaskTransition(ctx, tx, runRow, pgtype.UUID{}, pgtype.UUID{}); err != nil {
+		return nil, err
+	} else if terminal {
+		lastEvent = terminalEvent
+		runRow, err = tx.GetOrchestrationRunByIDForUpdate(ctx, runRow.ID)
+		if err != nil {
+			return nil, fmt.Errorf("lock run after cancel completion: %w", err)
+		}
+	}
+	snapshotSeq, err := uint64FromInt64(runRow.LastEventSeq, "cancel run event seq")
+	if err != nil {
+		return nil, err
+	}
+	if snapshotSeq == 0 && lastEvent.Seq > 0 {
+		snapshotSeq, err = uint64FromInt64(lastEvent.Seq, "cancel run last event seq")
+		if err != nil {
+			return nil, err
+		}
+	}
+	result := CancelRunResult{
+		RunID:           normalizedRunID,
+		LifecycleStatus: runRow.LifecycleStatus,
+		SnapshotSeq:     snapshotSeq,
+	}
+	if _, err := tx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(result),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodCancelRun,
+		TargetID:        normalizedRunID,
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return nil, fmt.Errorf("complete cancel run idempotency: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit cancel run tx: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *Service) ResumeRun(ctx context.Context, caller ControlIdentity, runID string, req ResumeRunRequest) (*ResumeRunResult, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	normalizedIdempotencyKey := normalizeIdempotencyKey(req.IdempotencyKey)
+	if normalizedIdempotencyKey == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
+	}
+	pgRunID, err := db.ParseUUID(runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+	normalizedRunID := pgRunID.String()
+	hash, err := resumeRunRequestHash(normalizedRunID, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.store.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin resume run tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	existing, existingFound, err := getIdempotencyRecord(ctx, tx, caller, methodResumeRun, normalizedRunID, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+
+	runRow, err := tx.GetOrchestrationRunByIDForUpdate(ctx, pgRunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("lock run for resume: %w", err)
+	}
+	if err := authorizeRun(caller, runRow); err != nil {
+		return nil, ErrRunNotFound
+	}
+	if existingFound {
+		if existing.RequestHash != hash {
+			return nil, ErrIdempotencyConflict
+		}
+		if existing.State != "completed" {
+			return nil, ErrIdempotencyIncomplete
+		}
+		result, err := decodeResumeRunResult(existing.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed resume run tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	record, replay, err := ensureIdempotencyRecord(ctx, tx, caller, methodResumeRun, normalizedRunID, normalizedIdempotencyKey, hash)
+	if err != nil {
+		return nil, err
+	}
+	if replay {
+		result, err := decodeResumeRunResult(record.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed resume run tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	if runRow.LifecycleStatus != LifecycleStatusFailed {
+		return nil, fmt.Errorf("%w: only failed runs can be resumed", ErrInvalidArgument)
+	}
+
+	tasks, err := tx.ListCurrentOrchestrationTasksByRun(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks for resume: %w", err)
+	}
+	deps, err := tx.ListCurrentOrchestrationTaskDependenciesByRun(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list dependencies for resume: %w", err)
+	}
+	resumedTaskIDs := make([]string, 0)
+	for _, task := range tasks {
+		if taskSuperseded(task) || !taskResumableAfterRunFailure(task) {
+			continue
+		}
+		if task.Status == TaskStatusFailed && !latestTaskFailureRetryable(ctx, tx, task) {
+			continue
+		}
+		nextStatusReady := task.Status == TaskStatusFailed || taskHasNoActivePredecessors(task.ID, deps)
+		var resumedTask sqlc.OrchestrationTask
+		if nextStatusReady {
+			resumedTask, err = tx.MarkOrchestrationTaskReadyForRetry(ctx, sqlc.MarkOrchestrationTaskReadyForRetryParams{
+				ID:             task.ID,
+				LatestResultID: task.LatestResultID,
+			})
+		} else {
+			resumedTask, err = tx.MarkOrchestrationTaskCreatedForResume(ctx, sqlc.MarkOrchestrationTaskCreatedForResumeParams{
+				ID:             task.ID,
+				LatestResultID: task.LatestResultID,
+			})
+		}
+		if err != nil {
+			return nil, fmt.Errorf("resume task %s: %w", task.ID.String(), err)
+		}
+		resumedTaskIDs = append(resumedTaskIDs, resumedTask.ID.String())
+		if _, err := s.appendEvent(ctx, tx, runRow.ID, eventSpec{
+			TaskID:           resumedTask.ID,
+			AggregateType:    "task",
+			AggregateID:      resumedTask.ID,
+			AggregateVersion: resumedTask.StatusVersion,
+			Type:             "run.event.task.ready",
+			IdempotencyKey:   normalizedIdempotencyKey,
+			Payload: map[string]any{
+				"task_id":          resumedTask.ID.String(),
+				"previous_status":  task.Status,
+				"new_status":       resumedTask.Status,
+				"latest_result_id": uuidToString(resumedTask.LatestResultID),
+				"ready_reason":     "run_resumed",
+			},
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if len(resumedTaskIDs) == 0 {
+		return nil, fmt.Errorf("%w: no retryable failed task found", ErrInvalidArgument)
+	}
+
+	runningRun, err := tx.MarkOrchestrationRunRunning(ctx, runRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("mark run running for resume: %w", err)
+	}
+	lastEvent, err := s.appendEvent(ctx, tx, runRow.ID, eventSpec{
+		AggregateType:    "run",
+		AggregateID:      runningRun.ID,
+		AggregateVersion: runningRun.StatusVersion,
+		Type:             "run.event.resumed",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"run_id":           runningRun.ID.String(),
+			"previous_status":  runRow.LifecycleStatus,
+			"new_status":       runningRun.LifecycleStatus,
+			"resumed_task_ids": resumedTaskIDs,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	snapshotSeq, err := uint64FromInt64(lastEvent.Seq, "resume run event seq")
+	if err != nil {
+		return nil, err
+	}
+	result := ResumeRunResult{
+		RunID:           normalizedRunID,
+		LifecycleStatus: runningRun.LifecycleStatus,
+		ResumedTaskIDs:  resumedTaskIDs,
+		SnapshotSeq:     snapshotSeq,
+	}
+	if _, err := tx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(result),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodResumeRun,
+		TargetID:        normalizedRunID,
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return nil, fmt.Errorf("complete resume run idempotency: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit resume run tx: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *Service) ResolveCheckpoint(ctx context.Context, caller ControlIdentity, checkpointID string, input CheckpointResolution) (*ResolveCheckpointResult, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	normalizedIdempotencyKey := normalizeIdempotencyKey(input.IdempotencyKey)
+	if normalizedIdempotencyKey == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
+	}
+	pgCheckpointID, err := db.ParseUUID(checkpointID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid checkpoint id", ErrInvalidArgument)
+	}
+	normalizedCheckpointID := pgCheckpointID.String()
+
+	tx, err := s.store.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin resolve checkpoint tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	existing, existingFound, err := getIdempotencyRecord(ctx, tx, caller, methodResolveCheckpoint, normalizedCheckpointID, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+
+	lockedCheckpoint, err := tx.GetOrchestrationHumanCheckpointByIDForUpdate(ctx, pgCheckpointID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrCheckpointNotFound
+		}
+		return nil, fmt.Errorf("lock checkpoint: %w", err)
+	}
+	lockedRun, err := tx.GetOrchestrationRunByIDForUpdate(ctx, lockedCheckpoint.RunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("lock checkpoint run: %w", err)
+	}
+	if err := authorizeRun(caller, lockedRun); err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	normalized, hash, err := normalizeCheckpointResolution(lockedCheckpoint, input)
+	if err != nil {
+		return nil, err
+	}
+	if existingFound {
+		if existing.RequestHash != hash {
+			return nil, ErrIdempotencyConflict
+		}
+		if existing.State != "completed" {
+			return nil, ErrIdempotencyIncomplete
+		}
+		result, err := decodeResolveCheckpointResult(existing.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed resolve checkpoint tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	record, replay, err := ensureIdempotencyRecord(ctx, tx, caller, methodResolveCheckpoint, normalizedCheckpointID, normalizedIdempotencyKey, hash)
+	if err != nil {
+		return nil, err
+	}
+	if replay {
+		result, err := decodeResolveCheckpointResult(record.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed resolve checkpoint tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	if !runAcceptsExternalMutations(lockedRun.LifecycleStatus) {
+		return nil, ErrRunImmutable
+	}
+	if lockedCheckpoint.Status != CheckpointStatusOpen {
+		return nil, ErrCheckpointNotOpen
+	}
+
+	lockedTask, err := tx.GetOrchestrationTaskByIDForUpdate(ctx, lockedCheckpoint.TaskID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, fmt.Errorf("lock checkpoint task: %w", err)
+	}
+
+	resolvedCheckpoint, err := tx.ResolveOrchestrationHumanCheckpoint(ctx, sqlc.ResolveOrchestrationHumanCheckpointParams{
+		ID:               lockedCheckpoint.ID,
+		ResolvedBy:       caller.Subject,
+		ResolvedOption:   normalized.Option,
+		ResolvedResponse: normalized.Response,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve checkpoint: %w", err)
+	}
+
+	_, err = s.appendEvent(ctx, tx, lockedRun.ID, eventSpec{
+		TaskID:           lockedCheckpoint.TaskID,
+		CheckpointID:     lockedCheckpoint.ID,
+		AggregateType:    "checkpoint",
+		AggregateID:      lockedCheckpoint.ID,
+		AggregateVersion: resolvedCheckpoint.StatusVersion,
+		Type:             "run.event.hitl.resolved",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"checkpoint_id":       resolvedCheckpoint.ID.String(),
+			"task_id":             resolvedCheckpoint.TaskID.String(),
+			"previous_status":     lockedCheckpoint.Status,
+			"new_status":          resolvedCheckpoint.Status,
+			"status":              resolvedCheckpoint.Status,
+			"blocks_run":          resolvedCheckpoint.BlocksRun,
+			"resolved_by":         caller.Subject,
+			"resolved_option":     normalized.Option,
+			"resolved_response":   normalized.Response,
+			"resolution_metadata": normalized.Metadata,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	_, planningIntentUUID, err := newPGUUID()
+	if err != nil {
+		return nil, err
+	}
+	planningIntent, err := tx.CreateOrchestrationPlanningIntent(ctx, sqlc.CreateOrchestrationPlanningIntentParams{
+		ID:               planningIntentUUID,
+		RunID:            lockedRun.ID,
+		TaskID:           lockedTask.ID,
+		CheckpointID:     resolvedCheckpoint.ID,
+		Kind:             PlanningIntentKindCheckpointResume,
+		Status:           PlanningIntentStatusPending,
+		BasePlannerEpoch: lockedRun.PlannerEpoch,
+		Payload: marshalJSON(map[string]any{
+			"run_id":              lockedRun.ID.String(),
+			"task_id":             lockedTask.ID.String(),
+			"checkpoint_id":       resolvedCheckpoint.ID.String(),
+			"checkpoint_blocking": resolvedCheckpoint.BlocksRun,
+			"resolved_by":         caller.Subject,
+			"resolved_option":     normalized.Option,
+			"resolution_metadata": normalized.Metadata,
+		}),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create checkpoint resume planning intent: %w", err)
+	}
+	_, err = s.appendEvent(ctx, tx, lockedRun.ID, eventSpec{
+		TaskID:           lockedTask.ID,
+		CheckpointID:     resolvedCheckpoint.ID,
+		AggregateType:    "planning_intent",
+		AggregateID:      planningIntent.ID,
+		AggregateVersion: 1,
+		Type:             "run.event.planning_intent.enqueued",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"planning_intent_id": planningIntent.ID.String(),
+			"run_id":             lockedRun.ID.String(),
+			"task_id":            lockedTask.ID.String(),
+			"checkpoint_id":      resolvedCheckpoint.ID.String(),
+			"kind":               planningIntent.Kind,
+			"status":             planningIntent.Status,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.syncRunPlanningStatus(ctx, tx, lockedRun.ID); err != nil {
+		return nil, err
+	}
+	lockedRun, err = tx.GetOrchestrationRunByIDForUpdate(ctx, lockedRun.ID)
+	if err != nil {
+		return nil, fmt.Errorf("lock run after checkpoint resolve: %w", err)
+	}
+
+	snapshotSeq, err := uint64FromInt64(lockedRun.LastEventSeq, "checkpoint resolve event seq")
+	if err != nil {
+		return nil, err
+	}
+	result := ResolveCheckpointResult{
+		CheckpointID: normalizedCheckpointID,
+		Checkpoint:   toHumanCheckpoint(resolvedCheckpoint),
+		SnapshotSeq:  snapshotSeq,
+	}
+	if _, err := tx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(result),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodResolveCheckpoint,
+		TargetID:        normalizedCheckpointID,
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return nil, fmt.Errorf("complete resolve checkpoint idempotency: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit resolve checkpoint tx: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *Service) CreateHumanCheckpoint(ctx context.Context, caller ControlIdentity, req CreateHumanCheckpointRequest) (*CreateHumanCheckpointResult, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	normalizedIdempotencyKey := normalizeIdempotencyKey(req.IdempotencyKey)
+	if strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.TaskID) == "" || strings.TrimSpace(req.Question) == "" {
+		return nil, fmt.Errorf("%w: run_id, task_id, and question are required", ErrInvalidArgument)
+	}
+	if len(req.Options) == 0 {
+		return nil, fmt.Errorf("%w: at least one checkpoint option is required", ErrInvalidArgument)
+	}
+	if normalizedIdempotencyKey == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
+	}
+	if !req.TimeoutAt.IsZero() {
+		return nil, fmt.Errorf("%w: timeout_at is not supported by current runtime", ErrInvalidArgument)
+	}
+
+	pgRunID, err := db.ParseUUID(req.RunID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+	pgTaskID, err := db.ParseUUID(req.TaskID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid task id", ErrInvalidArgument)
+	}
+
+	tx, err := s.store.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin create checkpoint tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	lockedRun, err := tx.GetOrchestrationRunByIDForUpdate(ctx, pgRunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("lock run for checkpoint create: %w", err)
+	}
+	if err := authorizeRun(caller, lockedRun); err != nil {
+		return nil, ErrRunNotFound
+	}
+	normalizedOptions, normalizedDefaultAction, err := validateCheckpointDefinition(req.Options, req.DefaultAction, req.TimeoutAt)
+	if err != nil {
+		return nil, err
+	}
+	normalizedResumePolicy, err := normalizeCheckpointResumePolicy(req.ResumePolicy)
+	if err != nil {
+		return nil, err
+	}
+	kind, reasonCode, triggeredBy, severity, err := normalizeCheckpointClassification(req)
+	if err != nil {
+		return nil, err
+	}
+	requestHash, err := createHumanCheckpointRequestHash(req, normalizedOptions, normalizedDefaultAction, normalizedResumePolicy, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+
+	existing, existingFound, err := getIdempotencyRecord(ctx, tx, caller, methodCreateHumanCheckpoint, pgTaskID.String(), normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if existingFound {
+		if existing.RequestHash != requestHash {
+			return nil, ErrIdempotencyConflict
+		}
+		if existing.State != "completed" {
+			return nil, ErrIdempotencyIncomplete
+		}
+		result, err := decodeCreateHumanCheckpointResult(existing.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed create checkpoint tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	lockedTask, err := tx.GetOrchestrationTaskByIDForUpdate(ctx, pgTaskID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, fmt.Errorf("lock task for checkpoint create: %w", err)
+	}
+	if lockedTask.RunID != lockedRun.ID {
+		return nil, ErrTaskNotFound
+	}
+	if !runAcceptsExternalMutations(lockedRun.LifecycleStatus) && lockedRun.LifecycleStatus != LifecycleStatusWaitingHuman {
+		return nil, ErrRunImmutable
+	}
+
+	if taskSuperseded(lockedTask) {
+		return nil, ErrTaskImmutable
+	}
+	if lockedTask.Status == TaskStatusWaitingHuman || lockedTask.WaitingCheckpointID.Valid {
+		return nil, ErrTaskAlreadyWaitingHuman
+	}
+	if !taskAcceptsHumanCheckpoint(lockedTask.Status) {
+		return nil, ErrTaskImmutable
+	}
+	if !taskSupportsHumanCheckpoint(lockedTask.Status) {
+		return nil, ErrTaskCheckpointUnsupported
+	}
+
+	record, replay, err := ensureIdempotencyRecord(ctx, tx, caller, methodCreateHumanCheckpoint, pgTaskID.String(), normalizedIdempotencyKey, requestHash)
+	if err != nil {
+		return nil, err
+	}
+	if replay {
+		result, err := decodeCreateHumanCheckpointResult(record.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed create checkpoint tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	if req.BlocksRun {
+		openBlockingCount, err := tx.CountOpenRunBlockingCheckpointsByRun(ctx, pgRunID)
+		if err != nil {
+			return nil, fmt.Errorf("count open run blocking checkpoints: %w", err)
+		}
+		if openBlockingCount > 0 {
+			return nil, ErrRunBarrierAlreadyOpen
+		}
+		siblingTasks, err := tx.ListCurrentOrchestrationTasksByRun(ctx, pgRunID)
+		if err != nil {
+			return nil, fmt.Errorf("list sibling tasks for run barrier preflight: %w", err)
+		}
+		for _, sibling := range siblingTasks {
+			if sibling.ID == lockedTask.ID {
+				continue
+			}
+			if taskBlocksRunBarrier(sibling) {
+				return nil, ErrRunBarrierUnsupported
+			}
+		}
+	}
+
+	checkpointID, checkpointUUID, err := newPGUUID()
+	if err != nil {
+		return nil, err
+	}
+	checkpointRow, err := tx.CreateOrchestrationHumanCheckpoint(ctx, sqlc.CreateOrchestrationHumanCheckpointParams{
+		ID:            checkpointUUID,
+		RunID:         pgRunID,
+		TaskID:        pgTaskID,
+		BlocksRun:     req.BlocksRun,
+		Kind:          kind,
+		ReasonCode:    reasonCode,
+		TriggeredBy:   triggeredBy,
+		Severity:      severity,
+		PlannerEpoch:  lockedRun.PlannerEpoch,
+		Status:        CheckpointStatusOpen,
+		StatusVersion: 1,
+		Question:      strings.TrimSpace(req.Question),
+		Options:       marshalJSON(normalizedOptions),
+		DefaultAction: marshalJSON(normalizedDefaultAction),
+		ResumePolicy:  marshalJSON(normalizedResumePolicy),
+		TimeoutAt:     timeToPg(req.TimeoutAt),
+		Metadata:      marshalObject(req.Metadata),
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_orchestration_human_checkpoints_open_run_barrier_unique" {
+			return nil, ErrRunBarrierAlreadyOpen
+		}
+		return nil, fmt.Errorf("create human checkpoint: %w", err)
+	}
+
+	lastEvent, err := s.appendEvent(ctx, tx, pgRunID, eventSpec{
+		TaskID:           lockedTask.ID,
+		CheckpointID:     checkpointUUID,
+		AggregateType:    "checkpoint",
+		AggregateID:      checkpointUUID,
+		AggregateVersion: checkpointRow.StatusVersion,
+		Type:             "run.event.hitl.requested",
+		Payload: map[string]any{
+			"checkpoint_id":  checkpointID,
+			"task_id":        checkpointRow.TaskID.String(),
+			"status":         checkpointRow.Status,
+			"blocks_run":     checkpointRow.BlocksRun,
+			"kind":           checkpointRow.Kind,
+			"reason_code":    checkpointRow.ReasonCode,
+			"triggered_by":   checkpointRow.TriggeredBy,
+			"severity":       checkpointRow.Severity,
+			"question":       checkpointRow.Question,
+			"options":        normalizedOptions,
+			"default_action": normalizedDefaultAction,
+			"resume_policy":  normalizedResumePolicy,
+			"timeout_at":     timeForJSON(db.TimeFromPg(checkpointRow.TimeoutAt)),
+			"metadata":       normalizeObject(req.Metadata),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	waitingTask, err := tx.MarkOrchestrationTaskWaitingHuman(ctx, sqlc.MarkOrchestrationTaskWaitingHumanParams{
+		ID:                  lockedTask.ID,
+		WaitingCheckpointID: checkpointUUID,
+		WaitingScope:        "task",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mark task waiting on checkpoint: %w", err)
+	}
+
+	lastEvent, err = s.appendEvent(ctx, tx, pgRunID, eventSpec{
+		TaskID:           waitingTask.ID,
+		CheckpointID:     checkpointUUID,
+		AggregateType:    "task",
+		AggregateID:      waitingTask.ID,
+		AggregateVersion: waitingTask.StatusVersion,
+		Type:             "run.event.task.waiting_human",
+		Payload: map[string]any{
+			"task_id":               waitingTask.ID.String(),
+			"previous_status":       lockedTask.Status,
+			"new_status":            waitingTask.Status,
+			"waiting_scope":         waitingTask.WaitingScope,
+			"waiting_checkpoint_id": checkpointID,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if req.BlocksRun && lockedRun.LifecycleStatus != LifecycleStatusWaitingHuman {
+		siblingTasks, err := tx.ListCurrentOrchestrationTasksByRun(ctx, pgRunID)
+		if err != nil {
+			return nil, fmt.Errorf("list sibling tasks for run barrier: %w", err)
+		}
+		runAttempts, err := tx.ListCurrentOrchestrationTaskAttemptsByRun(ctx, pgRunID)
+		if err != nil {
+			return nil, fmt.Errorf("list run attempts for run barrier: %w", err)
+		}
+		runVerifications, err := tx.ListCurrentOrchestrationTaskVerificationsByRun(ctx, pgRunID)
+		if err != nil {
+			return nil, fmt.Errorf("list run verifications for run barrier: %w", err)
+		}
+		for _, sibling := range siblingTasks {
+			if sibling.ID == lockedTask.ID {
+				continue
+			}
+			if !taskPauseableByRunBarrier(sibling) {
+				if taskBlocksRunBarrier(sibling) {
+					return nil, ErrRunBarrierUnsupported
+				}
+				continue
+			}
+			lockedSibling, err := tx.GetOrchestrationTaskByIDForUpdate(ctx, sibling.ID)
+			if err != nil {
+				return nil, fmt.Errorf("lock sibling task for run barrier: %w", err)
+			}
+			if !taskPauseableByRunBarrier(lockedSibling) {
+				if taskBlocksRunBarrier(lockedSibling) {
+					return nil, ErrRunBarrierUnsupported
+				}
+				continue
+			}
+			if err := s.pauseRunBarrierSiblingWork(ctx, tx, pgRunID, checkpointUUID, lockedSibling, runAttempts, runVerifications); err != nil {
+				return nil, err
+			}
+			waitingSibling, err := tx.MarkOrchestrationTaskWaitingHuman(ctx, sqlc.MarkOrchestrationTaskWaitingHumanParams{
+				ID:                  lockedSibling.ID,
+				WaitingCheckpointID: checkpointUUID,
+				WaitingScope:        "run",
+			})
+			if err != nil {
+				return nil, fmt.Errorf("mark sibling task waiting on run checkpoint: %w", err)
+			}
+			lastEvent, err = s.appendEvent(ctx, tx, pgRunID, eventSpec{
+				TaskID:           waitingSibling.ID,
+				CheckpointID:     checkpointUUID,
+				AggregateType:    "task",
+				AggregateID:      waitingSibling.ID,
+				AggregateVersion: waitingSibling.StatusVersion,
+				Type:             "run.event.task.waiting_human",
+				Payload: map[string]any{
+					"task_id":               waitingSibling.ID.String(),
+					"previous_status":       lockedSibling.Status,
+					"new_status":            waitingSibling.Status,
+					"waiting_scope":         waitingSibling.WaitingScope,
+					"waiting_checkpoint_id": checkpointID,
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+		waitingRun, err := tx.MarkOrchestrationRunWaitingHuman(ctx, lockedRun.ID)
+		if err != nil {
+			return nil, fmt.Errorf("mark run waiting_human: %w", err)
+		}
+		lastEvent, err = s.appendEvent(ctx, tx, pgRunID, eventSpec{
+			TaskID:           pgtype.UUID{},
+			CheckpointID:     checkpointUUID,
+			AggregateType:    "run",
+			AggregateID:      waitingRun.ID,
+			AggregateVersion: waitingRun.StatusVersion,
+			Type:             "run.event.waiting_human",
+			Payload: map[string]any{
+				"run_id":          waitingRun.ID.String(),
+				"checkpoint_id":   checkpointID,
+				"blocks_run":      true,
+				"previous_status": lockedRun.LifecycleStatus,
+				"new_status":      waitingRun.LifecycleStatus,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	snapshotSeq, err := uint64FromInt64(lastEvent.Seq, "checkpoint create event seq")
+	if err != nil {
+		return nil, err
+	}
+	result := CreateHumanCheckpointResult{
+		Checkpoint:  toHumanCheckpoint(checkpointRow),
+		SnapshotSeq: snapshotSeq,
+	}
+	if _, err := tx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(result),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodCreateHumanCheckpoint,
+		TargetID:        pgTaskID.String(),
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return nil, fmt.Errorf("complete create checkpoint idempotency: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit create checkpoint tx: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *Service) CommitArtifact(ctx context.Context, caller ControlIdentity, req CommitArtifactRequest) (*CommitArtifactResult, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return nil, err
+	}
+	normalizedIdempotencyKey := normalizeIdempotencyKey(req.IdempotencyKey)
+	if strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.TaskID) == "" {
+		return nil, fmt.Errorf("%w: run_id and task_id are required", ErrInvalidArgument)
+	}
+	if strings.TrimSpace(req.Kind) == "" || strings.TrimSpace(req.URI) == "" || strings.TrimSpace(req.Version) == "" || strings.TrimSpace(req.Digest) == "" {
+		return nil, fmt.Errorf("%w: kind, uri, version, and digest are required", ErrInvalidArgument)
+	}
+	if normalizedIdempotencyKey == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidArgument)
+	}
+
+	pgRunID, err := db.ParseUUID(req.RunID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+	pgTaskID, err := db.ParseUUID(req.TaskID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid task id", ErrInvalidArgument)
+	}
+	attemptID := pgtype.UUID{}
+	if strings.TrimSpace(req.AttemptID) != "" {
+		attemptID, err = db.ParseUUID(req.AttemptID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid attempt id", ErrInvalidArgument)
+		}
+	}
+
+	tx, err := s.store.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin commit artifact tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	lockedRun, err := tx.GetOrchestrationRunByIDForUpdate(ctx, pgRunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("lock run for artifact commit: %w", err)
+	}
+	if err := authorizeRun(caller, lockedRun); err != nil {
+		return nil, ErrRunNotFound
+	}
+	requestHash, err := commitArtifactRequestHash(req, normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	existing, existingFound, err := getIdempotencyRecord(ctx, tx, caller, methodCommitArtifact, pgTaskID.String(), normalizedIdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if existingFound {
+		if existing.RequestHash != requestHash {
+			return nil, ErrIdempotencyConflict
+		}
+		if existing.State != "completed" {
+			return nil, ErrIdempotencyIncomplete
+		}
+		result, err := decodeCommitArtifactResult(existing.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed artifact tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	if !runAcceptsExternalMutations(lockedRun.LifecycleStatus) {
+		return nil, ErrRunImmutable
+	}
+	lockedTask, err := tx.GetOrchestrationTaskByIDForUpdate(ctx, pgTaskID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, fmt.Errorf("lock task for artifact commit: %w", err)
+	}
+	if lockedTask.RunID != lockedRun.ID {
+		return nil, ErrTaskNotFound
+	}
+	if attemptID.Valid {
+		attemptRow, err := tx.GetOrchestrationTaskAttemptByIDForUpdate(ctx, attemptID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrAttemptNotFound
+			}
+			return nil, fmt.Errorf("lock attempt for artifact commit: %w", err)
+		}
+		if attemptRow.RunID != lockedRun.ID || attemptRow.TaskID != lockedTask.ID {
+			return nil, ErrAttemptNotFound
+		}
+	}
+
+	record, replay, err := ensureIdempotencyRecord(ctx, tx, caller, methodCommitArtifact, pgTaskID.String(), normalizedIdempotencyKey, requestHash)
+	if err != nil {
+		return nil, err
+	}
+	if replay {
+		result, err := decodeCommitArtifactResult(record.ResponsePayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed artifact tx: %w", err)
+		}
+		return &result, nil
+	}
+
+	artifactID, artifactUUID, err := newPGUUID()
+	if err != nil {
+		return nil, err
+	}
+	artifactRow, err := tx.CreateOrchestrationArtifact(ctx, sqlc.CreateOrchestrationArtifactParams{
+		ID:          artifactUUID,
+		RunID:       pgRunID,
+		TaskID:      pgTaskID,
+		AttemptID:   attemptID,
+		Kind:        strings.TrimSpace(req.Kind),
+		Uri:         strings.TrimSpace(req.URI),
+		Version:     strings.TrimSpace(req.Version),
+		Digest:      strings.TrimSpace(req.Digest),
+		ContentType: strings.TrimSpace(req.ContentType),
+		Summary:     strings.TrimSpace(req.Summary),
+		Metadata:    marshalObject(req.Metadata),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create orchestration artifact: %w", err)
+	}
+
+	lastEvent, err := s.appendEvent(ctx, tx, pgRunID, eventSpec{
+		TaskID:           pgTaskID,
+		CheckpointID:     pgtype.UUID{},
+		AggregateType:    "artifact",
+		AggregateID:      artifactUUID,
+		AggregateVersion: 1,
+		Type:             "run.event.artifact.committed",
+		IdempotencyKey:   normalizedIdempotencyKey,
+		Payload: map[string]any{
+			"artifact_id":  artifactID,
+			"run_id":       pgRunID.String(),
+			"task_id":      pgTaskID.String(),
+			"attempt_id":   attemptID.String(),
+			"kind":         artifactRow.Kind,
+			"uri":          artifactRow.Uri,
+			"version":      artifactRow.Version,
+			"digest":       artifactRow.Digest,
+			"content_type": artifactRow.ContentType,
+			"summary":      artifactRow.Summary,
+			"metadata":     normalizeObject(req.Metadata),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	snapshotSeq, err := uint64FromInt64(lastEvent.Seq, "artifact commit event seq")
+	if err != nil {
+		return nil, err
+	}
+	result := CommitArtifactResult{
+		Artifact:    toArtifact(artifactRow),
+		SnapshotSeq: snapshotSeq,
+	}
+	if _, err := tx.CompleteOrchestrationIdempotencyRecord(ctx, sqlc.CompleteOrchestrationIdempotencyRecordParams{
+		ResponsePayload: marshalJSON(result),
+		TenantID:        caller.TenantID,
+		CallerSubject:   caller.Subject,
+		Method:          methodCommitArtifact,
+		TargetID:        pgTaskID.String(),
+		IdempotencyKey:  normalizedIdempotencyKey,
+	}); err != nil {
+		return nil, fmt.Errorf("complete artifact idempotency: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit artifact tx: %w", err)
+	}
+	return &result, nil
+}
+
+type eventSpec struct {
+	TaskID           pgtype.UUID
+	AttemptID        pgtype.UUID
+	CheckpointID     pgtype.UUID
+	AggregateType    string
+	AggregateID      pgtype.UUID
+	AggregateVersion int64
+	Type             string
+	IdempotencyKey   string
+	Payload          map[string]any
+}
+
+func (*Service) appendEvent(ctx context.Context, tx Queries, runID pgtype.UUID, event eventSpec) (sqlc.OrchestrationEvent, error) {
+	lastSeq, err := tx.AllocateOrchestrationRunEventSeqs(ctx, sqlc.AllocateOrchestrationRunEventSeqsParams{
+		Delta: 1,
+		ID:    runID,
+	})
+	if err != nil {
+		return sqlc.OrchestrationEvent{}, fmt.Errorf("allocate orchestration event seq: %w", err)
+	}
+	row, err := tx.CreateOrchestrationEvent(ctx, sqlc.CreateOrchestrationEventParams{
+		RunID:            runID,
+		TaskID:           event.TaskID,
+		AttemptID:        event.AttemptID,
+		CheckpointID:     event.CheckpointID,
+		Seq:              lastSeq,
+		AggregateType:    event.AggregateType,
+		AggregateID:      event.AggregateID,
+		AggregateVersion: event.AggregateVersion,
+		Type:             event.Type,
+		CausationEventID: pgtype.UUID{},
+		CorrelationID:    runID.String(),
+		IdempotencyKey:   event.IdempotencyKey,
+		Payload:          marshalObject(event.Payload),
+	})
+	if err != nil {
+		return sqlc.OrchestrationEvent{}, fmt.Errorf("append orchestration event %q: %w", event.Type, err)
+	}
+	seq, err := uint64FromInt64(row.Seq, "event seq")
+	if err != nil {
+		return sqlc.OrchestrationEvent{}, err
+	}
+	if err := recordProjectionSnapshotAtSeq(ctx, tx, runID, seq); err != nil {
+		return sqlc.OrchestrationEvent{}, err
+	}
+	return row, nil
+}
+
+func recordProjectionSnapshotAtSeq(ctx context.Context, tx Queries, runID pgtype.UUID, seq uint64) error {
+	seqInt64, err := int64FromUint64(seq, "projection snapshot seq")
+	if err != nil {
+		return err
+	}
+	runRow, err := tx.GetOrchestrationRunByID(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("load run for projection snapshot: %w", err)
+	}
+	tasks, err := tx.ListCurrentOrchestrationTasksByRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("load tasks for projection snapshot: %w", err)
+	}
+	checkpoints, err := tx.ListCurrentOrchestrationCheckpointsByRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("load checkpoints for projection snapshot: %w", err)
+	}
+	artifacts, err := tx.ListCurrentOrchestrationArtifactsByRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("load artifacts for projection snapshot: %w", err)
+	}
+	results, err := tx.ListCurrentOrchestrationTaskResultsByRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("load results for projection snapshot: %w", err)
+	}
+	projections := []struct {
+		label string
+		kind  string
+		value any
+	}{
+		{"run", ProjectionKindRun, toRun(runRow)},
+		{"task", ProjectionKindTasks, mapSlice(tasks, toTask)},
+		{"checkpoint", ProjectionKindCheckpoints, mapSlice(checkpoints, toHumanCheckpoint)},
+		{"artifact", ProjectionKindArtifacts, mapSlice(artifacts, toArtifact)},
+		{"result", ProjectionKindResults, mapSlice(results, toTaskResult)},
+	}
+	for _, p := range projections {
+		if _, err := tx.CreateOrchestrationProjectionSnapshot(ctx, sqlc.CreateOrchestrationProjectionSnapshotParams{
+			RunID:          runID,
+			ProjectionKind: p.kind,
+			Seq:            seqInt64,
+			Payload:        marshalJSON(p.value),
+		}); err != nil {
+			return fmt.Errorf("write %s projection snapshot at seq %d: %w", p.label, seq, err)
+		}
+	}
+	return nil
+}
+
+// mapSlice converts a slice of source rows to a slice of domain types using
+// the provided projector. It always returns a non-nil slice (matching the
+// previous per-snapshot init that started with make([]T, 0, len(in))).
+func mapSlice[S, T any](in []S, fn func(S) T) []T {
+	out := make([]T, 0, len(in))
+	for _, item := range in {
+		out = append(out, fn(item))
+	}
+	return out
+}
+
+func (s *Service) loadRunSnapshot(ctx context.Context, runID pgtype.UUID, asOfSeq uint64) (Run, uint64, error) {
+	return loadProjectionSnapshot[Run](ctx, s.queries, runID, ProjectionKindRun, "run", asOfSeq)
+}
+
+func (s *Service) loadTaskSnapshot(ctx context.Context, runID pgtype.UUID, asOfSeq uint64) ([]Task, uint64, error) {
+	return loadProjectionSliceSnapshot[Task](ctx, s.queries, runID, ProjectionKindTasks, "task", asOfSeq)
+}
+
+func (s *Service) loadCheckpointSnapshot(ctx context.Context, runID pgtype.UUID, asOfSeq uint64) ([]HumanCheckpoint, uint64, error) {
+	return loadProjectionSliceSnapshot[HumanCheckpoint](ctx, s.queries, runID, ProjectionKindCheckpoints, "checkpoint", asOfSeq)
+}
+
+func (s *Service) loadArtifactSnapshot(ctx context.Context, runID pgtype.UUID, asOfSeq uint64) ([]Artifact, uint64, error) {
+	return loadProjectionSliceSnapshot[Artifact](ctx, s.queries, runID, ProjectionKindArtifacts, "artifact", asOfSeq)
+}
+
+func (s *Service) loadResultSnapshot(ctx context.Context, runID pgtype.UUID, asOfSeq uint64) ([]TaskResult, uint64, error) {
+	return loadProjectionSliceSnapshot[TaskResult](ctx, s.queries, runID, ProjectionKindResults, "result", asOfSeq)
+}
+
+// loadProjectionSnapshot loads a singleton snapshot (e.g. Run) at or before
+// asOfSeq, returning the zero value and seq=0 when no snapshot exists.
+func loadProjectionSnapshot[T any](ctx context.Context, queries Queries, runID pgtype.UUID, kind, label string, asOfSeq uint64) (T, uint64, error) {
+	var zero T
+	asOfSeqInt64, err := int64FromUint64(asOfSeq, label+" snapshot seq")
+	if err != nil {
+		return zero, 0, err
+	}
+	row, err := queries.GetOrchestrationProjectionSnapshotAtOrBeforeSeq(ctx, sqlc.GetOrchestrationProjectionSnapshotAtOrBeforeSeqParams{
+		RunID:          runID,
+		ProjectionKind: kind,
+		Seq:            asOfSeqInt64,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return zero, 0, nil
+		}
+		return zero, 0, fmt.Errorf("load %s projection snapshot: %w", label, err)
+	}
+	var item T
+	if err := unmarshalJSON(row.Payload, &item); err != nil {
+		return zero, 0, fmt.Errorf("decode %s projection snapshot: %w", label, err)
+	}
+	seq, err := uint64FromInt64(row.Seq, label+" snapshot seq")
+	if err != nil {
+		return zero, 0, err
+	}
+	return item, seq, nil
+}
+
+// loadProjectionSliceSnapshot is loadProjectionSnapshot specialized for slice
+// payloads, returning a non-nil empty slice when no snapshot is found (callers
+// rely on []T{} rather than nil to render JSON arrays consistently).
+func loadProjectionSliceSnapshot[T any](ctx context.Context, queries Queries, runID pgtype.UUID, kind, label string, asOfSeq uint64) ([]T, uint64, error) {
+	asOfSeqInt64, err := int64FromUint64(asOfSeq, label+" snapshot seq")
+	if err != nil {
+		return nil, 0, err
+	}
+	row, err := queries.GetOrchestrationProjectionSnapshotAtOrBeforeSeq(ctx, sqlc.GetOrchestrationProjectionSnapshotAtOrBeforeSeqParams{
+		RunID:          runID,
+		ProjectionKind: kind,
+		Seq:            asOfSeqInt64,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return []T{}, 0, nil
+		}
+		return nil, 0, fmt.Errorf("load %s projection snapshot: %w", label, err)
+	}
+	var items []T
+	if err := unmarshalJSON(row.Payload, &items); err != nil {
+		return nil, 0, fmt.Errorf("decode %s projection snapshot: %w", label, err)
+	}
+	seq, err := uint64FromInt64(row.Seq, label+" snapshot seq")
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, seq, nil
+}
+
+func (s *Service) getAuthorizedRun(ctx context.Context, caller ControlIdentity, runID string) (sqlc.OrchestrationRun, error) {
+	var err error
+	caller, err = normalizeControlIdentity(caller)
+	if err != nil {
+		return sqlc.OrchestrationRun{}, err
+	}
+	pgRunID, err := db.ParseUUID(runID)
+	if err != nil {
+		return sqlc.OrchestrationRun{}, fmt.Errorf("%w: invalid run id", ErrInvalidArgument)
+	}
+	row, err := s.queries.GetOrchestrationRunByID(ctx, pgRunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.OrchestrationRun{}, ErrRunNotFound
+		}
+		return sqlc.OrchestrationRun{}, fmt.Errorf("get orchestration run: %w", err)
+	}
+	if err := authorizeRun(caller, row); err != nil {
+		return sqlc.OrchestrationRun{}, ErrRunNotFound
+	}
+	return row, nil
+}
+
+func normalizeControlIdentity(caller ControlIdentity) (ControlIdentity, error) {
+	caller.Subject = strings.TrimSpace(caller.Subject)
+	caller.TenantID = strings.TrimSpace(caller.TenantID)
+	if caller.Subject == "" || caller.TenantID == "" {
+		return ControlIdentity{}, ErrInvalidControlIdentity
+	}
+	return caller, nil
+}
+
+func authorizeRun(caller ControlIdentity, run sqlc.OrchestrationRun) error {
+	if strings.TrimSpace(run.TenantID) != strings.TrimSpace(caller.TenantID) {
+		return ErrAccessDenied
+	}
+	policy := decodeJSONObject(run.ControlPolicy)
+	mode, _ := policy["mode"].(string)
+	ownerSubject, _ := policy["owner_subject"].(string)
+	ownerSubject = strings.TrimSpace(ownerSubject)
+	if ownerSubject == "" {
+		ownerSubject = run.OwnerSubject
+	}
+	runOwner := strings.TrimSpace(run.OwnerSubject)
+	if mode == ControlPolicyModeOwnerOnly && ownerSubject == strings.TrimSpace(caller.Subject) {
+		return nil
+	}
+	if runOwner != strings.TrimSpace(caller.Subject) {
+		return ErrAccessDenied
+	}
+	return nil
+}
+
+func runAcceptsExternalMutations(status string) bool {
+	switch status {
+	case LifecycleStatusCreated, LifecycleStatusRunning, LifecycleStatusWaitingHuman:
+		return true
+	case LifecycleStatusCancelling, LifecycleStatusCompleted, LifecycleStatusFailed, LifecycleStatusCancelled:
+		return false
+	default:
+		return false
+	}
+}
+
+func runAcceptsPlanningIntent(kind, status string, basePlannerEpoch, currentPlannerEpoch int64) bool {
+	if status == LifecycleStatusCancelling {
+		switch kind {
+		case PlanningIntentKindAttemptFinalize, PlanningIntentKindCheckpointResume:
+			return true
+		default:
+			return false
+		}
+	}
+	if status == LifecycleStatusFailed {
+		return kind == PlanningIntentKindAttemptFinalize
+	}
+	if !runAcceptsExternalMutations(status) {
+		return false
+	}
+	if kind == PlanningIntentKindCheckpointResume {
+		return true
+	}
+	return basePlannerEpoch == currentPlannerEpoch
+}
+
+func normalizeOptionalUUID(raw string, field string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	parsed, err := db.ParseUUID(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid %s", ErrInvalidArgument, field)
+	}
+	return parsed.String(), nil
+}
+
+func normalizeRequiredUUID(raw string, field string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("%w: %s is required", ErrInvalidArgument, field)
+	}
+	parsed, err := db.ParseUUID(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid %s", ErrInvalidArgument, field)
+	}
+	return parsed.String(), nil
+}
+
+func taskAcceptsHumanCheckpoint(status string) bool {
+	switch status {
+	case TaskStatusCreated, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning, TaskStatusVerifying, TaskStatusWaitingHuman, TaskStatusBlocked:
+		return true
+	case TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
+		return false
+	default:
+		return false
+	}
+}
+
+func taskSupportsHumanCheckpoint(status string) bool {
+	switch status {
+	case TaskStatusReady, TaskStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskSuperseded(task sqlc.OrchestrationTask) bool {
+	return task.SupersededByPlannerEpoch.Valid
+}
+
+func taskResumableAfterRunFailure(task sqlc.OrchestrationTask) bool {
+	if taskSuperseded(task) {
+		return false
+	}
+	switch task.Status {
+	case TaskStatusFailed, TaskStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func latestTaskFailureRetryable(ctx context.Context, tx Queries, task sqlc.OrchestrationTask) bool {
+	if !task.LatestResultID.Valid {
+		return false
+	}
+	result, err := tx.GetOrchestrationTaskResultByID(ctx, task.LatestResultID)
+	if err != nil {
+		return false
+	}
+	if result.Status != TaskAttemptStatusFailed {
+		return false
+	}
+	if !isRetryableAttemptFailureClass(result.FailureClass) && !isRetryableVerificationFailureClass(result.FailureClass) {
+		return false
+	}
+	maxAttempts := taskRetryMaxAttempts(decodeJSONObject(task.RetryPolicy))
+	if maxAttempts <= 1 {
+		return false
+	}
+	attemptCount := 0
+	if result.AttemptID.Valid {
+		attempts, err := tx.ListCurrentOrchestrationTaskAttemptsByRun(ctx, task.RunID)
+		if err != nil {
+			return false
+		}
+		for _, attempt := range attempts {
+			if attempt.TaskID == task.ID {
+				attemptCount++
+			}
+		}
+	} else {
+		verifications, err := tx.ListCurrentOrchestrationTaskVerificationsByRun(ctx, task.RunID)
+		if err != nil {
+			return false
+		}
+		for _, verification := range verifications {
+			if verification.TaskID == task.ID && verification.ResultID == result.ID {
+				attemptCount++
+			}
+		}
+	}
+	return attemptCount < maxAttempts
+}
+
+func taskHasNoActivePredecessors(taskID pgtype.UUID, deps []sqlc.OrchestrationTaskDependency) bool {
+	for _, dep := range deps {
+		if dep.SupersededByPlannerEpoch.Valid {
+			continue
+		}
+		if dep.SuccessorTaskID == taskID {
+			return false
+		}
+	}
+	return true
+}
+
+func taskPauseableByRunBarrier(task sqlc.OrchestrationTask) bool {
+	if taskSuperseded(task) {
+		return false
+	}
+	if task.WaitingCheckpointID.Valid {
+		return false
+	}
+	switch task.Status {
+	case TaskStatusReady, TaskStatusDispatching, TaskStatusRunning, TaskStatusVerifying:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskBlocksRunBarrier(task sqlc.OrchestrationTask) bool {
+	if taskSuperseded(task) {
+		return false
+	}
+	switch task.Status {
+	case TaskStatusWaitingHuman:
+		return true
+	case TaskStatusDispatching, TaskStatusRunning, TaskStatusVerifying:
+		return false
+	case TaskStatusCreated, TaskStatusReady, TaskStatusBlocked, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
+		return false
+	default:
+		return true
+	}
+}
+
+func taskCancellableImmediately(task sqlc.OrchestrationTask, attempts []sqlc.OrchestrationTaskAttempt, verifications []sqlc.OrchestrationTaskVerification) bool {
+	switch task.Status {
+	case TaskStatusCreated, TaskStatusReady, TaskStatusBlocked, TaskStatusWaitingHuman:
+		return true
+	case TaskStatusDispatching:
+		return !hasLeasedAttemptForTask(task.ID, attempts)
+	case TaskStatusVerifying:
+		return !hasLeasedVerificationForTask(task.ID, verifications)
+	case TaskStatusRunning, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
+		return false
+	default:
+		return false
+	}
+}
+
+func (s *Service) cancelTaskDuringRunCancellation(ctx context.Context, tx Queries, runRow sqlc.OrchestrationRun, taskRow sqlc.OrchestrationTask, attemptID pgtype.UUID) error {
+	if taskRow.Status == TaskStatusCancelled {
+		_, _, err := s.maybeMarkRunCompletedAfterTaskTransition(ctx, tx, runRow, taskRow.ID, attemptID)
+		return err
+	}
+	runAttempts, err := tx.ListCurrentOrchestrationTaskAttemptsByRun(ctx, runRow.ID)
+	if err != nil {
+		return fmt.Errorf("list task attempts during run cancellation: %w", err)
+	}
+	if err := s.cancelTaskAttemptsDuringRunCancellation(ctx, tx, runRow.ID, taskRow, runAttempts); err != nil {
+		return err
+	}
+	runVerifications, err := tx.ListCurrentOrchestrationTaskVerificationsByRun(ctx, runRow.ID)
+	if err != nil {
+		return fmt.Errorf("list task verifications during run cancellation: %w", err)
+	}
+	if err := s.cancelTaskVerificationsDuringRunCancellation(ctx, tx, runRow.ID, taskRow, runVerifications); err != nil {
+		return err
+	}
+	cancelledTask, err := tx.MarkOrchestrationTaskCancelled(ctx, sqlc.MarkOrchestrationTaskCancelledParams{
+		ID:             taskRow.ID,
+		TerminalReason: "run cancelled",
+	})
+	if err != nil {
+		return fmt.Errorf("cancel task during run cancellation: %w", err)
+	}
+	payload := map[string]any{
+		"task_id":         cancelledTask.ID.String(),
+		"previous_status": taskRow.Status,
+		"new_status":      cancelledTask.Status,
+		"terminal_reason": cancelledTask.TerminalReason,
+	}
+	if attemptID.Valid {
+		payload["attempt_id"] = attemptID.String()
+	}
+	if _, err := s.appendEvent(ctx, tx, runRow.ID, eventSpec{
+		TaskID:           cancelledTask.ID,
+		AttemptID:        attemptID,
+		AggregateType:    "task",
+		AggregateID:      cancelledTask.ID,
+		AggregateVersion: cancelledTask.StatusVersion,
+		Type:             "run.event.task.cancelled",
+		Payload:          payload,
+	}); err != nil {
+		return err
+	}
+	if _, _, err := s.maybeMarkRunCompletedAfterTaskTransition(ctx, tx, runRow, cancelledTask.ID, attemptID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) cancelTaskAttemptsDuringRunCancellation(
+	ctx context.Context,
+	tx Queries,
+	runID pgtype.UUID,
+	taskRow sqlc.OrchestrationTask,
+	runAttempts []sqlc.OrchestrationTaskAttempt,
+) error {
+	for _, attempt := range runAttempts {
+		if attempt.TaskID != taskRow.ID || isTerminalAttemptStatus(attempt.Status) {
+			continue
+		}
+		lockedAttempt, err := tx.GetOrchestrationTaskAttemptByIDForUpdate(ctx, attempt.ID)
+		if err != nil {
+			return fmt.Errorf("lock task attempt during run cancellation: %w", err)
+		}
+		if isTerminalAttemptStatus(lockedAttempt.Status) {
+			continue
+		}
+		switch lockedAttempt.Status {
+		case TaskAttemptStatusCreated:
+			finalAttempt, err := tx.RetireCreatedOrchestrationTaskAttemptFailed(ctx, sqlc.RetireCreatedOrchestrationTaskAttemptFailedParams{
+				ID:             lockedAttempt.ID,
+				FailureClass:   "run_cancelled",
+				TerminalReason: "run cancelled",
+			})
+			if err != nil {
+				return fmt.Errorf("retire created attempt during run cancellation: %w", err)
+			}
+			if _, err := s.appendEvent(ctx, tx, runID, eventSpec{
+				TaskID:           finalAttempt.TaskID,
+				AttemptID:        finalAttempt.ID,
+				AggregateType:    "attempt",
+				AggregateID:      finalAttempt.ID,
+				AggregateVersion: finalAttempt.ClaimEpoch,
+				Type:             "run.event.attempt.failed",
+				Payload: map[string]any{
+					"attempt_id":      finalAttempt.ID.String(),
+					"task_id":         finalAttempt.TaskID.String(),
+					"previous_status": lockedAttempt.Status,
+					"new_status":      finalAttempt.Status,
+					"failure_class":   finalAttempt.FailureClass,
+					"terminal_reason": finalAttempt.TerminalReason,
+				},
+			}); err != nil {
+				return err
+			}
+		case TaskAttemptStatusClaimed, TaskAttemptStatusBinding, TaskAttemptStatusRunning:
+			if _, err := s.retireAttempt(ctx, tx, lockedAttempt, attemptRetirementSpec{
+				Status:         TaskAttemptStatusLost,
+				FailureClass:   "run_cancelled",
+				TerminalReason: "run cancelled",
+			}); err != nil {
+				return fmt.Errorf("retire leased attempt during run cancellation: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Service) retireVerificationDuringRunCancellation(
+	ctx context.Context,
+	tx Queries,
+	runRow sqlc.OrchestrationRun,
+	verificationRow sqlc.OrchestrationTaskVerification,
+) (sqlc.OrchestrationTaskVerification, error) {
+	if isTerminalVerificationStatus(verificationRow.Status) {
+		return verificationRow, nil
+	}
+	cancelledVerification, err := tx.CancelOrchestrationTaskVerification(ctx, sqlc.CancelOrchestrationTaskVerificationParams{
+		ID:             verificationRow.ID,
+		Verdict:        VerificationVerdictRejected,
+		Summary:        "run cancelled",
+		FailureClass:   "run_cancelled",
+		TerminalReason: "run cancelled",
+	})
+	if err != nil {
+		return sqlc.OrchestrationTaskVerification{}, fmt.Errorf("cancel verification during run cancellation: %w", err)
+	}
+	if _, err := s.appendEvent(ctx, tx, runRow.ID, eventSpec{
+		TaskID:           cancelledVerification.TaskID,
+		AggregateType:    "verification",
+		AggregateID:      cancelledVerification.ID,
+		AggregateVersion: cancelledVerification.ClaimEpoch,
+		Type:             "run.event.verification.lost",
+		Payload: map[string]any{
+			"verification_id": cancelledVerification.ID.String(),
+			"task_id":         cancelledVerification.TaskID.String(),
+			"previous_status": verificationRow.Status,
+			"new_status":      cancelledVerification.Status,
+			"terminal_reason": cancelledVerification.TerminalReason,
+		},
+	}); err != nil {
+		return sqlc.OrchestrationTaskVerification{}, err
+	}
+	return cancelledVerification, nil
+}
+
+func (s *Service) cancelTaskVerificationsDuringRunCancellation(
+	ctx context.Context,
+	tx Queries,
+	runID pgtype.UUID,
+	taskRow sqlc.OrchestrationTask,
+	runVerifications []sqlc.OrchestrationTaskVerification,
+) error {
+	for _, verification := range runVerifications {
+		if verification.TaskID != taskRow.ID || isTerminalVerificationStatus(verification.Status) {
+			continue
+		}
+		if _, err := s.retireVerificationDuringRunCancellation(ctx, tx, sqlc.OrchestrationRun{ID: runID}, verification); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hasLeasedAttemptForTask(taskID pgtype.UUID, attempts []sqlc.OrchestrationTaskAttempt) bool {
+	for _, attempt := range attempts {
+		if attempt.TaskID != taskID {
+			continue
+		}
+		switch attempt.Status {
+		case TaskAttemptStatusClaimed, TaskAttemptStatusBinding, TaskAttemptStatusRunning:
+			return true
+		}
+	}
+	return false
+}
+
+func hasLeasedVerificationForTask(taskID pgtype.UUID, verifications []sqlc.OrchestrationTaskVerification) bool {
+	for _, verification := range verifications {
+		if verification.TaskID != taskID {
+			continue
+		}
+		switch verification.Status {
+		case TaskVerificationStatusClaimed, TaskVerificationStatusRunning:
+			return true
+		}
+	}
+	return false
+}
+
+func taskWaitingOnRunBarrier(task sqlc.OrchestrationTask, checkpointID pgtype.UUID) bool {
+	return task.Status == TaskStatusWaitingHuman &&
+		task.WaitingScope == "run" &&
+		task.WaitingCheckpointID.Valid &&
+		task.WaitingCheckpointID == checkpointID
+}
+
+func (s *Service) pauseRunBarrierSiblingWork(
+	ctx context.Context,
+	tx Queries,
+	runID pgtype.UUID,
+	checkpointID pgtype.UUID,
+	taskRow sqlc.OrchestrationTask,
+	runAttempts []sqlc.OrchestrationTaskAttempt,
+	runVerifications []sqlc.OrchestrationTaskVerification,
+) error {
+	if taskRow.Status == TaskStatusReady {
+		return nil
+	}
+	if taskRow.Status == TaskStatusVerifying {
+		return s.pauseRunBarrierSiblingVerification(ctx, tx, runID, checkpointID, taskRow, runVerifications)
+	}
+	pausedAttempt := false
+	for _, attempt := range runAttempts {
+		if attempt.TaskID != taskRow.ID || isTerminalAttemptStatus(attempt.Status) {
+			continue
+		}
+		pausedAttempt = true
+		lockedAttempt, err := tx.GetOrchestrationTaskAttemptByIDForUpdate(ctx, attempt.ID)
+		if err != nil {
+			return fmt.Errorf("lock sibling attempt for run barrier: %w", err)
+		}
+		if isTerminalAttemptStatus(lockedAttempt.Status) {
+			continue
+		}
+		var finalAttempt sqlc.OrchestrationTaskAttempt
+		switch lockedAttempt.Status {
+		case TaskAttemptStatusCreated:
+			finalAttempt, err = tx.RetireCreatedOrchestrationTaskAttemptFailed(ctx, sqlc.RetireCreatedOrchestrationTaskAttemptFailedParams{
+				ID:             lockedAttempt.ID,
+				FailureClass:   "run_barrier_paused",
+				TerminalReason: "attempt paused by run barrier before execution start",
+			})
+			if err == nil {
+				_, err = s.appendEvent(ctx, tx, runID, eventSpec{
+					TaskID:           finalAttempt.TaskID,
+					AttemptID:        finalAttempt.ID,
+					CheckpointID:     checkpointID,
+					AggregateType:    "attempt",
+					AggregateID:      finalAttempt.ID,
+					AggregateVersion: finalAttempt.ClaimEpoch,
+					Type:             "run.event.attempt.failed",
+					Payload: map[string]any{
+						"attempt_id":      finalAttempt.ID.String(),
+						"task_id":         finalAttempt.TaskID.String(),
+						"previous_status": lockedAttempt.Status,
+						"new_status":      finalAttempt.Status,
+						"failure_class":   finalAttempt.FailureClass,
+						"terminal_reason": finalAttempt.TerminalReason,
+					},
+				})
+			}
+		case TaskAttemptStatusRunning:
+			finalAttempt, err = tx.PreemptRunningOrchestrationTaskAttemptFailed(ctx, sqlc.PreemptRunningOrchestrationTaskAttemptFailedParams{
+				ID:             lockedAttempt.ID,
+				ClaimEpoch:     lockedAttempt.ClaimEpoch,
+				FailureClass:   "run_barrier_preempted",
+				TerminalReason: "attempt preempted by run barrier during execution",
+			})
+			if err == nil {
+				_, err = s.appendEvent(ctx, tx, runID, eventSpec{
+					TaskID:           finalAttempt.TaskID,
+					AttemptID:        finalAttempt.ID,
+					CheckpointID:     checkpointID,
+					AggregateType:    "attempt",
+					AggregateID:      finalAttempt.ID,
+					AggregateVersion: finalAttempt.ClaimEpoch,
+					Type:             "run.event.attempt.failed",
+					Payload: map[string]any{
+						"attempt_id":      finalAttempt.ID.String(),
+						"task_id":         finalAttempt.TaskID.String(),
+						"previous_status": lockedAttempt.Status,
+						"new_status":      finalAttempt.Status,
+						"failure_class":   finalAttempt.FailureClass,
+						"terminal_reason": finalAttempt.TerminalReason,
+					},
+				})
+			}
+		case TaskAttemptStatusClaimed, TaskAttemptStatusBinding:
+			_, err = s.retireAttempt(ctx, tx, lockedAttempt, attemptRetirementSpec{
+				Status:         TaskAttemptStatusFailed,
+				FailureClass:   "run_barrier_paused",
+				TerminalReason: "attempt paused by run barrier before execution start",
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("pause sibling attempt for run barrier: %w", err)
+		}
+	}
+	if !pausedAttempt {
+		return ErrRunBarrierUnsupported
+	}
+	return nil
+}
+
+func (s *Service) pauseRunBarrierSiblingVerification(
+	ctx context.Context,
+	tx Queries,
+	runID pgtype.UUID,
+	checkpointID pgtype.UUID,
+	taskRow sqlc.OrchestrationTask,
+	runVerifications []sqlc.OrchestrationTaskVerification,
+) error {
+	for _, verification := range runVerifications {
+		if verification.TaskID != taskRow.ID || isTerminalVerificationStatus(verification.Status) {
+			continue
+		}
+		if verification.Status == TaskVerificationStatusCreated {
+			return nil
+		}
+		lockedVerification, err := tx.GetOrchestrationTaskVerificationByIDForUpdate(ctx, verification.ID)
+		if err != nil {
+			return fmt.Errorf("lock sibling verification for run barrier: %w", err)
+		}
+		if isTerminalVerificationStatus(lockedVerification.Status) {
+			return nil
+		}
+		requeuedVerification, err := tx.RequeueOrchestrationTaskVerification(ctx, sqlc.RequeueOrchestrationTaskVerificationParams{
+			ID:         lockedVerification.ID,
+			ClaimEpoch: lockedVerification.ClaimEpoch,
+		})
+		if err != nil {
+			return fmt.Errorf("requeue sibling verification for run barrier: %w", err)
+		}
+		if _, err := s.appendEvent(ctx, tx, runID, eventSpec{
+			TaskID:           requeuedVerification.TaskID,
+			CheckpointID:     checkpointID,
+			AggregateType:    "verification",
+			AggregateID:      requeuedVerification.ID,
+			AggregateVersion: requeuedVerification.ClaimEpoch,
+			Type:             "run.event.verification.requeued",
+			Payload: map[string]any{
+				"verification_id": requeuedVerification.ID.String(),
+				"task_id":         requeuedVerification.TaskID.String(),
+				"previous_status": lockedVerification.Status,
+				"new_status":      requeuedVerification.Status,
+				"result_id":       requeuedVerification.ResultID.String(),
+				"terminal_reason": "verification preempted by run barrier",
+			},
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
+	return ErrRunBarrierUnsupported
+}
+
+func findOpenRunBlockingCheckpoint(ctx context.Context, tx Queries, runID pgtype.UUID) (sqlc.OrchestrationHumanCheckpoint, bool, error) {
+	checkpoints, err := tx.ListCurrentOrchestrationCheckpointsByRun(ctx, runID)
+	if err != nil {
+		return sqlc.OrchestrationHumanCheckpoint{}, false, err
+	}
+	for _, checkpoint := range checkpoints {
+		if checkpoint.BlocksRun && checkpoint.Status == CheckpointStatusOpen {
+			return checkpoint, true, nil
+		}
+	}
+	return sqlc.OrchestrationHumanCheckpoint{}, false, nil
+}
+
+func normalizeIdempotencyKey(value string) string {
+	return strings.TrimSpace(value)
+}
+
+func createHumanCheckpointRequestHash(
+	req CreateHumanCheckpointRequest,
+	options []CheckpointOption,
+	defaultAction *CheckpointDefaultAction,
+	resumePolicy *CheckpointResumePolicy,
+	idempotencyKey string,
+) (string, error) {
+	runID, err := normalizeOptionalUUID(req.RunID, "run_id")
+	if err != nil {
+		return "", err
+	}
+	taskID, err := normalizeOptionalUUID(req.TaskID, "task_id")
+	if err != nil {
+		return "", err
+	}
+	var timeoutAt *time.Time
+	if !req.TimeoutAt.IsZero() {
+		value := req.TimeoutAt.UTC()
+		timeoutAt = &value
+	}
+	normalized := struct {
+		RunID          string                   `json:"run_id"`
+		TaskID         string                   `json:"task_id"`
+		BlocksRun      bool                     `json:"blocks_run"`
+		Kind           string                   `json:"kind"`
+		ReasonCode     string                   `json:"reason_code"`
+		TriggeredBy    string                   `json:"triggered_by"`
+		Severity       string                   `json:"severity"`
+		Question       string                   `json:"question"`
+		Options        []CheckpointOption       `json:"options"`
+		DefaultAction  *CheckpointDefaultAction `json:"default_action"`
+		ResumePolicy   *CheckpointResumePolicy  `json:"resume_policy"`
+		TimeoutAt      *time.Time               `json:"timeout_at"`
+		Metadata       map[string]any           `json:"metadata"`
+		IdempotencyKey string                   `json:"idempotency_key"`
+	}{
+		RunID:          runID,
+		TaskID:         taskID,
+		BlocksRun:      req.BlocksRun,
+		Kind:           defaultString(strings.TrimSpace(req.Kind), CheckpointKindSemantic),
+		ReasonCode:     defaultString(strings.TrimSpace(req.ReasonCode), CheckpointReasonClarification),
+		TriggeredBy:    defaultString(strings.TrimSpace(req.TriggeredBy), CheckpointTriggeredByAgent),
+		Severity:       defaultString(strings.TrimSpace(req.Severity), CheckpointSeverityMedium),
+		Question:       strings.TrimSpace(req.Question),
+		Options:        options,
+		DefaultAction:  defaultAction,
+		ResumePolicy:   resumePolicy,
+		TimeoutAt:      timeoutAt,
+		Metadata:       normalizeObject(req.Metadata),
+		IdempotencyKey: idempotencyKey,
+	}
+	return hashJSON(normalized)
+}
+
+func commitArtifactRequestHash(req CommitArtifactRequest, idempotencyKey string) (string, error) {
+	runID, err := normalizeOptionalUUID(req.RunID, "run_id")
+	if err != nil {
+		return "", err
+	}
+	taskID, err := normalizeOptionalUUID(req.TaskID, "task_id")
+	if err != nil {
+		return "", err
+	}
+	attemptID, err := normalizeOptionalUUID(req.AttemptID, "attempt_id")
+	if err != nil {
+		return "", err
+	}
+	normalized := struct {
+		RunID          string         `json:"run_id"`
+		TaskID         string         `json:"task_id"`
+		AttemptID      string         `json:"attempt_id"`
+		Kind           string         `json:"kind"`
+		URI            string         `json:"uri"`
+		Version        string         `json:"version"`
+		Digest         string         `json:"digest"`
+		ContentType    string         `json:"content_type"`
+		Summary        string         `json:"summary"`
+		Metadata       map[string]any `json:"metadata"`
+		IdempotencyKey string         `json:"idempotency_key"`
+	}{
+		RunID:          runID,
+		TaskID:         taskID,
+		AttemptID:      attemptID,
+		Kind:           strings.TrimSpace(req.Kind),
+		URI:            strings.TrimSpace(req.URI),
+		Version:        strings.TrimSpace(req.Version),
+		Digest:         strings.TrimSpace(req.Digest),
+		ContentType:    strings.TrimSpace(req.ContentType),
+		Summary:        strings.TrimSpace(req.Summary),
+		Metadata:       normalizeObject(req.Metadata),
+		IdempotencyKey: idempotencyKey,
+	}
+	return hashJSON(normalized)
+}
+
+func cancelRunRequestHash(runID, idempotencyKey string) (string, error) {
+	return hashJSON(struct {
+		RunID          string `json:"run_id"`
+		IdempotencyKey string `json:"idempotency_key"`
+	}{
+		RunID:          runID,
+		IdempotencyKey: idempotencyKey,
+	})
+}
+
+func resumeRunRequestHash(runID, idempotencyKey string) (string, error) {
+	return hashJSON(struct {
+		RunID          string `json:"run_id"`
+		IdempotencyKey string `json:"idempotency_key"`
+	}{
+		RunID:          runID,
+		IdempotencyKey: idempotencyKey,
+	})
+}
+
+func startRunRequestHash(req StartRunRequest) (string, error) {
+	sourceMetadata, err := normalizeStartRunSourceMetadata(req)
+	if err != nil {
+		return "", err
+	}
+	normalized := struct {
+		Goal                   string         `json:"goal"`
+		Input                  map[string]any `json:"input"`
+		IdempotencyKey         string         `json:"idempotency_key"`
+		RequestedControlPolicy map[string]any `json:"requested_control_policy"`
+		SourceMetadata         map[string]any `json:"source_metadata"`
+		Policies               map[string]any `json:"policies"`
+	}{
+		Goal:                   strings.TrimSpace(req.Goal),
+		Input:                  normalizeObject(req.Input),
+		IdempotencyKey:         normalizeIdempotencyKey(req.IdempotencyKey),
+		RequestedControlPolicy: normalizeObject(req.RequestedControlPolicy),
+		SourceMetadata:         sourceMetadata,
+		Policies:               normalizeObject(req.Policies),
+	}
+	return hashJSON(normalized)
+}
+
+func normalizeStartRunSourceMetadata(req StartRunRequest) (map[string]any, error) {
+	sourceMetadata := normalizeObject(req.SourceMetadata)
+	botID := strings.TrimSpace(req.BotID)
+	if botID == "" {
+		return sourceMetadata, nil
+	}
+	existingBotID := strings.TrimSpace(stringValue(sourceMetadata["bot_id"]))
+	if existingBotID != "" && existingBotID != botID {
+		return nil, fmt.Errorf("%w: bot_id does not match source_metadata.bot_id", ErrInvalidArgument)
+	}
+	sourceMetadata["bot_id"] = botID
+	return sourceMetadata, nil
+}
+
+func buildPhase1ControlPolicy(caller ControlIdentity) map[string]any {
+	return map[string]any{
+		"mode":          ControlPolicyModeOwnerOnly,
+		"owner_subject": caller.Subject,
+	}
+}
+
+func rootWorkerProfile(input, _ map[string]any) string {
+	if _, ok := normalizeObject(input)["builtin_workerd"]; ok {
+		return BuiltinEchoWorkerProfile
+	}
+	return DefaultWorkerProfile
+}
+
+func normalizeCheckpointResolution(checkpoint sqlc.OrchestrationHumanCheckpoint, input CheckpointResolution) (CheckpointResolution, string, error) {
+	options, err := decodeCheckpointOptions(checkpoint.Options)
+	if err != nil {
+		return CheckpointResolution{}, "", fmt.Errorf("%w: invalid checkpoint options", ErrInvalidCheckpointResolution)
+	}
+
+	resolution := CheckpointResolution{
+		Option:         strings.TrimSpace(input.Option),
+		Response:       input.Response,
+		Metadata:       normalizeObject(input.Metadata),
+		IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
+	}
+	if resolution.Option == "" {
+		return CheckpointResolution{}, "", fmt.Errorf("%w: option is required", ErrInvalidCheckpointResolution)
+	}
+
+	option, ok := findCheckpointOption(options, resolution.Option)
+	if !ok {
+		return CheckpointResolution{}, "", fmt.Errorf("%w: unknown checkpoint option %q", ErrInvalidCheckpointResolution, resolution.Option)
+	}
+	switch option.Kind {
+	case CheckpointOptionKindChoice:
+		if strings.TrimSpace(resolution.Response) != "" {
+			return CheckpointResolution{}, "", fmt.Errorf("%w: response must be empty for choice option", ErrInvalidCheckpointResolution)
+		}
+		resolution.Response = ""
+	case CheckpointOptionKindFreeform:
+		if strings.TrimSpace(resolution.Response) == "" {
+			return CheckpointResolution{}, "", fmt.Errorf("%w: response is required for freeform option", ErrInvalidCheckpointResolution)
+		}
+	default:
+		return CheckpointResolution{}, "", fmt.Errorf("%w: unsupported checkpoint option kind %q", ErrInvalidCheckpointResolution, option.Kind)
+	}
+
+	hash, err := hashJSON(struct {
+		Option         string         `json:"option"`
+		Response       string         `json:"response"`
+		Metadata       map[string]any `json:"metadata"`
+		IdempotencyKey string         `json:"idempotency_key"`
+	}{
+		Option:         resolution.Option,
+		Response:       resolution.Response,
+		Metadata:       resolution.Metadata,
+		IdempotencyKey: resolution.IdempotencyKey,
+	})
+	if err != nil {
+		return CheckpointResolution{}, "", err
+	}
+	return resolution, hash, nil
+}
+
+func normalizeCheckpointResumePolicy(input *CheckpointResumePolicy) (*CheckpointResumePolicy, error) {
+	if input == nil {
+		return nil, nil
+	}
+	normalized := &CheckpointResumePolicy{
+		ResumeMode: strings.TrimSpace(input.ResumeMode),
+	}
+	switch normalized.ResumeMode {
+	case CheckpointResumeModeNewAttempt:
+		return normalized, nil
+	case CheckpointResumeModeResumeHeldEnv:
+		return nil, fmt.Errorf("%w: resume_policy.resume_mode %q is not supported in current runtime", ErrInvalidArgument, normalized.ResumeMode)
+	case "":
+		return nil, fmt.Errorf("%w: resume_policy.resume_mode is required", ErrInvalidArgument)
+	default:
+		return nil, fmt.Errorf("%w: unsupported resume_policy.resume_mode %q", ErrInvalidArgument, normalized.ResumeMode)
+	}
+}
+
+func normalizeCheckpointClassification(req CreateHumanCheckpointRequest) (string, string, string, string, error) {
+	kind := defaultString(strings.TrimSpace(req.Kind), CheckpointKindSemantic)
+	switch kind {
+	case CheckpointKindSemantic, CheckpointKindPolicy, CheckpointKindProgress:
+	default:
+		return "", "", "", "", fmt.Errorf("%w: unsupported checkpoint kind %q", ErrInvalidArgument, req.Kind)
+	}
+	reasonCode := defaultString(strings.TrimSpace(req.ReasonCode), CheckpointReasonClarification)
+	switch reasonCode {
+	case CheckpointReasonClarification,
+		CheckpointReasonScopeChange,
+		CheckpointReasonRiskConfirmation,
+		CheckpointReasonBlocked,
+		CheckpointReasonBudget,
+		CheckpointReasonExternalSideEffect,
+		CheckpointReasonProgressMilestone,
+		CheckpointReasonPolicyRequired:
+	default:
+		return "", "", "", "", fmt.Errorf("%w: unsupported checkpoint reason_code %q", ErrInvalidArgument, req.ReasonCode)
+	}
+	triggeredBy := defaultString(strings.TrimSpace(req.TriggeredBy), CheckpointTriggeredByAgent)
+	switch triggeredBy {
+	case CheckpointTriggeredByAgent, CheckpointTriggeredByRuntime, CheckpointTriggeredByScheduler, CheckpointTriggeredByPolicy:
+	default:
+		return "", "", "", "", fmt.Errorf("%w: unsupported checkpoint triggered_by %q", ErrInvalidArgument, req.TriggeredBy)
+	}
+	severity := defaultString(strings.TrimSpace(req.Severity), CheckpointSeverityMedium)
+	switch severity {
+	case CheckpointSeverityLow, CheckpointSeverityMedium, CheckpointSeverityHigh:
+	default:
+		return "", "", "", "", fmt.Errorf("%w: unsupported checkpoint severity %q", ErrInvalidArgument, req.Severity)
+	}
+	return kind, reasonCode, triggeredBy, severity, nil
+}
+
+func defaultString(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
+}
+
+func validateCheckpointDefinition(options []CheckpointOption, defaultAction *CheckpointDefaultAction, timeoutAt time.Time) ([]CheckpointOption, *CheckpointDefaultAction, error) {
+	if len(options) == 0 {
+		return nil, nil, fmt.Errorf("%w: checkpoint options are required", ErrInvalidArgument)
+	}
+	normalizedOptions := make([]CheckpointOption, 0, len(options))
+	seenOptionIDs := make(map[string]struct{}, len(options))
+	for _, option := range options {
+		normalized := CheckpointOption{
+			ID:          strings.TrimSpace(option.ID),
+			Kind:        strings.TrimSpace(option.Kind),
+			Label:       option.Label,
+			Description: option.Description,
+		}
+		switch normalized.Kind {
+		case CheckpointOptionKindChoice, CheckpointOptionKindFreeform:
+		default:
+			return nil, nil, fmt.Errorf("%w: unsupported checkpoint option kind %q", ErrInvalidArgument, option.Kind)
+		}
+		if normalized.ID == "" {
+			return nil, nil, fmt.Errorf("%w: checkpoint option id is required", ErrInvalidArgument)
+		}
+		if _, exists := seenOptionIDs[normalized.ID]; exists {
+			return nil, nil, fmt.Errorf("%w: duplicate checkpoint option id %q", ErrInvalidArgument, normalized.ID)
+		}
+		seenOptionIDs[normalized.ID] = struct{}{}
+		normalizedOptions = append(normalizedOptions, normalized)
+	}
+	if defaultAction == nil {
+		if !timeoutAt.IsZero() {
+			return nil, nil, fmt.Errorf("%w: timeout requires default_action", ErrInvalidArgument)
+		}
+		return normalizedOptions, nil, nil
+	}
+	normalized := &CheckpointDefaultAction{
+		Option:   strings.TrimSpace(defaultAction.Option),
+		Response: defaultAction.Response,
+	}
+	option, ok := findCheckpointOption(normalizedOptions, normalized.Option)
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: default_action option %q is not defined", ErrInvalidArgument, normalized.Option)
+	}
+	switch option.Kind {
+	case CheckpointOptionKindChoice:
+		if strings.TrimSpace(normalized.Response) != "" {
+			return nil, nil, fmt.Errorf("%w: default choice option cannot include response", ErrInvalidArgument)
+		}
+		normalized.Response = ""
+	case CheckpointOptionKindFreeform:
+		if strings.TrimSpace(normalized.Response) == "" {
+			return nil, nil, fmt.Errorf("%w: default freeform option requires response", ErrInvalidArgument)
+		}
+	default:
+		return nil, nil, fmt.Errorf("%w: unsupported checkpoint option kind %q", ErrInvalidArgument, option.Kind)
+	}
+	return normalizedOptions, normalized, nil
+}
+
+func findCheckpointOption(options []CheckpointOption, id string) (CheckpointOption, bool) {
+	needle := strings.TrimSpace(id)
+	for _, option := range options {
+		if strings.TrimSpace(option.ID) == needle {
+			return option, true
+		}
+	}
+	return CheckpointOption{}, false
+}
+
+func ensureIdempotencyRecord(ctx context.Context, tx Queries, caller ControlIdentity, method, targetID, idempotencyKey, requestHash string) (sqlc.OrchestrationIdempotencyRecord, bool, error) {
+	record, err := tx.TryCreateOrchestrationIdempotencyRecord(ctx, sqlc.TryCreateOrchestrationIdempotencyRecordParams{
+		TenantID:       caller.TenantID,
+		CallerSubject:  caller.Subject,
+		Method:         method,
+		TargetID:       targetID,
+		IdempotencyKey: idempotencyKey,
+		RequestHash:    requestHash,
+	})
+	if err == nil {
+		return record, false, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return sqlc.OrchestrationIdempotencyRecord{}, false, fmt.Errorf("create idempotency record: %w", err)
+	}
+	record, err = tx.GetOrchestrationIdempotencyRecordForUpdate(ctx, sqlc.GetOrchestrationIdempotencyRecordForUpdateParams{
+		TenantID:       caller.TenantID,
+		CallerSubject:  caller.Subject,
+		Method:         method,
+		TargetID:       targetID,
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		return sqlc.OrchestrationIdempotencyRecord{}, false, fmt.Errorf("load idempotency record: %w", err)
+	}
+	if record.RequestHash != requestHash {
+		return sqlc.OrchestrationIdempotencyRecord{}, false, ErrIdempotencyConflict
+	}
+	if record.State != "completed" {
+		return sqlc.OrchestrationIdempotencyRecord{}, false, ErrIdempotencyIncomplete
+	}
+	return record, true, nil
+}
+
+func getIdempotencyRecord(ctx context.Context, tx Queries, caller ControlIdentity, method, targetID, idempotencyKey string) (sqlc.OrchestrationIdempotencyRecord, bool, error) {
+	record, err := tx.GetOrchestrationIdempotencyRecordForUpdate(ctx, sqlc.GetOrchestrationIdempotencyRecordForUpdateParams{
+		TenantID:       caller.TenantID,
+		CallerSubject:  caller.Subject,
+		Method:         method,
+		TargetID:       targetID,
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.OrchestrationIdempotencyRecord{}, false, nil
+		}
+		return sqlc.OrchestrationIdempotencyRecord{}, false, fmt.Errorf("get idempotency record: %w", err)
+	}
+	return record, true, nil
+}
+
+func decodeRunHandle(raw []byte) (RunHandle, error) {
+	var handle RunHandle
+	if err := unmarshalJSON(raw, &handle); err != nil {
+		return RunHandle{}, fmt.Errorf("decode idempotent run handle: %w", err)
+	}
+	return handle, nil
+}
+
+func decodeCreateHumanCheckpointResult(raw []byte) (CreateHumanCheckpointResult, error) {
+	var result CreateHumanCheckpointResult
+	if err := unmarshalJSON(raw, &result); err != nil {
+		return CreateHumanCheckpointResult{}, fmt.Errorf("decode idempotent create checkpoint result: %w", err)
+	}
+	return result, nil
+}
+
+func decodeResolveCheckpointResult(raw []byte) (ResolveCheckpointResult, error) {
+	var result ResolveCheckpointResult
+	if err := unmarshalJSON(raw, &result); err != nil {
+		return ResolveCheckpointResult{}, fmt.Errorf("decode idempotent resolve checkpoint result: %w", err)
+	}
+	return result, nil
+}
+
+func decodeCancelRunResult(raw []byte) (CancelRunResult, error) {
+	var result CancelRunResult
+	if err := unmarshalJSON(raw, &result); err != nil {
+		return CancelRunResult{}, fmt.Errorf("decode idempotent cancel run result: %w", err)
+	}
+	return result, nil
+}
+
+func decodeResumeRunResult(raw []byte) (ResumeRunResult, error) {
+	var result ResumeRunResult
+	if err := unmarshalJSON(raw, &result); err != nil {
+		return ResumeRunResult{}, fmt.Errorf("decode idempotent resume run result: %w", err)
+	}
+	return result, nil
+}
+
+func decodeCommitArtifactResult(raw []byte) (CommitArtifactResult, error) {
+	var result CommitArtifactResult
+	if err := unmarshalJSON(raw, &result); err != nil {
+		return CommitArtifactResult{}, fmt.Errorf("decode idempotent artifact result: %w", err)
+	}
+	return result, nil
+}
+
+type paginationCursor struct {
+	ID          string    `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	SnapshotSeq uint64    `json:"snapshot_seq,omitempty"`
+	FilterHash  string    `json:"filter_hash,omitempty"`
+}
+
+func encodeCursor(id string, createdAt time.Time, snapshotSeq uint64, filterHash string) string {
+	return base64.RawURLEncoding.EncodeToString(marshalJSON(paginationCursor{
+		ID:          id,
+		CreatedAt:   createdAt.UTC(),
+		SnapshotSeq: snapshotSeq,
+		FilterHash:  filterHash,
+	}))
+}
+
+func decodeCursor(raw string) (paginationCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return paginationCursor{}, ErrInvalidCursor
+	}
+	var cursor paginationCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return paginationCursor{}, ErrInvalidCursor
+	}
+	if strings.TrimSpace(cursor.ID) == "" || cursor.CreatedAt.IsZero() {
+		return paginationCursor{}, ErrInvalidCursor
+	}
+	return cursor, nil
+}
+
+// pageable is satisfied by all paginated projection items (Task,
+// HumanCheckpoint, Artifact, TaskResult). The cursor is keyed on (id, created_at).
+type pageable interface {
+	pageKey() (string, time.Time)
+}
+
+func (t Task) pageKey() (string, time.Time)            { return t.ID, t.CreatedAt }
+func (c HumanCheckpoint) pageKey() (string, time.Time) { return c.ID, c.CreatedAt }
+func (a Artifact) pageKey() (string, time.Time)        { return a.ID, a.CreatedAt }
+func (r TaskResult) pageKey() (string, time.Time)      { return r.ID, r.CreatedAt }
+
+func paginateTasks(items []Task, after string, limit int, snapshotSeq uint64, filterHash string) ([]Task, string, error) {
+	return paginatePage(items, after, limit, snapshotSeq, filterHash)
+}
+
+func paginateCheckpoints(items []HumanCheckpoint, after string, limit int, snapshotSeq uint64, filterHash string) ([]HumanCheckpoint, string, error) {
+	return paginatePage(items, after, limit, snapshotSeq, filterHash)
+}
+
+func paginateArtifacts(items []Artifact, after string, limit int, snapshotSeq uint64, filterHash string) ([]Artifact, string, error) {
+	return paginatePage(items, after, limit, snapshotSeq, filterHash)
+}
+
+func paginateResults(items []TaskResult, after string, limit int, snapshotSeq uint64, filterHash string) ([]TaskResult, string, error) {
+	return paginatePage(items, after, limit, snapshotSeq, filterHash)
+}
+
+// paginatePage slices items[start:start+limit] and produces a next-cursor when
+// more items remain. start is resolved from the after cursor, validated against
+// filterHash so a filter change forces clients to restart pagination.
+func paginatePage[T pageable](items []T, after string, limit int, snapshotSeq uint64, filterHash string) ([]T, string, error) {
+	start, err := pageStart(items, after, filterHash)
+	if err != nil {
+		return nil, "", err
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	page := items[start:end]
+	if end == len(items) {
+		return page, "", nil
+	}
+	lastID, lastCreatedAt := page[len(page)-1].pageKey()
+	return page, encodeCursor(lastID, lastCreatedAt, snapshotSeq, filterHash), nil
+}
+
+func pageStart[T pageable](items []T, after string, filterHash string) (int, error) {
+	if strings.TrimSpace(after) == "" {
+		return 0, nil
+	}
+	cursor, err := decodeCursor(after)
+	if err != nil {
+		return 0, err
+	}
+	if cursor.FilterHash != filterHash {
+		return 0, ErrInvalidCursor
+	}
+	for idx, item := range items {
+		id, createdAt := item.pageKey()
+		if id == cursor.ID && createdAt.Equal(cursor.CreatedAt) {
+			return idx + 1, nil
+		}
+	}
+	return 0, ErrInvalidCursor
+}
+
+func filterTasks(items []Task, statuses []string) []Task {
+	return filterByStatus(items, statuses, func(t Task) string { return t.Status })
+}
+
+func filterCheckpoints(items []HumanCheckpoint, statuses []string) []HumanCheckpoint {
+	return filterByStatus(items, statuses, func(c HumanCheckpoint) string { return c.Status })
+}
+
+// filterByStatus returns items whose status is in the allowed set. Empty input
+// statuses (or all-blank) match everything (callers rely on this to skip a
+// filter entirely).
+func filterByStatus[T any](items []T, statuses []string, getStatus func(T) string) []T {
+	if len(statuses) == 0 {
+		return items
+	}
+	allowed := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		trimmed := strings.TrimSpace(status)
+		if trimmed == "" {
+			continue
+		}
+		allowed[trimmed] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		return items
+	}
+	filtered := make([]T, 0, len(items))
+	for _, item := range items {
+		if _, ok := allowed[getStatus(item)]; ok {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func filterArtifacts(items []Artifact, taskID string, kinds []string) []Artifact {
+	trimmedTaskID := strings.TrimSpace(taskID)
+	allowedKinds := make(map[string]struct{}, len(kinds))
+	for _, kind := range kinds {
+		trimmed := strings.TrimSpace(kind)
+		if trimmed == "" {
+			continue
+		}
+		allowedKinds[trimmed] = struct{}{}
+	}
+	filtered := make([]Artifact, 0, len(items))
+	for _, item := range items {
+		if trimmedTaskID != "" && item.TaskID != trimmedTaskID {
+			continue
+		}
+		if len(allowedKinds) > 0 {
+			if _, ok := allowedKinds[item.Kind]; !ok {
+				continue
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func filterResults(items []TaskResult, taskID string) []TaskResult {
+	trimmedTaskID := strings.TrimSpace(taskID)
+	if trimmedTaskID == "" {
+		return items
+	}
+	filtered := make([]TaskResult, 0, len(items))
+	for _, item := range items {
+		if item.TaskID == trimmedTaskID {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func filterHash(values ...[]string) string {
+	parts := make([]string, 0, len(values))
+	for _, group := range values {
+		seen := make(map[string]struct{}, len(group))
+		normalized := make([]string, 0, len(group))
+		for _, value := range group {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				continue
+			}
+			if _, ok := seen[trimmed]; ok {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			normalized = append(normalized, trimmed)
+		}
+		sort.Strings(normalized)
+		parts = append(parts, strings.Join(normalized, "\x1f"))
+	}
+	return strings.Join(parts, "\x1e")
+}
+
+func normalizedListLimit(limit int) int {
+	if limit <= 0 {
+		return defaultListLimit
+	}
+	if limit > maxListLimit {
+		return maxListLimit
+	}
+	return limit
+}
+
+func normalizedEventLimit(limit int) int {
+	if limit <= 0 {
+		return defaultEventLimit
+	}
+	if limit > maxEventLimit {
+		return maxEventLimit
+	}
+	return limit
+}
+
+func resolvePageAsOfSeq(current, requested uint64, after string) (uint64, error) {
+	if strings.TrimSpace(after) != "" {
+		cursor, err := decodeCursor(after)
+		if err != nil {
+			return 0, err
+		}
+		if cursor.SnapshotSeq != 0 {
+			if requested != 0 && requested != cursor.SnapshotSeq {
+				return 0, ErrInvalidCursor
+			}
+			requested = cursor.SnapshotSeq
+		}
+		if requested == 0 {
+			return 0, ErrInvalidCursor
+		}
+	}
+	if requested == 0 {
+		return current, nil
+	}
+	if requested > current {
+		return 0, fmt.Errorf("%w: as_of_seq exceeds current snapshot", ErrInvalidArgument)
+	}
+	return requested, nil
+}
+
+func resolveEventUntilSeq(current, after, requested uint64) (uint64, error) {
+	if requested == 0 {
+		if after > 0 {
+			return 0, fmt.Errorf("%w: until_seq is required when after_seq is set", ErrInvalidArgument)
+		}
+		requested = current
+	}
+	if requested > current {
+		return 0, fmt.Errorf("%w: until_seq exceeds current snapshot", ErrInvalidArgument)
+	}
+	if after > requested {
+		return 0, fmt.Errorf("%w: after_seq exceeds until_seq", ErrInvalidArgument)
+	}
+	return requested, nil
+}
+
+func normalizeObject(input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = normalizeJSONValue(value)
+	}
+	return out
+}
+
+func normalizeJSONValue(value any) any {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return normalizeObject(v)
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, normalizeJSONValue(item))
+		}
+		return out
+	default:
+		return normalizeTypedJSONValue(v)
+	}
+}
+
+func normalizeTypedJSONValue(value any) any {
+	rv := reflect.ValueOf(value)
+	if !rv.IsValid() {
+		return nil
+	}
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.IsNil() {
+			return map[string]any{}
+		}
+		out := make(map[string]any, rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			out[fmt.Sprint(iter.Key().Interface())] = normalizeJSONValue(iter.Value().Interface())
+		}
+		return out
+	case reflect.Slice:
+		if rv.IsNil() {
+			return []any{}
+		}
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			return value
+		}
+		fallthrough
+	case reflect.Array:
+		out := make([]any, 0, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			out = append(out, normalizeJSONValue(rv.Index(i).Interface()))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func hashJSON(value any) (string, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal canonical json: %w", err)
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func marshalObject(value map[string]any) []byte {
+	return marshalJSON(normalizeObject(value))
+}
+
+func marshalJSON(value any) []byte {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return []byte("{}")
+	}
+	return payload
+}
+
+func unmarshalJSON(data []byte, target any) error {
+	if len(data) == 0 {
+		return nil
+	}
+	return json.Unmarshal(data, target)
+}
+
+func timeToPg(value time.Time) pgtype.Timestamptz {
+	if value.IsZero() {
+		return pgtype.Timestamptz{}
+	}
+	return pgtype.Timestamptz{Time: value.UTC(), Valid: true}
+}
+
+func uuidToString(value pgtype.UUID) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String()
+}
+
+func timeForJSON(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC()
+}
+
+func newPGUUID() (string, pgtype.UUID, error) {
+	raw := uuid.NewString()
+	pgID, err := db.ParseUUID(raw)
+	if err != nil {
+		return "", pgtype.UUID{}, err
+	}
+	return raw, pgID, nil
+}
+
+func decodeCheckpointOptions(raw []byte) ([]CheckpointOption, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var options []CheckpointOption
+	if err := json.Unmarshal(raw, &options); err != nil {
+		return nil, err
+	}
+	return options, nil
+}
+
+func decodeCheckpointDefaultAction(raw []byte) (*CheckpointDefaultAction, error) {
+	if len(raw) == 0 || string(raw) == "{}" || string(raw) == "null" {
+		return nil, nil
+	}
+	var action CheckpointDefaultAction
+	if err := json.Unmarshal(raw, &action); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(action.Option) == "" && strings.TrimSpace(action.Response) == "" {
+		return nil, nil
+	}
+	return &action, nil
+}
+
+func decodeCheckpointResumePolicy(raw []byte) (*CheckpointResumePolicy, error) {
+	if len(raw) == 0 || string(raw) == "{}" || string(raw) == "null" {
+		return nil, nil
+	}
+	var policy CheckpointResumePolicy
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return nil, err
+	}
+	return normalizeCheckpointResumePolicy(&policy)
+}
+
+func decodeJSONObject(raw []byte) map[string]any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return map[string]any{}
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return map[string]any{}
+	}
+	return normalizeObject(value)
+}
+
+func decodeJSONArrayObjects(raw []byte) []map[string]any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return []map[string]any{}
+	}
+	var value []map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return []map[string]any{}
+	}
+	for i := range value {
+		value[i] = normalizeObject(value[i])
+	}
+	return value
+}
+
+func uint64FromInt64(value int64, field string) (uint64, error) {
+	parsed, err := strconv.ParseUint(strconv.FormatInt(value, 10), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s out of range (%w)", ErrInvalidArgument, field, err)
+	}
+	return parsed, nil
+}
+
+func int64FromUint64(value uint64, field string) (int64, error) {
+	parsed, err := strconv.ParseInt(strconv.FormatUint(value, 10), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s out of range (%w)", ErrInvalidArgument, field, err)
+	}
+	return parsed, nil
+}
+
+func int32FromInt(value int, field string) (int32, error) {
+	parsed, err := strconv.ParseInt(strconv.FormatInt(int64(value), 10), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s out of range (%w)", ErrInvalidArgument, field, err)
+	}
+	return int32(parsed), nil
+}
+
+func mustUint64FromInt64(value int64, field string) uint64 {
+	parsed, err := uint64FromInt64(value, field)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
+
+func toRun(row sqlc.OrchestrationRun) Run {
+	return Run{
+		ID:                     row.ID.String(),
+		TenantID:               row.TenantID,
+		OwnerSubject:           row.OwnerSubject,
+		LifecycleStatus:        row.LifecycleStatus,
+		PlanningStatus:         row.PlanningStatus,
+		StatusVersion:          mustUint64FromInt64(row.StatusVersion, "run.status_version"),
+		PlannerEpoch:           mustUint64FromInt64(row.PlannerEpoch, "run.planner_epoch"),
+		RootTaskID:             row.RootTaskID.String(),
+		Goal:                   row.Goal,
+		Input:                  decodeJSONObject(row.Input),
+		RequestedControlPolicy: decodeJSONObject(row.RequestedControlPolicy),
+		ControlPolicy:          decodeJSONObject(row.ControlPolicy),
+		SourceMetadata:         decodeJSONObject(row.SourceMetadata),
+		Policies:               decodeJSONObject(row.Policies),
+		CreatedBy:              row.CreatedBy,
+		TerminalReason:         row.TerminalReason,
+		CreatedAt:              db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:              db.TimeFromPg(row.UpdatedAt),
+		FinishedAt:             optionalTime(db.TimeFromPg(row.FinishedAt)),
+	}
+}
+
+func toTask(row sqlc.OrchestrationTask) Task {
+	return Task{
+		ID:                       row.ID.String(),
+		RunID:                    row.RunID.String(),
+		DecomposedFromTaskID:     row.DecomposedFromTaskID.String(),
+		Kind:                     row.Kind,
+		Role:                     row.Role,
+		Goal:                     row.Goal,
+		Inputs:                   decodeJSONObject(row.Inputs),
+		PlannerEpoch:             mustUint64FromInt64(row.PlannerEpoch, "task.planner_epoch"),
+		SupersededByPlannerEpoch: mustUint64FromInt64(row.SupersededByPlannerEpoch.Int64, "task.superseded_by_planner_epoch"),
+		WorkerProfile:            row.WorkerProfile,
+		Priority:                 int(row.Priority),
+		RetryPolicy:              decodeJSONObject(row.RetryPolicy),
+		VerificationPolicy:       decodeJSONObject(row.VerificationPolicy),
+		Status:                   row.Status,
+		StatusVersion:            mustUint64FromInt64(row.StatusVersion, "task.status_version"),
+		WaitingCheckpointID:      row.WaitingCheckpointID.String(),
+		WaitingScope:             row.WaitingScope,
+		LatestResultID:           row.LatestResultID.String(),
+		ReadyAt:                  optionalTime(db.TimeFromPg(row.ReadyAt)),
+		BlockedReason:            row.BlockedReason,
+		TerminalReason:           row.TerminalReason,
+		BlackboardScope:          row.BlackboardScope,
+		CreatedAt:                db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:                db.TimeFromPg(row.UpdatedAt),
+	}
+}
+
+func toRunListItem(row sqlc.OrchestrationRun) RunListItem {
+	return RunListItem{
+		ID:              row.ID.String(),
+		Goal:            row.Goal,
+		LifecycleStatus: row.LifecycleStatus,
+		PlanningStatus:  row.PlanningStatus,
+		RootTaskID:      row.RootTaskID.String(),
+		TerminalReason:  row.TerminalReason,
+		CreatedAt:       db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:       db.TimeFromPg(row.UpdatedAt),
+		FinishedAt:      optionalTime(db.TimeFromPg(row.FinishedAt)),
+	}
+}
+
+func toTaskDependency(row sqlc.OrchestrationTaskDependency) TaskDependency {
+	return TaskDependency{
+		ID:                       row.ID.String(),
+		RunID:                    row.RunID.String(),
+		PredecessorTaskID:        row.PredecessorTaskID.String(),
+		SuccessorTaskID:          row.SuccessorTaskID.String(),
+		PlannerEpoch:             mustUint64FromInt64(row.PlannerEpoch, "task_dependency.planner_epoch"),
+		SupersededByPlannerEpoch: mustUint64FromInt64(row.SupersededByPlannerEpoch.Int64, "task_dependency.superseded_by_planner_epoch"),
+		CreatedAt:                db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:                db.TimeFromPg(row.UpdatedAt),
+	}
+}
+
+func toTaskResult(row sqlc.OrchestrationTaskResult) TaskResult {
+	return TaskResult{
+		ID:               row.ID.String(),
+		RunID:            row.RunID.String(),
+		TaskID:           row.TaskID.String(),
+		AttemptID:        row.AttemptID.String(),
+		Status:           row.Status,
+		Summary:          row.Summary,
+		FailureClass:     row.FailureClass,
+		RequestReplan:    row.RequestReplan,
+		ArtifactIntents:  decodeJSONArrayObjects(row.ArtifactIntents),
+		StructuredOutput: decodeJSONObject(row.StructuredOutput),
+		CreatedAt:        db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:        db.TimeFromPg(row.UpdatedAt),
+	}
+}
+
+func toHumanCheckpoint(row sqlc.OrchestrationHumanCheckpoint) HumanCheckpoint {
+	options, _ := decodeCheckpointOptions(row.Options)
+	defaultAction, _ := decodeCheckpointDefaultAction(row.DefaultAction)
+	resumePolicy, _ := decodeCheckpointResumePolicy(row.ResumePolicy)
+	return HumanCheckpoint{
+		ID:                       row.ID.String(),
+		RunID:                    row.RunID.String(),
+		TaskID:                   row.TaskID.String(),
+		BlocksRun:                row.BlocksRun,
+		Kind:                     row.Kind,
+		ReasonCode:               row.ReasonCode,
+		TriggeredBy:              row.TriggeredBy,
+		Severity:                 row.Severity,
+		PlannerEpoch:             mustUint64FromInt64(row.PlannerEpoch, "checkpoint.planner_epoch"),
+		SupersededByPlannerEpoch: mustUint64FromInt64(row.SupersededByPlannerEpoch.Int64, "checkpoint.superseded_by_planner_epoch"),
+		Status:                   row.Status,
+		StatusVersion:            mustUint64FromInt64(row.StatusVersion, "checkpoint.status_version"),
+		Question:                 row.Question,
+		Options:                  options,
+		DefaultAction:            defaultAction,
+		ResumePolicy:             resumePolicy,
+		TimeoutAt:                optionalTime(db.TimeFromPg(row.TimeoutAt)),
+		ResolvedBy:               row.ResolvedBy,
+		ResolvedOption:           row.ResolvedOption,
+		ResolvedResponse:         row.ResolvedResponse,
+		ResolvedAt:               optionalTime(db.TimeFromPg(row.ResolvedAt)),
+		Metadata:                 decodeJSONObject(row.Metadata),
+		CreatedAt:                db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:                db.TimeFromPg(row.UpdatedAt),
+	}
+}
+
+func toArtifact(row sqlc.OrchestrationArtifact) Artifact {
+	return Artifact{
+		ID:          row.ID.String(),
+		RunID:       row.RunID.String(),
+		TaskID:      row.TaskID.String(),
+		AttemptID:   row.AttemptID.String(),
+		Kind:        row.Kind,
+		URI:         row.Uri,
+		Version:     row.Version,
+		Digest:      row.Digest,
+		ContentType: row.ContentType,
+		Summary:     row.Summary,
+		Metadata:    decodeJSONObject(row.Metadata),
+		CreatedAt:   db.TimeFromPg(row.CreatedAt),
+	}
+}
+
+func toRunEvent(row sqlc.OrchestrationEvent) RunEvent {
+	return RunEvent{
+		ID:               row.ID.String(),
+		RunID:            row.RunID.String(),
+		TaskID:           row.TaskID.String(),
+		AttemptID:        row.AttemptID.String(),
+		CheckpointID:     row.CheckpointID.String(),
+		Seq:              mustUint64FromInt64(row.Seq, "event.seq"),
+		AggregateType:    row.AggregateType,
+		AggregateID:      row.AggregateID.String(),
+		AggregateVersion: mustUint64FromInt64(row.AggregateVersion, "event.aggregate_version"),
+		Type:             row.Type,
+		CausationEventID: row.CausationEventID.String(),
+		CorrelationID:    row.CorrelationID,
+		IdempotencyKey:   row.IdempotencyKey,
+		Payload:          sanitizeEventPayload(decodeJSONObject(row.Payload)),
+		CreatedAt:        db.TimeFromPg(row.CreatedAt),
+		PublishedAt:      optionalTime(db.TimeFromPg(row.PublishedAt)),
+	}
+}
+
+func toRunTimelineEntry(row sqlc.OrchestrationEvent) RunTimelineEntry {
+	return RunTimelineEntry{
+		Seq:           mustUint64FromInt64(row.Seq, "timeline.seq"),
+		Type:          row.Type,
+		AggregateType: row.AggregateType,
+		AggregateID:   row.AggregateID.String(),
+		TaskID:        row.TaskID.String(),
+		AttemptID:     row.AttemptID.String(),
+		CheckpointID:  row.CheckpointID.String(),
+		CreatedAt:     db.TimeFromPg(row.CreatedAt),
+		Payload:       sanitizeEventPayload(decodeJSONObject(row.Payload)),
+	}
+}
+
+func toInspectorAttempt(row sqlc.OrchestrationTaskAttempt) InspectorAttempt {
+	return InspectorAttempt{
+		ID:               row.ID.String(),
+		RunID:            row.RunID.String(),
+		TaskID:           row.TaskID.String(),
+		SessionID:        uuidToString(row.SessionID),
+		AttemptNo:        int(row.AttemptNo),
+		WorkerID:         row.WorkerID,
+		ExecutorID:       row.ExecutorID,
+		Status:           row.Status,
+		ClaimEpoch:       mustUint64FromInt64(row.ClaimEpoch, "attempt.claim_epoch"),
+		LeaseExpiresAt:   optionalTime(db.TimeFromPg(row.LeaseExpiresAt)),
+		LastHeartbeatAt:  optionalTime(db.TimeFromPg(row.LastHeartbeatAt)),
+		InputManifestID:  row.InputManifestID.String(),
+		ParkCheckpointID: row.ParkCheckpointID.String(),
+		FailureClass:     row.FailureClass,
+		TerminalReason:   row.TerminalReason,
+		StartedAt:        optionalTime(db.TimeFromPg(row.StartedAt)),
+		FinishedAt:       optionalTime(db.TimeFromPg(row.FinishedAt)),
+		CreatedAt:        db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:        db.TimeFromPg(row.UpdatedAt),
+	}
+}
+
+func toInspectorVerification(row sqlc.OrchestrationTaskVerification) InspectorVerification {
+	return InspectorVerification{
+		ID:              row.ID.String(),
+		RunID:           row.RunID.String(),
+		TaskID:          row.TaskID.String(),
+		ResultID:        row.ResultID.String(),
+		SessionID:       uuidToString(row.SessionID),
+		AttemptNo:       int(row.AttemptNo),
+		WorkerID:        row.WorkerID,
+		ExecutorID:      row.ExecutorID,
+		VerifierProfile: row.VerifierProfile,
+		Status:          row.Status,
+		ClaimEpoch:      mustUint64FromInt64(row.ClaimEpoch, "verification.claim_epoch"),
+		LeaseExpiresAt:  optionalTime(db.TimeFromPg(row.LeaseExpiresAt)),
+		LastHeartbeatAt: optionalTime(db.TimeFromPg(row.LastHeartbeatAt)),
+		Verdict:         row.Verdict,
+		Summary:         row.Summary,
+		FailureClass:    row.FailureClass,
+		TerminalReason:  row.TerminalReason,
+		StartedAt:       optionalTime(db.TimeFromPg(row.StartedAt)),
+		FinishedAt:      optionalTime(db.TimeFromPg(row.FinishedAt)),
+		CreatedAt:       db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:       db.TimeFromPg(row.UpdatedAt),
+	}
+}
+
+func toInspectorWorkerLease(row sqlc.OrchestrationWorker) InspectorWorkerLease {
+	return InspectorWorkerLease{
+		ID:              row.ID,
+		ExecutorID:      row.ExecutorID,
+		DisplayName:     row.DisplayName,
+		Capabilities:    decodeJSONObject(row.Capabilities),
+		Status:          row.Status,
+		LastHeartbeatAt: db.TimeFromPg(row.LastHeartbeatAt),
+		LeaseExpiresAt:  db.TimeFromPg(row.LeaseExpiresAt),
+		CreatedAt:       db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:       db.TimeFromPg(row.UpdatedAt),
+	}
+}
+
+func sanitizeEventPayload(payload map[string]any) map[string]any {
+	if len(payload) == 0 {
+		return payload
+	}
+	delete(payload, "claim_token")
+	delete(payload, "lease_token")
+	return payload
+}
+
+func toInputManifest(row sqlc.OrchestrationInputManifest) InputManifest {
+	return InputManifest{
+		ID:                          row.ID.String(),
+		RunID:                       row.RunID.String(),
+		TaskID:                      row.TaskID.String(),
+		CapturedTaskInputs:          decodeJSONObject(row.CapturedTaskInputs),
+		CapturedArtifactVersions:    decodeJSONArrayObjects(row.CapturedArtifactVersions),
+		CapturedBlackboardRevisions: decodeJSONArrayObjects(row.CapturedBlackboardRevisions),
+		ProjectionHash:              row.ProjectionHash,
+		CreatedAt:                   db.TimeFromPg(row.CreatedAt),
+	}
+}
+
+func buildRunExecutionSpans(
+	attemptRows []sqlc.OrchestrationTaskAttempt,
+	verificationRows []sqlc.OrchestrationTaskVerification,
+	resultRows []sqlc.OrchestrationTaskResult,
+	eventRows []sqlc.OrchestrationEvent,
+) []RunExecutionSpan {
+	resultByAttemptID := make(map[string]sqlc.OrchestrationTaskResult, len(resultRows))
+	resultByID := make(map[string]sqlc.OrchestrationTaskResult, len(resultRows))
+	for _, resultRow := range resultRows {
+		resultByID[resultRow.ID.String()] = resultRow
+		if resultRow.AttemptID.Valid {
+			resultByAttemptID[resultRow.AttemptID.String()] = resultRow
+		}
+	}
+
+	spans := make([]RunExecutionSpan, 0, len(attemptRows)+len(verificationRows))
+	attemptSpanByID := make(map[string]*RunExecutionSpan, len(attemptRows))
+	for _, attemptRow := range attemptRows {
+		span := RunExecutionSpan{
+			Kind:               "attempt",
+			ID:                 attemptRow.ID.String(),
+			RunID:              attemptRow.RunID.String(),
+			TaskID:             attemptRow.TaskID.String(),
+			AttemptNo:          int(attemptRow.AttemptNo),
+			Status:             attemptRow.Status,
+			WorkerID:           strings.TrimSpace(attemptRow.WorkerID),
+			ExecutorID:         strings.TrimSpace(attemptRow.ExecutorID),
+			StartedAt:          optionalTime(db.TimeFromPg(attemptRow.StartedAt)),
+			FinishedAt:         optionalTime(db.TimeFromPg(attemptRow.FinishedAt)),
+			LastHeartbeatAt:    optionalTime(db.TimeFromPg(attemptRow.LastHeartbeatAt)),
+			LeaseExpiresAt:     optionalTime(db.TimeFromPg(attemptRow.LeaseExpiresAt)),
+			InputManifestID:    attemptRow.InputManifestID.String(),
+			CheckpointID:       attemptRow.ParkCheckpointID.String(),
+			FailureClass:       strings.TrimSpace(attemptRow.FailureClass),
+			TerminalReason:     strings.TrimSpace(attemptRow.TerminalReason),
+			CompletionMetadata: map[string]any{},
+			RelatedEventTypes:  make([]string, 0, 6),
+		}
+		if resultRow, ok := resultByAttemptID[span.ID]; ok {
+			span.ResultID = resultRow.ID.String()
+			span.Summary = strings.TrimSpace(resultRow.Summary)
+			if span.FailureClass == "" {
+				span.FailureClass = strings.TrimSpace(resultRow.FailureClass)
+			}
+		}
+		spans = append(spans, span)
+		attemptSpanByID[span.ID] = &spans[len(spans)-1]
+	}
+
+	verificationSpanByID := make(map[string]*RunExecutionSpan, len(verificationRows))
+	for _, verificationRow := range verificationRows {
+		span := RunExecutionSpan{
+			Kind:               "verification",
+			ID:                 verificationRow.ID.String(),
+			RunID:              verificationRow.RunID.String(),
+			TaskID:             verificationRow.TaskID.String(),
+			AttemptNo:          int(verificationRow.AttemptNo),
+			Status:             verificationRow.Status,
+			WorkerID:           strings.TrimSpace(verificationRow.WorkerID),
+			ExecutorID:         strings.TrimSpace(verificationRow.ExecutorID),
+			VerifierProfile:    strings.TrimSpace(verificationRow.VerifierProfile),
+			StartedAt:          optionalTime(db.TimeFromPg(verificationRow.StartedAt)),
+			FinishedAt:         optionalTime(db.TimeFromPg(verificationRow.FinishedAt)),
+			LastHeartbeatAt:    optionalTime(db.TimeFromPg(verificationRow.LastHeartbeatAt)),
+			LeaseExpiresAt:     optionalTime(db.TimeFromPg(verificationRow.LeaseExpiresAt)),
+			ResultID:           verificationRow.ResultID.String(),
+			FailureClass:       strings.TrimSpace(verificationRow.FailureClass),
+			TerminalReason:     strings.TrimSpace(verificationRow.TerminalReason),
+			Summary:            strings.TrimSpace(verificationRow.Summary),
+			Verdict:            strings.TrimSpace(verificationRow.Verdict),
+			CompletionMetadata: map[string]any{},
+			RelatedEventTypes:  make([]string, 0, 6),
+		}
+		if resultRow, ok := resultByID[span.ResultID]; ok && span.Summary == "" {
+			span.Summary = strings.TrimSpace(resultRow.Summary)
+		}
+		spans = append(spans, span)
+		verificationSpanByID[span.ID] = &spans[len(spans)-1]
+	}
+
+	for _, eventRow := range eventRows {
+		eventType := strings.TrimSpace(eventRow.Type)
+		if eventType == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(eventType, "run.event.attempt."):
+			span := attemptSpanByID[eventRow.AttemptID.String()]
+			if span == nil {
+				continue
+			}
+			span.RelatedEventTypes = appendUniqueString(span.RelatedEventTypes, eventType)
+			switch eventType {
+			case "run.event.attempt.created":
+				span.CreatedSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.attempt.created_seq")
+			case "run.event.attempt.claimed":
+				span.ClaimedSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.attempt.claimed_seq")
+			case "run.event.attempt.running":
+				span.StartedSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.attempt.started_seq")
+			case "run.event.attempt.completed", "run.event.attempt.failed", "run.event.attempt.lost":
+				span.TerminalSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.attempt.terminal_seq")
+			case "run.event.attempt.requeued":
+				span.RequeueSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.attempt.requeue_seq")
+			}
+		case strings.HasPrefix(eventType, "run.event.verification."):
+			payload := decodeJSONObject(eventRow.Payload)
+			verificationID := strings.TrimSpace(stringValue(payload["verification_id"]))
+			if verificationID == "" {
+				verificationID = eventRow.AggregateID.String()
+			}
+			span := verificationSpanByID[verificationID]
+			if span == nil {
+				continue
+			}
+			span.RelatedEventTypes = appendUniqueString(span.RelatedEventTypes, eventType)
+			switch eventType {
+			case "run.event.verification.created":
+				span.CreatedSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.verification.created_seq")
+			case "run.event.verification.claimed":
+				span.ClaimedSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.verification.claimed_seq")
+			case "run.event.verification.running":
+				span.StartedSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.verification.started_seq")
+			case "run.event.verification.passed", "run.event.verification.rejected", "run.event.verification.lost":
+				span.TerminalSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.verification.terminal_seq")
+			case "run.event.verification.requeued":
+				span.RequeueSeq = mustUint64FromInt64(eventRow.Seq, "execution_span.verification.requeue_seq")
+			}
+		}
+	}
+
+	sort.SliceStable(spans, func(i, j int) bool {
+		leftSeq := executionSpanSortSeq(spans[i])
+		rightSeq := executionSpanSortSeq(spans[j])
+		if leftSeq != rightSeq {
+			return leftSeq < rightSeq
+		}
+		if spans[i].TaskID != spans[j].TaskID {
+			return spans[i].TaskID < spans[j].TaskID
+		}
+		if spans[i].Kind != spans[j].Kind {
+			return spans[i].Kind < spans[j].Kind
+		}
+		return spans[i].ID < spans[j].ID
+	})
+
+	return spans
+}
+
+func executionSpanSortSeq(span RunExecutionSpan) uint64 {
+	if span.CreatedSeq != 0 {
+		return span.CreatedSeq
+	}
+	if span.ClaimedSeq != 0 {
+		return span.ClaimedSeq
+	}
+	if span.StartedSeq != 0 {
+		return span.StartedSeq
+	}
+	if span.TerminalSeq != 0 {
+		return span.TerminalSeq
+	}
+	if span.RequeueSeq != 0 {
+		return span.RequeueSeq
+	}
+	return 0
+}
+
+func appendUniqueString(items []string, value string) []string {
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
+}
+
+func summarizeRunInspector(tasks []Task, checkpoints []HumanCheckpoint, attempts []InspectorAttempt, verifications []InspectorVerification, workers []InspectorWorkerLease, stuckSignals []RunStuckSignal) RunInspectorSummary {
+	summary := RunInspectorSummary{}
+	for _, checkpoint := range checkpoints {
+		if checkpoint.Status == CheckpointStatusOpen {
+			summary.OpenCheckpointCount++
+		}
+	}
+	for _, task := range tasks {
+		switch task.Status {
+		case TaskStatusReady:
+			summary.ReadyTaskCount++
+		case TaskStatusDispatching:
+			summary.DispatchingTaskCount++
+		case TaskStatusRunning:
+			summary.RunningTaskCount++
+		case TaskStatusVerifying:
+			summary.VerifyingTaskCount++
+		case TaskStatusWaitingHuman:
+			summary.WaitingHumanTaskCount++
+		case TaskStatusCompleted:
+			summary.CompletedTaskCount++
+		case TaskStatusBlocked:
+			summary.BlockedTaskCount++
+		case TaskStatusFailed:
+			summary.FailedTaskCount++
+		case TaskStatusCancelled:
+			summary.CancelledTaskCount++
+		}
+	}
+	for _, attempt := range attempts {
+		switch attempt.Status {
+		case TaskAttemptStatusCreated, TaskAttemptStatusClaimed, TaskAttemptStatusBinding, TaskAttemptStatusRunning:
+			summary.ActiveAttemptCount++
+		}
+	}
+	for _, verification := range verifications {
+		switch verification.Status {
+		case TaskVerificationStatusCreated, TaskVerificationStatusClaimed, TaskVerificationStatusRunning:
+			summary.ActiveVerificationCount++
+		}
+	}
+	for _, worker := range workers {
+		if worker.Status == WorkerStatusActive {
+			summary.ActiveWorkerCount++
+		}
+	}
+	summary.StuckSignalCount = len(stuckSignals)
+	for _, signal := range stuckSignals {
+		if signal.Severity == "critical" {
+			summary.CriticalSignalCount++
+		}
+	}
+	return summary
+}
+
+func buildRunStuckSignals(tasks []Task, attempts []InspectorAttempt, verifications []InspectorVerification, workers []InspectorWorkerLease, observedAt time.Time) []RunStuckSignal {
+	activeAttemptsByTask := make(map[string][]InspectorAttempt)
+	activeVerificationsByTask := make(map[string][]InspectorVerification)
+	activeWorkByWorker := make(map[string]struct{})
+	signals := make([]RunStuckSignal, 0)
+
+	for _, attempt := range attempts {
+		if !isActiveAttemptStatus(attempt.Status) {
+			continue
+		}
+		activeAttemptsByTask[attempt.TaskID] = append(activeAttemptsByTask[attempt.TaskID], attempt)
+		if workerID := strings.TrimSpace(attempt.WorkerID); workerID != "" {
+			activeWorkByWorker[workerID] = struct{}{}
+		}
+		if inspectorLeaseExpired(attempt.LeaseExpiresAt, observedAt) {
+			signals = append(signals, RunStuckSignal{
+				Code:            "attempt_lease_expired",
+				Severity:        "critical",
+				Message:         "active attempt lease expired before recovery completed",
+				TaskID:          attempt.TaskID,
+				AttemptID:       attempt.ID,
+				WorkerID:        attempt.WorkerID,
+				Status:          attempt.Status,
+				LastHeartbeatAt: attempt.LastHeartbeatAt,
+				LeaseExpiresAt:  attempt.LeaseExpiresAt,
+				ObservedAt:      observedAt,
+			})
+		}
+	}
+	for _, verification := range verifications {
+		if !isActiveVerificationStatus(verification.Status) {
+			continue
+		}
+		activeVerificationsByTask[verification.TaskID] = append(activeVerificationsByTask[verification.TaskID], verification)
+		if workerID := strings.TrimSpace(verification.WorkerID); workerID != "" {
+			activeWorkByWorker[workerID] = struct{}{}
+		}
+		if inspectorLeaseExpired(verification.LeaseExpiresAt, observedAt) {
+			signals = append(signals, RunStuckSignal{
+				Code:            "verification_lease_expired",
+				Severity:        "critical",
+				Message:         "active verification lease expired before recovery completed",
+				TaskID:          verification.TaskID,
+				VerificationID:  verification.ID,
+				WorkerID:        verification.WorkerID,
+				Status:          verification.Status,
+				LastHeartbeatAt: verification.LastHeartbeatAt,
+				LeaseExpiresAt:  verification.LeaseExpiresAt,
+				ObservedAt:      observedAt,
+			})
+		}
+	}
+	for _, task := range tasks {
+		switch task.Status {
+		case TaskStatusDispatching, TaskStatusRunning:
+			if len(activeAttemptsByTask[task.ID]) == 0 {
+				signals = append(signals, RunStuckSignal{
+					Code:       "task_missing_active_attempt",
+					Severity:   "critical",
+					Message:    "task is active but has no active attempt",
+					TaskID:     task.ID,
+					Status:     task.Status,
+					ObservedAt: observedAt,
+				})
+			}
+		case TaskStatusVerifying:
+			if len(activeVerificationsByTask[task.ID]) == 0 {
+				signals = append(signals, RunStuckSignal{
+					Code:       "task_missing_active_verification",
+					Severity:   "critical",
+					Message:    "task is verifying but has no active verification",
+					TaskID:     task.ID,
+					Status:     task.Status,
+					ObservedAt: observedAt,
+				})
+			}
+		}
+	}
+	for _, worker := range workers {
+		if worker.Status != WorkerStatusActive {
+			continue
+		}
+		if _, ok := activeWorkByWorker[worker.ID]; !ok {
+			continue
+		}
+		if !inspectorLeaseExpired(optionalTime(worker.LeaseExpiresAt), observedAt) {
+			continue
+		}
+		signals = append(signals, RunStuckSignal{
+			Code:            "worker_lease_expired",
+			Severity:        "critical",
+			Message:         "worker lease expired while run still references it as active",
+			WorkerID:        worker.ID,
+			Status:          worker.Status,
+			LastHeartbeatAt: optionalTime(worker.LastHeartbeatAt),
+			LeaseExpiresAt:  optionalTime(worker.LeaseExpiresAt),
+			ObservedAt:      observedAt,
+		})
+	}
+
+	sort.Slice(signals, func(i, j int) bool {
+		if signals[i].Severity != signals[j].Severity {
+			return signals[i].Severity < signals[j].Severity
+		}
+		if signals[i].Code != signals[j].Code {
+			return signals[i].Code < signals[j].Code
+		}
+		if signals[i].TaskID != signals[j].TaskID {
+			return signals[i].TaskID < signals[j].TaskID
+		}
+		if signals[i].AttemptID != signals[j].AttemptID {
+			return signals[i].AttemptID < signals[j].AttemptID
+		}
+		if signals[i].VerificationID != signals[j].VerificationID {
+			return signals[i].VerificationID < signals[j].VerificationID
+		}
+		return signals[i].WorkerID < signals[j].WorkerID
+	})
+
+	return signals
+}
+
+func isActiveAttemptStatus(status string) bool {
+	switch status {
+	case TaskAttemptStatusCreated, TaskAttemptStatusClaimed, TaskAttemptStatusBinding, TaskAttemptStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+func isActiveVerificationStatus(status string) bool {
+	switch status {
+	case TaskVerificationStatusCreated, TaskVerificationStatusClaimed, TaskVerificationStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+func inspectorLeaseExpired(leaseExpiresAt *time.Time, observedAt time.Time) bool {
+	return leaseExpiresAt != nil && !leaseExpiresAt.After(observedAt)
+}
+
+func optionalTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	cloned := value
+	return &cloned
+}

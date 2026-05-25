@@ -4063,6 +4063,25 @@ func (q *Queries) TouchSession(ctx context.Context, id pgtype.UUID) error {
 	return mapQueryErr(err)
 }
 
+func (q *Queries) FinalizeSession(ctx context.Context, id pgtype.UUID) (pgsqlc.BotSession, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotSession{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteId string
+	if err := convertValue(id, &sqliteId); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	out, err := q.store.queries.FinalizeSession(ctx, sqliteId)
+	if err != nil {
+		return pgsqlc.BotSession{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotSession
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) UpdateAccountAdmin(ctx context.Context, arg pgsqlc.UpdateAccountAdminParams) (pgsqlc.User, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.User{}, errSQLiteQueriesNotConfigured

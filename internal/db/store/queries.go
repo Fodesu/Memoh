@@ -243,6 +243,7 @@ type Queries interface {
 	SoftDeleteSessionsByBot(ctx context.Context, botID pgtype.UUID) error
 	TouchChat(ctx context.Context, chatID pgtype.UUID) error
 	TouchSession(ctx context.Context, id pgtype.UUID) error
+	FinalizeSession(ctx context.Context, id pgtype.UUID) (dbsqlc.BotSession, error)
 	UpdateAccountAdmin(ctx context.Context, arg dbsqlc.UpdateAccountAdminParams) (dbsqlc.User, error)
 	UpdateAccountLastLogin(ctx context.Context, id pgtype.UUID) (dbsqlc.User, error)
 	UpdateAccountPassword(ctx context.Context, arg dbsqlc.UpdateAccountPasswordParams) (dbsqlc.User, error)

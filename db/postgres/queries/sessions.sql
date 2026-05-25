@@ -22,7 +22,7 @@ WHERE id = $1
 -- name: ListSessionsByBot :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata,
-  s.created_at, s.updated_at, s.deleted_at,
+  s.parent_session_id, s.finalized_at, s.created_at, s.updated_at, s.deleted_at,
   r.metadata AS route_metadata,
   r.conversation_type AS route_conversation_type
 FROM bot_sessions s
@@ -59,6 +59,12 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 UPDATE bot_sessions
 SET updated_at = now()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: FinalizeSession :one
+UPDATE bot_sessions
+SET finalized_at = COALESCE(finalized_at, now()), updated_at = now()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+RETURNING *;
 
 -- name: GetActiveSessionForRoute :one
 SELECT s.*

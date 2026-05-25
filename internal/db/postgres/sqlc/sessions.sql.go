@@ -24,7 +24,7 @@ VALUES (
   $6,
   $7::uuid
 )
-RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, created_at, updated_at, deleted_at
+RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, finalized_at, created_at, updated_at, deleted_at
 `
 
 type CreateSessionParams struct {
@@ -57,6 +57,34 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (B
 		&i.Title,
 		&i.Metadata,
 		&i.ParentSessionID,
+		&i.FinalizedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const finalizeSession = `-- name: FinalizeSession :one
+UPDATE bot_sessions
+SET finalized_at = COALESCE(finalized_at, now()), updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, finalized_at, created_at, updated_at, deleted_at
+`
+
+func (q *Queries) FinalizeSession(ctx context.Context, id pgtype.UUID) (BotSession, error) {
+	row := q.db.QueryRow(ctx, finalizeSession, id)
+	var i BotSession
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.RouteID,
+		&i.ChannelType,
+		&i.Type,
+		&i.Title,
+		&i.Metadata,
+		&i.ParentSessionID,
+		&i.FinalizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -65,7 +93,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (B
 }
 
 const getActiveSessionForRoute = `-- name: GetActiveSessionForRoute :one
-SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata, s.parent_session_id, s.created_at, s.updated_at, s.deleted_at
+SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata, s.parent_session_id, s.finalized_at, s.created_at, s.updated_at, s.deleted_at
 FROM bot_sessions s
 JOIN bot_channel_routes r ON r.active_session_id = s.id
 WHERE r.id = $1
@@ -84,6 +112,7 @@ func (q *Queries) GetActiveSessionForRoute(ctx context.Context, routeID pgtype.U
 		&i.Title,
 		&i.Metadata,
 		&i.ParentSessionID,
+		&i.FinalizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -92,7 +121,7 @@ func (q *Queries) GetActiveSessionForRoute(ctx context.Context, routeID pgtype.U
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, created_at, updated_at, deleted_at
+SELECT id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, finalized_at, created_at, updated_at, deleted_at
 FROM bot_sessions
 WHERE id = $1
   AND deleted_at IS NULL
@@ -110,6 +139,7 @@ func (q *Queries) GetSessionByID(ctx context.Context, id pgtype.UUID) (BotSessio
 		&i.Title,
 		&i.Metadata,
 		&i.ParentSessionID,
+		&i.FinalizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -120,7 +150,7 @@ func (q *Queries) GetSessionByID(ctx context.Context, id pgtype.UUID) (BotSessio
 const listSessionsByBot = `-- name: ListSessionsByBot :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata,
-  s.created_at, s.updated_at, s.deleted_at,
+  s.parent_session_id, s.finalized_at, s.created_at, s.updated_at, s.deleted_at,
   r.metadata AS route_metadata,
   r.conversation_type AS route_conversation_type
 FROM bot_sessions s
@@ -138,6 +168,8 @@ type ListSessionsByBotRow struct {
 	Type                  string             `json:"type"`
 	Title                 string             `json:"title"`
 	Metadata              []byte             `json:"metadata"`
+	ParentSessionID       pgtype.UUID        `json:"parent_session_id"`
+	FinalizedAt           pgtype.Timestamptz `json:"finalized_at"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
@@ -162,6 +194,8 @@ func (q *Queries) ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]L
 			&i.Type,
 			&i.Title,
 			&i.Metadata,
+			&i.ParentSessionID,
+			&i.FinalizedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
@@ -179,7 +213,7 @@ func (q *Queries) ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]L
 }
 
 const listSessionsByRoute = `-- name: ListSessionsByRoute :many
-SELECT id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, created_at, updated_at, deleted_at
+SELECT id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, finalized_at, created_at, updated_at, deleted_at
 FROM bot_sessions
 WHERE route_id = $1
   AND deleted_at IS NULL
@@ -204,6 +238,7 @@ func (q *Queries) ListSessionsByRoute(ctx context.Context, routeID pgtype.UUID) 
 			&i.Title,
 			&i.Metadata,
 			&i.ParentSessionID,
+			&i.FinalizedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
@@ -219,7 +254,7 @@ func (q *Queries) ListSessionsByRoute(ctx context.Context, routeID pgtype.UUID) 
 }
 
 const listSubagentSessionsByParent = `-- name: ListSubagentSessionsByParent :many
-SELECT id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, created_at, updated_at, deleted_at
+SELECT id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, finalized_at, created_at, updated_at, deleted_at
 FROM bot_sessions
 WHERE parent_session_id = $1
   AND deleted_at IS NULL
@@ -244,6 +279,7 @@ func (q *Queries) ListSubagentSessionsByParent(ctx context.Context, parentSessio
 			&i.Title,
 			&i.Metadata,
 			&i.ParentSessionID,
+			&i.FinalizedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
@@ -295,7 +331,7 @@ const updateSessionMetadata = `-- name: UpdateSessionMetadata :one
 UPDATE bot_sessions
 SET metadata = $1, updated_at = now()
 WHERE id = $2 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, created_at, updated_at, deleted_at
+RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, finalized_at, created_at, updated_at, deleted_at
 `
 
 type UpdateSessionMetadataParams struct {
@@ -315,6 +351,7 @@ func (q *Queries) UpdateSessionMetadata(ctx context.Context, arg UpdateSessionMe
 		&i.Title,
 		&i.Metadata,
 		&i.ParentSessionID,
+		&i.FinalizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -326,7 +363,7 @@ const updateSessionTitle = `-- name: UpdateSessionTitle :one
 UPDATE bot_sessions
 SET title = $1, updated_at = now()
 WHERE id = $2 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, created_at, updated_at, deleted_at
+RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, finalized_at, created_at, updated_at, deleted_at
 `
 
 type UpdateSessionTitleParams struct {
@@ -346,6 +383,7 @@ func (q *Queries) UpdateSessionTitle(ctx context.Context, arg UpdateSessionTitle
 		&i.Title,
 		&i.Metadata,
 		&i.ParentSessionID,
+		&i.FinalizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,

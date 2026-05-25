@@ -1,0 +1,65 @@
+# Dedicated local config for orchestration integration tests.
+# Use with:
+#   CONFIG_PATH=./config.orchestration-test.toml mise run db-up
+#
+# If your local PostgreSQL auth differs, adjust only the [postgres] section.
+
+[log]
+level = "info"
+format = "text"
+
+[server]
+addr = ":8080"
+
+[admin]
+username = "admin"
+password = "admin123"
+email = "test@memoh.local"
+
+[auth]
+jwt_secret = "memoh-local-test-secret"
+jwt_expires_in = "168h"
+
+timezone = "UTC"
+
+[database]
+driver = "postgres"
+
+[container]
+backend = "containerd"
+default_image = "debian:bookworm-slim"
+data_root = "data"
+runtime_dir = "/opt/memoh/runtime"
+
+[containerd]
+socket_path = "/run/containerd/containerd.sock"
+namespace = "default"
+snapshotter = "overlayfs"
+cni_bin_dir = "/opt/cni/bin"
+cni_conf_dir = "/etc/cni/net.d"
+
+[postgres]
+host = "127.0.0.1"
+port = 5432
+user = "postgres"
+password = ""
+database = "memoh_orchestration_test"
+sslmode = "disable"
+
+[qdrant]
+base_url = "http://127.0.0.1:6334"
+api_key = ""
+timeout_seconds = 10
+
+[sparse]
+base_url = "http://127.0.0.1:8085"
+
+[registry]
+providers_dir = "conf/providers"
+
+[supermarket]
+base_url = "https://supermarket.memoh.ai"
+
+[web]
+host = "127.0.0.1"
+port = 8082

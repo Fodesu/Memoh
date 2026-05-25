@@ -335,10 +335,11 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   route_id TEXT REFERENCES bot_channel_routes(id) ON DELETE SET NULL,
   channel_type TEXT,
-  type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss')),
+  type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss', 'orchestration_attempt', 'orchestration_verification')),
   title TEXT NOT NULL DEFAULT '',
   metadata TEXT NOT NULL DEFAULT '{}',
   parent_session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,
+  finalized_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at TEXT
@@ -704,3 +705,342 @@ CREATE TABLE IF NOT EXISTS user_provider_oauth_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_provider_oauth_tokens_state ON user_provider_oauth_tokens(state) WHERE state != '';
+
+-- orchestration_runs: phase-1 orchestration kernel runs
+CREATE TABLE IF NOT EXISTS orchestration_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  tenant_id TEXT NOT NULL,
+  owner_subject TEXT NOT NULL,
+  lifecycle_status TEXT NOT NULL CHECK (lifecycle_status IN ('created', 'running', 'waiting_human', 'cancelling', 'completed', 'failed', 'cancelled')),
+  planning_status TEXT NOT NULL CHECK (planning_status IN ('idle', 'active')),
+  status_version INTEGER NOT NULL DEFAULT 1,
+  planner_epoch INTEGER NOT NULL DEFAULT 1,
+  last_event_seq INTEGER NOT NULL DEFAULT 0,
+  root_task_id TEXT NOT NULL,
+  goal TEXT NOT NULL DEFAULT '',
+  input TEXT NOT NULL DEFAULT '{}',
+  requested_control_policy TEXT NOT NULL DEFAULT '{}',
+  control_policy TEXT NOT NULL DEFAULT '{}',
+  source_metadata TEXT NOT NULL DEFAULT '{}',
+  policies TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT NOT NULL,
+  terminal_reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_runs_owner_created_at ON orchestration_runs(owner_subject, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orchestration_runs_lifecycle_status ON orchestration_runs(lifecycle_status);
+
+-- orchestration_tasks: phase-1 orchestration kernel tasks
+CREATE TABLE IF NOT EXISTS orchestration_tasks (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  decomposed_from_task_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'step',
+  role TEXT NOT NULL DEFAULT 'mid' CHECK (role IN ('start', 'mid', 'final')),
+  goal TEXT NOT NULL DEFAULT '',
+  inputs TEXT NOT NULL DEFAULT '{}',
+  planner_epoch INTEGER NOT NULL DEFAULT 1,
+  superseded_by_planner_epoch INTEGER,
+  worker_profile TEXT NOT NULL DEFAULT '',
+  priority INTEGER NOT NULL DEFAULT 0,
+  retry_policy TEXT NOT NULL DEFAULT '{}',
+  verification_policy TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL CHECK (status IN ('created', 'ready', 'dispatching', 'running', 'verifying', 'waiting_human', 'completed', 'blocked', 'failed', 'cancelled')),
+  status_version INTEGER NOT NULL DEFAULT 1,
+  waiting_checkpoint_id TEXT,
+  waiting_scope TEXT NOT NULL DEFAULT '' CHECK (waiting_scope IN ('', 'task', 'run')),
+  latest_result_id TEXT,
+  ready_at TEXT,
+  blocked_reason TEXT NOT NULL DEFAULT '',
+  terminal_reason TEXT NOT NULL DEFAULT '',
+  blackboard_scope TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_tasks_id_run_unique UNIQUE (id, run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_run_created_at ON orchestration_tasks(run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_run_status ON orchestration_tasks(run_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_waiting_checkpoint ON orchestration_tasks(waiting_checkpoint_id) WHERE waiting_checkpoint_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_tasks_one_start_per_run
+  ON orchestration_tasks(run_id)
+  WHERE role = 'start' AND superseded_by_planner_epoch IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_tasks_one_final_per_run
+  ON orchestration_tasks(run_id)
+  WHERE role = 'final' AND superseded_by_planner_epoch IS NULL;
+
+-- orchestration_input_manifests: immutable dispatch-time task input slices
+CREATE TABLE IF NOT EXISTS orchestration_input_manifests (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  captured_task_inputs TEXT NOT NULL DEFAULT '{}',
+  captured_artifact_versions TEXT NOT NULL DEFAULT '[]',
+  captured_blackboard_revisions TEXT NOT NULL DEFAULT '[]',
+  projection_hash TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_input_manifests_id_run_task_unique UNIQUE (id, run_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_input_manifests_task_created_at ON orchestration_input_manifests(task_id, created_at DESC, id DESC);
+
+-- orchestration_task_results: authoritative durable task outputs
+CREATE TABLE IF NOT EXISTS orchestration_task_results (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL UNIQUE REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  attempt_id TEXT,
+  status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('completed', 'failed')),
+  summary TEXT NOT NULL DEFAULT '',
+  failure_class TEXT NOT NULL DEFAULT '',
+  request_replan INTEGER NOT NULL DEFAULT FALSE,
+  artifact_intents TEXT NOT NULL DEFAULT '[]',
+  structured_output TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_task_results_id_run_task_unique UNIQUE (id, run_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_results_run_created_at ON orchestration_task_results(run_id, created_at DESC);
+
+-- orchestration_artifacts: authoritative committed artifact metadata
+CREATE TABLE IF NOT EXISTS orchestration_artifacts (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  attempt_id TEXT,
+  kind TEXT NOT NULL,
+  uri TEXT NOT NULL,
+  version TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  content_type TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_artifacts_id_run_task_unique UNIQUE (id, run_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_artifacts_run_created_at ON orchestration_artifacts(run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_artifacts_task_created_at ON orchestration_artifacts(task_id, created_at, id);
+
+-- orchestration_human_checkpoints: authoritative HITL checkpoints
+CREATE TABLE IF NOT EXISTS orchestration_human_checkpoints (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  blocks_run INTEGER NOT NULL DEFAULT FALSE,
+  kind TEXT NOT NULL DEFAULT 'semantic' CHECK (kind IN ('semantic', 'policy', 'progress')),
+  reason_code TEXT NOT NULL DEFAULT 'clarification',
+  triggered_by TEXT NOT NULL DEFAULT 'agent' CHECK (triggered_by IN ('agent', 'runtime', 'scheduler', 'policy')),
+  severity TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('low', 'medium', 'high')),
+  planner_epoch INTEGER NOT NULL DEFAULT 1,
+  superseded_by_planner_epoch INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('open', 'resolved', 'timed_out', 'cancelled', 'superseded')),
+  status_version INTEGER NOT NULL DEFAULT 1,
+  question TEXT NOT NULL DEFAULT '',
+  options TEXT NOT NULL DEFAULT '[]',
+  default_action TEXT NOT NULL DEFAULT '{}',
+  resume_policy TEXT NOT NULL DEFAULT '{}',
+  timeout_at TEXT,
+  resolved_by TEXT NOT NULL DEFAULT '',
+  resolved_option TEXT NOT NULL DEFAULT '',
+  resolved_response TEXT NOT NULL DEFAULT '',
+  resolved_at TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_human_checkpoints_id_run_unique UNIQUE (id, run_id),
+  CONSTRAINT orchestration_human_checkpoints_id_run_task_unique UNIQUE (id, run_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_run_created_at ON orchestration_human_checkpoints(run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_run_status ON orchestration_human_checkpoints(run_id, status, created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orchestration_human_checkpoints_open_run_barrier_unique
+  ON orchestration_human_checkpoints(run_id)
+  WHERE blocks_run = TRUE AND status = 'open';
+
+-- orchestration_planning_intents: authoritative planner/replanner work queue
+CREATE TABLE IF NOT EXISTS orchestration_planning_intents (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  checkpoint_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('start_run', 'checkpoint_resume', 'attempt_finalize', 'replan')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+  base_planner_epoch INTEGER NOT NULL DEFAULT 0,
+  claim_epoch INTEGER NOT NULL DEFAULT 0,
+  claim_token TEXT NOT NULL DEFAULT '',
+  claimed_by TEXT NOT NULL DEFAULT '',
+  lease_expires_at TEXT,
+  last_heartbeat_at TEXT,
+  failure_reason TEXT NOT NULL DEFAULT '',
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_planning_intents_checkpoint_requires_task CHECK (checkpoint_id IS NULL OR task_id IS NOT NULL),
+  CONSTRAINT orchestration_planning_intents_id_run_unique UNIQUE (id, run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_planning_intents_run_created_at ON orchestration_planning_intents(run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_planning_intents_status_created_at ON orchestration_planning_intents(status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_planning_intents_lease_expires_at ON orchestration_planning_intents(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+
+-- orchestration_task_dependencies: authoritative task DAG edges
+CREATE TABLE IF NOT EXISTS orchestration_task_dependencies (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  predecessor_task_id TEXT NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  successor_task_id TEXT NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  planner_epoch INTEGER NOT NULL DEFAULT 1,
+  superseded_by_planner_epoch INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_task_dependencies_no_self_edge CHECK (predecessor_task_id <> successor_task_id),
+  CONSTRAINT orchestration_task_dependencies_unique UNIQUE (run_id, predecessor_task_id, successor_task_id, planner_epoch)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_dependencies_successor ON orchestration_task_dependencies(successor_task_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_dependencies_predecessor ON orchestration_task_dependencies(predecessor_task_id, created_at, id);
+
+-- orchestration_task_attempts: authoritative execution attempts with lease/fencing state
+CREATE TABLE IF NOT EXISTS orchestration_task_attempts (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  attempt_no INTEGER NOT NULL,
+  worker_id TEXT NOT NULL DEFAULT '',
+  executor_id TEXT NOT NULL DEFAULT '',
+  worker_lease_token TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('created', 'claimed', 'binding', 'running', 'completed', 'failed', 'parked', 'lost')),
+  claim_epoch INTEGER NOT NULL DEFAULT 0,
+  claim_token TEXT NOT NULL DEFAULT '',
+  lease_expires_at TEXT,
+  last_heartbeat_at TEXT,
+  input_manifest_id TEXT REFERENCES orchestration_input_manifests(id) ON DELETE SET NULL,
+  park_checkpoint_id TEXT REFERENCES orchestration_human_checkpoints(id) ON DELETE SET NULL,
+  session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,
+  failure_class TEXT NOT NULL DEFAULT '',
+  terminal_reason TEXT NOT NULL DEFAULT '',
+  started_at TEXT,
+  finished_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_task_attempts_task_attempt_no_unique UNIQUE (task_id, attempt_no),
+  CONSTRAINT orchestration_task_attempts_id_run_task_unique UNIQUE (id, run_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_attempts_run_created_at ON orchestration_task_attempts(run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_attempts_task_created_at ON orchestration_task_attempts(task_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_attempts_status_created_at ON orchestration_task_attempts(status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_attempts_lease_expires_at ON orchestration_task_attempts(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_attempts_session_id ON orchestration_task_attempts(session_id) WHERE session_id IS NOT NULL;
+
+-- orchestration_task_verifications: authoritative verifier work queue
+CREATE TABLE IF NOT EXISTS orchestration_task_verifications (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL UNIQUE REFERENCES orchestration_tasks(id) ON DELETE CASCADE,
+  result_id TEXT NOT NULL UNIQUE REFERENCES orchestration_task_results(id) ON DELETE CASCADE,
+  attempt_no INTEGER NOT NULL DEFAULT 1,
+  worker_id TEXT NOT NULL DEFAULT '',
+  executor_id TEXT NOT NULL DEFAULT '',
+  worker_lease_token TEXT NOT NULL DEFAULT '',
+  verifier_profile TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('created', 'claimed', 'running', 'completed', 'failed', 'lost')),
+  claim_epoch INTEGER NOT NULL DEFAULT 0,
+  claim_token TEXT NOT NULL DEFAULT '',
+  lease_expires_at TEXT,
+  last_heartbeat_at TEXT,
+  session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,
+  verdict TEXT NOT NULL DEFAULT '' CHECK (verdict IN ('', 'accepted', 'rejected')),
+  summary TEXT NOT NULL DEFAULT '',
+  failure_class TEXT NOT NULL DEFAULT '',
+  terminal_reason TEXT NOT NULL DEFAULT '',
+  started_at TEXT,
+  finished_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_task_verifications_id_run_task_unique UNIQUE (id, run_id, task_id),
+  CONSTRAINT orchestration_task_verifications_id_run_result_unique UNIQUE (id, run_id, result_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_verifications_run_status ON orchestration_task_verifications(run_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_verifications_claim_queue ON orchestration_task_verifications(status, verifier_profile, created_at, id) WHERE status = 'created';
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_verifications_session_id ON orchestration_task_verifications(session_id) WHERE session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orchestration_task_verifications_lease_expiry ON orchestration_task_verifications(lease_expires_at, id) WHERE status IN ('claimed', 'running') AND lease_expires_at IS NOT NULL;
+
+-- orchestration_events: committed orchestration event timeline
+CREATE TABLE IF NOT EXISTS orchestration_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  task_id TEXT,
+  attempt_id TEXT,
+  checkpoint_id TEXT,
+  seq INTEGER NOT NULL,
+  aggregate_type TEXT NOT NULL,
+  aggregate_id TEXT NOT NULL,
+  aggregate_version INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  causation_event_id TEXT,
+  correlation_id TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL DEFAULT '',
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  published_at TEXT,
+  CONSTRAINT orchestration_events_run_seq_unique UNIQUE (run_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_events_run_seq ON orchestration_events(run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_orchestration_events_task_seq ON orchestration_events(task_id, seq) WHERE task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orchestration_events_checkpoint_seq ON orchestration_events(checkpoint_id, seq) WHERE checkpoint_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orchestration_events_unpublished ON orchestration_events(run_id, seq) WHERE published_at IS NULL;
+
+-- orchestration_projection_snapshots: materialized projection snapshots keyed by seq
+CREATE TABLE IF NOT EXISTS orchestration_projection_snapshots (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  run_id TEXT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+  projection_kind TEXT NOT NULL CHECK (projection_kind IN ('tasks', 'checkpoints', 'artifacts', 'results', 'run')),
+  seq INTEGER NOT NULL,
+  payload TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_projection_snapshots_unique UNIQUE (run_id, projection_kind, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_projection_snapshots_lookup ON orchestration_projection_snapshots(run_id, projection_kind, seq DESC);
+
+-- orchestration_idempotency_records: request dedupe for mutating control APIs
+CREATE TABLE IF NOT EXISTS orchestration_idempotency_records (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  tenant_id TEXT NOT NULL,
+  caller_subject TEXT NOT NULL,
+  method TEXT NOT NULL,
+  target_id TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'in_progress' CHECK (state IN ('in_progress', 'completed')),
+  response_payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT orchestration_idempotency_records_unique UNIQUE (tenant_id, caller_subject, method, target_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_idempotency_records_lookup ON orchestration_idempotency_records(tenant_id, caller_subject, method, target_id, idempotency_key);
+
+-- orchestration_workers: runtime worker leases and capabilities
+CREATE TABLE IF NOT EXISTS orchestration_workers (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+  executor_id TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  capabilities TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'unavailable')),
+  lease_token TEXT NOT NULL DEFAULT '',
+  last_heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  lease_expires_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_workers_status_lease_expires_at ON orchestration_workers(status, lease_expires_at);
