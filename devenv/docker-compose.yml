@@ -100,6 +100,7 @@ services:
       - ..:/workspace
       - go_mod_cache:/go/pkg/mod
       - go_build_cache:/root/.cache/go-build
+      - containerd_run:/run/containerd
       - containerd_data:/var/lib/containerd
       - server_cni_state:/var/lib/cni
       - memoh_data:/opt/memoh/data
@@ -172,6 +173,8 @@ volumes:
   go_mod_cache:
     driver: local
   go_build_cache:
+    driver: local
+  containerd_run:
     driver: local
   containerd_data:
     driver: local

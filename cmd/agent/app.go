@@ -13,6 +13,7 @@ import (
 	stdpath "path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,6 +52,7 @@ import (
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/conversation/flow"
 	"github.com/memohai/memoh/internal/db"
+	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
 	sqlitestore "github.com/memohai/memoh/internal/db/sqlite/store"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -81,6 +83,8 @@ import (
 	netctl "github.com/memohai/memoh/internal/network"
 	"github.com/memohai/memoh/internal/network/kubeapi"
 	netoverlay "github.com/memohai/memoh/internal/network/overlay"
+	"github.com/memohai/memoh/internal/orchestration"
+	"github.com/memohai/memoh/internal/orchestrationagent"
 	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 	"github.com/memohai/memoh/internal/policy"
 	"github.com/memohai/memoh/internal/providers"
@@ -219,6 +223,13 @@ func provideDBQueries(cfg config.Config, postgresStore *postgresstore.Store, sql
 	}
 }
 
+func providePostgresSQLCQueries(cfg config.Config, postgresStore *postgresstore.Store) *dbsqlc.Queries {
+	if db.DriverFromConfig(cfg) != db.DriverPostgres || postgresStore == nil {
+		return nil
+	}
+	return postgresStore.SQLC()
+}
+
 func provideAccountStore(cfg config.Config, postgresStore *postgresstore.Store, sqliteStore *sqlitestore.Store) (dbstore.AccountStore, error) {
 	switch db.DriverFromConfig(cfg) {
 	case db.DriverPostgres:
@@ -347,6 +358,61 @@ func provideHeartbeatSessionCreator(sessionService *sessionpkg.Service) heartbea
 
 func provideScheduleSessionCreator(sessionService *sessionpkg.Service) schedule.SessionCreator {
 	return &sessionCreatorAdapter{svc: sessionService}
+}
+
+func provideOrchestrationStore(cfg config.Config, pool *pgxpool.Pool, postgresQueries *dbsqlc.Queries, sqliteStore *sqlitestore.Store) orchestration.Store {
+	switch db.DriverFromConfig(cfg) {
+	case db.DriverPostgres:
+		if pool == nil || postgresQueries == nil {
+			return nil
+		}
+		return orchestration.NewPostgresStore(pool, postgresQueries)
+	case db.DriverSQLite:
+		return sqlitestore.NewOrchestrationStore(sqliteStore)
+	default:
+		return nil
+	}
+}
+
+func provideOrchestrationService(log *slog.Logger, store orchestration.Store) *orchestration.Service {
+	if store == nil {
+		return nil
+	}
+	return orchestration.NewService(log, store)
+}
+
+func provideOrchestrationExecutor(
+	log *slog.Logger,
+	orchestrationStore orchestration.Store,
+	store dbstore.Queries,
+	orchestrationService *orchestration.Service,
+	agent *agentpkg.Agent,
+	settingsService *settings.Service,
+	modelsService *models.Service,
+	sessionService *sessionpkg.Service,
+	messageService *message.DBService,
+	providers []agenttools.ToolProvider,
+	rc *boot.RuntimeConfig,
+) *orchestrationagent.Executor {
+	if orchestrationService == nil || agent == nil || orchestrationStore == nil {
+		return nil
+	}
+	executor := orchestrationagent.New(orchestrationagent.Deps{
+		Logger:        log,
+		Queries:       orchestrationStore.Queries(),
+		Store:         store,
+		Orchestration: orchestrationService,
+		Agent:         agent,
+		Settings:      settingsService,
+		Models:        modelsService,
+		Sessions:      sessionService,
+		Messages:      messageService,
+		BaseProviders: providers,
+		ClockLocation: rc.TimezoneLocation,
+	})
+	orchestrationService.SetAttemptExecutor(executor)
+	orchestrationService.SetVerificationExecutor(executor)
+	return executor
 }
 
 func provideAgent(log *slog.Logger, provider bridge.Provider) *agentpkg.Agent {
@@ -579,13 +645,24 @@ func provideBackgroundManager(log *slog.Logger) *background.Manager {
 	return background.New(log)
 }
 
-func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, registry *channel.Registry, routeService *route.DBService, scheduleService *schedule.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *workspace.Manager, mediaService *media.Service, memoryRegistry *memprovider.Registry, emailService *emailpkg.Service, emailManager *emailpkg.Manager, fedGateway *handlers.MCPFederationGateway, mcpConnService *mcp.ConnectionService, modelsService *models.Service, queries dbstore.Queries, audioService *audiopkg.Service, sessionService *sessionpkg.Service, bgManager *background.Manager) []agenttools.ToolProvider {
+type optionalToolProviders []agenttools.ToolProvider
+
+func provideOrchestrationToolProviders(log *slog.Logger, orchestrationService *orchestration.Service, botService *bots.Service) optionalToolProviders {
+	if orchestrationService == nil {
+		return nil
+	}
+	return optionalToolProviders{
+		agenttools.NewOrchestrationProvider(log, orchestrationService, botService),
+	}
+}
+
+func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, registry *channel.Registry, routeService *route.DBService, scheduleService *schedule.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *workspace.Manager, mediaService *media.Service, memoryRegistry *memprovider.Registry, emailService *emailpkg.Service, emailManager *emailpkg.Manager, fedGateway *handlers.MCPFederationGateway, mcpConnService *mcp.ConnectionService, modelsService *models.Service, queries dbstore.Queries, audioService *audiopkg.Service, sessionService *sessionpkg.Service, bgManager *background.Manager, optionalProviders optionalToolProviders) []agenttools.ToolProvider {
 	var assetResolver messaging.AssetResolver
 	if mediaService != nil {
 		assetResolver = &mediaAssetResolverAdapter{media: mediaService}
 	}
 	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService)
-	return []agenttools.ToolProvider{
+	providers := []agenttools.ToolProvider{
 		agenttools.NewMessageProvider(log, channelManager, channelManager, registry, assetResolver),
 		agenttools.NewContactsProvider(log, routeService),
 		agenttools.NewScheduleProvider(log, scheduleService),
@@ -603,6 +680,7 @@ func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, reg
 		agenttools.NewFederationProvider(log, fedSource),
 		agenttools.NewHistoryProvider(log, sessionService, queries),
 	}
+	return append(providers, optionalProviders...)
 }
 
 func provideMemoryHandler(log *slog.Logger, botService *bots.Service, accountService *accounts.Service, _ config.Config, provider bridge.Provider, memoryRegistry *memprovider.Registry, settingsService *settings.Service, _ *handlers.ContainerdHandler) *handlers.MemoryHandler {
@@ -912,6 +990,58 @@ func startHeartbeatService(lc fx.Lifecycle, heartbeatService *heartbeat.Service)
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			return heartbeatService.Bootstrap(ctx)
+		},
+	})
+}
+
+func startOrchestrationRuntime(lc fx.Lifecycle, orchestrationService *orchestration.Service, _ *orchestrationagent.Executor) {
+	if orchestrationService == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	lc.Append(fx.Hook{
+		OnStart: func(_ context.Context) error {
+			wg.Add(6)
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunPlannerLoop(ctx)
+			}()
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunSchedulerLoop(ctx)
+			}()
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunAttemptExecutorLoop(ctx)
+			}()
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunRecoveryLoop(ctx)
+			}()
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunVerificationRecoveryLoop(ctx)
+			}()
+			go func() {
+				defer wg.Done()
+				orchestrationService.RunVerifierLoop(ctx)
+			}()
+			return nil
+		},
+		OnStop: func(stopCtx context.Context) error {
+			cancel()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				wg.Wait()
+			}()
+			select {
+			case <-stopCtx.Done():
+				return stopCtx.Err()
+			case <-done:
+				return nil
+			}
 		},
 	})
 }
