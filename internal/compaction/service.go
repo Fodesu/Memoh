@@ -13,6 +13,7 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/models"
+	sessionpkg "github.com/memohai/memoh/internal/session"
 )
 
 // Service manages context compaction for bot conversations.
@@ -65,6 +66,16 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	sessionRow, err := s.queries.GetSessionByID(ctx, sessionUUID)
+	if err != nil {
+		s.completeLog(ctx, logRow.ID, "error", "", err.Error(), 0, nil, pgtype.UUID{})
+		return err
+	}
+	if sessionRow.Type == sessionpkg.TypeOrchestrationAttempt || sessionRow.Type == sessionpkg.TypeOrchestrationVerification {
+		s.completeLog(ctx, logRow.ID, "ok", "", "", 0, nil, pgtype.UUID{})
+		return nil
 	}
 
 	compactErr := s.doCompaction(ctx, logRow.ID, sessionUUID, cfg)

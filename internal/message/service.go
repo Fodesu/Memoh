@@ -18,6 +18,8 @@ import (
 	"github.com/memohai/memoh/internal/message/event"
 )
 
+var ErrSessionFinalized = errors.New("session is finalized")
+
 // DBService persists and reads bot history messages.
 type DBService struct {
 	queries   dbstore.Queries
@@ -51,6 +53,15 @@ func (s *DBService) Persist(ctx context.Context, input PersistInput) (Message, e
 	pgSessionID, err := parseOptionalUUID(input.SessionID)
 	if err != nil {
 		return Message{}, fmt.Errorf("invalid session id: %w", err)
+	}
+	if pgSessionID.Valid {
+		sessionRow, err := s.queries.GetSessionByID(ctx, pgSessionID)
+		if err != nil {
+			return Message{}, fmt.Errorf("load session: %w", err)
+		}
+		if sessionRow.FinalizedAt.Valid {
+			return Message{}, ErrSessionFinalized
+		}
 	}
 	pgSenderChannelIdentityID, err := parseOptionalUUID(input.SenderChannelIdentityID)
 	if err != nil {

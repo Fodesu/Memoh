@@ -16,13 +16,15 @@ import (
 var promptsFS embed.FS
 
 var (
-	systemChatTmpl      string
-	systemDiscussTmpl   string
-	systemHeartbeatTmpl string
-	systemScheduleTmpl  string
-	systemSubagentTmpl  string
-	scheduleTmpl        string
-	heartbeatTmpl       string
+	systemChatTmpl                      string
+	systemDiscussTmpl                   string
+	systemHeartbeatTmpl                 string
+	systemScheduleTmpl                  string
+	systemSubagentTmpl                  string
+	systemOrchestrationAttemptTmpl      string
+	systemOrchestrationVerificationTmpl string
+	scheduleTmpl                        string
+	heartbeatTmpl                       string
 
 	MemoryExtractPrompt string
 	MemoryUpdatePrompt  string
@@ -38,6 +40,8 @@ func init() {
 	systemHeartbeatTmpl = mustReadPrompt("prompts/system_heartbeat.md")
 	systemScheduleTmpl = mustReadPrompt("prompts/system_schedule.md")
 	systemSubagentTmpl = mustReadPrompt("prompts/system_subagent.md")
+	systemOrchestrationAttemptTmpl = mustReadPrompt("prompts/system_orchestration_attempt.md")
+	systemOrchestrationVerificationTmpl = mustReadPrompt("prompts/system_orchestration_verification.md")
 	scheduleTmpl = mustReadPrompt("prompts/schedule.md")
 	heartbeatTmpl = mustReadPrompt("prompts/heartbeat.md")
 	MemoryExtractPrompt = mustReadPrompt("prompts/memory_extract.md")
@@ -57,6 +61,8 @@ func init() {
 	systemHeartbeatTmpl = resolveIncludes(systemHeartbeatTmpl)
 	systemScheduleTmpl = resolveIncludes(systemScheduleTmpl)
 	systemSubagentTmpl = resolveIncludes(systemSubagentTmpl)
+	systemOrchestrationAttemptTmpl = resolveIncludes(systemOrchestrationAttemptTmpl)
+	systemOrchestrationVerificationTmpl = resolveIncludes(systemOrchestrationVerificationTmpl)
 }
 
 func mustReadPrompt(name string) string {
@@ -101,9 +107,21 @@ func selectSystemTemplate(sessionType string) string {
 		return systemScheduleTmpl
 	case "subagent":
 		return systemSubagentTmpl
+	case "orchestration_attempt":
+		return systemOrchestrationAttemptTmpl
+	case "orchestration_verification":
+		return systemOrchestrationVerificationTmpl
 	default:
 		return systemChatTmpl
 	}
+}
+
+func OrchestrationAttemptSystemPrompt() string {
+	return GenerateSystemPrompt(SystemPromptParams{SessionType: "orchestration_attempt"})
+}
+
+func OrchestrationVerificationSystemPrompt() string {
+	return GenerateSystemPrompt(SystemPromptParams{SessionType: "orchestration_verification"})
 }
 
 // GenerateSystemPrompt builds the complete system prompt from files, skills, and context.

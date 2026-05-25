@@ -82,6 +82,7 @@ type SessionContext struct {
 	SupportsImageInput bool
 	IsSubagent         bool
 	Skills             map[string]SkillDetail
+	Attachments        []Attachment
 	TimezoneLocation   *time.Location
 	Emitter            StreamEmitter
 }

@@ -9,6 +9,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/background"
+	"github.com/memohai/memoh/internal/agent/tools"
 )
 
 // SessionContext carries request-scoped identity and routing information.
@@ -64,6 +65,7 @@ type InjectMessage struct {
 type RunConfig struct {
 	Model              *sdk.Model
 	ReasoningEffort    string
+	ResponseFormat     *sdk.ResponseFormat
 	Messages           []sdk.Message
 	Query              string
 	System             string
@@ -72,6 +74,7 @@ type RunConfig struct {
 	SupportsToolCall   bool
 	DisplayEnabled     bool
 	InlineImages       []sdk.ImagePart
+	Attachments        []FileAttachment
 	Identity           SessionContext
 	Skills             []SkillEntry
 	LoopDetection      LoopDetectionConfig
@@ -113,6 +116,14 @@ type RunConfig struct {
 	BackgroundManager *background.Manager
 
 	ToolApprovalHandler func(ctx context.Context, call sdk.ToolCall) (sdk.ToolApprovalResult, error)
+
+	// ToolProviders overrides the agent's default provider set for isolated
+	// internal runs such as orchestration attempts.
+	ToolProviders []tools.ToolProvider
+
+	// ToolCallObserver receives start and finish callbacks for every tool call
+	// that actually executes inside the agent loop.
+	ToolCallObserver ToolCallObserver
 }
 
 // GenerateResult holds the result of a non-streaming agent invocation.

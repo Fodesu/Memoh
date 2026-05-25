@@ -40,3 +40,29 @@ func fileAttachmentFromBundle(bundle attachmentpkg.Bundle) FileAttachment {
 func fileAttachmentFromToolAttachment(att tools.Attachment) FileAttachment {
 	return fileAttachmentFromBundle(bundleFromToolAttachment(att))
 }
+
+func toolAttachmentFromFileAttachment(att FileAttachment) tools.Attachment {
+	return tools.Attachment{
+		Type:        att.Type,
+		Base64:      att.Base64,
+		Path:        att.Path,
+		URL:         att.URL,
+		PlatformKey: att.PlatformKey,
+		Mime:        att.Mime,
+		Name:        att.Name,
+		ContentHash: att.ContentHash,
+		Size:        att.Size,
+		Metadata:    att.Metadata,
+	}
+}
+
+func toolAttachmentsFromFileAttachments(atts []FileAttachment) []tools.Attachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]tools.Attachment, 0, len(atts))
+	for _, att := range atts {
+		out = append(out, toolAttachmentFromFileAttachment(att))
+	}
+	return out
+}

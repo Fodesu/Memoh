@@ -25,6 +25,7 @@ type Session struct {
 	Title                 string         `json:"title"`
 	Metadata              map[string]any `json:"metadata,omitempty"`
 	ParentSessionID       string         `json:"parent_session_id,omitempty"`
+	FinalizedAt           *time.Time     `json:"finalized_at,omitempty"`
 	CreatedAt             time.Time      `json:"created_at"`
 	UpdatedAt             time.Time      `json:"updated_at"`
 	RouteMetadata         map[string]any `json:"route_metadata,omitempty"`
@@ -37,6 +38,9 @@ const (
 	TypeSchedule  = "schedule"
 	TypeSubagent  = "subagent"
 	TypeDiscuss   = "discuss"
+
+	TypeOrchestrationAttempt      = "orchestration_attempt"
+	TypeOrchestrationVerification = "orchestration_verification"
 )
 
 // CreateInput holds input for creating a new session.
@@ -234,6 +238,19 @@ func (s *Service) Touch(ctx context.Context, sessionID string) error {
 	return s.queries.TouchSession(ctx, pgID)
 }
 
+// Finalize marks a background execution transcript immutable.
+func (s *Service) Finalize(ctx context.Context, sessionID string) (Session, error) {
+	pgID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return Session{}, fmt.Errorf("invalid session id: %w", err)
+	}
+	row, err := s.queries.FinalizeSession(ctx, pgID)
+	if err != nil {
+		return Session{}, err
+	}
+	return toSession(row), nil
+}
+
 // SetRouteActiveSession sets the active session for a route.
 func (s *Service) SetRouteActiveSession(ctx context.Context, routeID, sessionID string) error {
 	pgRouteID, err := dbpkg.ParseUUID(routeID)
@@ -309,6 +326,7 @@ func toSession(row sqlc.BotSession) Session {
 		Title:           row.Title,
 		Metadata:        parseJSONMap(row.Metadata),
 		ParentSessionID: parentID,
+		FinalizedAt:     optionalTime(row.FinalizedAt),
 		CreatedAt:       row.CreatedAt.Time,
 		UpdatedAt:       row.UpdatedAt.Time,
 	}
@@ -339,9 +357,18 @@ func toSessionFromListRow(row sqlc.ListSessionsByBotRow) Session {
 		Type:                  row.Type,
 		Title:                 row.Title,
 		Metadata:              parseJSONMap(row.Metadata),
+		FinalizedAt:           optionalTime(row.FinalizedAt),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 		RouteMetadata:         parseJSONMap(row.RouteMetadata),
 		RouteConversationType: dbpkg.TextToString(row.RouteConversationType),
 	}
+}
+
+func optionalTime(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	t := value.Time
+	return &t
 }
