@@ -409,6 +409,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		runCfg.Query = headerifiedQuery
 	}
 	runCfg.InlineImages = extractNativeImageParts(mergedAttachments)
+	runCfg.Attachments = extractToolAttachmentRefs(mergedAttachments)
 
 	var injectedRecords *[]conversation.InjectedMessageRecord
 	if req.InjectCh != nil {
@@ -998,4 +999,37 @@ func extractNativeImageParts(attachments []any) []sdk.ImagePart {
 		})
 	}
 	return parts
+}
+
+func extractToolAttachmentRefs(attachments []any) []agentpkg.FileAttachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]agentpkg.FileAttachment, 0, len(attachments))
+	for _, att := range attachments {
+		ga, ok := att.(gatewayAttachment)
+		if !ok {
+			continue
+		}
+		ref := agentpkg.FileAttachment{
+			Type:        strings.TrimSpace(ga.Type),
+			Path:        strings.TrimSpace(ga.FallbackPath),
+			Mime:        strings.TrimSpace(ga.Mime),
+			Name:        strings.TrimSpace(ga.Name),
+			ContentHash: strings.TrimSpace(ga.ContentHash),
+			Size:        ga.Size,
+			Metadata:    ga.Metadata,
+		}
+		if strings.TrimSpace(ref.Path) == "" && ga.Transport == gatewayTransportToolFileRef {
+			ref.Path = strings.TrimSpace(ga.Payload)
+		}
+		if ga.Transport == gatewayTransportPublicURL {
+			ref.URL = strings.TrimSpace(ga.Payload)
+		}
+		if ref.ContentHash == "" && ref.Path == "" && ref.URL == "" {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
 }

@@ -245,6 +245,11 @@
       "generate_image": "生成图像",
       "spawn": "派遣 {count} 个子代理",
       "use_skill": "使用技能",
+      "start_orchestration_run": "启动编排",
+      "get_orchestration_status": "查看编排状态",
+      "cancel_orchestration_run": "取消编排",
+      "resolve_orchestration_checkpoint": "处理检查点",
+      "request_human_checkpoint_decision": "等待你的决定",
       "generic": "调用工具",
       "approve": "允许",
       "reject": "拒绝",
@@ -272,7 +277,22 @@
         "editOld": "原文",
         "editNew": "新文",
         "attachments": "附件",
-        "replyTo": "回复"
+        "replyTo": "回复",
+        "checkpoint": {
+          "blocksRun": "运行已暂停",
+          "timeoutAt": "{time} 超时",
+          "freeformPlaceholder": "输入你的回复…",
+          "submit": "提交",
+          "submitFailed": "提交检查点回复失败",
+          "stale": "该检查点已不再开放，编排已继续前进。",
+          "useDefault": "使用默认",
+          "useDefaultOption": "使用默认（{label}）",
+          "useDefaultFreeform": "使用默认回复",
+          "resolvedOption": "你选择了：{label}",
+          "resolvedFreeform": "你回复了：{input}",
+          "resolvedDefault": "你接受了默认值",
+          "resolvedRemote": "检查点已被处理"
+        }
       }
     },
     "unknownUser": "{platform}用户",

@@ -249,6 +249,11 @@
       "generate_image": "Generate image",
       "spawn": "Spawn {count} subagents",
       "use_skill": "Use skill",
+      "start_orchestration_run": "Start orchestration",
+      "get_orchestration_status": "Get orchestration status",
+      "cancel_orchestration_run": "Cancel orchestration",
+      "resolve_orchestration_checkpoint": "Resolve checkpoint",
+      "request_human_checkpoint_decision": "Awaiting your decision",
       "generic": "Tool",
       "approve": "Allow",
       "reject": "Reject",
@@ -276,7 +281,22 @@
         "editOld": "Old",
         "editNew": "New",
         "attachments": "Attachments",
-        "replyTo": "Reply to"
+        "replyTo": "Reply to",
+        "checkpoint": {
+          "blocksRun": "Run is paused",
+          "timeoutAt": "Times out at {time}",
+          "freeformPlaceholder": "Type your response…",
+          "submit": "Submit",
+          "submitFailed": "Failed to submit checkpoint response",
+          "stale": "This checkpoint is no longer open. The run has moved on.",
+          "useDefault": "Use default",
+          "useDefaultOption": "Use default ({label})",
+          "useDefaultFreeform": "Use default response",
+          "resolvedOption": "You chose: {label}",
+          "resolvedFreeform": "You answered: {input}",
+          "resolvedDefault": "You accepted the default",
+          "resolvedRemote": "Checkpoint already resolved"
+        }
       }
     },
     "unknownUser": "{platform} User",

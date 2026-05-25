@@ -1,11 +1,14 @@
 import type { Component } from 'vue'
 import {
+  Activity,
   AudioLines,
+  Ban,
   Brain,
   Calendar,
   CalendarCog,
   CalendarMinus,
   CalendarPlus,
+  Check,
   FilePen,
   FilePlus2,
   FileText,
@@ -17,7 +20,9 @@ import {
   Mail,
   MailOpen,
   MailPlus,
+  MessageCircleQuestion,
   MessagesSquare,
+  Play,
   Search,
   SearchCheck,
   Send,
@@ -38,6 +43,7 @@ import ToolCallDetailEmailRead from './tool-call-detail-email-read.vue'
 import ToolCallDetailExec from './tool-call-detail-exec.vue'
 import ToolCallDetailImage from './tool-call-detail-image.vue'
 import ToolCallDetailMemory from './tool-call-detail-memory.vue'
+import ToolCallDetailOrchestrationCheckpoint from './tool-call-detail-orchestration-checkpoint.vue'
 import ToolCallDetailSchedule from './tool-call-detail-schedule.vue'
 import ToolCallDetailSend from './tool-call-detail-send.vue'
 import ToolCallDetailSpawn from './tool-call-detail-spawn.vue'
@@ -375,6 +381,44 @@ export function getToolDisplay(block: ToolCallBlock): ToolDisplay {
         icon: Sparkles,
         actionKey: 'use_skill',
         target: pickString(input, 'skillName'),
+      }
+    case 'start_orchestration_run':
+      return {
+        icon: Play,
+        actionKey: 'start_orchestration_run',
+        target: truncate(pickString(input, 'goal'), 80),
+        fullTarget: pickString(input, 'goal'),
+        expandable: true,
+      }
+    case 'get_orchestration_status':
+      return {
+        icon: Activity,
+        actionKey: 'get_orchestration_status',
+        target: pickString(input, 'run_id'),
+        expandable: true,
+      }
+    case 'cancel_orchestration_run':
+      return {
+        icon: Ban,
+        actionKey: 'cancel_orchestration_run',
+        target: pickString(input, 'run_id'),
+      }
+    case 'resolve_orchestration_checkpoint':
+      return {
+        icon: Check,
+        actionKey: 'resolve_orchestration_checkpoint',
+        target: pickString(input, 'option'),
+        fullTarget: pickString(input, 'checkpoint_id'),
+        expandable: true,
+      }
+    case 'request_human_checkpoint_decision':
+      return {
+        icon: MessageCircleQuestion,
+        actionKey: 'request_human_checkpoint_decision',
+        target: '',
+        detail: ToolCallDetailOrchestrationCheckpoint,
+        expandable: true,
+        defaultOpen: true,
       }
     default:
       return {
