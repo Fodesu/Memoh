@@ -1,4 +1,4 @@
-## Service configuration
+## Service configuration for Linux/KVM Docker Compose deployments using Kata.
 [log]
 level = "info"
 format = "text"
@@ -43,8 +43,9 @@ runtime_dir = "/opt/memoh/runtime"
 # Embedded containerd socket inside the memoh-server container.
 socket_path = "/run/containerd/containerd.sock"
 namespace = "default"
-# Set to "io.containerd.kata.v2" only when the host provides Kata and KVM.
-runtime_type = "io.containerd.runc.v2"
+# Requires the docker-compose.kata.yml override to mount /dev/kvm and the host
+# Kata shim/config/assets into the server container.
+runtime_type = "io.containerd.kata.v2"
 
 [docker]
 # Used only when [container].backend = "docker"; the official Compose stack

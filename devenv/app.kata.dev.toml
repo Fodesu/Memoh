@@ -1,8 +1,9 @@
-# Memoh development configuration
-# Connects to devenv/docker-compose.yml infrastructure
+# Development configuration for validating containerd + Kata workspace runtime.
+# Requires a Linux host with KVM and Kata mounted into the dev server container
+# via devenv/docker-compose.kata.yml.
 
 [log]
-level = "debug"
+level = "info"
 format = "text"
 
 [server]
@@ -11,27 +12,21 @@ addr = ":8080"
 [admin]
 username = "admin"
 password = "admin123"
-email = "dev@memoh.local"
+email = "admin@memoh.local"
 
 [auth]
-jwt_secret = "memoh-dev-secret-do-not-use-in-production"
+jwt_secret = "DEV-CHANGE-ME"
 jwt_expires_in = "168h"
 
 timezone = "UTC"
 
 [database]
-# Supported values: "postgres" or "sqlite".
-# This dev profile uses PostgreSQL from devenv/docker-compose.yml.
 driver = "postgres"
 
 [container]
-# Development runs nested containerd inside the server container, matching the
-# production Docker Compose image.
 backend = "containerd"
-# registry = "memoh.cn"  # Uncomment for China mainland mirror
 default_image = "debian:bookworm-slim"
 image_pull_policy = "if_not_present"
-# containerd snapshotter and CNI settings for bot workspace containers.
 snapshotter = "overlayfs"
 data_root = "/opt/memoh/data"
 runtime_dir = "/opt/memoh/runtime"
@@ -39,18 +34,14 @@ cni_bin_dir = "/opt/cni/bin"
 cni_conf_dir = "/etc/cni/net.d"
 
 [containerd]
-# Embedded containerd socket inside the dev server container.
 socket_path = "/run/containerd/containerd.sock"
 namespace = "default"
-# Set to "io.containerd.kata.v2" only in a Linux/KVM test environment with Kata installed.
-runtime_type = "io.containerd.runc.v2"
+runtime_type = "io.containerd.kata.v2"
 
 [docker]
-# Used only when [container].backend = "docker"; the dev Compose stack uses containerd.
 host = ""
 
 [postgres]
-# Used only when [database].driver = "postgres".
 host = "postgres"
 port = 5432
 user = "memoh"
@@ -59,8 +50,6 @@ database = "memoh"
 sslmode = "disable"
 
 [sqlite]
-# Used only when [database].driver = "sqlite". The SQLite dev profile mounts
-# /opt/memoh/data to a persistent Docker volume.
 path = "/opt/memoh/data/memoh.db"
 wal = true
 busy_timeout_ms = 5000
@@ -83,5 +72,5 @@ base_url = "https://supermarket.memoh.ai"
 config_path = "conf/oauth-clients.toml"
 
 [web]
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 8082

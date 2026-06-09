@@ -49,6 +49,36 @@ Access:
 
 Default credentials: `admin` / `admin123` (change in `config.toml`)
 
+### Kata workspace runtime (Linux/KVM)
+
+Memoh can run containerd-backed bot workspaces through Kata Containers on a
+Linux/KVM host:
+
+```bash
+cp conf/app.kata.docker.toml config.kata.toml
+nano config.kata.toml   # Change passwords and JWT secret
+MEMOH_CONFIG=./config.kata.toml \
+  docker compose -f docker-compose.yml -f docker-compose.kata.yml up --build -d
+```
+
+Before using this path for production, run the full host, container, runtime,
+API, resource-limit, and data-restore verification on a dedicated clean
+Linux/KVM test host:
+
+```bash
+mise run test:kata:compose:e2e
+```
+
+The E2E task starts and tears down the root Compose stack itself. It refuses to
+run if root Compose containers such as `memoh-server` or `memoh-postgres`
+already exist, so run it before starting a manual production stack. For an
+already-running stack, use the manual production verification commands in the
+Kata runtime guide.
+
+See [docs/kata-containerd.md](docs/kata-containerd.md) for host requirements,
+custom Kata paths, dev validation, production verification, and the exact
+evidence required before treating the Kata path as verified.
+
 ## Docker Compose Profiles
 
 The base `docker-compose.yml` contains all services. Core services (postgres, server, agent, web) always start. Optional services are gated by profiles and only start when explicitly enabled:
