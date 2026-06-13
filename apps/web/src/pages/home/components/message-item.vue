@@ -141,7 +141,7 @@
               :smooth-streaming="message.streaming"
               :typewriter="message.streaming"
               :fade="message.streaming"
-              :render-code-blocks-as-pre="codeBlocksAsPre"
+              :code-renderer="codeBlocksAsPre ? 'pre' : 'shiki'"
               :code-block-monaco-options="codeBlockMonacoOptions"
               custom-id="chat-msg"
             />
@@ -298,7 +298,7 @@
                 :smooth-streaming="isBlockStreaming(segment.block)"
                 :typewriter="isBlockStreaming(segment.block)"
                 :fade="isBlockStreaming(segment.block)"
-                :render-code-blocks-as-pre="codeBlocksAsPre"
+                :code-renderer="codeBlocksAsPre ? 'pre' : 'shiki'"
                 :code-block-monaco-options="codeBlockMonacoOptions"
                 custom-id="chat-msg"
               />
@@ -345,6 +345,7 @@
 import { computed, onBeforeUnmount, ref, useTemplateRef, watch } from 'vue'
 import { CircleAlert, LoaderCircle } from 'lucide-vue-next'
 import { formatRelativeTime, formatDateTime } from '@/utils/date-time'
+import { warmCodeHighlightOnIdle } from '@/utils/warm-code-highlight'
 import { Avatar, AvatarImage, AvatarFallback } from '@memohai/ui'
 import MarkdownRender, { enableKatex, enableMermaid } from 'markstream-vue'
 import { useSettingsStore } from '@/store/settings'
@@ -380,6 +381,7 @@ import { useElementVisibility, useIntersectionObserver } from '@vueuse/core'
 
 enableKatex()
 enableMermaid()
+warmCodeHighlightOnIdle()
 
 
 const settingsStore = useSettingsStore()
