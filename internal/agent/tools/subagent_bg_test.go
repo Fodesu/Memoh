@@ -331,6 +331,8 @@ func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 
 	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "research_one", "task": "again"}); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected duplicate id error, got %v", err)
+	} else if strings.Contains(err.Error(), ToolSendMessage.String()) {
+		t.Fatalf("duplicate id error should not name sibling tools that may be unavailable, got %v", err)
 	}
 	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "1bad", "task": "bad"}); err == nil || !strings.Contains(err.Error(), "invalid agent id") {
 		t.Fatalf("expected invalid id error, got %v", err)

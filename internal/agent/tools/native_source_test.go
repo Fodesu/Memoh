@@ -358,6 +358,52 @@ func TestNativeToolSourceApprovalNotDeliveredRejectsWithoutWaiting(t *testing.T)
 	}
 }
 
+func TestNativeToolSourceAskUserRequiresInteractiveStream(t *testing.T) {
+	provider := NewAskUserProvider(nil)
+	source := NewNativeToolSource(nil, []ToolProvider{provider}, NativeToolSourceOptions{
+		AllowTools: map[string]bool{ToolAskUser.String(): true},
+	})
+
+	tools, err := source.ListTools(context.Background(), mcp.ToolSessionContext{
+		BotID:     "bot-1",
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("ListTools without stream: %v", err)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("tools without stream = %#v, want none", tools)
+	}
+
+	tools, err = source.ListTools(context.Background(), mcp.ToolSessionContext{
+		BotID:               "bot-1",
+		SessionID:           "session-1",
+		StreamID:            "stream-1",
+		CanRequestUserInput: true,
+	})
+	if err != nil {
+		t.Fatalf("ListTools with stream: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != ToolAskUser.String() {
+		t.Fatalf("tools with stream = %#v, want ask_user", tools)
+	}
+	if !strings.Contains(tools[0].Description, "## User Input") || !strings.Contains(tools[0].Description, "`ask_user`") {
+		t.Fatalf("ask_user description should include usage guidance, got:\n%s", tools[0].Description)
+	}
+}
+
+func nativeAskUserSession(toolCallID string) mcp.ToolSessionContext {
+	return mcp.ToolSessionContext{
+		BotID:               "bot-1",
+		SessionID:           "session-1",
+		StreamID:            "stream-1",
+		ToolCallID:          toolCallID,
+		ChannelIdentityID:   "user-1",
+		RuntimeID:           "runtime-1",
+		CanRequestUserInput: true,
+	}
+}
+
 func TestNativeToolSourceAskUserWaitsForInputAndPublishesRequest(t *testing.T) {
 	provider := NewAskUserProvider(nil)
 	userInput := &nativeSourceUserInput{
@@ -395,14 +441,7 @@ func TestNativeToolSourceAskUserWaitsForInputAndPublishesRequest(t *testing.T) {
 		ToolEvents: toolEvents,
 	})
 
-	result, err := source.CallTool(context.Background(), mcp.ToolSessionContext{
-		BotID:             "bot-1",
-		SessionID:         "session-1",
-		StreamID:          "stream-1",
-		ToolCallID:        "mcp-http-call-1",
-		ChannelIdentityID: "user-1",
-		RuntimeID:         "runtime-1",
-	}, ToolAskUser.String(), map[string]any{
+	result, err := source.CallTool(context.Background(), nativeAskUserSession("mcp-http-call-1"), ToolAskUser.String(), map[string]any{
 		"questions": []any{
 			map[string]any{
 				"text": "Pick plans",
@@ -479,12 +518,7 @@ func TestNativeToolSourceAskUserRejectsExistingResolvedRequest(t *testing.T) {
 		ToolEvents: toolEvents,
 	})
 
-	_, err := source.CallTool(context.Background(), mcp.ToolSessionContext{
-		BotID:      "bot-1",
-		SessionID:  "session-1",
-		StreamID:   "stream-1",
-		ToolCallID: "mcp-http-call-1",
-	}, ToolAskUser.String(), map[string]any{
+	_, err := source.CallTool(context.Background(), nativeAskUserSession("mcp-http-call-1"), ToolAskUser.String(), map[string]any{
 		"questions": []any{
 			map[string]any{"text": "Question?", "kind": "text"},
 		},
@@ -512,12 +546,7 @@ func TestNativeToolSourceAskUserAbortCancelsAfterReleasingWaiter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := source.CallTool(ctx, mcp.ToolSessionContext{
-		BotID:      "bot-1",
-		SessionID:  "session-1",
-		StreamID:   "stream-1",
-		ToolCallID: "mcp-http-call-1",
-	}, ToolAskUser.String(), map[string]any{
+	_, err := source.CallTool(ctx, nativeAskUserSession("mcp-http-call-1"), ToolAskUser.String(), map[string]any{
 		"questions": []any{
 			map[string]any{"text": "Question?", "kind": "text"},
 		},
@@ -555,12 +584,7 @@ func TestNativeToolSourceAskUserAbortReturnsLateAnswerWhenCancelLoses(t *testing
 		ToolEvents: &nativeSourceToolEvents{delivered: true},
 	})
 
-	result, err := source.CallTool(context.Background(), mcp.ToolSessionContext{
-		BotID:      "bot-1",
-		SessionID:  "session-1",
-		StreamID:   "stream-1",
-		ToolCallID: "mcp-http-call-1",
-	}, ToolAskUser.String(), map[string]any{
+	result, err := source.CallTool(context.Background(), nativeAskUserSession("mcp-http-call-1"), ToolAskUser.String(), map[string]any{
 		"questions": []any{
 			map[string]any{"text": "Question?", "kind": "text"},
 		},
@@ -592,12 +616,7 @@ func TestNativeToolSourceAskUserNotDeliveredCancelsWithoutWaiting(t *testing.T) 
 		ToolEvents: &nativeSourceToolEvents{delivered: false},
 	})
 
-	result, err := source.CallTool(context.Background(), mcp.ToolSessionContext{
-		BotID:      "bot-1",
-		SessionID:  "session-1",
-		StreamID:   "stream-1",
-		ToolCallID: "mcp-http-call-1",
-	}, ToolAskUser.String(), map[string]any{
+	result, err := source.CallTool(context.Background(), nativeAskUserSession("mcp-http-call-1"), ToolAskUser.String(), map[string]any{
 		"questions": []any{
 			map[string]any{"text": "Question?", "kind": "text"},
 		},
@@ -642,9 +661,10 @@ func TestNativeToolSourceAskUserKeepsMultipleRequestsIndependent(t *testing.T) {
 		ToolEvents: &nativeSourceToolEvents{delivered: true},
 	})
 	session := mcp.ToolSessionContext{
-		BotID:     "bot-1",
-		SessionID: "session-1",
-		StreamID:  "stream-1",
+		BotID:               "bot-1",
+		SessionID:           "session-1",
+		StreamID:            "stream-1",
+		CanRequestUserInput: true,
 	}
 
 	for idx, callID := range []string{"mcp-http-call-1", "mcp-http-call-2"} {

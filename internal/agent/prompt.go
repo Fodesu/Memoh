@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/memohai/memoh/internal/agent/sessionmode"
 	skillset "github.com/memohai/memoh/internal/skills"
 )
 
@@ -17,14 +18,15 @@ import (
 var promptsFS embed.FS
 
 var (
-	systemCommonTmpl  string
-	modeChatTmpl      string
-	modeDiscussTmpl   string
-	modeHeartbeatTmpl string
-	modeScheduleTmpl  string
-	modeSubagentTmpl  string
-	scheduleTmpl      string
-	heartbeatTmpl     string
+	systemCommonTmpl           string
+	modeChatTmpl               string
+	modeDiscussTmpl            string
+	modeHeartbeatTmpl          string
+	modeBackgroundDeliveryTmpl string
+	modeScheduleTmpl           string
+	modeSubagentTmpl           string
+	scheduleTmpl               string
+	heartbeatTmpl              string
 
 	includes map[string]string
 )
@@ -36,6 +38,7 @@ func init() {
 	modeChatTmpl = mustReadPrompt("prompts/mode_chat.md")
 	modeDiscussTmpl = mustReadPrompt("prompts/mode_discuss.md")
 	modeHeartbeatTmpl = mustReadPrompt("prompts/mode_heartbeat.md")
+	modeBackgroundDeliveryTmpl = mustReadPrompt("prompts/mode_background_delivery.md")
 	modeScheduleTmpl = mustReadPrompt("prompts/mode_schedule.md")
 	modeSubagentTmpl = mustReadPrompt("prompts/mode_subagent.md")
 	scheduleTmpl = mustReadPrompt("prompts/schedule.md")
@@ -50,6 +53,7 @@ func init() {
 	modeChatTmpl = resolveIncludes(modeChatTmpl)
 	modeDiscussTmpl = resolveIncludes(modeDiscussTmpl)
 	modeHeartbeatTmpl = resolveIncludes(modeHeartbeatTmpl)
+	modeBackgroundDeliveryTmpl = resolveIncludes(modeBackgroundDeliveryTmpl)
 	modeScheduleTmpl = resolveIncludes(modeScheduleTmpl)
 	modeSubagentTmpl = resolveIncludes(modeSubagentTmpl)
 }
@@ -88,13 +92,15 @@ func render(tmpl string, vars map[string]string) string {
 
 func selectModeTemplate(sessionType string) string {
 	switch sessionType {
-	case "discuss":
+	case sessionmode.Discuss:
 		return modeDiscussTmpl
-	case "heartbeat":
+	case sessionmode.Heartbeat:
 		return modeHeartbeatTmpl
-	case "schedule":
+	case sessionmode.BackgroundDelivery:
+		return modeBackgroundDeliveryTmpl
+	case sessionmode.Schedule:
 		return modeScheduleTmpl
-	case "subagent":
+	case sessionmode.Subagent:
 		return modeSubagentTmpl
 	default:
 		return modeChatTmpl
@@ -230,7 +236,7 @@ func buildFileSections(files []SystemFile) string {
 	return sb.String()
 }
 
-func buildMainAgentSections(platformIdentitiesSection, skillsSection, fileSections string) string {
+func buildMainAgentSections(platformIdentitiesSection string, skillsSection, fileSections string) string {
 	identitiesSection := render(includes["_identities"], map[string]string{
 		"platformIdentitiesSection": platformIdentitiesSection,
 	})

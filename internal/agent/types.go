@@ -82,6 +82,8 @@ type RunConfig struct {
 	Query                 string
 	System                string
 	SessionType           string
+	LiveToolStream        bool
+	CanRequestUserInput   bool
 	SupportsImageInput    bool
 	SupportsToolCall      bool
 	InlineImages          []sdk.ImagePart

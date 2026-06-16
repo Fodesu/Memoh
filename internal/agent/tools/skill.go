@@ -22,14 +22,19 @@ func NewSkillProvider(log *slog.Logger) *SkillProvider {
 }
 
 func (*SkillProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
-	if !available.Has(ToolUseSkill) {
+	useRef, ok := available.Ref(ToolUseSkill)
+	if !ok {
 		return ""
 	}
-	guidance := "Use " + toolRef(ToolUseSkill) + " to load a relevant skill's full instructions before following it."
-	if available.Has(ToolListSkills) {
-		guidance = "Use " + toolRef(ToolListSkills) + " to inspect skill names and descriptions when needed, then use " + toolRef(ToolUseSkill) + " to load a relevant skill's full instructions before following it."
+	var parts []string
+	if listRef, ok := available.Ref(ToolListSkills); ok {
+		parts = append(parts, "Use "+listRef+" to inspect skill names and descriptions when needed.")
 	}
-	return "### Skills\n\n" + guidance + " Do not activate skills that are unrelated to the current task."
+	parts = append(parts,
+		"Use "+useRef+" to load a relevant skill's full instructions before following it.",
+		"Do not activate skills that are unrelated to the current task.",
+	)
+	return usageSection("Skills", parts)
 }
 
 func (*SkillProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {

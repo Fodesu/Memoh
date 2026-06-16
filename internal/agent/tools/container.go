@@ -64,6 +64,42 @@ func (p *ContainerProvider) SetHookService(h *hooks.Service) {
 	p.hookService = h
 }
 
+func (*ContainerProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
+	var parts []string
+	if ref, ok := available.Ref(ToolRead); ok {
+		text := ref + ": read file content"
+		if session.SupportsImageInput {
+			text += " (also supports images: PNG, JPEG, GIF, WebP)"
+		}
+		parts = append(parts, text)
+	}
+	if ref, ok := available.Ref(ToolWrite); ok {
+		parts = append(parts, ref+": write file content")
+	}
+	if ref, ok := available.Ref(ToolList); ok {
+		parts = append(parts, ref+": list directory entries")
+	}
+	if ref, ok := available.Ref(ToolEdit); ok {
+		parts = append(parts, ref+": replace exact text in a file")
+	}
+	if ref, ok := available.Ref(ToolApplyPatch); ok {
+		parts = append(parts, ref+": apply a patch to files")
+	}
+	if ref, ok := available.Ref(ToolExec); ok {
+		parts = append(parts, ref+": execute command")
+	}
+	if ref, ok := available.Ref(ToolListBackground); ok {
+		parts = append(parts, ref+": list background commands")
+	}
+	if ref, ok := available.Ref(ToolGetBackgroundStatus); ok {
+		parts = append(parts, ref+": inspect a background command")
+	}
+	if ref, ok := available.Ref(ToolKillBackground); ok {
+		parts = append(parts, ref+": stop a background command")
+	}
+	return usageSection("Basic Tools", parts)
+}
+
 func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
 	workspace := p.resolveToolWorkspace(ctx, session)
 	wd := workspace.defaultWorkDir
@@ -416,7 +452,7 @@ func (p *ContainerProvider) execRead(ctx context.Context, session SessionContext
 	const maxReadBytes = 16 * 1024 * 1024 // 16 MB
 	if stat, err := client.Stat(opCtx, filePath); err == nil && stat != nil {
 		if stat.GetSize() > maxReadBytes {
-			return nil, fmt.Errorf("file is too large (%d bytes, limit %d bytes). Use exec with head/tail/sed for partial reads", stat.GetSize(), maxReadBytes)
+			return nil, fmt.Errorf("file is too large (%d bytes, limit %d bytes). The read tool cannot read files above this limit", stat.GetSize(), maxReadBytes)
 		}
 	}
 

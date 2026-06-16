@@ -70,7 +70,7 @@ func (a *Agent) Generate(ctx context.Context, cfg RunConfig) (*GenerateResult, e
 }
 
 func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCall) (sdk.ToolResultPart, error) {
-	sdkTools, _, err := a.assembleTools(ctx, cfg, tools.StreamEmitter(func(tools.ToolStreamEvent) {}))
+	sdkTools, _, err := a.assembleTools(ctx, cfg, nil, false)
 	if err != nil {
 		return sdk.ToolResultPart{}, fmt.Errorf("assemble tools: %w", err)
 	}
@@ -144,7 +144,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	if cfg.SupportsToolCall {
 		var toolUsage string
 		var err error
-		sdkTools, toolUsage, err = a.assembleTools(streamCtx, cfg, streamEmitter)
+		sdkTools, toolUsage, err = a.assembleTools(streamCtx, cfg, streamEmitter, cfg.LiveToolStream)
 		if err != nil {
 			turnError = fmt.Sprintf("assemble tools: %v", err)
 			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
@@ -617,7 +617,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if cfg.SupportsToolCall {
 		var toolUsage string
 		var err error
-		sdkTools, toolUsage, err = a.assembleTools(genCtx, cfg, collectEmitter)
+		sdkTools, toolUsage, err = a.assembleTools(genCtx, cfg, collectEmitter, false)
 		if err != nil {
 			return nil, fmt.Errorf("assemble tools: %w", err)
 		}
@@ -805,7 +805,7 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 // (see tools.ToolUsage). emitter is injected into the session context so that
 // tools targeting the current conversation can push side-effect events
 // (attachments, reactions, speech) directly into the agent stream.
-func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.StreamEmitter) ([]sdk.Tool, string, error) {
+func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.StreamEmitter, liveStream bool) ([]sdk.Tool, string, error) {
 	if len(a.toolProviders) == 0 {
 		return nil, "", nil
 	}
@@ -818,20 +818,22 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 		}
 	}
 	session := tools.SessionContext{
-		BotID:              cfg.Identity.BotID,
-		ChatID:             cfg.Identity.ChatID,
-		SessionID:          cfg.Identity.SessionID,
-		SessionType:        cfg.SessionType,
-		ChannelIdentityID:  cfg.Identity.ChannelIdentityID,
-		SessionToken:       cfg.Identity.SessionToken,
-		CurrentPlatform:    cfg.Identity.CurrentPlatform,
-		ReplyTarget:        cfg.Identity.ReplyTarget,
-		ConversationType:   cfg.Identity.ConversationType,
-		SupportsImageInput: cfg.SupportsImageInput,
-		IsSubagent:         cfg.Identity.IsSubagent,
-		Skills:             skillsMap,
-		TimezoneLocation:   cfg.Identity.TimezoneLocation,
-		Emitter:            emitter,
+		BotID:               cfg.Identity.BotID,
+		ChatID:              cfg.Identity.ChatID,
+		SessionID:           cfg.Identity.SessionID,
+		SessionType:         cfg.SessionType,
+		ChannelIdentityID:   cfg.Identity.ChannelIdentityID,
+		SessionToken:        cfg.Identity.SessionToken,
+		CurrentPlatform:     cfg.Identity.CurrentPlatform,
+		ReplyTarget:         cfg.Identity.ReplyTarget,
+		ConversationType:    cfg.Identity.ConversationType,
+		CanRequestUserInput: cfg.CanRequestUserInput,
+		SupportsImageInput:  cfg.SupportsImageInput,
+		IsSubagent:          cfg.Identity.IsSubagent,
+		Skills:              skillsMap,
+		TimezoneLocation:    cfg.Identity.TimezoneLocation,
+		Emitter:             emitter,
+		LiveStream:          liveStream,
 	}
 
 	var allTools []sdk.Tool

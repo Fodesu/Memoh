@@ -54,21 +54,18 @@ func NewHistoryProvider(log *slog.Logger, sessions SessionLister, messages Histo
 	}
 }
 
-func (p *HistoryProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
+func (*HistoryProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
 	var parts []string
-	if available.Has(ToolListSessions) {
-		parts = append(parts, "Use "+toolRef(ToolListSessions)+" to discover conversations and session IDs.")
+	if ref, ok := available.Ref(ToolListSessions); ok {
+		parts = append(parts, ref+": List all chat sessions with their bound contact/route info. Filter by `type` (chat/heartbeat/schedule) or `platform`.")
 	}
-	if available.Has(ToolGetMessages) {
-		parts = append(parts, "Use "+toolRef(ToolGetMessages)+" to read recent messages from the current or selected session.")
+	if ref, ok := available.Ref(ToolGetMessages); ok {
+		parts = append(parts, ref+": Get recent messages from the current or selected session.")
 	}
-	if available.Has(ToolSearchMessages) {
-		parts = append(parts, "Use "+toolRef(ToolSearchMessages)+" to look up past messages by keyword, time range, session, contact, or role.")
+	if ref, ok := available.Ref(ToolSearchMessages); ok {
+		parts = append(parts, ref+": Search past message history. All parameters are optional: `start_time` / `end_time`, `keyword`, `session_id`, `contact_id`, and `role`.")
 	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "### Message history\n\n" + strings.Join(parts, " ")
+	return usageSection("Sessions & History", parts)
 }
 
 func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]sdk.Tool, error) {

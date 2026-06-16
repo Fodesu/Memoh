@@ -43,7 +43,7 @@ func TestToolGatewayMiddlewareScopesRuntimeToolCallsToActivePrompts(t *testing.T
 }
 
 func TestToolSessionContextFromHTTPParsesSupportsImageInput(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "http://example.test/tools", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.test/tools", nil)
 	if err != nil {
 		t.Fatalf("NewRequest error = %v", err)
 	}

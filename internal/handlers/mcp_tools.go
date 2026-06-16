@@ -37,7 +37,7 @@ func (h *ContainerdHandler) SetToolSessionContextStore(store *mcpgw.ToolSessionC
 // acpRuntimeContextResolver resolves the trusted tool context of a live ACP
 // runtime from its stable, server-generated runtime ID.
 type acpRuntimeContextResolver interface {
-	ResolveRuntimeToolContext(botID, runtimeID string) (mcpgw.ToolSessionContext, bool)
+	ResolveRuntimeToolContext(botID, runtimeID, toolToken string) (mcpgw.ToolSessionContext, bool)
 }
 
 func (h *ContainerdHandler) SetACPRuntimeResolver(resolver acpRuntimeContextResolver) {
@@ -75,7 +75,7 @@ func (h *ContainerdHandler) handleMCPToolsWithBotID(c echo.Context, botID string
 		if h.acpRuntimes == nil {
 			return echo.NewHTTPError(http.StatusNotFound, "runtime not found")
 		}
-		session, ok := h.acpRuntimes.ResolveRuntimeToolContext(botID, runtimeID)
+		session, ok := h.acpRuntimes.ResolveRuntimeToolContext(botID, runtimeID, c.Request().Header.Get(mcpgw.ToolHeaderRuntimeToken))
 		if !ok {
 			return echo.NewHTTPError(http.StatusNotFound, "runtime not found")
 		}
@@ -95,6 +95,7 @@ func (*ContainerdHandler) buildToolSessionContext(c echo.Context, botID string) 
 	botID = strings.TrimSpace(botID)
 	session := mcpgw.ToolSessionContextFromHTTP(c.Request(), botID)
 	session.BotID = botID
+	session.RuntimeToken = ""
 	session.ChannelIdentityID = ""
 	session.SessionToken = ""
 	// Public MCP clients cannot prove model-native image transport support.

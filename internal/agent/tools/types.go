@@ -9,6 +9,8 @@ import (
 	"time"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
+
+	"github.com/memohai/memoh/internal/agent/sessionmode"
 )
 
 // SkillDetail holds the description and content of a loadable skill.
@@ -71,20 +73,28 @@ type StreamEmitter func(ToolStreamEvent)
 
 // SessionContext carries request-scoped identity for tool execution.
 type SessionContext struct {
-	BotID              string
-	ChatID             string
-	SessionID          string
-	SessionType        string
-	ChannelIdentityID  string
-	SessionToken       string //nolint:gosec // carries session credential material at runtime
-	CurrentPlatform    string
-	ReplyTarget        string
-	ConversationType   string
-	SupportsImageInput bool
-	IsSubagent         bool
-	Skills             map[string]SkillDetail
-	TimezoneLocation   *time.Location
-	Emitter            StreamEmitter
+	BotID               string
+	ChatID              string
+	SessionID           string
+	SessionType         string
+	ChannelIdentityID   string
+	SessionToken        string //nolint:gosec // carries session credential material at runtime
+	CurrentPlatform     string
+	ReplyTarget         string
+	ConversationType    string
+	CanRequestUserInput bool
+	SupportsImageInput  bool
+	IsSubagent          bool
+	Skills              map[string]SkillDetail
+	TimezoneLocation    *time.Location
+	Emitter             StreamEmitter
+	LiveStream          bool
+}
+
+// CanAskUser reports whether ask_user can be both shown to the model and
+// delivered to the user in this run.
+func (s SessionContext) CanAskUser() bool {
+	return s.CanRequestUserInput && sessionmode.IsInteractive(s.SessionType)
 }
 
 // IsSameConversation reports whether the given platform+target pair refers to
@@ -103,6 +113,35 @@ func (s SessionContext) IsSameConversation(platform, target string) bool {
 		target == strings.TrimSpace(s.ReplyTarget)
 }
 
+// CanOmitMessagingTarget reports whether messaging tools can safely default to
+// the current conversation. Background sessions may have no live reply target,
+// so their usage guidance should ask for explicit platform/target instead.
+func (s SessionContext) CanOmitMessagingTarget() bool {
+	switch s.SessionType {
+	case sessionmode.Heartbeat, sessionmode.Schedule, sessionmode.BackgroundDelivery:
+		return false
+	default:
+		return strings.TrimSpace(s.CurrentPlatform) != "" &&
+			strings.TrimSpace(s.ReplyTarget) != ""
+	}
+}
+
+// CanUseLocalMessagingShortcut reports whether current-conversation side
+// effects can be represented by the live agent stream instead of the channel
+// sender. Non-interactive runs must use the real sender even when their target
+// equals the current conversation.
+func (s SessionContext) CanUseLocalMessagingShortcut() bool {
+	if !s.LiveStream || s.Emitter == nil || !s.CanOmitMessagingTarget() {
+		return false
+	}
+	switch s.SessionType {
+	case "", sessionmode.Chat:
+		return true
+	default:
+		return false
+	}
+}
+
 // FormatTime formats a time.Time using the session timezone (falls back to UTC).
 func (s SessionContext) FormatTime(t time.Time) string {
 	if s.TimezoneLocation != nil {
@@ -119,14 +158,18 @@ type ToolProvider interface {
 }
 
 // AvailableTools is the set of tool names registered for the current session.
-type AvailableTools map[string]struct{}
+// Keep the backing set private so Usage implementations must go through
+// Has/Ref/Refs and cannot hard-code string indexes.
+type AvailableTools struct {
+	names map[string]struct{}
+}
 
 func NewAvailableTools(tools []sdk.Tool) AvailableTools {
-	available := make(AvailableTools, len(tools))
+	available := AvailableTools{names: make(map[string]struct{}, len(tools))}
 	for _, tool := range tools {
 		name := strings.TrimSpace(tool.Name)
 		if name != "" {
-			available[name] = struct{}{}
+			available.names[name] = struct{}{}
 		}
 	}
 	return available
@@ -134,8 +177,57 @@ func NewAvailableTools(tools []sdk.Tool) AvailableTools {
 
 // Has reports whether a built-in tool name is registered for the current session.
 func (a AvailableTools) Has(name ToolName) bool {
-	_, ok := a[strings.TrimSpace(name.String())]
+	if a.names == nil {
+		return false
+	}
+	_, ok := a.names[strings.TrimSpace(name.String())]
 	return ok
+}
+
+// Ref returns a prompt-ready tool reference only when the tool is registered.
+func (a AvailableTools) Ref(name ToolName) (string, bool) {
+	if !a.Has(name) {
+		return "", false
+	}
+	return toolRef(name), true
+}
+
+// Refs returns prompt-ready tool references for the registered tools in order.
+func (a AvailableTools) Refs(names ...ToolName) []string {
+	refs := make([]string, 0, len(names))
+	for _, name := range names {
+		if ref, ok := a.Ref(name); ok {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func usageSection(title string, items []string) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			lines = append(lines, "- "+item)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "### " + title + "\n\n" + strings.Join(lines, "\n")
+}
+
+func joinRefs(refs []string, conjunction string) string {
+	switch len(refs) {
+	case 0:
+		return ""
+	case 1:
+		return refs[0]
+	case 2:
+		return refs[0] + " " + strings.TrimSpace(conjunction) + " " + refs[1]
+	default:
+		return strings.Join(refs[:len(refs)-1], ", ") + ", " + strings.TrimSpace(conjunction) + " " + refs[len(refs)-1]
+	}
 }
 
 // ToolUsage is an optional capability a ToolProvider may also implement to
@@ -145,9 +237,8 @@ func (a AvailableTools) Has(name ToolName) bool {
 // only when the same provider actually returns tools for the session, so the
 // guidance shares that provider's gating and stays in lockstep with the tools
 // that provider registers. available contains the complete registered tool set
-// for this session; only name cross-provider tools after checking
-// available.Has(ToolName), otherwise use generic wording. Return "" to
-// contribute nothing.
+// for this session; use available.Ref/Refs before naming cross-provider tools.
+// Return "" to contribute nothing.
 type ToolUsage interface {
 	Usage(ctx context.Context, session SessionContext, available AvailableTools) string
 }

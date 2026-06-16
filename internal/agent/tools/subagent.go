@@ -218,37 +218,40 @@ func (p *SpawnProvider) SetHookService(h *hooks.Service) {
 	p.hookService = h
 }
 
-// Usage frames how the agent-control tool group is meant to be used. Injected
-// only when spawn_agent is registered; subagents cannot spawn more agents.
-func (p *SpawnProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
-	if !available.Has(ToolSpawnAgent) {
+// Usage frames how the available agent-control tools are meant to be used.
+func (*SpawnProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
+	var parts []string
+	canStartBackground := false
+	if spawnRef, ok := available.Ref(ToolSpawnAgent); ok {
+		canStartBackground = true
+		parts = append(parts,
+			"Use "+spawnRef+" to create a managed subagent for an independent task.",
+			"Use subagents when work benefits from isolated context or can proceed while you continue. Don't use one for simple single-step work — just do it directly.",
+		)
+	}
+	if ref, ok := available.Ref(ToolSendMessage); ok {
+		canStartBackground = true
+		parts = append(parts, "Use "+ref+" to continue an existing agent with a follow-up.")
+	}
+	if backgroundTools := available.Refs(ToolListBackground, ToolGetBackgroundStatus, ToolKillBackground); len(backgroundTools) > 0 {
+		if canStartBackground {
+			parts = append(parts, "For long work, set `run_in_background: true`. The call returns a task ID immediately and you will be notified when the agent task finishes — do not poll or sleep while waiting.")
+		}
+		parts = append(parts, "Manage running agent tasks with "+joinRefs(backgroundTools, "and")+".")
+	}
+	if ref, ok := available.Ref(ToolWaitAgent); ok {
+		parts = append(parts, "Use "+ref+" when you need to wait briefly.")
+	}
+	if ref, ok := available.Ref(ToolListAgents); ok {
+		parts = append(parts, "Use "+ref+" to see agents created in the current session.")
+	}
+	if ref, ok := available.Ref(ToolSearchMessages); ok {
+		parts = append(parts, "Read a finished task's full transcript with "+ref+" using the session ID from its notification.")
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	parts := []string{
-		"Use " + toolRef(ToolSpawnAgent) + " for independent subtasks that benefit from a managed worker; for simple single-step work, just do it directly.",
-	}
-	if available.Has(ToolSendMessage) {
-		parts = append(parts, "Use "+toolRef(ToolSendMessage)+" to continue an existing worker.")
-	}
-	if available.Has(ToolWaitAgent) {
-		parts = append(parts, "Use "+toolRef(ToolWaitAgent)+" only when a short foreground wait is useful.")
-	}
-	if available.Has(ToolListAgents) {
-		parts = append(parts, "Use "+toolRef(ToolListAgents)+" to inspect workers created in the current session.")
-	}
-	if available.Has(ToolListBackground) || available.Has(ToolGetBackgroundStatus) || available.Has(ToolKillBackground) {
-		var backgroundTools []string
-		for _, name := range []ToolName{ToolListBackground, ToolGetBackgroundStatus, ToolKillBackground} {
-			if available.Has(name) {
-				backgroundTools = append(backgroundTools, toolRef(name))
-			}
-		}
-		parts = append(parts, "For long work set `run_in_background: true`; manage background tasks with "+strings.Join(backgroundTools, ", ")+".")
-	}
-	if available.Has(ToolSearchMessages) {
-		parts = append(parts, "Read a finished task's full transcript with "+toolRef(ToolSearchMessages)+" using the session ID from its notification.")
-	}
-	return "### Subagents\n\n" + strings.Join(parts, " ")
+	return usageSection("Subagents", parts)
 }
 
 func (p *SpawnProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
@@ -459,7 +462,7 @@ func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionConte
 		return nil, err
 	}
 	if existing, err := p.findAgent(ctx, session, agentID); err == nil && existing.AgentID != "" {
-		return nil, fmt.Errorf("agent %q already exists; use %s to continue it", agentID, ToolSendMessage.String())
+		return nil, fmt.Errorf("agent %q already exists; choose a different id or continue the existing agent if follow-up messaging is available", agentID)
 	} else if err != nil && !errors.Is(err, errAgentNotFound) {
 		return nil, err
 	}

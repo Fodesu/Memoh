@@ -34,6 +34,14 @@ func TestToolSessionContextMergePreservesSupportsImageInput(t *testing.T) {
 	}
 }
 
+func TestToolSessionContextMergePreservesUserInputCapability(t *testing.T) {
+	base := ToolSessionContext{BotID: "bot-1"}
+	merged := MergeToolSessionContext(base, ToolSessionContext{CanRequestUserInput: true})
+	if !merged.CanRequestUserInput {
+		t.Fatalf("CanRequestUserInput = false, want true")
+	}
+}
+
 func TestToolSessionContextStorePutPreservesExistingNonEmptyFields(t *testing.T) {
 	store := NewToolSessionContextStore()
 	store.Put(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"})

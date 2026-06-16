@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/agent/tools"
 )
 
@@ -19,9 +20,13 @@ type usageTestProvider struct {
 	usage         string
 	requireTool   tools.ToolName
 	missingMarker string
+	sessionSeen   *tools.SessionContext
 }
 
-func (p *usageTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]sdk.Tool, error) {
+func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContext) ([]sdk.Tool, error) {
+	if p.sessionSeen != nil {
+		*p.sessionSeen = session
+	}
 	if !p.emitTool {
 		return nil, nil
 	}
@@ -109,8 +114,112 @@ func TestGenerateInjectsToolUsageIntoModelSystem(t *testing.T) {
 	}
 
 	params := modelProvider.lastParams()
-	if !strings.Contains(params.System, "## Tool usage") || !strings.Contains(params.System, usageMarker) {
-		t.Fatalf("expected model system to contain injected usage, got %q", params.System)
+	wantSystem := "base system\n\n## Tool usage\n\n" + usageMarker
+	if params.System != wantSystem {
+		t.Fatalf("expected model system %q, got %q", wantSystem, params.System)
+	}
+}
+
+type usageStreamRecordingProvider struct {
+	usageRecordingProvider
+}
+
+func (p *usageStreamRecordingProvider) DoStream(_ context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+	p.mu.Lock()
+	p.params = append(p.params, params)
+	p.mu.Unlock()
+
+	ch := make(chan sdk.StreamPart, 4)
+	go func() {
+		defer close(ch)
+		ch <- &sdk.StartPart{}
+		ch <- &sdk.StartStepPart{}
+		ch <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}
+		ch <- &sdk.FinishPart{FinishReason: sdk.FinishReasonStop}
+	}()
+	return &sdk.StreamResult{Stream: ch}, nil
+}
+
+func TestStreamInjectsToolUsageIntoModelSystem(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageStreamRecordingProvider{}
+	a := newTestAgent(&usageTestProvider{emitTool: true, usage: usageMarker})
+
+	for range a.Stream(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "usage-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "base system",
+		Messages:         []sdk.Message{sdk.UserMessage("hi")},
+		SupportsToolCall: true,
+	}) {
+	}
+
+	params := modelProvider.lastParams()
+	wantSystem := "base system\n\n## Tool usage\n\n" + usageMarker
+	if params.System != wantSystem {
+		t.Fatalf("expected stream model system %q, got %q", wantSystem, params.System)
+	}
+}
+
+func TestStreamPassesLiveToolStreamFlagToTools(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		live bool
+	}{
+		{name: "internal stream", live: false},
+		{name: "live stream", live: true},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			modelProvider := &usageStreamRecordingProvider{}
+			var seen tools.SessionContext
+			a := newTestAgent(&usageTestProvider{emitTool: true, sessionSeen: &seen})
+
+			for range a.Stream(context.Background(), RunConfig{
+				Model: &sdk.Model{
+					ID:       "usage-model",
+					Provider: modelProvider,
+					Type:     sdk.ModelTypeChat,
+				},
+				System:           "base system",
+				Messages:         []sdk.Message{sdk.UserMessage("hi")},
+				SupportsToolCall: true,
+				LiveToolStream:   tc.live,
+			}) {
+			}
+			if seen.LiveStream != tc.live {
+				t.Fatalf("tool session LiveStream = %v, want %v", seen.LiveStream, tc.live)
+			}
+		})
+	}
+}
+
+func TestStreamOmitsToolUsageWhenToolCallingUnsupported(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageStreamRecordingProvider{}
+	a := newTestAgent(&usageTestProvider{emitTool: true, usage: usageMarker})
+
+	for range a.Stream(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "usage-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "base system",
+		Messages:         []sdk.Message{sdk.UserMessage("hi")},
+		SupportsToolCall: false,
+	}) {
+	}
+
+	params := modelProvider.lastParams()
+	if strings.Contains(params.System, "## Tool usage") || strings.Contains(params.System, usageMarker) {
+		t.Fatalf("expected stream model system to omit tool usage when tools are unsupported, got %q", params.System)
 	}
 }
 
@@ -142,7 +251,7 @@ func TestAssembleToolsInjectsUsageWhenProviderEmitsTools(t *testing.T) {
 	t.Parallel()
 	a := newTestAgent(&usageTestProvider{emitTool: true, usage: usageMarker})
 
-	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}))
+	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
 	if err != nil {
 		t.Fatalf("assembleTools error: %v", err)
 	}
@@ -161,7 +270,7 @@ func TestAssembleToolsOmitsUsageWhenProviderEmitsNoTools(t *testing.T) {
 	t.Parallel()
 	a := newTestAgent(&usageTestProvider{emitTool: false, usage: usageMarker})
 
-	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}))
+	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
 	if err != nil {
 		t.Fatalf("assembleTools error: %v", err)
 	}
@@ -173,11 +282,43 @@ func TestAssembleToolsOmitsUsageWhenProviderEmitsNoTools(t *testing.T) {
 	}
 }
 
+func TestAssembleToolsDoesNotExposeAskUserWithoutCapability(t *testing.T) {
+	t.Parallel()
+	a := newTestAgent(&tools.AskUserProvider{})
+
+	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{
+		SessionType: sessionmode.Chat,
+	}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
+	if err != nil {
+		t.Fatalf("assembleTools error: %v", err)
+	}
+	if len(gotTools) != 0 {
+		t.Fatalf("expected ask_user to be omitted without user input capability, got %d tools", len(gotTools))
+	}
+	if usage != "" {
+		t.Fatalf("expected no ask_user usage without user input capability, got %q", usage)
+	}
+
+	gotTools, usage, err = a.assembleTools(context.Background(), RunConfig{
+		SessionType:         sessionmode.Chat,
+		CanRequestUserInput: true,
+	}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
+	if err != nil {
+		t.Fatalf("assembleTools with capability error: %v", err)
+	}
+	if len(gotTools) != 1 || gotTools[0].Name != tools.ToolAskUser.String() {
+		t.Fatalf("expected ask_user when capability is present, got %#v", gotTools)
+	}
+	if !strings.Contains(usage, tools.ToolAskUser.String()) {
+		t.Fatalf("expected ask_user usage when capability is present, got %q", usage)
+	}
+}
+
 func TestAssembleToolsIgnoresProvidersWithoutUsage(t *testing.T) {
 	t.Parallel()
 	a := newTestAgent(plainTestProvider{})
 
-	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}))
+	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
 	if err != nil {
 		t.Fatalf("assembleTools error: %v", err)
 	}
@@ -205,7 +346,7 @@ func TestAssembleToolsGatesUsagePerProvider(t *testing.T) {
 		plainTestProvider{},
 	)
 
-	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}))
+	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
 	if err != nil {
 		t.Fatalf("assembleTools error: %v", err)
 	}
@@ -236,7 +377,7 @@ func TestAssembleToolsPassesCompleteAvailableToolSetToUsage(t *testing.T) {
 		plainTestProvider{},
 	)
 
-	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}))
+	gotTools, usage, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
 	if err != nil {
 		t.Fatalf("assembleTools error: %v", err)
 	}

@@ -35,11 +35,15 @@ func NewMemoryProvider(log *slog.Logger, registry *memprovider.Registry, setting
 	}
 }
 
-func (p *MemoryProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
-	if !available.Has(ToolSearchMemory) {
+func (*MemoryProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
+	ref, ok := available.Ref(ToolSearchMemory)
+	if !ok {
 		return ""
 	}
-	return "### Long-term memory\n\nUse " + toolRef(ToolSearchMemory) + " when the task may depend on durable user preferences, prior conversations, project context, or facts that may have fallen out of the visible chat history. Prefer the latest user message over stale memory when they conflict."
+	return usageSection("Long-term memory", []string{
+		"Use " + ref + " to recall durable user preferences, prior conversations, project context, and other long-term facts beyond the current context window.",
+		"When retrieved memory conflicts with the latest user message or visible context, treat the latest user message and current context as authoritative.",
+	})
 }
 
 func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {

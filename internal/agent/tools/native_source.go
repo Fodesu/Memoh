@@ -388,17 +388,18 @@ func (s *NativeToolSource) loadTools(ctx context.Context, session mcp.ToolSessio
 
 func sessionFromMCP(session mcp.ToolSessionContext) SessionContext {
 	return SessionContext{
-		BotID:              session.BotID,
-		ChatID:             firstNonEmpty(session.ChatID, session.BotID),
-		SessionID:          session.SessionID,
-		SessionType:        session.SessionType,
-		ChannelIdentityID:  session.ChannelIdentityID,
-		SessionToken:       session.SessionToken,
-		CurrentPlatform:    session.CurrentPlatform,
-		ReplyTarget:        session.ReplyTarget,
-		ConversationType:   session.ConversationType,
-		SupportsImageInput: session.SupportsImageInput,
-		IsSubagent:         session.IsSubagent,
+		BotID:               session.BotID,
+		ChatID:              firstNonEmpty(session.ChatID, session.BotID),
+		SessionID:           session.SessionID,
+		SessionType:         session.SessionType,
+		ChannelIdentityID:   session.ChannelIdentityID,
+		SessionToken:        session.SessionToken,
+		CurrentPlatform:     session.CurrentPlatform,
+		ReplyTarget:         session.ReplyTarget,
+		ConversationType:    session.ConversationType,
+		CanRequestUserInput: session.CanRequestUserInput,
+		SupportsImageInput:  session.SupportsImageInput,
+		IsSubagent:          session.IsSubagent,
 	}
 }
 

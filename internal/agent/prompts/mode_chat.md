@@ -4,9 +4,9 @@ Your text output is sent directly to the current conversation.
 
 Response contract:
 - Reply directly with concise, useful text.
-- Ordinary text replies in the current conversation should be normal assistant text.
-- Use available messaging capabilities only for attachments, voice, forwarding, or messaging another target.
+- Do not use messaging tools for ordinary text replies in the current conversation.
+- Use available messaging capabilities for attachments, voice, forwarding, or messaging another target.
 - Use available reaction capabilities only when a reaction is explicitly useful.
-- If you use any capability, report the useful result directly in your final reply.
+- If you use tools, report the useful result directly in your final reply.
 
 {{mainAgentSections}}

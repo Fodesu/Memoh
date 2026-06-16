@@ -73,41 +73,53 @@ func NewBrowserProvider(log *slog.Logger, settingsSvc *settings.Service, contain
 
 // Usage frames the workspace browser/desktop tool group. Injected only when
 // these tools are registered (display-enabled, non-subagent sessions).
-func (p *BrowserProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
+func (*BrowserProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
 	var parts []string
-	if available.Has(ToolBrowserObserve) && available.Has(ToolBrowserAction) {
-		parts = append(parts, "Prefer the browser tools ("+toolRef(ToolBrowserObserve)+", "+toolRef(ToolBrowserAction)+") for web pages.")
-	} else if available.Has(ToolBrowserObserve) {
-		parts = append(parts, "Use "+toolRef(ToolBrowserObserve)+" to inspect workspace browser pages.")
-	} else if available.Has(ToolBrowserAction) {
-		parts = append(parts, "Use "+toolRef(ToolBrowserAction)+" to operate the current workspace browser tab.")
+	browserRefs := available.Refs(ToolBrowserObserve, ToolBrowserAction)
+	switch len(browserRefs) {
+	case 2:
+		parts = append(parts, "**Browser** ("+strings.Join(browserRefs, ", ")+"): Web pages in Chrome. Observe before acting; prefer element refs from snapshot over CSS selectors.")
+	case 1:
+		if ref, ok := available.Ref(ToolBrowserObserve); ok {
+			parts = append(parts, "**Browser** ("+ref+"): Web pages in Chrome. Observe before acting; prefer element refs from snapshot over CSS selectors.")
+		} else {
+			parts = append(parts, "**Browser** ("+browserRefs[0]+"): Web pages in Chrome.")
+		}
 	}
-	if available.Has(ToolComputerObserve) && available.Has(ToolComputerAction) {
-		parts = append(parts, "Use the desktop tools ("+toolRef(ToolComputerObserve)+", "+toolRef(ToolComputerAction)+") for native dialogs, non-browser apps, or when the browser path fails.")
-	} else if available.Has(ToolComputerObserve) {
-		parts = append(parts, "Use "+toolRef(ToolComputerObserve)+" to inspect the broader workspace desktop.")
-	} else if available.Has(ToolComputerAction) {
-		parts = append(parts, "Use "+toolRef(ToolComputerAction)+" to operate the broader workspace desktop.")
+	desktopRefs := available.Refs(ToolComputerObserve, ToolComputerAction)
+	switch len(desktopRefs) {
+	case 2:
+		parts = append(parts, "**Computer** ("+strings.Join(desktopRefs, ", ")+"): Whole-desktop fallback for native dialogs, non-browser apps, or when the browser path fails. Start with a snapshot to get an accessibility tree with element refs, then drive actions with those refs; raw coordinates are a last-resort fallback.")
+	case 1:
+		if ref, ok := available.Ref(ToolComputerObserve); ok {
+			parts = append(parts, "**Computer** ("+ref+"): Whole-desktop fallback for native dialogs, non-browser apps, or when the browser path fails.")
+		} else {
+			parts = append(parts, "**Computer** ("+desktopRefs[0]+"): Whole-desktop fallback for native dialogs, non-browser apps, or when the browser path fails; raw coordinates are a last-resort fallback.")
+		}
+	}
+	if ref, ok := available.Ref(ToolBrowserRemoteSession); ok {
+		if len(browserRefs) > 0 || len(desktopRefs) > 0 {
+			parts = append(parts, ref+": Only when running Playwright or other CDP automation inside the workspace is clearly better than the GUI tools above.")
+		} else {
+			parts = append(parts, ref+": Use for code-driven Playwright or other CDP automation inside the workspace.")
+		}
+	}
+	hasObserve := available.Has(ToolBrowserObserve) || available.Has(ToolComputerObserve)
+	if hasObserve {
+		readHint := "the returned path can be used by later workspace actions when needed."
+		if session.SupportsImageInput {
+			if readRef, ok := available.Ref(ToolRead); ok {
+				readHint = "Read the returned path with " + readRef + " when you need the image."
+			}
+		}
+		parts = append(parts, "**Screenshots**: Observe tools save screenshots to a workspace path; they are not attached to the conversation. "+readHint)
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	hasObserve := available.Has(ToolBrowserObserve) || available.Has(ToolComputerObserve)
-	if hasObserve {
-		parts = append(parts, "Observe before acting and prefer element refs from a snapshot over coordinates or CSS selectors.")
-	}
-	if available.Has(ToolBrowserRemoteSession) {
-		parts = append(parts, "Use "+toolRef(ToolBrowserRemoteSession)+" only for code-driven Playwright/CDP automation.")
-	}
-	if hasObserve {
-		readHint := "the path can be used by later workspace actions when needed."
-		if session.SupportsImageInput && available.Has(ToolRead) {
-			readHint = "read that path with the " + toolRef(ToolRead) + " tool when you need the image."
-		}
-		parts = append(parts, "Observe tools save screenshots to a workspace path and do not attach them to the conversation — "+readHint)
-	}
-	return "### Workspace browser & desktop\n\n" +
-		"This bot has a headed workspace display. Use GUI tools only when the task needs on-screen interaction. " + strings.Join(parts, " ")
+	return usageSection("Workspace browser & desktop", append([]string{
+		"This bot has a headed workspace display (Chrome on a virtual desktop). Use GUI tools only when the task needs on-screen interaction.",
+	}, parts...))
 }
 
 func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
@@ -197,7 +209,7 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 		},
 		{
 			Name:        ToolBrowserRemoteSession.String(),
-			Description: "Advanced escape hatch for code-driven automation. Use only when writing or running Playwright/CDP code inside the bot workspace is clearly better than normal browser tools. Exposes the workspace Chrome CDP endpoint for chromium.connectOverCDP or other CDP clients.",
+			Description: "Advanced escape hatch for code-driven automation. Exposes the workspace Chrome CDP endpoint for chromium.connectOverCDP or other CDP clients.",
 			Parameters: browserObjectSchema(map[string]any{
 				"action":     map[string]any{"type": "string", "enum": []string{"create", "close", "status"}, "description": "Session action to perform."},
 				"session_id": map[string]any{"type": "string", "description": "Target/session ID returned by create or status."},

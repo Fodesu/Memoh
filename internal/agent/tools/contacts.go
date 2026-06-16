@@ -26,22 +26,28 @@ func NewContactsProvider(log *slog.Logger, routeService route.Service) *Contacts
 	}
 }
 
-// Usage describes how the contacts/messaging/history tools combine. It is
-// injected only when get_contacts is registered (main-agent sessions);
-// subagent sessions register none of these tools, so it never shows there.
-func (p *ContactsProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
-	if !available.Has(ToolGetContacts) {
+// Usage describes how get_contacts feeds other tools without restating those
+// tools' own usage blocks.
+func (*ContactsProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
+	contactsRef, ok := available.Ref(ToolGetContacts)
+	if !ok {
 		return ""
 	}
 	var parts []string
-	parts = append(parts, "Use "+toolRef(ToolGetContacts)+" to discover conversations and their reply targets.")
-	if available.Has(ToolSend) || available.Has(ToolSpeak) {
-		parts = append(parts, "Pass a target to a messaging tool to reach another channel or person; omit the target to act in the current conversation.")
+	parts = append(parts, "Use "+contactsRef+" to list all known contacts and conversations. It returns each route's platform, conversation type, and `target`.")
+	messageRefs := available.Refs(ToolSend, ToolSpeak)
+	if len(messageRefs) > 0 {
+		if session.CanOmitMessagingTarget() {
+			parts = append(parts, "For another channel/person, pass the returned `platform` and `target` to "+joinRefs(messageRefs, "or")+".")
+		} else {
+			parts = append(parts, "Pass the returned `platform` and `target` to "+joinRefs(messageRefs, "or")+" when this session needs to notify a contact.")
+		}
 	}
-	if available.Has(ToolListSessions) || available.Has(ToolSearchMessages) {
-		parts = append(parts, "Use the message-history tools to find earlier sessions and look up past messages.")
+	historyRefs := available.Refs(ToolListSessions, ToolGetMessages, ToolSearchMessages)
+	if len(historyRefs) > 0 {
+		parts = append(parts, "Use the returned route and conversation metadata to choose the right session or contact filters for "+joinRefs(historyRefs, "or")+".")
 	}
-	return "### Contacts, messaging & history\n\n" + strings.Join(parts, " ")
+	return usageSection("Contacts & Messaging", parts)
 }
 
 func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {

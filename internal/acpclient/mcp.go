@@ -14,6 +14,7 @@ const (
 	memohHeaderBotID              = mcpgw.ToolHeaderBotID
 	memohHeaderChatID             = mcpgw.ToolHeaderChatID
 	memohHeaderRuntimeID          = mcpgw.ToolHeaderRuntimeID
+	memohHeaderRuntimeToken       = mcpgw.ToolHeaderRuntimeToken
 	memohHeaderSessionID          = mcpgw.ToolHeaderSessionID
 	memohHeaderStreamID           = mcpgw.ToolHeaderStreamID
 	memohHeaderSessionType        = mcpgw.ToolHeaderSessionType
@@ -53,6 +54,7 @@ func memohToolsHTTPHeaders(session mcpgw.ToolSessionContext) []acp.HttpHeader {
 	add(memohHeaderBotID, session.BotID)
 	add(memohHeaderChatID, session.ChatID)
 	add(memohHeaderRuntimeID, session.RuntimeID)
+	add(memohHeaderRuntimeToken, session.RuntimeToken)
 	add(memohHeaderSessionID, session.SessionID)
 	add(memohHeaderStreamID, session.StreamID)
 	add(memohHeaderSessionType, session.SessionType)
