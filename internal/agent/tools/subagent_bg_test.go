@@ -299,14 +299,14 @@ func TestAgentControlToolSchemasDoNotReferenceSiblingTools(t *testing.T) {
 		}
 		schema := string(raw)
 		switch tool.Name {
-		case ToolSendMessage.String():
-			for _, absent := range []string{ToolSpawnAgent.String(), ToolListAgents.String()} {
+		case ToolSendMessage().String():
+			for _, absent := range []string{ToolSpawnAgent().String(), ToolListAgents().String()} {
 				if strings.Contains(schema, absent) {
 					t.Fatalf("%s schema references sibling tool %s:\n%s", tool.Name, absent, schema)
 				}
 			}
-		case ToolWaitAgent.String():
-			for _, absent := range []string{ToolSpawnAgent.String(), ToolSendMessage.String()} {
+		case ToolWaitAgent().String():
+			for _, absent := range []string{ToolSpawnAgent().String(), ToolSendMessage().String()} {
 				if strings.Contains(schema, absent) {
 					t.Fatalf("%s schema references sibling tool %s:\n%s", tool.Name, absent, schema)
 				}
@@ -331,7 +331,7 @@ func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 
 	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "research_one", "task": "again"}); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected duplicate id error, got %v", err)
-	} else if strings.Contains(err.Error(), ToolSendMessage.String()) {
+	} else if strings.Contains(err.Error(), ToolSendMessage().String()) {
 		t.Fatalf("duplicate id error should not name sibling tools that may be unavailable, got %v", err)
 	}
 	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "1bad", "task": "bad"}); err == nil || !strings.Contains(err.Error(), "invalid agent id") {

@@ -156,15 +156,16 @@ type PromptInput struct {
 	ChannelIdentityID string
 	// SessionToken is consumed only by Prompt, where it flows into the
 	// per-prompt tool context overlay. Ensure and SetModel ignore it.
-	SessionToken       string //nolint:gosec // runtime session credential, not a hardcoded secret.
-	CurrentPlatform    string
-	ReplyTarget        string
-	ConversationType   string
-	SupportsImageInput bool
-	ToolHTTPURL        string
-	ContextURI         string
-	ContextMarkdown    string
-	Sink               acpclient.EventSink
+	SessionToken        string //nolint:gosec // runtime session credential, not a hardcoded secret.
+	CurrentPlatform     string
+	ReplyTarget         string
+	ConversationType    string
+	CanRequestUserInput bool
+	SupportsImageInput  bool
+	ToolHTTPURL         string
+	ContextURI          string
+	ContextMarkdown     string
+	Sink                acpclient.EventSink
 }
 
 // CreateRuntimeInput describes a pre-session runtime creation request.
@@ -1153,6 +1154,7 @@ func (h *runtimeHandle) toolContext() mcp.ToolSessionContext {
 		return ctx
 	}
 	ctx.RuntimeActive = true
+	ctx.CanListUserInput = true
 	overlay := func(dst *string, value string) {
 		if value = strings.TrimSpace(value); value != "" {
 			*dst = value
@@ -1210,7 +1212,7 @@ func toolSessionContext(input PromptInput, h *runtimeHandle) acpclient.ToolSessi
 		CurrentPlatform:     input.CurrentPlatform,
 		ReplyTarget:         input.ReplyTarget,
 		ConversationType:    input.ConversationType,
-		CanRequestUserInput: strings.TrimSpace(input.StreamID) != "",
+		CanRequestUserInput: input.CanRequestUserInput,
 		IsSubagent:          false,
 		SupportsImageInput:  input.SupportsImageInput,
 	}

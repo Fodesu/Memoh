@@ -78,7 +78,9 @@ func NewNativeToolSource(log *slog.Logger, providers []ToolProvider, opts Native
 			continue
 		}
 		if normalized := strings.TrimSpace(name); normalized != "" {
-			allow[normalized] = struct{}{}
+			if builtIn, ok := lookupBuiltInToolName(normalized); ok {
+				allow[builtIn.String()] = struct{}{}
+			}
 		}
 	}
 	source := &NativeToolSource{
@@ -162,7 +164,7 @@ func (s *NativeToolSource) CallTool(ctx context.Context, session mcp.ToolSession
 		if arguments == nil {
 			arguments = map[string]any{}
 		}
-		if toolName == ToolAskUser.String() {
+		if toolName == ToolAskUser().String() {
 			return s.callAskUser(ctx, session, arguments)
 		}
 		approval, err := s.requireApproval(ctx, session, toolName, arguments)
@@ -199,11 +201,14 @@ func publicNativeToolResult(result any) any {
 }
 
 func (s *NativeToolSource) callAskUser(ctx context.Context, session mcp.ToolSessionContext, arguments map[string]any) (map[string]any, error) {
+	if !session.CanRequestUserInput {
+		return mcp.BuildToolErrorResult("user input cannot be delivered in this session"), nil
+	}
 	if err := userinput.ValidateAskUserInput(arguments); err != nil {
 		return mcp.BuildToolSuccessResult(map[string]any{
 			"status":      "invalid_arguments",
 			"error":       err.Error(),
-			"instruction": "Call " + toolRef(ToolAskUser) + " again with a valid `questions` array. Every question needs `text` and a `kind` of single_select, multi_select, or text; select kinds need `options` with labels.",
+			"instruction": "Call " + toolRef(ToolAskUser()) + " again with a valid `questions` array. Every question needs `text` and a `kind` of single_select, multi_select, or text; select kinds need `options` with labels.",
 		}), nil
 	}
 	if s == nil || s.userInput == nil {
@@ -225,7 +230,7 @@ func (s *NativeToolSource) callAskUser(ctx context.Context, session mcp.ToolSess
 			ChannelIdentityID:            session.ChannelIdentityID,
 			RequestedByChannelIdentityID: session.ChannelIdentityID,
 			ToolCallID:                   toolCallID,
-			ToolName:                     ToolAskUser.String(),
+			ToolName:                     ToolAskUser().String(),
 			Input:                        arguments,
 			ProviderMetadata: map[string]any{
 				"source":     userinput.ProviderSourceACPMCP,
@@ -238,7 +243,7 @@ func (s *NativeToolSource) callAskUser(ctx context.Context, session mcp.ToolSess
 			ExpiresAt:        &expiresAt,
 		},
 		ActorChannelIdentityID: session.ChannelIdentityID,
-		Interactive:            strings.TrimSpace(session.StreamID) != "",
+		Interactive:            session.CanRequestUserInput,
 		WaitTimeout:            userinput.DefaultWaitTimeout,
 		NonInteractiveReason:   "user input requested without an interactive stream",
 		UndeliveredReason:      "user input request was not delivered to the interactive stream",
@@ -256,9 +261,9 @@ func (s *NativeToolSource) callAskUser(ctx context.Context, session mcp.ToolSess
 		if len(req.Result) > 0 {
 			return mcp.BuildToolSuccessResult(req.Result), nil
 		}
-		return mcp.BuildToolErrorResult(ToolAskUser.String() + " request is no longer pending"), nil
+		return mcp.BuildToolErrorResult(ToolAskUser().String() + " request is no longer pending"), nil
 	}
-	return mcp.BuildToolErrorResult(ToolAskUser.String() + " request is still pending"), nil
+	return mcp.BuildToolErrorResult(ToolAskUser().String() + " request is still pending"), nil
 }
 
 type nativeApprovalResult struct {
@@ -398,6 +403,7 @@ func sessionFromMCP(session mcp.ToolSessionContext) SessionContext {
 		ReplyTarget:         session.ReplyTarget,
 		ConversationType:    session.ConversationType,
 		CanRequestUserInput: session.CanRequestUserInput,
+		CanListUserInput:    session.CanListUserInput,
 		SupportsImageInput:  session.SupportsImageInput,
 		IsSubagent:          session.IsSubagent,
 	}
@@ -427,14 +433,17 @@ func (s *NativeToolSource) allowed(name string) bool {
 	if s == nil {
 		return false
 	}
-	if s.allowAll {
-		return strings.TrimSpace(name) != ""
-	}
-	if len(s.allow) == 0 {
+	normalized := strings.TrimSpace(name)
+	if normalized == "" {
 		return false
 	}
-	_, ok := s.allow[strings.TrimSpace(name)]
-	return ok
+	if _, ok := s.allow[normalized]; ok {
+		return true
+	}
+	if !s.allowAll {
+		return false
+	}
+	return IsBuiltInToolName(normalized)
 }
 
 func toolInputSchema(parameters any) map[string]any {

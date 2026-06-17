@@ -322,9 +322,9 @@ func withoutMessageAttachments(args map[string]any) map[string]any {
 func (e *Executor) resolveOutboundAttachments(
 	ctx context.Context,
 	botID string,
-	session SessionContext,
-	channelType channel.ChannelType,
-	target string,
+	_ SessionContext,
+	_ channel.ChannelType,
+	_ string,
 	rawAttachments any,
 	allowSameConversationShortcut bool,
 ) ([]channel.Attachment, error) {

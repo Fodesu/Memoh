@@ -65,7 +65,7 @@ func NewTTSProvider(log *slog.Logger, settingsSvc *settings.Service, audioSvc *a
 }
 
 func (*TTSProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
-	ref, ok := available.Ref(ToolSpeak)
+	ref, ok := available.Ref(ToolSpeak())
 	if !ok {
 		return ""
 	}
@@ -99,7 +99,7 @@ func (p *TTSProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.
 	description, platformDescription, targetDescription, required := speakToolPromptMetadata(session)
 	return []sdk.Tool{
 		{
-			Name:        ToolSpeak.String(),
+			Name:        ToolSpeak().String(),
 			Description: description,
 			Parameters: map[string]any{
 				"type": "object",

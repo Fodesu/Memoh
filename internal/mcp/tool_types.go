@@ -26,6 +26,7 @@ type ToolSessionContext struct {
 	ReplyTarget         string
 	ConversationType    string
 	CanRequestUserInput bool
+	CanListUserInput    bool
 	IsSubagent          bool
 	RuntimeActive       bool
 	SupportsImageInput  bool

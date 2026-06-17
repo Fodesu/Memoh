@@ -36,7 +36,7 @@ func NewMemoryProvider(log *slog.Logger, registry *memprovider.Registry, setting
 }
 
 func (*MemoryProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
-	ref, ok := available.Ref(ToolSearchMemory)
+	ref, ok := available.Ref(ToolSearchMemory())
 	if !ok {
 		return ""
 	}

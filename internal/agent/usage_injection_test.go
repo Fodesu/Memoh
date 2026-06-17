@@ -34,7 +34,7 @@ func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContex
 }
 
 func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, available tools.AvailableTools) string {
-	if p.requireTool != "" {
+	if !p.requireTool.IsZero() {
 		if available.Has(p.requireTool) {
 			return p.usage
 		}
@@ -47,7 +47,7 @@ func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, ava
 type plainTestProvider struct{}
 
 func (plainTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{{Name: tools.ToolRead.String(), Description: "plain"}}, nil
+	return []sdk.Tool{{Name: tools.ToolRead().String(), Description: "plain"}}, nil
 }
 
 func newTestAgent(providers ...tools.ToolProvider) *Agent {
@@ -115,6 +115,31 @@ func TestGenerateInjectsToolUsageIntoModelSystem(t *testing.T) {
 
 	params := modelProvider.lastParams()
 	wantSystem := "base system\n\n## Tool usage\n\n" + usageMarker
+	if params.System != wantSystem {
+		t.Fatalf("expected model system %q, got %q", wantSystem, params.System)
+	}
+}
+
+func TestGeneratePlacesToolUsageBeforeWorkspaceInstructions(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	a := newTestAgent(&usageTestProvider{emitTool: true, usage: usageMarker})
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "usage-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "base system\n\n## Workspace instruction files\n\nworkspace text",
+		Messages:         []sdk.Message{sdk.UserMessage("hi")},
+		SupportsToolCall: true,
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	params := modelProvider.lastParams()
+	wantSystem := "base system\n\n## Tool usage\n\n" + usageMarker + "\n\n## Workspace instruction files\n\nworkspace text"
 	if params.System != wantSystem {
 		t.Fatalf("expected model system %q, got %q", wantSystem, params.System)
 	}
@@ -306,10 +331,10 @@ func TestAssembleToolsDoesNotExposeAskUserWithoutCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assembleTools with capability error: %v", err)
 	}
-	if len(gotTools) != 1 || gotTools[0].Name != tools.ToolAskUser.String() {
+	if len(gotTools) != 1 || gotTools[0].Name != tools.ToolAskUser().String() {
 		t.Fatalf("expected ask_user when capability is present, got %#v", gotTools)
 	}
-	if !strings.Contains(usage, tools.ToolAskUser.String()) {
+	if !strings.Contains(usage, tools.ToolAskUser().String()) {
 		t.Fatalf("expected ask_user usage when capability is present, got %q", usage)
 	}
 }
@@ -371,7 +396,7 @@ func TestAssembleToolsPassesCompleteAvailableToolSetToUsage(t *testing.T) {
 		&usageTestProvider{
 			emitTool:      true,
 			usage:         markerPresent,
-			requireTool:   tools.ToolRead,
+			requireTool:   tools.ToolRead(),
 			missingMarker: markerMissing,
 		},
 		plainTestProvider{},

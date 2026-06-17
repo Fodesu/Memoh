@@ -186,6 +186,11 @@ func toolRegistryCacheKey(session ToolSessionContext) string {
 	} else {
 		parts = append(parts, "no-user-input")
 	}
+	if session.CanListUserInput {
+		parts = append(parts, "list-user-input")
+	} else {
+		parts = append(parts, "no-list-user-input")
+	}
 	return strings.Join(parts, "\x00")
 }
 

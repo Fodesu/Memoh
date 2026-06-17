@@ -11,6 +11,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/sessionmode"
+	"github.com/memohai/memoh/internal/agent/tools/internal/toolset"
 )
 
 // SkillDetail holds the description and content of a loadable skill.
@@ -83,6 +84,7 @@ type SessionContext struct {
 	ReplyTarget         string
 	ConversationType    string
 	CanRequestUserInput bool
+	CanListUserInput    bool
 	SupportsImageInput  bool
 	IsSubagent          bool
 	Skills              map[string]SkillDetail
@@ -158,49 +160,17 @@ type ToolProvider interface {
 }
 
 // AvailableTools is the set of tool names registered for the current session.
-// Keep the backing set private so Usage implementations must go through
-// Has/Ref/Refs and cannot hard-code string indexes.
-type AvailableTools struct {
-	names map[string]struct{}
-}
+type AvailableTools = toolset.Available
 
 func NewAvailableTools(tools []sdk.Tool) AvailableTools {
-	available := AvailableTools{names: make(map[string]struct{}, len(tools))}
+	names := make([]ToolName, 0, len(tools))
 	for _, tool := range tools {
 		name := strings.TrimSpace(tool.Name)
-		if name != "" {
-			available.names[name] = struct{}{}
+		if builtIn, ok := lookupBuiltInToolName(name); ok {
+			names = append(names, builtIn)
 		}
 	}
-	return available
-}
-
-// Has reports whether a built-in tool name is registered for the current session.
-func (a AvailableTools) Has(name ToolName) bool {
-	if a.names == nil {
-		return false
-	}
-	_, ok := a.names[strings.TrimSpace(name.String())]
-	return ok
-}
-
-// Ref returns a prompt-ready tool reference only when the tool is registered.
-func (a AvailableTools) Ref(name ToolName) (string, bool) {
-	if !a.Has(name) {
-		return "", false
-	}
-	return toolRef(name), true
-}
-
-// Refs returns prompt-ready tool references for the registered tools in order.
-func (a AvailableTools) Refs(names ...ToolName) []string {
-	refs := make([]string, 0, len(names))
-	for _, name := range names {
-		if ref, ok := a.Ref(name); ok {
-			refs = append(refs, ref)
-		}
-	}
-	return refs
+	return toolset.New(names)
 }
 
 func usageSection(title string, items []string) string {

@@ -66,35 +66,35 @@ func (p *ContainerProvider) SetHookService(h *hooks.Service) {
 
 func (*ContainerProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
 	var parts []string
-	if ref, ok := available.Ref(ToolRead); ok {
+	if ref, ok := available.Ref(ToolRead()); ok {
 		text := ref + ": read file content"
 		if session.SupportsImageInput {
 			text += " (also supports images: PNG, JPEG, GIF, WebP)"
 		}
 		parts = append(parts, text)
 	}
-	if ref, ok := available.Ref(ToolWrite); ok {
+	if ref, ok := available.Ref(ToolWrite()); ok {
 		parts = append(parts, ref+": write file content")
 	}
-	if ref, ok := available.Ref(ToolList); ok {
+	if ref, ok := available.Ref(ToolList()); ok {
 		parts = append(parts, ref+": list directory entries")
 	}
-	if ref, ok := available.Ref(ToolEdit); ok {
+	if ref, ok := available.Ref(ToolEdit()); ok {
 		parts = append(parts, ref+": replace exact text in a file")
 	}
-	if ref, ok := available.Ref(ToolApplyPatch); ok {
+	if ref, ok := available.Ref(ToolApplyPatch()); ok {
 		parts = append(parts, ref+": apply a patch to files")
 	}
-	if ref, ok := available.Ref(ToolExec); ok {
+	if ref, ok := available.Ref(ToolExec()); ok {
 		parts = append(parts, ref+": execute command")
 	}
-	if ref, ok := available.Ref(ToolListBackground); ok {
+	if ref, ok := available.Ref(ToolListBackground()); ok {
 		parts = append(parts, ref+": list background commands")
 	}
-	if ref, ok := available.Ref(ToolGetBackgroundStatus); ok {
+	if ref, ok := available.Ref(ToolGetBackgroundStatus()); ok {
 		parts = append(parts, ref+": inspect a background command")
 	}
-	if ref, ok := available.Ref(ToolKillBackground); ok {
+	if ref, ok := available.Ref(ToolKillBackground()); ok {
 		parts = append(parts, ref+": stop a background command")
 	}
 	return usageSection("Basic Tools", parts)
@@ -112,7 +112,7 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 
 	return []sdk.Tool{
 		{
-			Name:        ToolRead.String(),
+			Name:        ToolRead().String(),
 			Description: readDesc,
 			Parameters: map[string]any{
 				"type": "object",
@@ -128,7 +128,7 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 			},
 		},
 		{
-			Name:        ToolWrite.String(),
+			Name:        ToolWrite().String(),
 			Description: fmt.Sprintf("Write file content %s. Creates parent directories automatically. Handles files of any size.", workspace.locationDescription),
 			Parameters: map[string]any{
 				"type": "object",
@@ -143,7 +143,7 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 			},
 		},
 		{
-			Name:        ToolList.String(),
+			Name:        ToolList().String(),
 			Description: fmt.Sprintf("List directory entries %s. Supports pagination. Max %d entries per call. In recursive mode, subdirectories with >%d items are collapsed to a summary.", workspace.locationDescription, listMaxEntries, listCollapseThreshold),
 			Parameters: map[string]any{
 				"type": "object",
@@ -160,7 +160,7 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 			},
 		},
 		{
-			Name:        ToolEdit.String(),
+			Name:        ToolEdit().String(),
 			Description: fmt.Sprintf("Replace exact text in a file %s.", workspace.locationDescription),
 			Parameters: map[string]any{
 				"type": "object",
@@ -176,7 +176,7 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 			},
 		},
 		{
-			Name: ToolApplyPatch.String(),
+			Name: ToolApplyPatch().String(),
 			Description: fmt.Sprintf(`Apply a structured patch %s. This is a Memoh/Codex-style patch format, not a standard unified diff or git patch.
 
 Use this tool for multi-file edits, structured code changes, file creation, file deletion, or file moves.
@@ -233,7 +233,7 @@ Delete a file:
 			},
 		},
 		{
-			Name: ToolExec.String(),
+			Name: ToolExec().String(),
 			Description: fmt.Sprintf(`Execute a shell command %s. Runs in %s by default.
 
 # Instructions
@@ -263,7 +263,7 @@ Delete a file:
 			},
 		},
 		{
-			Name:        ToolListBackground.String(),
+			Name:        ToolListBackground().String(),
 			Description: "List background tasks for the current session.",
 			Parameters: map[string]any{
 				"type":       "object",
@@ -274,7 +274,7 @@ Delete a file:
 			},
 		},
 		{
-			Name:        ToolGetBackgroundStatus.String(),
+			Name:        ToolGetBackgroundStatus().String(),
 			Description: "Get the status and details of a background task.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -288,7 +288,7 @@ Delete a file:
 			},
 		},
 		{
-			Name:        ToolKillBackground.String(),
+			Name:        ToolKillBackground().String(),
 			Description: "Kill a running background task.",
 			Parameters: map[string]any{
 				"type": "object",

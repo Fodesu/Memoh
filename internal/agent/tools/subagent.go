@@ -222,30 +222,31 @@ func (p *SpawnProvider) SetHookService(h *hooks.Service) {
 func (*SpawnProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
 	var parts []string
 	canStartBackground := false
-	if spawnRef, ok := available.Ref(ToolSpawnAgent); ok {
+	if spawnRef, ok := available.Ref(ToolSpawnAgent()); ok {
 		canStartBackground = true
 		parts = append(parts,
 			"Use "+spawnRef+" to create a managed subagent for an independent task.",
+			"Each subagent has a restricted worker tool set: file tools, exec/background tools, web search, and web fetch.",
 			"Use subagents when work benefits from isolated context or can proceed while you continue. Don't use one for simple single-step work — just do it directly.",
 		)
 	}
-	if ref, ok := available.Ref(ToolSendMessage); ok {
+	if ref, ok := available.Ref(ToolSendMessage()); ok {
 		canStartBackground = true
 		parts = append(parts, "Use "+ref+" to continue an existing agent with a follow-up.")
 	}
-	if backgroundTools := available.Refs(ToolListBackground, ToolGetBackgroundStatus, ToolKillBackground); len(backgroundTools) > 0 {
+	if backgroundTools := available.Refs(ToolListBackground(), ToolGetBackgroundStatus(), ToolKillBackground()); len(backgroundTools) > 0 {
 		if canStartBackground {
 			parts = append(parts, "For long work, set `run_in_background: true`. The call returns a task ID immediately and you will be notified when the agent task finishes — do not poll or sleep while waiting.")
 		}
 		parts = append(parts, "Manage running agent tasks with "+joinRefs(backgroundTools, "and")+".")
 	}
-	if ref, ok := available.Ref(ToolWaitAgent); ok {
+	if ref, ok := available.Ref(ToolWaitAgent()); ok {
 		parts = append(parts, "Use "+ref+" when you need to wait briefly.")
 	}
-	if ref, ok := available.Ref(ToolListAgents); ok {
+	if ref, ok := available.Ref(ToolListAgents()); ok {
 		parts = append(parts, "Use "+ref+" to see agents created in the current session.")
 	}
-	if ref, ok := available.Ref(ToolSearchMessages); ok {
+	if ref, ok := available.Ref(ToolSearchMessages()); ok {
 		parts = append(parts, "Read a finished task's full transcript with "+ref+" using the session ID from its notification.")
 	}
 	if len(parts) == 0 {
@@ -261,7 +262,7 @@ func (p *SpawnProvider) Tools(_ context.Context, session SessionContext) ([]sdk.
 	sess := session
 	return []sdk.Tool{
 		{
-			Name:        ToolSpawnAgent.String(),
+			Name:        ToolSpawnAgent().String(),
 			Description: "Create one managed subagent for an independent task. Returns a memorable agent_id.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -286,7 +287,7 @@ func (p *SpawnProvider) Tools(_ context.Context, session SessionContext) ([]sdk.
 			},
 		},
 		{
-			Name:        ToolSendMessage.String(),
+			Name:        ToolSendMessage().String(),
 			Description: "Send a follow-up message to an existing managed subagent. Messages to a busy agent are queued and run serially.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -311,7 +312,7 @@ func (p *SpawnProvider) Tools(_ context.Context, session SessionContext) ([]sdk.
 			},
 		},
 		{
-			Name:        ToolWaitAgent.String(),
+			Name:        ToolWaitAgent().String(),
 			Description: "Wait for a managed subagent task to finish. A timeout only stops waiting; it does not cancel the agent.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -338,7 +339,7 @@ func (p *SpawnProvider) Tools(_ context.Context, session SessionContext) ([]sdk.
 			},
 		},
 		{
-			Name:        ToolListAgents.String(),
+			Name:        ToolListAgents().String(),
 			Description: "List managed subagents created in the current session only.",
 			Parameters: map[string]any{
 				"type":       "object",

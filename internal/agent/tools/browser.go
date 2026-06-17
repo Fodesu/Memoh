@@ -75,40 +75,40 @@ func NewBrowserProvider(log *slog.Logger, settingsSvc *settings.Service, contain
 // these tools are registered (display-enabled, non-subagent sessions).
 func (*BrowserProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
 	var parts []string
-	browserRefs := available.Refs(ToolBrowserObserve, ToolBrowserAction)
+	browserRefs := available.Refs(ToolBrowserObserve(), ToolBrowserAction())
 	switch len(browserRefs) {
 	case 2:
 		parts = append(parts, "**Browser** ("+strings.Join(browserRefs, ", ")+"): Web pages in Chrome. Observe before acting; prefer element refs from snapshot over CSS selectors.")
 	case 1:
-		if ref, ok := available.Ref(ToolBrowserObserve); ok {
+		if ref, ok := available.Ref(ToolBrowserObserve()); ok {
 			parts = append(parts, "**Browser** ("+ref+"): Web pages in Chrome. Observe before acting; prefer element refs from snapshot over CSS selectors.")
 		} else {
 			parts = append(parts, "**Browser** ("+browserRefs[0]+"): Web pages in Chrome.")
 		}
 	}
-	desktopRefs := available.Refs(ToolComputerObserve, ToolComputerAction)
+	desktopRefs := available.Refs(ToolComputerObserve(), ToolComputerAction())
 	switch len(desktopRefs) {
 	case 2:
 		parts = append(parts, "**Computer** ("+strings.Join(desktopRefs, ", ")+"): Whole-desktop fallback for native dialogs, non-browser apps, or when the browser path fails. Start with a snapshot to get an accessibility tree with element refs, then drive actions with those refs; raw coordinates are a last-resort fallback.")
 	case 1:
-		if ref, ok := available.Ref(ToolComputerObserve); ok {
+		if ref, ok := available.Ref(ToolComputerObserve()); ok {
 			parts = append(parts, "**Computer** ("+ref+"): Whole-desktop fallback for native dialogs, non-browser apps, or when the browser path fails.")
 		} else {
 			parts = append(parts, "**Computer** ("+desktopRefs[0]+"): Whole-desktop fallback for native dialogs, non-browser apps, or when the browser path fails; raw coordinates are a last-resort fallback.")
 		}
 	}
-	if ref, ok := available.Ref(ToolBrowserRemoteSession); ok {
+	if ref, ok := available.Ref(ToolBrowserRemoteSession()); ok {
 		if len(browserRefs) > 0 || len(desktopRefs) > 0 {
 			parts = append(parts, ref+": Only when running Playwright or other CDP automation inside the workspace is clearly better than the GUI tools above.")
 		} else {
 			parts = append(parts, ref+": Use for code-driven Playwright or other CDP automation inside the workspace.")
 		}
 	}
-	hasObserve := available.Has(ToolBrowserObserve) || available.Has(ToolComputerObserve)
+	hasObserve := available.Has(ToolBrowserObserve()) || available.Has(ToolComputerObserve())
 	if hasObserve {
 		readHint := "the returned path can be used by later workspace actions when needed."
 		if session.SupportsImageInput {
-			if readRef, ok := available.Ref(ToolRead); ok {
+			if readRef, ok := available.Ref(ToolRead()); ok {
 				readHint = "Read the returned path with " + readRef + " when you need the image."
 			}
 		}
@@ -140,7 +140,7 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 	sess := session
 	return []sdk.Tool{
 		{
-			Name:        ToolBrowserAction.String(),
+			Name:        ToolBrowserAction().String(),
 			Description: "Operate the current workspace browser tab. Prefer element refs from an observation result over CSS selectors; use selectors only as a fallback. Use fill to replace input values, type to append text, and press for shortcuts or submit keys. After navigation or UI-changing actions, observe again only when the next step depends on the changed state.",
 			Parameters: browserObjectSchema(map[string]any{
 				"action":          map[string]any{"type": "string", "enum": []string{"navigate", "click", "double_click", "focus", "type", "fill", "press", "hover", "select", "check", "uncheck", "scroll", "scroll_into_view", "drag", "upload", "wait", "go_back", "go_forward", "reload", "tab_new", "tab_select", "tab_close"}, "description": "Browser action to perform. Compatibility aliases dblclick and scrollintoview are also accepted."},
@@ -163,7 +163,7 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 			},
 		},
 		{
-			Name:        ToolBrowserObserve.String(),
+			Name:        ToolBrowserObserve().String(),
 			Description: "Inspect the current workspace browser without changing page state. Prefer snapshot for interactive elements and get_content for readable text. Use screenshot_annotate only when visual layout matters or you need rendered-page refs. Use evaluate only for small DOM queries or page-state checks. Screenshots are saved to a workspace path and are not attached automatically.",
 			Parameters: browserObjectSchema(map[string]any{
 				"observe":   map[string]any{"type": "string", "enum": []string{"snapshot", "get_content", "screenshot_annotate", "screenshot", "get_html", "evaluate", "get_url", "get_title", "pdf", "tab_list"}, "description": "What to observe from the page."},
@@ -177,7 +177,7 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 			},
 		},
 		{
-			Name:        ToolComputerObserve.String(),
+			Name:        ToolComputerObserve().String(),
 			Description: "Inspect the workspace desktop without changing state. Use snapshot for an accessibility-tree listing of interactive UI elements with refs for later desktop actions. Use screenshot only when accessibility is unavailable or you need visual layout; the image is saved to a workspace path and is not attached automatically.",
 			Parameters: browserObjectSchema(map[string]any{
 				"observe": map[string]any{"type": "string", "enum": []string{"snapshot", "screenshot"}, "description": "What to observe from the desktop."},
@@ -187,7 +187,7 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 			},
 		},
 		{
-			Name:        ToolComputerAction.String(),
+			Name:        ToolComputerAction().String(),
 			Description: "Drive the workspace desktop. Prefer refs from a desktop observation snapshot for click/double_click/type/fill/scroll; coordinates (x, y) are only a fallback when no ref applies (native dialogs, raw drags, pointer hovers). For in-page browser targets, prefer browser-specific actions when they are available.",
 			Parameters: browserObjectSchema(map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"click", "double_click", "type", "fill", "key", "scroll", "drag", "wait", "mouse_move", "pointer"}, "description": "Desktop action to perform."},
@@ -208,7 +208,7 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 			},
 		},
 		{
-			Name:        ToolBrowserRemoteSession.String(),
+			Name:        ToolBrowserRemoteSession().String(),
 			Description: "Advanced escape hatch for code-driven automation. Exposes the workspace Chrome CDP endpoint for chromium.connectOverCDP or other CDP clients.",
 			Parameters: browserObjectSchema(map[string]any{
 				"action":     map[string]any{"type": "string", "enum": []string{"create", "close", "status"}, "description": "Session action to perform."},

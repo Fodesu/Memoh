@@ -22,18 +22,16 @@ func NewSkillProvider(log *slog.Logger) *SkillProvider {
 }
 
 func (*SkillProvider) Usage(_ context.Context, _ SessionContext, available AvailableTools) string {
-	useRef, ok := available.Ref(ToolUseSkill)
-	if !ok {
-		return ""
-	}
 	var parts []string
-	if listRef, ok := available.Ref(ToolListSkills); ok {
+	if listRef, ok := available.Ref(ToolListSkills()); ok {
 		parts = append(parts, "Use "+listRef+" to inspect skill names and descriptions when needed.")
 	}
-	parts = append(parts,
-		"Use "+useRef+" to load a relevant skill's full instructions before following it.",
-		"Do not activate skills that are unrelated to the current task.",
-	)
+	if useRef, ok := available.Ref(ToolUseSkill()); ok {
+		parts = append(parts,
+			"Use "+useRef+" to load a relevant skill's full instructions before following it.",
+			"Do not activate skills that are unrelated to the current task.",
+		)
+	}
 	return usageSection("Skills", parts)
 }
 
@@ -44,7 +42,7 @@ func (*SkillProvider) Tools(_ context.Context, session SessionContext) ([]sdk.To
 	skills := session.Skills
 	return []sdk.Tool{
 		{
-			Name:        ToolListSkills.String(),
+			Name:        ToolListSkills().String(),
 			Description: "List the skills available in the current session.",
 			Parameters: map[string]any{
 				"type":       "object",
@@ -74,7 +72,7 @@ func (*SkillProvider) Tools(_ context.Context, session SessionContext) ([]sdk.To
 			},
 		},
 		{
-			Name:        ToolUseSkill.String(),
+			Name:        ToolUseSkill().String(),
 			Description: "Activate a skill to get its full instructions. Call this when you think a skill is relevant to the current task.",
 			Parameters: map[string]any{
 				"type": "object",

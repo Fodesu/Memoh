@@ -34,7 +34,7 @@ func NewMessageProvider(log *slog.Logger, sender messaging.Sender, reactor messa
 
 func (*MessageProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
 	var parts []string
-	if sendRef, ok := available.Ref(ToolSend); ok {
+	if sendRef, ok := available.Ref(ToolSend()); ok {
 		switch session.SessionType {
 		case sessionmode.Discuss:
 			parts = append(parts, "Use "+sendRef+" to speak in the observed conversation; if you do not call it, you stay silent.")
@@ -50,7 +50,7 @@ func (*MessageProvider) Usage(_ context.Context, session SessionContext, availab
 			}
 		}
 	}
-	if reactRef, ok := available.Ref(ToolReact); ok {
+	if reactRef, ok := available.Ref(ToolReact()); ok {
 		if session.CanOmitMessagingTarget() {
 			parts = append(parts, reactRef+": Add or remove an emoji reaction on a message. Omit `target` to react in the current conversation.")
 		} else {
@@ -69,7 +69,7 @@ func (p *MessageProvider) Tools(_ context.Context, session SessionContext) ([]sd
 	if p.exec.CanSend() {
 		sendDescription, sendPlatformDescription, sendTargetDescription, sendRequired := sendToolPromptMetadata(session)
 		tools = append(tools, sdk.Tool{
-			Name:        ToolSend.String(),
+			Name:        ToolSend().String(),
 			Description: sendDescription,
 			Parameters: map[string]any{
 				"type": "object",
@@ -101,7 +101,7 @@ func (p *MessageProvider) Tools(_ context.Context, session SessionContext) ([]sd
 	if p.exec.CanReact() {
 		reactDescription, reactPlatformDescription, reactTargetDescription, reactRequired := reactToolPromptMetadata(session)
 		tools = append(tools, sdk.Tool{
-			Name:        ToolReact.String(),
+			Name:        ToolReact().String(),
 			Description: reactDescription,
 			Parameters: map[string]any{
 				"type": "object",

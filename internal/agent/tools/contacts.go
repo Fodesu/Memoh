@@ -29,13 +29,13 @@ func NewContactsProvider(log *slog.Logger, routeService route.Service) *Contacts
 // Usage describes how get_contacts feeds other tools without restating those
 // tools' own usage blocks.
 func (*ContactsProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
-	contactsRef, ok := available.Ref(ToolGetContacts)
+	contactsRef, ok := available.Ref(ToolGetContacts())
 	if !ok {
 		return ""
 	}
 	var parts []string
 	parts = append(parts, "Use "+contactsRef+" to list all known contacts and conversations. It returns each route's platform, conversation type, and `target`.")
-	messageRefs := available.Refs(ToolSend, ToolSpeak)
+	messageRefs := available.Refs(ToolSend(), ToolSpeak())
 	if len(messageRefs) > 0 {
 		if session.CanOmitMessagingTarget() {
 			parts = append(parts, "For another channel/person, pass the returned `platform` and `target` to "+joinRefs(messageRefs, "or")+".")
@@ -43,9 +43,11 @@ func (*ContactsProvider) Usage(_ context.Context, session SessionContext, availa
 			parts = append(parts, "Pass the returned `platform` and `target` to "+joinRefs(messageRefs, "or")+" when this session needs to notify a contact.")
 		}
 	}
-	historyRefs := available.Refs(ToolListSessions, ToolGetMessages, ToolSearchMessages)
-	if len(historyRefs) > 0 {
-		parts = append(parts, "Use the returned route and conversation metadata to choose the right session or contact filters for "+joinRefs(historyRefs, "or")+".")
+	if historyRefs := available.Refs(ToolListSessions(), ToolGetMessages()); len(historyRefs) > 0 {
+		parts = append(parts, "Use the returned route and conversation metadata to choose the right session for "+joinRefs(historyRefs, "or")+".")
+	}
+	if searchRef, ok := available.Ref(ToolSearchMessages()); ok {
+		parts = append(parts, "Use returned session/contact metadata as `session_id` or `contact_id` filters for "+searchRef+".")
 	}
 	return usageSection("Contacts & Messaging", parts)
 }
@@ -57,7 +59,7 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]s
 	sess := session
 	return []sdk.Tool{
 		{
-			Name:        ToolGetContacts.String(),
+			Name:        ToolGetContacts().String(),
 			Description: "List all known contacts and conversations for the current bot. Returns platform, conversation type, reply target, and metadata for each route.",
 			Parameters: map[string]any{
 				"type": "object",

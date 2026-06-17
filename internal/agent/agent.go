@@ -99,7 +99,7 @@ func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCal
 		return sdk.ToolResultPart{
 			ToolCallID: call.ToolCallID,
 			ToolName:   call.ToolName,
-			Result:     output,
+			Result:     publicReadMediaToolResult(output),
 		}, nil
 	}
 	return sdk.ToolResultPart{}, fmt.Errorf("tool %q not found", call.ToolName)
@@ -153,7 +153,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		if toolUsage != "" {
 			// Must run before buildGenerateOptions so prompt caching and
 			// background-notification steps see the usage-augmented text.
-			cfg.System = strings.TrimSpace(cfg.System + "\n\n" + toolUsage)
+			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
 		}
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
@@ -624,7 +624,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		if toolUsage != "" {
 			// Must run before buildGenerateOptions so prompt caching and
 			// background-notification steps see the usage-augmented text.
-			cfg.System = strings.TrimSpace(cfg.System + "\n\n" + toolUsage)
+			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
 		}
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
@@ -875,10 +875,26 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 	return allTools, usage, nil
 }
 
+func appendToolUsageToSystem(system, toolUsage string) string {
+	system = strings.TrimSpace(system)
+	toolUsage = strings.TrimSpace(toolUsage)
+	if toolUsage == "" {
+		return system
+	}
+	if system == "" {
+		return toolUsage
+	}
+	const workspaceAnchor = "\n## Workspace instruction files"
+	if idx := strings.Index(system, workspaceAnchor); idx >= 0 {
+		return strings.TrimSpace(system[:idx]) + "\n\n" + toolUsage + "\n" + system[idx:]
+	}
+	return strings.TrimSpace(system + "\n\n" + toolUsage)
+}
+
 func markApprovalTools(sdkTools []sdk.Tool) []sdk.Tool {
 	for i := range sdkTools {
 		switch sdkTools[i].Name {
-		case tools.ToolWrite.String(), tools.ToolEdit.String(), tools.ToolApplyPatch.String(), tools.ToolExec.String():
+		case tools.ToolWrite().String(), tools.ToolEdit().String(), tools.ToolApplyPatch().String(), tools.ToolExec().String():
 			sdkTools[i].RequireApproval = true
 		}
 	}
@@ -960,7 +976,7 @@ func isUserInputMetadata(metadata map[string]any) bool {
 }
 
 func isAskUserArgumentParseError(message string) bool {
-	return strings.Contains(message, `unmarshal tool call arguments for "`+tools.ToolAskUser.String()+`"`)
+	return strings.Contains(message, `unmarshal tool call arguments for "`+tools.ToolAskUser().String()+`"`)
 }
 
 // toolStreamEventToAgentEvent converts a tool-layer ToolStreamEvent into an

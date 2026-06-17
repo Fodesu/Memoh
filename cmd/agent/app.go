@@ -668,7 +668,7 @@ func injectACPToolProviders(source *agenttools.NativeToolSource, toolProviders [
 
 func provideToolGatewayService(log *slog.Logger, fedGateway *handlers.MCPFederationGateway, oauthService *mcp.OAuthService, mcpConnService *mcp.ConnectionService, containerdHandler *handlers.ContainerdHandler, nativeSource *agenttools.NativeToolSource, toolContexts *mcp.ToolSessionContextStore) *mcp.ToolGatewayService {
 	fedGateway.SetOAuthService(oauthService)
-	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService)
+	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService, mcpfederation.WithReservedToolName(agenttools.IsBuiltInToolName))
 	svc := mcp.NewToolGatewayService(log, []mcp.ToolSource{nativeSource, fedSource})
 	containerdHandler.SetToolGatewayService(svc)
 	containerdHandler.SetToolSessionContextStore(toolContexts)
@@ -698,7 +698,7 @@ func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, reg
 	if mediaService != nil {
 		assetResolver = &mediaAssetResolverAdapter{media: mediaService}
 	}
-	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService)
+	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService, mcpfederation.WithReservedToolName(agenttools.IsBuiltInToolName))
 	return []agenttools.ToolProvider{
 		agenttools.NewAskUserProvider(log),
 		agenttools.NewMessageProvider(log, channelManager, channelManager, registry, assetResolver),

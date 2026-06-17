@@ -115,7 +115,7 @@ func TestContainerApplyPatchDescriptionDoesNotReferenceSiblingTools(t *testing.T
 		t.Fatalf("Tools() error = %v", err)
 	}
 	for _, tool := range toolList {
-		if tool.Name != ToolApplyPatch.String() {
+		if tool.Name != ToolApplyPatch().String() {
 			continue
 		}
 		for _, absent := range []string{"Use edit", "Use write", "`edit`", "`write`"} {
@@ -139,7 +139,7 @@ func TestContainerReadLargeFileErrorDoesNotReferenceSiblingTools(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected large file read to fail")
 	}
-	for _, absent := range []string{ToolExec.String(), "head/tail/sed", "line_offset", "n_lines"} {
+	for _, absent := range []string{ToolExec().String(), "head/tail/sed", "line_offset", "n_lines"} {
 		if strings.Contains(err.Error(), absent) {
 			t.Fatalf("large file error should not reference unavailable or ineffective fallback %q: %v", absent, err)
 		}

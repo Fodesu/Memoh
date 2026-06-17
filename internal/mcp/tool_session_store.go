@@ -264,6 +264,9 @@ func MergeToolSessionContext(base, latest ToolSessionContext) ToolSessionContext
 	if latest.CanRequestUserInput {
 		merged.CanRequestUserInput = true
 	}
+	if latest.CanListUserInput {
+		merged.CanListUserInput = true
+	}
 	if latest.IsSubagent {
 		merged.IsSubagent = true
 	}

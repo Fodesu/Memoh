@@ -17,10 +17,10 @@ func NewAskUserProvider(_ *slog.Logger) *AskUserProvider {
 }
 
 func (*AskUserProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
-	if !session.CanAskUser() {
+	if !canExposeAskUserTool(session) {
 		return ""
 	}
-	ref, ok := available.Ref(ToolAskUser)
+	ref, ok := available.Ref(ToolAskUser())
 	if !ok {
 		return ""
 	}
@@ -36,11 +36,11 @@ func (*AskUserProvider) Usage(_ context.Context, session SessionContext, availab
 }
 
 func (*AskUserProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
-	if session.IsSubagent || !session.CanAskUser() {
+	if session.IsSubagent || !canExposeAskUserTool(session) {
 		return nil, nil
 	}
 	return []sdk.Tool{{
-		Name:        ToolAskUser.String(),
+		Name:        ToolAskUser().String(),
 		Description: "Pause the run and ask the user one or more questions (a quiz question, a plan choice, a decision, or open text input). Use this whenever the user asks you to quiz them, test them, or pose a multiple-choice question, and whenever the user must make a choice before you continue. Put the question text in `text` and every answer choice in `options`; never write the choices as ordinary assistant text or simulate the interaction yourself. Wait for this tool's result before grading, explaining answers, or continuing. If the latest user message asks for another question, quiz, or choice, create it with this tool — do not treat that request itself as the user's answer.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -106,10 +106,14 @@ func (*AskUserProvider) Tools(_ context.Context, session SessionContext) ([]sdk.
 				return map[string]any{
 					"status":      "invalid_arguments",
 					"error":       err.Error(),
-					"instruction": "Call " + toolRef(ToolAskUser) + " again with a valid `questions` array. Every question needs `text` and a `kind` of single_select, multi_select, or text; select kinds need `options` with labels.",
+					"instruction": "Call " + toolRef(ToolAskUser()) + " again with a valid `questions` array. Every question needs `text` and a `kind` of single_select, multi_select, or text; select kinds need `options` with labels.",
 				}, nil
 			}
-			return nil, errors.New(ToolAskUser.String() + " must be resolved through user input before execution")
+			return nil, errors.New(ToolAskUser().String() + " must be resolved through user input before execution")
 		},
 	}}, nil
+}
+
+func canExposeAskUserTool(session SessionContext) bool {
+	return session.CanAskUser()
 }

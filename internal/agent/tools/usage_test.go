@@ -119,6 +119,73 @@ func requiredContainsForTest(required []string, field string) bool {
 	return false
 }
 
+func TestBuiltInToolsHaveUsageGuidanceOrExplicitExemption(t *testing.T) {
+	t.Parallel()
+
+	covered := map[ToolName]string{
+		ToolRead():                "container",
+		ToolWrite():               "container",
+		ToolList():                "container",
+		ToolEdit():                "container",
+		ToolExec():                "container",
+		ToolApplyPatch():          "container",
+		ToolListBackground():      "container",
+		ToolGetBackgroundStatus(): "container",
+		ToolKillBackground():      "container",
+
+		ToolSend():  "messaging",
+		ToolReact(): "messaging",
+		ToolSpeak(): "tts",
+
+		ToolGetContacts():    "contacts",
+		ToolListSessions():   "history",
+		ToolGetMessages():    "history",
+		ToolSearchMessages(): "history",
+		ToolSearchMemory():   "memory",
+		ToolListSkills():     "skills",
+		ToolUseSkill():       "skills",
+
+		ToolSpawnAgent():  "subagents",
+		ToolSendMessage(): "subagents",
+		ToolWaitAgent():   "subagents",
+		ToolListAgents():  "subagents",
+
+		ToolListSchedule():   "schedule",
+		ToolGetSchedule():    "schedule",
+		ToolCreateSchedule(): "schedule",
+		ToolUpdateSchedule(): "schedule",
+		ToolDeleteSchedule(): "schedule",
+
+		ToolBrowserAction():        "browser",
+		ToolBrowserObserve():       "browser",
+		ToolComputerObserve():      "browser",
+		ToolComputerAction():       "browser",
+		ToolBrowserRemoteSession(): "browser",
+
+		ToolAskUser(): "user-input",
+	}
+	exempt := map[ToolName]string{
+		ToolWebSearch():         "self-describing one-shot search tool",
+		ToolWebFetch():          "self-describing one-shot fetch tool",
+		ToolGenerateImage():     "self-describing media generation tool",
+		ToolTranscribeAudio():   "self-describing media transcription tool",
+		ToolListEmailAccounts(): "email tool descriptions carry account/read/write semantics",
+		ToolSendEmail():         "email tool descriptions carry account/read/write semantics",
+		ToolListEmail():         "email tool descriptions carry account/read/write semantics",
+		ToolReadEmail():         "email tool descriptions carry account/read/write semantics",
+	}
+
+	for _, name := range BuiltInToolNames() {
+		if _, ok := covered[name]; ok {
+			continue
+		}
+		if _, ok := exempt[name]; ok {
+			continue
+		}
+		t.Fatalf("built-in tool %s must have Usage guidance or an explicit no-guidance exemption", name.String())
+	}
+}
+
 func TestMessageProviderUsageGatesRegisteredTools(t *testing.T) {
 	t.Parallel()
 
@@ -129,7 +196,7 @@ func TestMessageProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without available tools = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), session, availableToolsForTest(ToolSend))
+	got := provider.Usage(context.Background(), session, availableToolsForTest(ToolSend()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`send`") {
 		t.Fatalf("Usage with send should mention send, got:\n%s", got)
@@ -138,7 +205,7 @@ func TestMessageProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage with only send should not mention react, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), session, availableToolsForTest(ToolReact))
+	got = provider.Usage(context.Background(), session, availableToolsForTest(ToolReact()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`react`") {
 		t.Fatalf("Usage with react should mention react, got:\n%s", got)
@@ -148,19 +215,19 @@ func TestMessageProviderUsageGatesRegisteredTools(t *testing.T) {
 	}
 
 	currentSession := SessionContext{SessionType: sessionmode.Chat, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}
-	got = provider.Usage(context.Background(), currentSession, availableToolsForTest(ToolSend, ToolReact))
+	got = provider.Usage(context.Background(), currentSession, availableToolsForTest(ToolSend(), ToolReact()))
 	if !strings.Contains(got, "Use ordinary assistant text for normal replies") || !strings.Contains(got, "Omit `target` to react") {
 		t.Fatalf("Usage with an explicit current conversation should distinguish normal replies from local reactions, got:\n%s", got)
 	}
 
 	backgroundSession := SessionContext{SessionType: sessionmode.Heartbeat, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}
-	got = provider.Usage(context.Background(), backgroundSession, availableToolsForTest(ToolReact))
+	got = provider.Usage(context.Background(), backgroundSession, availableToolsForTest(ToolReact()))
 	if strings.Contains(got, "Omit `target`") || strings.Contains(got, "unless the current conversation target is explicit") || !strings.Contains(got, "Specify `platform` and `target`") {
 		t.Fatalf("Usage for background reactions should require explicit target, got:\n%s", got)
 	}
 
 	deliverySession := SessionContext{SessionType: sessionmode.BackgroundDelivery, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}
-	got = provider.Usage(context.Background(), deliverySession, availableToolsForTest(ToolSend))
+	got = provider.Usage(context.Background(), deliverySession, availableToolsForTest(ToolSend()))
 	if !strings.Contains(got, "ordinary text output is already sent") || !strings.Contains(got, "attach files") {
 		t.Fatalf("Usage for background delivery should reserve send for attachments/media/different targets, got:\n%s", got)
 	}
@@ -182,7 +249,7 @@ func TestMessageProviderToolDescriptionsGateCurrentConversationTarget(t *testing
 	if err != nil {
 		t.Fatalf("Tools current session: %v", err)
 	}
-	currentSend := toolByNameForTest(t, currentTools, ToolSend)
+	currentSend := toolByNameForTest(t, currentTools, ToolSend())
 	if !strings.Contains(currentSend.Description, "Use ordinary assistant text for normal replies") {
 		t.Fatalf("send description with explicit current conversation should reserve normal replies for assistant text, got:\n%s", currentSend.Description)
 	}
@@ -198,7 +265,7 @@ func TestMessageProviderToolDescriptionsGateCurrentConversationTarget(t *testing
 	if err != nil {
 		t.Fatalf("Tools background session: %v", err)
 	}
-	backgroundSend := toolByNameForTest(t, backgroundTools, ToolSend)
+	backgroundSend := toolByNameForTest(t, backgroundTools, ToolSend())
 	if strings.Contains(backgroundSend.Description, "current conversation") {
 		t.Fatalf("send description for background sessions should not allow omitted target, got:\n%s", backgroundSend.Description)
 	}
@@ -217,7 +284,7 @@ func TestMessageProviderToolDescriptionsGateCurrentConversationTarget(t *testing
 	if err != nil {
 		t.Fatalf("Tools background delivery session: %v", err)
 	}
-	deliverySend := toolByNameForTest(t, deliveryTools, ToolSend)
+	deliverySend := toolByNameForTest(t, deliveryTools, ToolSend())
 	if !strings.Contains(deliverySend.Description, "Do not use this for ordinary text updates") {
 		t.Fatalf("send description for background delivery should reserve ordinary text for automatic delivery, got:\n%s", deliverySend.Description)
 	}
@@ -228,7 +295,7 @@ func TestMessageProviderToolDescriptionsGateCurrentConversationTarget(t *testing
 		}
 	}
 
-	backgroundReact := toolByNameForTest(t, backgroundTools, ToolReact)
+	backgroundReact := toolByNameForTest(t, backgroundTools, ToolReact())
 	if strings.Contains(backgroundReact.Description, "omitted") || strings.Contains(backgroundReact.Description, "unless the current conversation target is explicit") {
 		t.Fatalf("react description for background sessions should not allow omitted target/platform, got:\n%s", backgroundReact.Description)
 	}
@@ -248,7 +315,7 @@ func TestContainerProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without file tools = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{SupportsImageInput: true}, availableToolsForTest(ToolRead, ToolWrite, ToolList, ToolEdit, ToolApplyPatch, ToolExec, ToolListBackground, ToolGetBackgroundStatus, ToolKillBackground))
+	got := provider.Usage(context.Background(), SessionContext{SupportsImageInput: true}, availableToolsForTest(ToolRead(), ToolWrite(), ToolList(), ToolEdit(), ToolApplyPatch(), ToolExec(), ToolListBackground(), ToolGetBackgroundStatus(), ToolKillBackground()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`read`", "`write`", "`list`", "`edit`", "`apply_patch`", "`exec`", "`list_background`", "`get_background_status`", "`kill_background`", "also supports images"} {
 		if !strings.Contains(got, want) {
@@ -256,7 +323,7 @@ func TestContainerProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolRead))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolRead()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`read`") {
 		t.Fatalf("Usage with read should mention it, got:\n%s", got)
@@ -270,7 +337,7 @@ func TestContainerProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolApplyPatch, ToolListBackground))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolApplyPatch(), ToolListBackground()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`apply_patch`") || !strings.Contains(got, "`list_background`") {
 		t.Fatalf("Usage with patch/background tools should mention them, got:\n%s", got)
@@ -290,7 +357,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		t.Fatalf("Usage without ask_user = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{CanRequestUserInput: true}, availableToolsForTest(ToolAskUser))
+	got := provider.Usage(context.Background(), SessionContext{CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`ask_user`", "multiple-choice question", "allow_custom"} {
 		if !strings.Contains(got, want) {
@@ -298,17 +365,27 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat}, availableToolsForTest(ToolAskUser))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat}, availableToolsForTest(ToolAskUser()))
 	if got != "" {
 		t.Fatalf("Usage without user input delivery = %q, want empty", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.BackgroundDelivery, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.ACPAgent, CanListUserInput: true}, availableToolsForTest(ToolAskUser()))
+	if got != "" {
+		t.Fatalf("Usage with ACP list-only user input discovery = %q, want empty", got)
+	}
+
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.BackgroundDelivery, CanListUserInput: true}, availableToolsForTest(ToolAskUser()))
+	if got != "" {
+		t.Fatalf("Usage with non-ACP list-only user input discovery = %q, want empty", got)
+	}
+
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.BackgroundDelivery, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
 	if got != "" {
 		t.Fatalf("Usage in background delivery = %q, want empty", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Discuss, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Discuss, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
 	if got != "" {
 		t.Fatalf("Usage in discuss = %q, want empty", got)
 	}
@@ -317,7 +394,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools in chat: %v", err)
 	}
-	if len(chatTools) != 1 || chatTools[0].Name != ToolAskUser.String() {
+	if len(chatTools) != 1 || chatTools[0].Name != ToolAskUser().String() {
 		t.Fatalf("chat tools = %#v, want ask_user", chatTools)
 	}
 
@@ -327,6 +404,22 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 	}
 	if len(noDeliveryTools) != 0 {
 		t.Fatalf("tools without user input delivery = %#v, want none", noDeliveryTools)
+	}
+
+	listOnlyChatTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Chat, CanListUserInput: true})
+	if err != nil {
+		t.Fatalf("Tools with non-ACP list-only user input discovery: %v", err)
+	}
+	if len(listOnlyChatTools) != 0 {
+		t.Fatalf("non-ACP list-only tools = %#v, want none", listOnlyChatTools)
+	}
+
+	listOnlyACPTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.ACPAgent, CanListUserInput: true})
+	if err != nil {
+		t.Fatalf("Tools with ACP list-only user input discovery: %v", err)
+	}
+	if len(listOnlyACPTools) != 0 {
+		t.Fatalf("ACP list-only tools = %#v, want none", listOnlyACPTools)
 	}
 
 	backgroundTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.BackgroundDelivery, CanRequestUserInput: true})
@@ -354,7 +447,7 @@ func TestTTSProviderUsageGatesSpeak(t *testing.T) {
 		t.Fatalf("Usage without speak = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpeak))
+	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpeak()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`speak`") {
 		t.Fatalf("Usage with speak should mention speak, got:\n%s", got)
@@ -369,7 +462,7 @@ func TestTTSProviderUsageGatesSpeak(t *testing.T) {
 		t.Fatalf("Usage with only speak should not mention send/react, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}, availableToolsForTest(ToolSpeak))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}, availableToolsForTest(ToolSpeak()))
 	if !strings.Contains(got, "Omit `target` to speak") {
 		t.Fatalf("Usage with an explicit current conversation should allow speaking without target, got:\n%s", got)
 	}
@@ -412,7 +505,7 @@ func TestMemoryProviderUsageGatesSearchMemory(t *testing.T) {
 	if got := provider.Usage(context.Background(), SessionContext{}, AvailableTools{}); got != "" {
 		t.Fatalf("Usage without search_memory = %q, want empty", got)
 	}
-	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSearchMemory))
+	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSearchMemory()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`search_memory`", "durable user preferences", "prior conversations", "latest user message"} {
 		if !strings.Contains(got, want) {
@@ -428,7 +521,7 @@ func TestSkillProviderUsageGatesUseSkill(t *testing.T) {
 	if got := provider.Usage(context.Background(), SessionContext{}, AvailableTools{}); got != "" {
 		t.Fatalf("Usage without use_skill = %q, want empty", got)
 	}
-	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolUseSkill))
+	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolUseSkill()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`use_skill`") {
 		t.Fatalf("Usage with use_skill should mention it, got:\n%s", got)
@@ -443,7 +536,7 @@ func TestHistoryProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without history tools = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSessions))
+	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSessions()))
 	assertUsageItemsAreBulleted(t, got)
 	assertNoMultipleToolSentencesOnOneLine(t, got)
 	if !strings.Contains(got, "`list_sessions`") {
@@ -453,7 +546,7 @@ func TestHistoryProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage with only list_sessions should not mention search_messages, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolGetMessages))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolGetMessages()))
 	assertUsageItemsAreBulleted(t, got)
 	assertNoMultipleToolSentencesOnOneLine(t, got)
 	if !strings.Contains(got, "`get_messages`") {
@@ -465,7 +558,7 @@ func TestHistoryProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSearchMessages))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSearchMessages()))
 	assertUsageItemsAreBulleted(t, got)
 	assertNoMultipleToolSentencesOnOneLine(t, got)
 	if !strings.Contains(got, "`search_messages`") {
@@ -473,6 +566,24 @@ func TestHistoryProviderUsageGatesRegisteredTools(t *testing.T) {
 	}
 	if strings.Contains(got, "`list_sessions`") {
 		t.Fatalf("Usage with only search_messages should not mention list_sessions, got:\n%s", got)
+	}
+
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSessions(), ToolGetMessages()))
+	assertUsageItemsAreBulleted(t, got)
+	if !strings.Contains(got, "as `session_id` for `get_messages`") {
+		t.Fatalf("Usage with list_sessions/get_messages should explain session_id dependency, got:\n%s", got)
+	}
+	if strings.Contains(got, "`search_messages`") {
+		t.Fatalf("Usage without search_messages should not mention it, got:\n%s", got)
+	}
+
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSessions(), ToolSearchMessages()))
+	assertUsageItemsAreBulleted(t, got)
+	if !strings.Contains(got, "as `session_id` for `search_messages`") {
+		t.Fatalf("Usage with list_sessions/search_messages should explain session_id dependency, got:\n%s", got)
+	}
+	if strings.Contains(got, "`get_messages`") {
+		t.Fatalf("Usage without get_messages should not mention it, got:\n%s", got)
 	}
 }
 
@@ -484,7 +595,7 @@ func TestContactsProviderUsageGatesGetContacts(t *testing.T) {
 		t.Fatalf("Usage without get_contacts = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}, availableToolsForTest(ToolGetContacts, ToolSend, ToolSearchMessages))
+	got := provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}, availableToolsForTest(ToolGetContacts(), ToolSend(), ToolSearchMessages()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`get_contacts`", "`send`", "`search_messages`"} {
 		if !strings.Contains(got, want) {
@@ -500,13 +611,13 @@ func TestContactsProviderUsageGatesGetContacts(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Schedule, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}, availableToolsForTest(ToolGetContacts, ToolSend))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Schedule, CurrentPlatform: "telegram", ReplyTarget: "chat-1"}, availableToolsForTest(ToolGetContacts(), ToolSend()))
 	assertUsageItemsAreBulleted(t, got)
 	if strings.Contains(got, "Omit `target`") || !strings.Contains(got, "Pass the returned `platform` and `target`") {
 		t.Fatalf("Usage for background contacts/messaging should point to returned target values, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolGetContacts))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolGetContacts()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`get_contacts`") {
 		t.Fatalf("Usage with get_contacts should mention it, got:\n%s", got)
@@ -517,7 +628,7 @@ func TestContactsProviderUsageGatesGetContacts(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolGetContacts, ToolSearchMessages))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolGetContacts(), ToolSearchMessages()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`search_messages`") {
 		t.Fatalf("Usage with search_messages should mention it, got:\n%s", got)
@@ -526,6 +637,15 @@ func TestContactsProviderUsageGatesGetContacts(t *testing.T) {
 		if strings.Contains(got, absent) {
 			t.Fatalf("Usage with only search_messages should not imply %q, got:\n%s", absent, got)
 		}
+	}
+	if !strings.Contains(got, "`session_id` or `contact_id` filters for `search_messages`") {
+		t.Fatalf("Usage with search_messages should scope contact filters to search_messages, got:\n%s", got)
+	}
+
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolGetContacts(), ToolListSessions(), ToolGetMessages()))
+	assertUsageItemsAreBulleted(t, got)
+	if strings.Contains(got, "contact filters") || strings.Contains(got, "`contact_id`") {
+		t.Fatalf("Usage without search_messages should not suggest contact filters for list/get history tools, got:\n%s", got)
 	}
 }
 
@@ -537,7 +657,7 @@ func TestBrowserProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without browser tools = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolBrowserObserve, ToolBrowserAction))
+	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolBrowserObserve(), ToolBrowserAction()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`browser_observe`") || !strings.Contains(got, "`browser_action`") {
 		t.Fatalf("Usage with browser tools should mention them, got:\n%s", got)
@@ -548,7 +668,7 @@ func TestBrowserProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolComputerObserve, ToolComputerAction, ToolBrowserRemoteSession, ToolRead))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolComputerObserve(), ToolComputerAction(), ToolBrowserRemoteSession(), ToolRead()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`computer_observe`", "`computer_action`", "`browser_remote_session`"} {
 		if !strings.Contains(got, want) {
@@ -564,13 +684,13 @@ func TestBrowserProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SupportsImageInput: true}, availableToolsForTest(ToolComputerObserve, ToolRead))
+	got = provider.Usage(context.Background(), SessionContext{SupportsImageInput: true}, availableToolsForTest(ToolComputerObserve(), ToolRead()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`computer_observe`") || !strings.Contains(got, "`read`") || !strings.Contains(got, "when you need the image") {
 		t.Fatalf("Usage with observe/read and image input support should mention image read path, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolBrowserAction))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolBrowserAction()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`browser_action`") {
 		t.Fatalf("Usage with browser_action should mention it, got:\n%s", got)
@@ -581,7 +701,7 @@ func TestBrowserProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolBrowserRemoteSession))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolBrowserRemoteSession()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`browser_remote_session`") {
 		t.Fatalf("Usage with browser_remote_session should mention it, got:\n%s", got)
@@ -604,7 +724,7 @@ func TestScheduleProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without schedule tools = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolCreateSchedule, ToolSend))
+	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolCreateSchedule(), ToolSend()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`create_schedule`") || !strings.Contains(got, "`send`") {
 		t.Fatalf("Usage with create_schedule/send should mention them, got:\n%s", got)
@@ -618,7 +738,7 @@ func TestScheduleProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolCreateSchedule))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolCreateSchedule()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`create_schedule`") {
 		t.Fatalf("Usage with create_schedule should mention it, got:\n%s", got)
@@ -627,7 +747,7 @@ func TestScheduleProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without messaging tools should not mention send/speak, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolCreateSchedule, ToolSpeak))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolCreateSchedule(), ToolSpeak()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`create_schedule`") {
 		t.Fatalf("Usage with create_schedule/speak should mention create_schedule, got:\n%s", got)
@@ -639,7 +759,7 @@ func TestScheduleProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage with create_schedule/speak should require explicit delivery target in scheduled commands, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSchedule, ToolGetSchedule, ToolUpdateSchedule, ToolDeleteSchedule))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSchedule(), ToolGetSchedule(), ToolUpdateSchedule(), ToolDeleteSchedule()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`list_schedule`", "`get_schedule`", "`update_schedule`", "`delete_schedule`"} {
 		if !strings.Contains(got, want) {
@@ -650,7 +770,7 @@ func TestScheduleProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without create_schedule/send should not mention them, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSchedule))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolListSchedule()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`list_schedule`") {
 		t.Fatalf("Usage with list_schedule should mention it, got:\n%s", got)
@@ -670,10 +790,16 @@ func TestSpawnProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without spawn_agent = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpawnAgent))
+	got := provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpawnAgent()))
 	assertUsageItemsAreBulleted(t, got)
 	if !strings.Contains(got, "`spawn_agent`") {
 		t.Fatalf("Usage with spawn_agent should mention it, got:\n%s", got)
+	}
+	if !strings.Contains(got, "restricted worker tool set") {
+		t.Fatalf("Usage with spawn_agent should describe restricted worker tools, got:\n%s", got)
+	}
+	if strings.Contains(got, "unless those tools are explicitly available") {
+		t.Fatalf("Usage with spawn_agent should not imply side-effect tools can be passed through, got:\n%s", got)
 	}
 	for _, absent := range []string{"`send_message`", "`wait_agent`"} {
 		if strings.Contains(got, absent) {
@@ -681,7 +807,7 @@ func TestSpawnProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpawnAgent, ToolSendMessage, ToolWaitAgent))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpawnAgent(), ToolSendMessage(), ToolWaitAgent()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`spawn_agent`", "`send_message`", "`wait_agent`"} {
 		if !strings.Contains(got, want) {
@@ -694,7 +820,7 @@ func TestSpawnProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpawnAgent, ToolSendMessage, ToolWaitAgent, ToolListAgents, ToolListBackground, ToolGetBackgroundStatus, ToolKillBackground, ToolSearchMessages))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSpawnAgent(), ToolSendMessage(), ToolWaitAgent(), ToolListAgents(), ToolListBackground(), ToolGetBackgroundStatus(), ToolKillBackground(), ToolSearchMessages()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`spawn_agent`", "`send_message`", "`wait_agent`", "`list_agents`", "`list_background`", "`get_background_status`", "`kill_background`", "`search_messages`"} {
 		if !strings.Contains(got, want) {
@@ -702,7 +828,7 @@ func TestSpawnProviderUsageGatesRegisteredTools(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSendMessage, ToolWaitAgent, ToolListAgents))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolSendMessage(), ToolWaitAgent(), ToolListAgents()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`send_message`", "`wait_agent`", "`list_agents`"} {
 		if !strings.Contains(got, want) {
@@ -713,7 +839,7 @@ func TestSpawnProviderUsageGatesRegisteredTools(t *testing.T) {
 		t.Fatalf("Usage without spawn_agent should not mention it, got:\n%s", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolWaitAgent, ToolListAgents, ToolListBackground, ToolGetBackgroundStatus))
+	got = provider.Usage(context.Background(), SessionContext{}, availableToolsForTest(ToolWaitAgent(), ToolListAgents(), ToolListBackground(), ToolGetBackgroundStatus()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`wait_agent`", "`list_agents`", "`list_background`", "`get_background_status`"} {
 		if !strings.Contains(got, want) {
