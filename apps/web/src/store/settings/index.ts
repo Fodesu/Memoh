@@ -3,6 +3,7 @@ import { computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useColorMode, useStorage } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
+import type { BundledTheme } from 'shiki'
 import { isColorSchemeId, type ColorSchemeId } from '@/constants/color-schemes'
 import {
   applyTypographyVariables,
@@ -15,6 +16,13 @@ import {
   normalizeStoredFontFamilyInput,
   normalizeUiFontSizePx,
 } from './typography'
+import {
+  DEFAULT_SHIKI_THEME_DARK,
+  DEFAULT_SHIKI_THEME_LIGHT,
+  normalizeShikiTheme,
+  type ShikiThemeVariant,
+} from './shiki-theme'
+import { DEFAULT_MERMAID_THEME, isMermaidTheme, type MermaidTheme } from './mermaid'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 
@@ -26,6 +34,9 @@ export interface Settings {
   codeFontFamily: string;
   uiFontSizePx: number;
   codeFontSizePx: number;
+  shikiThemeLight: BundledTheme;
+  shikiThemeDark: BundledTheme;
+  mermaidTheme: MermaidTheme;
 }
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -40,8 +51,12 @@ export const useSettingsStore = defineStore('settings', () => {
   const codeFontFamily = useStorage<string>('code-font-family', '')
   const uiFontSizePx = useStorage<number>('ui-font-size-px', DEFAULT_UI_FONT_SIZE_PX)
   const codeFontSizePx = useStorage<number>('code-font-size-px', DEFAULT_CODE_FONT_SIZE_PX)
+  const shikiThemeLight = useStorage<BundledTheme>('shiki-theme-light', DEFAULT_SHIKI_THEME_LIGHT)
+  const shikiThemeDark = useStorage<BundledTheme>('shiki-theme-dark', DEFAULT_SHIKI_THEME_DARK)
+  const mermaidTheme = useStorage<MermaidTheme>('mermaid-theme', DEFAULT_MERMAID_THEME)
   const uiFontStack = computed(() => cssFontFamilyDeclaration(uiFontFamily.value, DEFAULT_UI_FONT_FAMILY))
   const codeFontStack = computed(() => cssFontFamilyDeclaration(codeFontFamily.value, DEFAULT_CODE_FONT_FAMILY))
+  const shikiThemes = computed(() => ({ light: shikiThemeLight.value, dark: shikiThemeDark.value }))
 
   const applyColorScheme = (value: ColorSchemeId) => {
     if (typeof document === 'undefined') return
@@ -68,6 +83,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   if (!isColorSchemeId(colorScheme.value)) {
     colorScheme.value = 'memoh'
+  }
+  shikiThemeLight.value = normalizeShikiTheme(shikiThemeLight.value, 'light')
+  shikiThemeDark.value = normalizeShikiTheme(shikiThemeDark.value, 'dark')
+  if (!isMermaidTheme(mermaidTheme.value)) {
+    mermaidTheme.value = DEFAULT_MERMAID_THEME
   }
   normalizeTypographySettings()
 
@@ -143,6 +163,17 @@ export const useSettingsStore = defineStore('settings', () => {
     codeFontSizePx.value = normalizeCodeFontSizePx(value)
   }
 
+  const setShikiTheme = (variant: ShikiThemeVariant, value: BundledTheme) => {
+    const next = normalizeShikiTheme(value, variant)
+    if (variant === 'light') shikiThemeLight.value = next
+    else shikiThemeDark.value = next
+  }
+
+  const setMermaidTheme = (value: MermaidTheme) => {
+    if (!isMermaidTheme(value)) return
+    mermaidTheme.value = value
+  }
+
   return {
     language,
     theme,
@@ -151,6 +182,10 @@ export const useSettingsStore = defineStore('settings', () => {
     codeFontFamily,
     uiFontSizePx,
     codeFontSizePx,
+    shikiThemeLight,
+    shikiThemeDark,
+    shikiThemes,
+    mermaidTheme,
     defaultUiFontFamily,
     defaultCodeFontFamily,
     uiFontStack,
@@ -162,5 +197,10 @@ export const useSettingsStore = defineStore('settings', () => {
     setCodeFontFamily,
     setUiFontSizePx,
     setCodeFontSizePx,
+    setShikiTheme,
+    setMermaidTheme,
   }
 })
+
+export type { MermaidTheme } from './mermaid'
+export { MERMAID_THEMES, DEFAULT_MERMAID_THEME } from './mermaid'

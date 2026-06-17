@@ -204,6 +204,13 @@
       "codeFontFamilyDescription": "標準のコードフォントを上書きします",
       "codeFontSize": "コードフォントサイズ",
       "codeFontSizeDescription": "コードエディタ、コードブロック、ターミナルに適用されます",
+      "syntaxHighlighting": "Syntax Highlight",
+      "shikiThemeLight": "Light テーマ",
+      "shikiThemeLightDescription": "Light モード時のコードブロックとエディタに適用されます",
+      "shikiThemeDark": "Dark テーマ",
+      "shikiThemeDarkDescription": "Dark モード時のコードブロックとエディタに適用されます",
+      "shikiThemeSearch": "テーマを検索…",
+      "shikiThemeEmpty": "該当するテーマがありません。",
       "colorSchemes": {
         "memoh": "Memoh",
         "ocean": "海",
@@ -217,7 +224,12 @@
         "forest": "控えめなグリーントーン",
         "rose": "温かみのあるアクセントと柔らかなコントラスト",
         "amber": "明確なステータスインジケーターを備えた金色のハイライト"
-      }
+      },
+      "codeHighlight": "コードハイライト",
+      "codeHighlightDescription": "コードブロックとエディタに適用される配色。",
+      "diagrams": "ダイアグラム",
+      "mermaidTheme": "Mermaid テーマ",
+      "mermaidThemeDescription": "レンダリング済みの Mermaid 図表に適用されます。"
     },
     "keyboard": {
       "title": "キーボードショートカット",

@@ -123,6 +123,7 @@
               :fade="message.streaming"
               :show-tooltips="false"
               :mermaid-props="{ showTooltips: false }"
+              :theme="codeBlockTheme"
               custom-id="chat-msg"
             />
           </div>
@@ -254,6 +255,7 @@
                   :fade="isAssistantBlockStreaming(node.index)"
                   :show-tooltips="false"
                   :mermaid-props="{ showTooltips: false }"
+                  :theme="codeBlockTheme"
                   custom-id="chat-msg"
                 />
               </div>
@@ -313,8 +315,10 @@
 </template>
 
 <script lang="ts">
+import { setCustomComponents } from 'markstream-vue'
 import ChatCodeBlock from './chat-code-block.vue'
 import { registerSharedMarkdownComponents } from '@/components/markdown'
+import ThemedMermaidBlock from '@/components/themed-mermaid-block/index.vue'
 
 // Scope the chat renderer ("chat-msg"): replace markstream's heavy Monaco code
 // block (and its font-size/expand/preview toolbar that surfaced raw i18n keys)
@@ -323,6 +327,10 @@ import { registerSharedMarkdownComponents } from '@/components/markdown'
 // node components (library Checkbox task markers, link-language footnotes).
 // Runs once at module load.
 registerSharedMarkdownComponents('chat-msg', { code_block: ChatCodeBlock, shell: ChatCodeBlock })
+// Mermaid is registered globally so the appearance preference wins over the
+// markstream default (which only follows the host renderer's isDark flag). One
+// registration covers chat + file preview + any future MarkdownRender call site.
+setCustomComponents({ mermaid: ThemedMermaidBlock })
 </script>
 
 <script setup lang="ts">
@@ -363,6 +371,10 @@ enableMermaid()
 
 const settingsStore = useSettingsStore()
 const isDark = computed(() => settingsStore.theme === 'dark')
+const codeBlockTheme = computed(() => ({
+  light: settingsStore.shikiThemeLight,
+  dark: settingsStore.shikiThemeDark,
+}))
 
 const messageEl = useTemplateRef('messageItem')
 const emit = defineEmits<{

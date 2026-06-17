@@ -151,40 +151,133 @@
           />
         </SettingsRow>
 
+        <SettingsRow
+          :label="t('settings.appearance.codeFontFamily')"
+          :description="t('settings.appearance.codeFontFamilyDescription')"
+        >
+          <Input
+            id="code-font-family"
+            :model-value="codeFontFamilyDraft"
+            :placeholder="defaultCodeFontFamily"
+            class="h-8 w-48 font-mono text-xs"
+            @update:model-value="(value) => updateCodeFontFamilyDraft(value)"
+            @change="commitCodeFontFamilyDraft"
+            @blur="commitCodeFontFamilyDraft"
+            @keydown.enter="commitCodeFontFamilyDraft"
+          />
+        </SettingsRow>
+
+        <div class="mx-4 border-b border-border py-3 last:border-b-0">
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-foreground">
+              {{ t('settings.appearance.codeHighlight') }}
+            </div>
+            <p class="mt-0.5 text-xs text-muted-foreground">
+              {{ t('settings.appearance.codeHighlightDescription') }}
+            </p>
+          </div>
+          <div class="mt-3 grid gap-3 sm:grid-cols-2">
+            <div class="space-y-2">
+              <SearchableSelectPopover
+                v-model="shikiThemeLightSelection"
+                :options="lightShikiThemeOptions"
+                :placeholder="t('settings.appearance.shikiThemeLight')"
+                :aria-label="t('settings.appearance.shikiThemeLight')"
+                :search-placeholder="t('settings.appearance.shikiThemeSearch')"
+                :search-aria-label="t('settings.appearance.shikiThemeSearch')"
+                :empty-text="t('settings.appearance.shikiThemeEmpty')"
+                :show-group-headers="false"
+              />
+              <div
+                class="typography-code-preview shiki-preview pointer-events-none overflow-hidden"
+                :style="codeFontPreviewStyle"
+                inert
+              >
+                <!-- eslint-disable vue/no-v-html -->
+                <div
+                  class="overflow-x-auto"
+                  v-html="codeFontPreviewLightHtml"
+                />
+                <!-- eslint-enable vue/no-v-html -->
+              </div>
+            </div>
+            <div class="space-y-2">
+              <SearchableSelectPopover
+                v-model="shikiThemeDarkSelection"
+                :options="darkShikiThemeOptions"
+                :placeholder="t('settings.appearance.shikiThemeDark')"
+                :aria-label="t('settings.appearance.shikiThemeDark')"
+                :search-placeholder="t('settings.appearance.shikiThemeSearch')"
+                :search-aria-label="t('settings.appearance.shikiThemeSearch')"
+                :empty-text="t('settings.appearance.shikiThemeEmpty')"
+                :show-group-headers="false"
+              />
+              <div
+                class="typography-code-preview shiki-preview pointer-events-none overflow-hidden"
+                :style="codeFontPreviewStyle"
+                inert
+              >
+                <!-- eslint-disable vue/no-v-html -->
+                <div
+                  class="overflow-x-auto"
+                  v-html="codeFontPreviewDarkHtml"
+                />
+                <!-- eslint-enable vue/no-v-html -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection :title="t('settings.appearance.diagrams')">
         <div class="mx-4 border-b border-border py-3 last:border-b-0">
           <div class="flex min-h-[2.25rem] items-center justify-between gap-4">
             <div class="min-w-0">
               <div class="text-sm font-medium text-foreground">
-                {{ t('settings.appearance.codeFontFamily') }}
+                {{ t('settings.appearance.mermaidTheme') }}
               </div>
               <p class="mt-0.5 text-xs text-muted-foreground">
-                {{ t('settings.appearance.codeFontFamilyDescription') }}
+                {{ t('settings.appearance.mermaidThemeDescription') }}
               </p>
             </div>
             <div class="shrink-0">
-              <Input
-                id="code-font-family"
-                :model-value="codeFontFamilyDraft"
-                :placeholder="defaultCodeFontFamily"
-                class="h-8 w-48 font-mono text-xs"
-                @update:model-value="(value) => updateCodeFontFamilyDraft(value)"
-                @change="commitCodeFontFamilyDraft"
-                @blur="commitCodeFontFamilyDraft"
-                @keydown.enter="commitCodeFontFamilyDraft"
-              />
+              <Select
+                :model-value="mermaidTheme"
+                @update:model-value="(value) => value && setMermaidTheme(value as MermaidTheme)"
+              >
+                <SelectTrigger
+                  size="sm"
+                  class="min-w-36"
+                >
+                  <SelectValue>
+                    {{ mermaidThemeLabels[mermaidTheme] }}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent
+                  align="end"
+                  :align-offset="0"
+                >
+                  <SelectItem
+                    v-for="value in MERMAID_THEMES"
+                    :key="value"
+                    :value="value"
+                  >
+                    {{ mermaidThemeLabels[value] }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div
-            class="typography-code-preview pointer-events-none mt-3 border-l-4 border-l-warning-border pl-3"
-            :style="codeFontPreviewStyle"
-            inert
-          >
-            <!-- eslint-disable vue/no-v-html -->
-            <div
-              class="overflow-x-auto"
-              v-html="codeFontPreviewHtml"
+          <div class="appearance-mermaid-preview pointer-events-none mt-3">
+            <MarkdownRender
+              :key="mermaidPreviewKey"
+              :content="MERMAID_PREVIEW_CONTENT"
+              :is-dark="isDark"
+              :typewriter="false"
+              :fade="false"
+              :mermaid-props="MERMAID_PREVIEW_PROPS"
+              custom-id="appearance-mermaid-preview"
             />
-            <!-- eslint-enable vue/no-v-html -->
           </div>
         </div>
       </SettingsSection>
@@ -210,19 +303,81 @@ import { Monitor, Moon, Sun } from 'lucide-vue-next'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import MarkdownRender, { enableMermaid, setCustomComponents } from 'markstream-vue'
 import { useShikiHighlighter } from '@/composables/useShikiHighlighter'
 import type { Locale } from '@/i18n'
+import type { BundledTheme } from 'shiki'
 import SettingsRow from '@/components/settings/row.vue'
 import SettingsSection from '@/components/settings/section.vue'
+import SearchableSelectPopover from '@/components/searchable-select-popover/index.vue'
+import type { SearchableSelectOption } from '@/components/searchable-select-popover/index.vue'
+import ThemedMermaidBlock from '@/components/themed-mermaid-block/index.vue'
 import { colorSchemes, type ColorSchemeId, type ColorSchemeOption } from '@/constants/color-schemes'
-import { useSettingsStore, type ThemePreference } from '@/store/settings'
+import { MERMAID_THEMES, type MermaidTheme, useSettingsStore, type ThemePreference } from '@/store/settings'
+import { listBundledShikiThemes } from '@/store/settings/shiki-theme'
 import { cssFontFamilyDeclaration, DEFAULT_CODE_FONT_FAMILY, DEFAULT_CODE_FONT_SIZE_PX, DEFAULT_UI_FONT_SIZE_PX, normalizeCodeFontSizePx } from '@/store/settings/typography'
+
+enableMermaid()
+setCustomComponents({ mermaid: ThemedMermaidBlock })
+
+const MERMAID_PREVIEW_CONTENT = `\`\`\`mermaid
+flowchart LR
+  A([Idea]) --> B{Pick a theme}
+  B -->|Auto| C[Match interface]
+  B -->|Forest| D[Forest]
+  B -->|Neutral| E[Neutral]
+\`\`\``
+
+// Hide every chrome control on the preview's mermaid block; we want just the
+// bare diagram, no header, no toolbar.
+const MERMAID_PREVIEW_PROPS = {
+  showHeader: false,
+  showModeToggle: false,
+  showCopyButton: false,
+  showExportButton: false,
+  showFullscreenButton: false,
+  showCollapseButton: false,
+  showZoomControls: false,
+  enableMermaidInteractions: false,
+} as const
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
-const { language, theme, colorScheme, uiFontFamily, codeFontFamily, uiFontSizePx, codeFontSizePx, defaultUiFontFamily, defaultCodeFontFamily } = storeToRefs(settingsStore)
-const { setLanguage, setTheme, setColorScheme, setUiFontFamily, setCodeFontFamily, setUiFontSizePx, setCodeFontSizePx } = settingsStore
+const { language, theme, colorScheme, uiFontFamily, codeFontFamily, uiFontSizePx, codeFontSizePx, shikiThemeLight, shikiThemeDark, mermaidTheme, defaultUiFontFamily, defaultCodeFontFamily } = storeToRefs(settingsStore)
+const { setLanguage, setTheme, setColorScheme, setUiFontFamily, setCodeFontFamily, setUiFontSizePx, setCodeFontSizePx, setShikiTheme, setMermaidTheme } = settingsStore
 const isDark = useDark()
+
+const mermaidThemeLabels: Record<MermaidTheme, string> = {
+  auto: 'Auto',
+  default: 'Default',
+  dark: 'Dark',
+  forest: 'Forest',
+  neutral: 'Neutral',
+}
+
+// Mermaid renders to SVG once per source+theme; force a remount when either
+// changes so the preview reflects the picked theme immediately.
+const mermaidPreviewKey = computed(() => `${mermaidTheme.value}:${isDark.value ? 'dark' : 'light'}`)
+
+const allShikiThemes = listBundledShikiThemes()
+const lightShikiThemeOptions = computed<SearchableSelectOption[]>(() =>
+  allShikiThemes
+    .filter(theme => theme.type === 'light')
+    .map(theme => ({ value: theme.id, label: theme.displayName, keywords: [theme.id] })),
+)
+const darkShikiThemeOptions = computed<SearchableSelectOption[]>(() =>
+  allShikiThemes
+    .filter(theme => theme.type === 'dark')
+    .map(theme => ({ value: theme.id, label: theme.displayName, keywords: [theme.id] })),
+)
+const shikiThemeLightSelection = computed<string>({
+  get: () => shikiThemeLight.value,
+  set: (value) => setShikiTheme('light', value as BundledTheme),
+})
+const shikiThemeDarkSelection = computed<string>({
+  get: () => shikiThemeDark.value,
+  set: (value) => setShikiTheme('dark', value as BundledTheme),
+})
 
 const currentColorScheme = computed(() =>
   colorSchemes.find(scheme => scheme.id === colorScheme.value) ?? colorSchemes[0],
@@ -247,20 +402,35 @@ const uiFontSizeDraft = ref(String(uiFontSizePx.value))
 const codeFontSizeDraft = ref(String(codeFontSizePx.value))
 const uiFontFamilyDraft = ref(uiFontFamily.value)
 const codeFontFamilyDraft = ref(codeFontFamily.value)
-const codeFontPreview = useShikiHighlighter()
+// Each variant renders in its own highlighter against its picked theme, so
+// the two previews always show the chosen light + dark side-by-side regardless
+// of the interface mode (mirrors Claude Code's Code-appearance panel).
+const codeFontPreviewLight = useShikiHighlighter()
+const codeFontPreviewDark = useShikiHighlighter()
 const codeFontPreviewCode = `function greet(name: string): string {
   return \`Hello, \${name}\`
 }`
-const codeFontPreviewHtml = computed(() => codeFontPreview.html.value || `<pre><code>${codeFontPreviewCode}</code></pre>`)
+const codeFontPreviewFallback = `<pre><code>${codeFontPreviewCode}</code></pre>`
+const codeFontPreviewLightHtml = computed(() => codeFontPreviewLight.html.value || codeFontPreviewFallback)
+const codeFontPreviewDarkHtml = computed(() => codeFontPreviewDark.html.value || codeFontPreviewFallback)
 const codeFontPreviewStyle = computed(() => ({
   '--typography-code-preview-font-family': cssFontFamilyDeclaration(codeFontFamilyDraft.value, DEFAULT_CODE_FONT_FAMILY),
   '--typography-code-preview-font-size': `${normalizeCodeFontSizePx(codeFontSizeDraft.value)}px`,
 }))
 
 function renderCodeFontPreview() {
-  void codeFontPreview.highlightLanguage(codeFontPreviewCode, 'typescript', {
-    theme: isDark.value ? 'github-dark' : 'github-light',
-    transparentPre: true,
+  // Both halves of each preview use the SAME picked theme. The design system's
+  // `.dark .shiki span` !important rule forces every span color to var(--shiki-dark)
+  // in dark interface mode; pinning both halves means that variable already equals
+  // the chosen theme's colors, so the cascade override is a visual no-op and each
+  // preview stays true to its picked theme regardless of interface mode.
+  const light = shikiThemeLight.value as BundledTheme
+  const dark = shikiThemeDark.value as BundledTheme
+  void codeFontPreviewLight.highlightLanguage(codeFontPreviewCode, 'typescript', {
+    themes: { light, dark: light },
+  })
+  void codeFontPreviewDark.highlightLanguage(codeFontPreviewCode, 'typescript', {
+    themes: { light: dark, dark },
   })
 }
 
@@ -272,7 +442,7 @@ watch(uiFontSizePx, (value) => { uiFontSizeDraft.value = String(value) })
 watch(codeFontSizePx, (value) => { codeFontSizeDraft.value = String(value) })
 watch(uiFontFamily, (value) => { uiFontFamilyDraft.value = value })
 watch(codeFontFamily, (value) => { codeFontFamilyDraft.value = value })
-watch(isDark, () => { renderCodeFontPreview() })
+watch([shikiThemeLight, shikiThemeDark], () => { renderCodeFontPreview() })
 
 function updateUiFontSizeDraft(value: string | number) { uiFontSizeDraft.value = String(value) }
 function updateCodeFontSizeDraft(value: string | number) { codeFontSizeDraft.value = String(value) }
@@ -309,3 +479,34 @@ function commitCodeFontFamilyDraft() {
   codeFontFamilyDraft.value = codeFontFamily.value
 }
 </script>
+
+<style scoped>
+/* Strip markstream-vue's card chrome off the appearance preview so only the
+   bare diagram shows — no border, no surface background, no rounding. */
+.appearance-mermaid-preview :deep(.mermaid-block-container) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.appearance-mermaid-preview :deep(.mermaid-preview-area) {
+  background: transparent;
+}
+
+/* The shiki preview keeps the theme's inline background-color on <pre>, so
+   the parent typography-code-preview rule's `padding: 0` would crowd the code
+   against the corners. Re-add comfortable padding inside the themed box, and
+   derive the rounded outline from the theme's own text color (via currentColor)
+   so it stays stable across UI mode flips — UI tokens like --color-border
+   adapt with light/dark, which we want for page chrome but not for these
+   theme previews. Line numbers follow the same idea so they stay legible on
+   any chosen theme. */
+.shiki-preview :deep(pre) {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
+}
+.shiki-preview :deep(.line::before) {
+  color: currentColor;
+  opacity: 0.45;
+}
+</style>
