@@ -54,7 +54,7 @@ func (p *WebProvider) Tools(_ context.Context, session SessionContext) ([]sdk.To
 	sess := session
 	return []sdk.Tool{
 		{
-			Name:        "web_search",
+			Name:        ToolWebSearch().String(),
 			Description: "Search web results via configured search provider.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -87,6 +87,9 @@ func (p *WebProvider) execWebSearch(ctx context.Context, session SessionContext,
 	provider, err := p.searchProviders.GetRawByID(ctx, searchProviderID)
 	if err != nil {
 		return nil, err
+	}
+	if !provider.Enable {
+		return nil, errors.New("search provider is disabled")
 	}
 	registerSearchProviderSecrets(provider)
 

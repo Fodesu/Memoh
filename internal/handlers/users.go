@@ -573,12 +573,33 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 			send(createContainerCreatingEvent{Type: "creating"})
 		case "restoring":
 			send(createContainerRestoringEvent{Type: "restoring"})
+		case "complete":
+			send(createContainerCompleteEvent{
+				Type: "complete",
+				Container: CreateContainerResponse{
+					ContainerID:      event.ContainerID,
+					WorkspaceBackend: event.WorkspaceBackend,
+					RuntimeBackend:   event.RuntimeBackend,
+					ContainerPath:    event.ContainerPath,
+					Image:            event.Image,
+					CDIDevices:       event.CDIDevices,
+					Started:          event.Started,
+					DataRestored:     event.DataRestored,
+					HasPreservedData: event.HasPreservedData,
+				},
+			})
 		}
 	}); err != nil {
 		h.logger.Error("bot container setup failed",
 			slog.String("bot_id", bot.ID),
 			slog.Any("error", err),
 		)
+		if recordErr := h.botService.RecordContainerSetupFailure(lifecycleCtx, bot.ID, "setup", err); recordErr != nil {
+			h.logger.Warn("record bot container setup failure failed",
+				slog.String("bot_id", bot.ID),
+				slog.Any("error", recordErr),
+			)
+		}
 		if _, readyErr := h.botService.MarkReady(lifecycleCtx, bot.ID); readyErr != nil {
 			h.logger.Error("failed to update bot status to ready after stream create failure",
 				slog.String("bot_id", bot.ID),
@@ -591,6 +612,12 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 		return nil
 	}
 
+	if clearErr := h.botService.ClearContainerSetupFailure(lifecycleCtx, bot.ID); clearErr != nil {
+		h.logger.Warn("clear bot container setup failure failed",
+			slog.String("bot_id", bot.ID),
+			slog.Any("error", clearErr),
+		)
+	}
 	readyBot, err := h.botService.MarkReady(lifecycleCtx, bot.ID)
 	if err != nil {
 		h.logger.Error("failed to update bot status to ready after stream create",
@@ -733,7 +760,10 @@ func (h *UsersHandler) ListBotChecks(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
 	}
 	// Health checks are read-only status; members with chat access may view them.
-	if _, err := AuthorizeBotAccessWithPermission(c.Request().Context(), h.botService, h.service, channelIdentityID, botID, bots.PermissionChat); err != nil {
+	// Detailed diagnostics can contain runtime paths, registry output, or host
+	// network details, so only manage-level users receive detail/metadata fields.
+	bot, err := AuthorizeBotAccessWithPermission(c.Request().Context(), h.botService, h.service, channelIdentityID, botID, bots.PermissionChat)
+	if err != nil {
 		return err
 	}
 	items, err := h.botService.ListChecks(c.Request().Context(), botID)
@@ -743,7 +773,16 @@ func (h *UsersHandler) ListBotChecks(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(http.StatusOK, bots.ListChecksResponse{Items: items})
+	isAdmin, err := h.service.IsAdmin(c.Request().Context(), channelIdentityID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	perms, err := h.botService.ResolveUserPermissions(c.Request().Context(), bot.ID, channelIdentityID, isAdmin)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	includeDetails := bots.HasPermission(perms, bots.PermissionManage)
+	return c.JSON(http.StatusOK, bots.ListChecksResponse{Items: scrubBotChecksForResponse(items, includeDetails)})
 }
 
 // UpdateBot godoc
@@ -785,9 +824,14 @@ func (h *UsersHandler) UpdateBot(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
+	// The bot row is already updated, so a workspace-config write failure
+	// (e.g. the user is mid-typing an API key and it is still empty) must NOT
+	// fail the request. Log and continue — the managed config can be
+	// (re)written from the bot settings page once the credentials are complete.
 	if req.Metadata != nil {
 		if err := h.prepareACPWorkspaceConfig(c.Request().Context(), resp); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			h.logger.Warn("write ACP workspace config after bot update failed",
+				slog.String("bot_id", resp.ID), slog.Any("error", err))
 		}
 	}
 	return c.JSON(http.StatusOK, scrubBotForResponse(resp))

@@ -1,4 +1,5 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import type { PluginOption } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import { createRequire } from 'node:module'
@@ -77,9 +78,19 @@ function resolveProxyTarget(command: 'build' | 'serve'): { port: number; host: s
   return { port, host, baseUrl }
 }
 
-export default defineConfig(({ command }) => {
+export default defineConfig(async ({ command }) => {
   const { port, host, baseUrl } = resolveProxyTarget(command)
   const bundledElectronToolkit = ['@electron-toolkit/preload', '@electron-toolkit/utils']
+
+  const devtoolsPlugins: PluginOption[] = []
+  if (command !== 'build') {
+    try {
+      const { default: vueDevTools } = await import('vite-plugin-vue-devtools')
+      devtoolsPlugins.push(vueDevTools())
+    } catch {
+      // DevTools is optional — never block startup.
+    }
+  }
 
   return {
     main: {
@@ -102,7 +113,7 @@ export default defineConfig(({ command }) => {
       // Reuse apps/web/public so absolute-path assets (e.g. /logo.svg) resolve
       // when web modules are imported directly from the desktop renderer.
       publicDir: resolve(__dirname, '../web/public'),
-      plugins: [vue(), tailwindcss()],
+      plugins: [...devtoolsPlugins, vue(), tailwindcss()],
       resolve: {
         alias: {
           '@renderer': fileURLToPath(new URL('./src/renderer/src', import.meta.url)),
@@ -112,23 +123,29 @@ export default defineConfig(({ command }) => {
         },
       },
       optimizeDeps: {
+        // Only pre-bundle from the renderer entry — scanning all web pages
+        // forces esbuild to crawl Monaco/xterm/ECharts/Mermaid/etc. on every
+        // new import, which during AI-assisted editing triggers repeated
+        // full dev-server restarts and page reloads. Vite's scanner follows
+        // dynamic imports in the router, so page-level deps are still
+        // discovered without listing every page here.
         entries: [
           'src/renderer/src/main.ts',
-          '../web/src/main.ts',
-          '../web/src/pages/**/*.vue',
         ],
       },
       build: {
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/renderer/index.html'),
-            settings: resolve(__dirname, 'src/renderer/settings.html'),
           },
         },
       },
       server: {
         port,
         host,
+        hmr: {
+          overlay: false,
+        },
         proxy: {
           '/api': {
             target: baseUrl,

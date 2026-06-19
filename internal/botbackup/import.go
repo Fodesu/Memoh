@@ -24,6 +24,7 @@ import (
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	emailpkg "github.com/memohai/memoh/internal/email"
+	fetchpkg "github.com/memohai/memoh/internal/fetchproviders"
 	"github.com/memohai/memoh/internal/mcp"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	modelpkg "github.com/memohai/memoh/internal/models"
@@ -654,8 +655,19 @@ type dependencyMap struct {
 	providers       map[string]string
 	models          map[string]string
 	searchProviders map[string]string
+	fetchProviders  map[string]string
 	memoryProviders map[string]string
 	emailProviders  map[string]string
+}
+
+type modelDependency struct {
+	ID         string               `json:"id"`
+	ModelID    string               `json:"model_id"`
+	Name       string               `json:"name"`
+	ProviderID string               `json:"provider_id"`
+	Type       modelpkg.ModelType   `json:"type"`
+	Enable     *bool                `json:"enable,omitempty"`
+	Config     modelpkg.ModelConfig `json:"config"`
 }
 
 func (s *Service) importDependencies(ctx context.Context, state *importState) (dependencyMap, error) {
@@ -663,6 +675,7 @@ func (s *Service) importDependencies(ctx context.Context, state *importState) (d
 		providers:       map[string]string{},
 		models:          map[string]string{},
 		searchProviders: map[string]string{},
+		fetchProviders:  map[string]string{},
 		memoryProviders: map[string]string{},
 		emailProviders:  map[string]string{},
 	}
@@ -675,7 +688,7 @@ func (s *Service) importDependencies(ctx context.Context, state *importState) (d
 		}
 		deps.providers[item.ID] = id
 	}
-	models, _ := readEntry[[]modelpkg.GetResponse](state, "dependencies/models.json")
+	models, _ := readEntry[[]modelDependency](state, "dependencies/models.json")
 	for _, item := range models {
 		id, err := s.ensureModel(ctx, item, deps)
 		if err != nil {
@@ -692,6 +705,15 @@ func (s *Service) importDependencies(ctx context.Context, state *importState) (d
 			continue
 		}
 		deps.searchProviders[item.ID] = id
+	}
+	fetchProviders, _ := readEntry[[]fetchpkg.GetResponse](state, "dependencies/fetch_providers.json")
+	for _, item := range fetchProviders {
+		id, err := s.ensureFetchProvider(ctx, item)
+		if err != nil {
+			state.warnings = append(state.warnings, "fetch provider dependency skipped: "+err.Error())
+			continue
+		}
+		deps.fetchProviders[item.ID] = id
 	}
 	memoryProviders, _ := readEntry[[]memprovider.ProviderGetResponse](state, "dependencies/memory_providers.json")
 	for _, item := range memoryProviders {
@@ -778,6 +800,7 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 				eff.ChatModelID = current.ChatModelID
 				eff.ImageModelID = current.ImageModelID
 				eff.SearchProviderID = current.SearchProviderID
+				eff.FetchProviderID = current.FetchProviderID
 				eff.MemoryProviderID = current.MemoryProviderID
 				eff.TtsModelID = current.TtsModelID
 				eff.TranscriptionModelID = current.TranscriptionModelID
@@ -831,10 +854,12 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 	overlayEnabled := eff.OverlayEnabled
 	overlayProvider := eff.OverlayProvider
 	reasoningEnabled := eff.ReasoningEnabled
+	fetchProviderID := modelID(eff.FetchProviderID, deps.fetchProviders)
 	_, err := s.settings.UpsertBot(ctx, botID, settings.UpsertRequest{
 		ChatModelID:            modelID(eff.ChatModelID, deps.models),
 		ImageModelID:           modelID(eff.ImageModelID, deps.models),
 		SearchProviderID:       modelID(eff.SearchProviderID, deps.searchProviders),
+		FetchProviderID:        &fetchProviderID,
 		MemoryProviderID:       modelID(eff.MemoryProviderID, deps.memoryProviders),
 		TtsModelID:             modelID(eff.TtsModelID, deps.models),
 		TranscriptionModelID:   modelID(eff.TranscriptionModelID, deps.models),
@@ -1163,7 +1188,7 @@ func (s *Service) ensureProvider(ctx context.Context, item providerpkg.GetRespon
 	return created.ID, nil
 }
 
-func (s *Service) ensureModel(ctx context.Context, item modelpkg.GetResponse, deps dependencyMap) (string, error) {
+func (s *Service) ensureModel(ctx context.Context, item modelDependency, deps dependencyMap) (string, error) {
 	if s.models == nil {
 		return item.ID, errors.New("model service not configured")
 	}
@@ -1179,6 +1204,7 @@ func (s *Service) ensureModel(ctx context.Context, item modelpkg.GetResponse, de
 		Name:       item.Name,
 		ProviderID: providerID,
 		Type:       item.Type,
+		Enable:     item.Enable,
 		Config:     item.Config,
 	})
 	if err != nil {
@@ -1204,6 +1230,46 @@ func (s *Service) ensureSearchProvider(ctx context.Context, item searchpkg.GetRe
 	})
 	if err != nil {
 		return "", err
+	}
+	return created.ID, nil
+}
+
+func (s *Service) ensureFetchProvider(ctx context.Context, item fetchpkg.GetResponse) (string, error) {
+	if s.fetchProviders == nil {
+		return item.ID, errors.New("fetch provider service not configured")
+	}
+	if item.Provider == string(fetchpkg.ProviderNative) {
+		list, _ := s.fetchProviders.List(ctx, string(fetchpkg.ProviderNative))
+		for _, existing := range list {
+			return existing.ID, nil
+		}
+		return item.ID, errors.New("native fetch provider is not available")
+	}
+	list, _ := s.fetchProviders.List(ctx, "")
+	for _, existing := range list {
+		if existing.Name == item.Name {
+			if item.Enable && !existing.Enable {
+				enable := true
+				if _, err := s.fetchProviders.Update(ctx, existing.ID, fetchpkg.UpdateRequest{Enable: &enable}); err != nil {
+					return "", err
+				}
+			}
+			return existing.ID, nil
+		}
+	}
+	created, err := s.fetchProviders.Create(ctx, fetchpkg.CreateRequest{
+		Name:     item.Name,
+		Provider: fetchpkg.ProviderName(item.Provider),
+		Config:   item.Config,
+	})
+	if err != nil {
+		return "", err
+	}
+	if item.Enable {
+		enable := true
+		if _, err := s.fetchProviders.Update(ctx, created.ID, fetchpkg.UpdateRequest{Enable: &enable}); err != nil {
+			return "", err
+		}
 	}
 	return created.ID, nil
 }

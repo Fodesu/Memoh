@@ -28,6 +28,10 @@ const toast = vi.hoisted(() => ({
 
 vi.mock('@/composables/api/useChat', () => api)
 vi.mock('vue-sonner', () => ({ toast }))
+vi.mock('@memohai/ui', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@memohai/ui')>()
+  return { ...original, toast }
+})
 
 function flushPromises() {
   return new Promise(resolve => setTimeout(resolve, 0))
@@ -185,6 +189,20 @@ describe('chat-list store', () => {
     })
   })
 
+  it('selects the first ready bot during initialization when none is selected', async () => {
+    api.fetchBots.mockResolvedValueOnce([
+      { id: 'bot-creating', status: 'creating', name: 'Creating' },
+      { id: 'bot-ready', status: 'active', name: 'Ready' },
+    ])
+
+    const store = useChatStore()
+
+    await store.initialize()
+
+    expect(store.currentBotId).toBe('bot-ready')
+    expect(api.fetchSessions).toHaveBeenCalledWith('bot-ready')
+  })
+
   it('returns startup stream errors to the composer when no assistant output exists', async () => {
     const store = useChatStore()
 
@@ -204,6 +222,292 @@ describe('chat-list store', () => {
       error: 'model failed',
       restoreInput: 'hello',
     })
+  })
+
+  it('merges ACP approval tool messages into the existing tool block by call id', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'exec',
+          input: { command: 'make test' },
+          tool_call_id: 'mcp-http-call-1',
+          running: true,
+        },
+      } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1000007,
+          type: 'tool',
+          name: 'exec',
+          input: { command: 'make test' },
+          tool_call_id: 'mcp-http-call-1',
+          running: false,
+          approval: {
+            approval_id: 'approval-1',
+            short_id: 7,
+            status: 'pending',
+            can_approve: true,
+          },
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'stop after visible output' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    const result = await store.sendMessage('run command')
+
+    expect(result).toMatchObject({ ok: false, stage: 'stream' })
+    const assistant = store.messages.find(turn => turn.role === 'assistant')
+    expect(assistant?.role).toBe('assistant')
+    if (!assistant || assistant.role !== 'assistant') {
+      throw new Error('assistant turn was not created')
+    }
+    expect(assistant.messages.filter(block => block.type === 'tool')).toHaveLength(1)
+    const tool = assistant.messages.find(block => block.type === 'tool')
+    expect(tool).toMatchObject({
+      id: 1,
+      type: 'tool',
+      toolCallId: 'mcp-http-call-1',
+      running: false,
+      approval: {
+        approval_id: 'approval-1',
+        status: 'pending',
+      },
+    })
+  })
+
+  it('allows responding to ACP approval while the original stream is still active', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'exec',
+          input: { command: 'pwd' },
+          tool_call_id: 'call-pwd',
+          running: false,
+          approval: {
+            approval_id: 'approval-pwd',
+            short_id: 9,
+            status: 'pending',
+            can_approve: true,
+          },
+        },
+      } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    const sendPromise = store.sendMessage('run pwd')
+    await flushPromises()
+    await flushPromises()
+
+    expect(store.streaming).toBe(true)
+    const initialMessageCount = store.messages.length
+    const assistant = store.messages.find(turn => turn.role === 'assistant')
+    if (!assistant || assistant.role !== 'assistant') {
+      throw new Error('assistant turn was not created')
+    }
+    const tool = assistant.messages.find(block => block.type === 'tool')
+    expect(tool).toMatchObject({
+      toolCallId: 'call-pwd',
+      approval: {
+        approval_id: 'approval-pwd',
+        status: 'pending',
+      },
+    })
+
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      { type: 'end' } as UIStreamEvent,
+    ]
+    await store.respondToolApproval(tool!.approval!, 'approve')
+    await flushPromises()
+
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'tool_approval_response',
+      session_id: 'session-1',
+      approval_id: 'approval-pwd',
+      decision: 'approve',
+    })
+    expect(store.messages).toHaveLength(initialMessageCount)
+    const updatedAssistant = store.messages.find(turn => turn.role === 'assistant')
+    if (!updatedAssistant || updatedAssistant.role !== 'assistant') {
+      throw new Error('assistant turn was not found after approval')
+    }
+    const updatedTool = updatedAssistant.messages.find(block => block.type === 'tool')
+    expect(updatedTool?.approval).toMatchObject({
+      approval_id: 'approval-pwd',
+      status: 'approved',
+      can_approve: false,
+    })
+
+    const originalStreamId = sentWSMessages[0]?.stream_id as string
+    streamHandler?.({
+      type: 'message',
+      stream_id: originalStreamId,
+      session_id: 'session-1',
+      data: {
+        id: 1,
+        type: 'tool',
+        name: 'exec',
+        input: { command: 'pwd' },
+        tool_call_id: 'call-pwd',
+        running: false,
+        approval: {
+          approval_id: 'approval-pwd',
+          short_id: 9,
+          status: 'pending',
+          can_approve: true,
+        },
+      },
+    } as UIStreamEvent)
+    const staleAssistant = store.messages.find(turn => turn.role === 'assistant')
+    if (!staleAssistant || staleAssistant.role !== 'assistant') {
+      throw new Error('assistant turn was not found after stale pending')
+    }
+    const staleTool = staleAssistant.messages.find(block => block.type === 'tool')
+    expect(staleTool?.approval).toMatchObject({
+      approval_id: 'approval-pwd',
+      status: 'approved',
+      can_approve: false,
+    })
+
+    streamHandler?.({ type: 'end', stream_id: originalStreamId, session_id: 'session-1' } as UIStreamEvent)
+    await expect(sendPromise).resolves.toMatchObject({ ok: true })
+  })
+
+  it('rolls the optimistic approval back to pending when the response stream errors', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'exec',
+          input: { command: 'pwd' },
+          tool_call_id: 'call-pwd',
+          running: false,
+          approval: {
+            approval_id: 'approval-pwd',
+            short_id: 9,
+            status: 'pending',
+            can_approve: true,
+          },
+        },
+      } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    const sendPromise = store.sendMessage('run pwd')
+    await flushPromises()
+    await flushPromises()
+
+    const assistant = store.messages.find(turn => turn.role === 'assistant')
+    if (!assistant || assistant.role !== 'assistant') {
+      throw new Error('assistant turn was not created')
+    }
+    const tool = assistant.messages.find(block => block.type === 'tool')
+
+    // The approval response stream fails before the server applies the decision.
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      { type: 'error', message: 'approval failed' } as UIStreamEvent,
+    ]
+    await store.respondToolApproval(tool!.approval!, 'approve')
+    await flushPromises()
+
+    expect(toast.error).toHaveBeenCalledWith('approval failed')
+    const rolledBackTool = assistant.messages.find(block => block.type === 'tool')
+    expect(rolledBackTool?.approval).toMatchObject({
+      approval_id: 'approval-pwd',
+      status: 'pending',
+      can_approve: true,
+    })
+
+    // The user can retry, and the retry goes through.
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      { type: 'end' } as UIStreamEvent,
+    ]
+    const retried = await store.respondToolApproval(rolledBackTool!.approval!, 'approve')
+    await flushPromises()
+
+    expect(retried).toBe(true)
+    const approvalResponses = sentWSMessages.filter(message => message.type === 'tool_approval_response')
+    expect(approvalResponses).toHaveLength(2)
+    const retriedTool = assistant.messages.find(block => block.type === 'tool')
+    expect(retriedTool?.approval).toMatchObject({
+      status: 'approved',
+      can_approve: false,
+    })
+
+    const originalStreamId = sentWSMessages[0]?.stream_id as string
+    streamHandler?.({ type: 'end', stream_id: originalStreamId, session_id: 'session-1' } as UIStreamEvent)
+    await expect(sendPromise).resolves.toMatchObject({ ok: true })
+  })
+
+  it('sends each ACP approval response only once while the response is in flight', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'exec',
+          input: { command: 'pwd' },
+          tool_call_id: 'call-pwd',
+          running: false,
+          approval: {
+            approval_id: 'approval-pwd',
+            short_id: 9,
+            status: 'pending',
+            can_approve: true,
+          },
+        },
+      } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    const sendPromise = store.sendMessage('run pwd')
+    await flushPromises()
+    await flushPromises()
+
+    const assistant = store.messages.find(turn => turn.role === 'assistant')
+    if (!assistant || assistant.role !== 'assistant') {
+      throw new Error('assistant turn was not created')
+    }
+    const tool = assistant.messages.find(block => block.type === 'tool')
+    if (!tool?.approval) {
+      throw new Error('tool approval was not created')
+    }
+    const approval = tool.approval
+
+    sendEvents = [{ type: 'start' } as UIStreamEvent]
+    await store.respondToolApproval(approval, 'approve')
+    await store.respondToolApproval(approval, 'approve')
+    await flushPromises()
+
+    const approvalResponses = sentWSMessages.filter(message => message.type === 'tool_approval_response')
+    expect(approvalResponses).toHaveLength(1)
+
+    const approvalStreamId = approvalResponses[0]?.stream_id as string
+    streamHandler?.({ type: 'end', stream_id: approvalStreamId, session_id: 'session-1' } as UIStreamEvent)
+    const originalStreamId = sentWSMessages[0]?.stream_id as string
+    streamHandler?.({ type: 'end', stream_id: originalStreamId, session_id: 'session-1' } as UIStreamEvent)
+    await expect(sendPromise).resolves.toMatchObject({ ok: true })
   })
 
   it('creates ACP sessions without a placeholder title', async () => {
@@ -957,6 +1261,111 @@ describe('chat-list store', () => {
     expect(api.fetchMessagesUI).toHaveBeenCalledTimes(1)
   })
 
+  it('reconciles refreshed turns in place, preserving identity of unchanged turns', async () => {
+    api.fetchSessions.mockResolvedValueOnce([
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ])
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    api.fetchMessagesUI.mockResolvedValueOnce([{
+      id: 'assistant-1',
+      role: 'assistant',
+      messages: [{ id: 0, type: 'text', content: 'hello' }],
+      timestamp: '2026-01-01T00:00:01Z',
+    }])
+    streamHandler?.({ type: 'start', stream_id: 'stream-a', session_id: 'session-1' } as UIStreamEvent)
+    streamHandler?.({ type: 'end', stream_id: 'stream-a', session_id: 'session-1' } as UIStreamEvent)
+    await flushPromises()
+
+    const turn = store.messages.find(message => message.id === 'assistant-1')
+    const block = turn?.role === 'assistant' ? turn.messages[0] : null
+    expect(turn?.role).toBe('assistant')
+    expect(block?.type).toBe('text')
+
+    api.fetchMessagesUI.mockResolvedValueOnce([{
+      id: 'assistant-1',
+      role: 'assistant',
+      messages: [{ id: 0, type: 'text', content: 'hello world' }],
+      timestamp: '2026-01-01T00:00:01Z',
+    }])
+    streamHandler?.({ type: 'start', stream_id: 'stream-b', session_id: 'session-1' } as UIStreamEvent)
+    streamHandler?.({ type: 'end', stream_id: 'stream-b', session_id: 'session-1' } as UIStreamEvent)
+    await flushPromises()
+
+    const turnAfter = store.messages.find(message => message.id === 'assistant-1')
+    const blockAfter = turnAfter?.role === 'assistant' ? turnAfter.messages[0] : null
+    expect(turnAfter).toBe(turn)
+    expect(blockAfter).toBe(block)
+    expect(blockAfter?.type === 'text' ? blockAfter.content : '').toBe('hello world')
+  })
+
+  it('adopts the server id onto the just-sent optimistic turn in place, keeping its key', async () => {
+    api.fetchSessions.mockResolvedValueOnce([
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ])
+    sendEvents = [
+      { type: 'message', data: { id: 0, type: 'text', content: 'hello' } } as UIStreamEvent,
+      { type: 'end' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    api.fetchMessagesUI.mockResolvedValueOnce([
+      { id: 'srv-user-1', role: 'user', text: 'hi', timestamp: '2026-01-01T00:00:00Z' },
+      { id: 'srv-asst-1', role: 'assistant', messages: [{ id: 0, type: 'text', content: 'hello' }], timestamp: '2026-01-01T00:00:01Z' },
+    ])
+    await store.sendMessage('hi')
+    await flushPromises()
+
+    const asstTurn = store.messages.find(message => message.role === 'assistant')
+    expect(asstTurn).toBeTruthy()
+    expect(asstTurn!.id).not.toBe('srv-asst-1')
+    expect((asstTurn as { serverId?: string }).serverId).toBe('srv-asst-1')
+
+    api.fetchMessagesUI.mockResolvedValueOnce([
+      { id: 'srv-user-1', role: 'user', text: 'hi', timestamp: '2026-01-01T00:00:00Z' },
+      { id: 'srv-asst-1', role: 'assistant', messages: [{ id: 0, type: 'text', content: 'hello' }], timestamp: '2026-01-01T00:00:01Z' },
+      { id: 'srv-user-2', role: 'user', text: 'again', timestamp: '2026-01-01T00:00:02Z' },
+      { id: 'srv-asst-2', role: 'assistant', messages: [{ id: 0, type: 'text', content: 'reply 2' }], timestamp: '2026-01-01T00:00:03Z' },
+    ])
+    await store.sendMessage('again')
+    await flushPromises()
+
+    const asstTurnAfter = store.messages.find(message => (message as { serverId?: string }).serverId === 'srv-asst-1')
+    expect(asstTurnAfter).toBe(asstTurn)
+  })
+
+  it('stamps session updated_at from the server message time, not the client clock or a reorder', async () => {
+    api.fetchSessions.mockResolvedValueOnce([
+      { id: 'session-1', bot_id: 'bot-1', title: 'A', type: 'chat', updated_at: '2026-01-01T00:00:00Z' },
+      { id: 'session-2', bot_id: 'bot-1', title: 'B', type: 'chat', updated_at: '2026-01-02T00:00:00Z' },
+    ])
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    messageEventsHandler?.({
+      type: 'message_created',
+      bot_id: 'bot-1',
+      message: {
+        id: 'm1',
+        bot_id: 'bot-1',
+        session_id: 'session-2',
+        role: 'assistant',
+        content: 'hi',
+        created_at: '2026-01-03T00:00:00Z',
+      },
+    })
+    await flushPromises()
+
+    const updated = store.sessions.find(session => session.id === 'session-2')
+    expect(updated?.updated_at).toBe('2026-01-03T00:00:00Z')
+    expect(store.sessions.map(session => session.id)).toEqual(['session-1', 'session-2'])
+  })
+
   it('refreshes pending user input after response stream failure', async () => {
     api.fetchSessions.mockResolvedValueOnce([
       { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
@@ -1221,5 +1630,833 @@ describe('chat-list store', () => {
     streamHandler?.({ type: 'end', stream_id: streamB, session_id: 'session-b' } as UIStreamEvent)
     await first
     await second
+  })
+
+  it('debounces fsChangedAt bumps when a fs-mutating tool completes', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-write-1',
+          running: false,
+        },
+      } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 2,
+          type: 'tool',
+          name: 'edit',
+          tool_call_id: 'call-edit-1',
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    const before = store.fsChangedAt
+    await store.sendMessage('write file')
+
+    expect(store.fsChangedAt).toBe(before)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.fsChangedAt).toBeGreaterThan(before)
+  })
+
+  it('does not bump fsChangedAt for non-fs-mutating tools', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'web_search',
+          tool_call_id: 'call-search',
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    const before = store.fsChangedAt
+    await store.sendMessage('search')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.fsChangedAt).toBe(before)
+  })
+
+  it('does not double-bump fsChangedAt when a refresh re-delivers a streamed tool', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-stream-then-refresh',
+          input: { path: '/data/dedup.md', content: 'x' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('write file')
+
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const afterStream = store.fsChangedAt
+    expect(afterStream).toBeGreaterThan(0)
+
+    // Now a refresh delivers the SAME tool call again — should not re-bump.
+    api.fetchMessagesUI.mockResolvedValueOnce([{
+      id: 'assistant-1',
+      role: 'assistant',
+      messages: [{
+        id: 1,
+        type: 'tool',
+        name: 'write',
+        tool_call_id: 'call-stream-then-refresh',
+        input: { path: '/data/dedup.md', content: 'x' },
+        running: false,
+      }],
+      timestamp: new Date().toISOString(),
+    }])
+
+    messageEventsHandler?.({
+      type: 'message_created',
+      bot_id: 'bot-1',
+      message: {
+        id: 'msg-dedup',
+        bot_id: 'bot-1',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'tool',
+        created_at: new Date().toISOString(),
+      },
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 350))
+    expect(store.fsChangedAt).toBe(afterStream)
+  })
+
+  it('bumps fsChangedAt when a refresh delivers a fs-mutating tool from another channel', async () => {
+    api.fetchSessions.mockResolvedValueOnce([
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ])
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    api.fetchMessagesUI.mockResolvedValueOnce([{
+      id: 'assistant-1',
+      role: 'assistant',
+      messages: [{
+        id: 1,
+        type: 'tool',
+        name: 'write',
+        tool_call_id: 'call-cross-channel-write',
+        input: { path: '/data/cross-channel.md', content: 'hi' },
+        running: false,
+      }],
+      timestamp: new Date().toISOString(),
+    }])
+
+    messageEventsHandler?.({
+      type: 'message_created',
+      bot_id: 'bot-1',
+      message: {
+        id: 'msg-write',
+        bot_id: 'bot-1',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'tool',
+        created_at: new Date().toISOString(),
+      },
+    })
+
+    // 100ms refresh schedule + 150ms fs debounce + slack.
+    await new Promise(resolve => setTimeout(resolve, 350))
+
+    expect(store.affectsPath('/data/cross-channel.md')).toBe(true)
+  })
+
+  it('bumps fsChangedAt when a non-current session refresh delivers a fs-mutating tool', async () => {
+    api.fetchSessions.mockResolvedValueOnce([
+      { id: 'session-1', bot_id: 'bot-1', title: 'Current', type: 'chat' },
+      { id: 'session-2', bot_id: 'bot-1', title: 'Other', type: 'chat' },
+    ])
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    expect(store.sessionId).toBe('session-1')
+
+    api.fetchMessagesUI.mockClear()
+    api.fetchMessagesUI.mockResolvedValueOnce([{
+      id: 'assistant-2',
+      role: 'assistant',
+      messages: [{
+        id: 1,
+        type: 'tool',
+        name: 'write',
+        tool_call_id: 'call-other-session-write',
+        input: { path: '/data/other-session.md', content: 'hi' },
+        running: false,
+      }],
+      timestamp: new Date().toISOString(),
+    }])
+
+    messageEventsHandler?.({
+      type: 'message_created',
+      bot_id: 'bot-1',
+      message: {
+        id: 'msg-write-other-session',
+        bot_id: 'bot-1',
+        session_id: 'session-2',
+        role: 'assistant',
+        content: 'tool',
+        created_at: new Date().toISOString(),
+      },
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 350))
+
+    expect(api.fetchMessagesUI).toHaveBeenCalledWith('bot-1', 'session-2', { limit: 30 })
+    expect(store.sessionId).toBe('session-1')
+    expect(store.affectsPath('/data/other-session.md')).toBe(true)
+  })
+
+  it('does not bump fsChangedAt while a fs-mutating tool is still running', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-write-pending',
+          running: true,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    const before = store.fsChangedAt
+    await store.sendMessage('start write')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.fsChangedAt).toBe(before)
+  })
+})
+
+describe('fsChangedAt markFsChanged()', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('bumps fsChangedAt after the debounce window', () => {
+    const store = useChatStore()
+    const before = store.fsChangedAt
+    store.markFsChanged()
+    expect(store.fsChangedAt).toBe(before)
+    vi.advanceTimersByTime(149)
+    expect(store.fsChangedAt).toBe(before)
+    vi.advanceTimersByTime(1)
+    expect(store.fsChangedAt).toBeGreaterThan(before)
+  })
+
+  it('collapses bursts of markFsChanged() within the window into a single bump', () => {
+    const store = useChatStore()
+    const before = store.fsChangedAt
+    for (let i = 0; i < 5; i++) store.markFsChanged()
+    expect(store.fsChangedAt).toBe(before)
+    vi.advanceTimersByTime(150)
+    const afterFirst = store.fsChangedAt
+    expect(afterFirst).toBeGreaterThan(before)
+
+    store.markFsChanged()
+    expect(store.fsChangedAt).toBe(afterFirst)
+    vi.advanceTimersByTime(150)
+    expect(store.fsChangedAt).toBeGreaterThan(afterFirst)
+  })
+})
+
+describe('path-tagged fs change batches', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('records the path in the batch and exposes it via affectsPath()', () => {
+    const store = useChatStore()
+    store.markFsChanged('/data/foo.ts')
+    vi.advanceTimersByTime(150)
+    expect(store.affectsPath('/data/foo.ts')).toBe(true)
+    expect(store.affectsPath('/data/bar.ts')).toBe(false)
+  })
+
+  it('merges multiple paths within a single debounce window', () => {
+    const store = useChatStore()
+    store.markFsChanged('/data/a.ts')
+    store.markFsChanged('/data/b.ts')
+    vi.advanceTimersByTime(150)
+    expect(store.affectsPath('/data/a.ts')).toBe(true)
+    expect(store.affectsPath('/data/b.ts')).toBe(true)
+    expect(store.affectsPath('/data/c.ts')).toBe(false)
+  })
+
+  it('null in any bump within the window poisons the batch to wildcard', () => {
+    const store = useChatStore()
+    store.markFsChanged('/data/a.ts')
+    store.markFsChanged(null)
+    store.markFsChanged('/data/b.ts')
+    vi.advanceTimersByTime(150)
+    expect(store.affectsPath('/anything.ts')).toBe(true)
+  })
+
+  it('treats markFsChanged() with no argument as wildcard', () => {
+    const store = useChatStore()
+    store.markFsChanged()
+    vi.advanceTimersByTime(150)
+    expect(store.affectsPath('/anything.ts')).toBe(true)
+  })
+
+  it('returns false from affectsPath() before any bump fires', () => {
+    const store = useChatStore()
+    store.markFsChanged('/data/a.ts')
+    expect(store.affectsPath('/data/a.ts')).toBe(false)
+    vi.advanceTimersByTime(150)
+    expect(store.affectsPath('/data/a.ts')).toBe(true)
+  })
+
+  it('resets the path set after the batch fires', () => {
+    const store = useChatStore()
+    store.markFsChanged('/data/a.ts')
+    vi.advanceTimersByTime(150)
+    expect(store.affectsPath('/data/a.ts')).toBe(true)
+
+    store.markFsChanged('/data/b.ts')
+    vi.advanceTimersByTime(150)
+    expect(store.affectsPath('/data/a.ts')).toBe(false)
+    expect(store.affectsPath('/data/b.ts')).toBe(true)
+  })
+})
+
+describe('fs-mutating tool path extraction', () => {
+  let lastStreamId = ''
+  let lastSessionId = ''
+  let sendEvents: UIStreamEvent[]
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lastStreamId = ''
+    lastSessionId = ''
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    vi.clearAllMocks()
+
+    api.fetchBots.mockResolvedValue([{ id: 'bot-1', status: 'active', name: 'Bot' }])
+    api.fetchSessions.mockResolvedValue([])
+    api.createSession.mockResolvedValue({
+      id: 'session-1',
+      bot_id: 'bot-1',
+      title: 'New session',
+      type: 'chat',
+    })
+    api.fetchMessagesUI.mockResolvedValue([])
+    api.streamMessageEvents.mockImplementation((_botId: string, signal: AbortSignal) => new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => resolve(), { once: true })
+    }))
+    api.connectWebSocket.mockImplementation((_botId: string, onStreamEvent: UIStreamEventHandler) => {
+      return {
+        get connected() { return true },
+        send: vi.fn((message: { stream_id?: string; session_id?: string }) => {
+          lastStreamId = message.stream_id ?? ''
+          lastSessionId = message.session_id ?? ''
+          for (const event of sendEvents) {
+            onStreamEvent({
+              ...event,
+              stream_id: lastStreamId,
+              session_id: lastSessionId,
+            } as UIStreamEvent)
+          }
+        }),
+        abort: vi.fn(),
+        close: vi.fn(),
+        onOpen: null,
+        onClose: null,
+      }
+    })
+  })
+
+  it('tags the batch with input.path for write and edit tools', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-write',
+          input: { path: '/data/touched-by-write.ts', content: 'x' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 2,
+          type: 'tool',
+          name: 'edit',
+          tool_call_id: 'call-edit',
+          input: { path: '/data/touched-by-edit.ts', old_text: 'a', new_text: 'b' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('do work')
+
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.affectsPath('/data/touched-by-write.ts')).toBe(true)
+    expect(store.affectsPath('/data/touched-by-edit.ts')).toBe(true)
+    expect(store.affectsPath('/data/untouched.ts')).toBe(false)
+  })
+
+  it('treats a relative tool path as wildcard (viewer filePaths are absolute)', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-relative',
+          input: { path: 'cat.md', content: 'meow' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('write rel')
+
+    await new Promise(resolve => setTimeout(resolve, 200))
+    // Relative paths can't be compared against the viewer's absolute filePath,
+    // so the batch falls back to wildcard — affectsPath returns true for any path.
+    expect(store.affectsPath('/data/cat.md')).toBe(true)
+    expect(store.affectsPath('/data/unrelated.ts')).toBe(true)
+  })
+
+  it('falls back to wildcard when exec completes (path unknown)', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'exec',
+          tool_call_id: 'call-exec',
+          input: { command: 'rm -rf /data/maybe' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('exec')
+
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.affectsPath('/data/anything.ts')).toBe(true)
+  })
+})
+
+describe('fs change events per-path metadata', () => {
+  let lastStreamId = ''
+  let lastSessionId = ''
+  let sendEvents: UIStreamEvent[]
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    lastStreamId = ''
+    lastSessionId = ''
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    vi.clearAllMocks()
+    api.fetchBots.mockResolvedValue([{ id: 'bot-1', status: 'active', name: 'Bot 1' }])
+    api.fetchSessions.mockResolvedValue([
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ])
+    api.createSession.mockResolvedValue({
+      id: 'session-1',
+      bot_id: 'bot-1',
+      title: 'Chat',
+      type: 'chat',
+    })
+    api.fetchMessagesUI.mockResolvedValue([])
+    api.streamMessageEvents.mockImplementation((_botId: string, signal: AbortSignal) => new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => resolve(), { once: true })
+    }))
+    api.connectWebSocket.mockImplementation((_botId: string, onStreamEvent: UIStreamEventHandler) => {
+      return {
+        get connected() { return true },
+        send: vi.fn((message: { stream_id?: string; session_id?: string }) => {
+          lastStreamId = message.stream_id ?? ''
+          lastSessionId = message.session_id ?? ''
+          for (const event of sendEvents) {
+            onStreamEvent({
+              ...event,
+              stream_id: lastStreamId,
+              session_id: lastSessionId,
+            } as UIStreamEvent)
+          }
+        }),
+        abort: vi.fn(),
+        close: vi.fn(),
+        onOpen: null,
+        onClose: null,
+      }
+    })
+  })
+
+  it('records writeContent on the per-path event for a write tool', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-w',
+          input: { path: '/data/foo.ts', content: 'hello\nworld\n' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('write foo')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    const event = store.fsEventForPath('/data/foo.ts')
+    expect(event).not.toBe(null)
+    expect(event?.kind).toBe('write')
+    expect(event?.toolCallId).toBe('call-w')
+    expect(event?.writeContent).toBe('hello\nworld\n')
+    expect(event?.sessionId).toBe('session-1')
+  })
+
+  it('records old_text/new_text on the event for an edit tool', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'edit',
+          tool_call_id: 'call-e',
+          input: {
+            path: '/data/bar.ts',
+            old_text: 'old line',
+            new_text: 'new line one\nnew line two',
+          },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('edit bar')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    const event = store.fsEventForPath('/data/bar.ts')
+    expect(event).not.toBe(null)
+    expect(event?.kind).toBe('edit')
+    expect(event?.editOldText).toBe('old line')
+    expect(event?.editNewText).toBe('new line one\nnew line two')
+  })
+
+  it('does not record per-path events for relative paths', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-rel',
+          input: { path: 'foo.ts', content: 'x' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('write rel')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(store.fsEventForPath('/data/foo.ts')).toBe(null)
+    expect(store.fsEventForPath('foo.ts')).toBe(null)
+  })
+
+  it('does not record per-path events for exec (no path known)', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'exec',
+          tool_call_id: 'call-x',
+          input: { command: 'rm /data/x' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('exec')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(store.fsEventForPath('/data/x')).toBe(null)
+    expect(store.lastFsEvents.size).toBe(0)
+  })
+
+  it('later write to the same path overwrites the earlier event', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-w-1',
+          input: { path: '/data/foo.ts', content: 'first' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 2,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-w-2',
+          input: { path: '/data/foo.ts', content: 'second' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('write twice')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(store.fsEventForPath('/data/foo.ts')?.writeContent).toBe('second')
+  })
+
+  it('keeps independent events for distinct absolute paths in the same batch', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-a',
+          input: { path: '/data/a.md', content: 'aa' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 2,
+          type: 'tool',
+          name: 'edit',
+          tool_call_id: 'call-b',
+          input: { path: '/data/b.md', old_text: 'old', new_text: 'new' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('two paths')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(store.fsEventForPath('/data/a.md')?.writeContent).toBe('aa')
+    expect(store.fsEventForPath('/data/b.md')?.editNewText).toBe('new')
+    expect(store.lastFsEvents.size).toBe(2)
+  })
+
+  it('clears lastFsEvents when the user switches to another bot', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-c',
+          input: { path: '/data/c.md', content: 'c' },
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    api.fetchBots.mockResolvedValue([
+      { id: 'bot-1', status: 'active', name: 'Bot 1' },
+      { id: 'bot-2', status: 'active', name: 'Bot 2' },
+    ])
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('write')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.fsEventForPath('/data/c.md')).not.toBe(null)
+
+    await store.selectBot('bot-2')
+    expect(store.lastFsEvents.size).toBe(0)
+    expect(store.fsEventForPath('/data/c.md')).toBe(null)
+  })
+
+  it('records a write event even when input.content is missing (no diff content)', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: {
+          id: 1,
+          type: 'tool',
+          name: 'write',
+          tool_call_id: 'call-d',
+          input: { path: '/data/d.md' }, // no content field
+          running: false,
+        },
+      } as UIStreamEvent,
+      { type: 'error', message: 'done' } as UIStreamEvent,
+    ]
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await store.sendMessage('write no content')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    const event = store.fsEventForPath('/data/d.md')
+    expect(event).not.toBe(null)
+    expect(event?.kind).toBe('write')
+    expect(event?.writeContent).toBeUndefined()
+  })
+})
+
+describe('fs bump bot-switch isolation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    api.fetchBots.mockResolvedValue([
+      { id: 'bot-1', status: 'active', name: 'Bot 1' },
+      { id: 'bot-2', status: 'active', name: 'Bot 2' },
+    ])
+    api.fetchSessions.mockResolvedValue([])
+    api.fetchMessagesUI.mockResolvedValue([])
+    api.streamMessageEvents.mockImplementation((_botId: string, signal: AbortSignal) => new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => resolve(), { once: true })
+    }))
+    api.connectWebSocket.mockImplementation(() => ({
+      get connected() { return true },
+      send: vi.fn(),
+      abort: vi.fn(),
+      close: vi.fn(),
+      onOpen: null,
+      onClose: null,
+    }))
+  })
+
+  it('discards a pending fs batch when currentBotId changes before the timer fires', () => {
+    vi.useFakeTimers()
+    try {
+      const store = useChatStore()
+      store.currentBotId = 'bot-A'
+      store.markFsChanged('/data/foo.ts')
+      store.currentBotId = 'bot-B'
+      vi.advanceTimersByTime(150)
+      expect(store.lastFsChange).toBe(null)
+      expect(store.affectsPath('/data/foo.ts')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not leak a batch from one bot into the next after a switch', () => {
+    vi.useFakeTimers()
+    try {
+      const store = useChatStore()
+      store.currentBotId = 'bot-A'
+      store.markFsChanged('/data/foo.ts')
+      store.currentBotId = 'bot-B'
+      vi.advanceTimersByTime(150)
+      expect(store.affectsPath('/data/foo.ts')).toBe(false)
+
+      store.markFsChanged('/data/bar.ts')
+      vi.advanceTimersByTime(150)
+      expect(store.affectsPath('/data/bar.ts')).toBe(true)
+      expect(store.affectsPath('/data/foo.ts')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('selectBot cancels any pending fs bump and clears lastFsChange', async () => {
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    store.markFsChanged('/data/foo.ts')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.lastFsChange).not.toBe(null)
+
+    await store.selectBot('bot-2')
+    expect(store.lastFsChange).toBe(null)
+
+    store.markFsChanged('/data/foo.ts')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(store.lastFsChange).not.toBe(null)
   })
 })

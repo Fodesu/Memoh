@@ -1,5 +1,5 @@
 <template>
-  <section class="relative px-4 pt-2 pb-10 lg:px-6 md:pt-4 md:pb-12 max-w-2xl">
+  <section class="relative mx-auto w-full max-w-2xl px-4 pt-2 pb-10 md:pt-4 md:pb-12 lg:px-6">
     <Tabs
       v-model="mode"
       class="mb-6"
@@ -347,7 +347,7 @@ import { SquarePen, CircleHelp, Check, X, LoaderCircle } from 'lucide-vue-next'
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { useRouter, useRoute } from 'vue-router'
-import { toast } from 'vue-sonner'
+import { toast } from '@memohai/ui'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { getModels, getProviders, getMemoryProviders, getBotsNameAvailability } from '@memohai/sdk'

@@ -40,6 +40,7 @@ type ContainerdHandler struct {
 	botService       *bots.Service
 	accountService   *accounts.Service
 	policyService    *policy.Service
+	pluginService    PluginInstallationLister
 	displayService   *displaypkg.Service
 	browserSessions  *browserSessionStore
 }
@@ -60,6 +61,7 @@ type CreateContainerRequest struct {
 type CreateContainerResponse struct {
 	ContainerID      string   `json:"container_id"`
 	WorkspaceBackend string   `json:"workspace_backend"`
+	RuntimeBackend   string   `json:"runtime_backend,omitempty"`
 	ContainerPath    string   `json:"container_path"`
 	Image            string   `json:"image"`
 	Snapshotter      string   `json:"snapshotter"`
@@ -108,6 +110,7 @@ type createContainerErrorEvent struct {
 type GetContainerResponse struct {
 	ContainerID      string    `json:"container_id"`
 	WorkspaceBackend string    `json:"workspace_backend"`
+	RuntimeBackend   string    `json:"runtime_backend,omitempty"`
 	Image            string    `json:"image"`
 	Status           string    `json:"status"`
 	Namespace        string    `json:"namespace"`
@@ -412,6 +415,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 		if pullErr != nil {
 			h.logger.Error("image preparation failed",
 				slog.String("image", image), slog.Any("error", pullErr))
+			h.recordContainerSetupFailure(ctx, botID, "image_prepare", pullErr)
 			sendError("image preparation failed: " + pullErr.Error())
 			return nil
 		}
@@ -431,7 +435,8 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 
 	// Notify the client before starting if data migration will happen,
 	// since restoring a large /data volume can take a while.
-	if h.manager.HasPreservedData(botID) {
+	willRestoreData := h.manager.HasPreservedData(botID)
+	if willRestoreData {
 		send(createContainerRestoringEvent{Type: "restoring"})
 	}
 
@@ -441,8 +446,17 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	}); err != nil {
 		h.logger.Error("container start failed",
 			slog.String("bot_id", botID), slog.Any("error", err))
+		h.recordContainerSetupFailure(ctx, botID, "start", err)
 		sendError("container start failed: " + err.Error())
 		return nil
+	}
+	if workspaceBackend != "local" {
+		if err := h.manager.WaitForWorkspaceReady(ctx, botID); err != nil {
+			h.logger.Error("container bridge not ready",
+				slog.String("bot_id", botID), slog.Any("error", err))
+			sendError("container bridge not ready: " + err.Error())
+			return nil
+		}
 	}
 	if err := h.manager.RememberWorkspaceImage(ctx, botID, image); err != nil {
 		h.logger.Warn("remember workspace image failed",
@@ -463,7 +477,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 		return nil
 	}
 
-	dataRestored := false
+	dataRestored := willRestoreData && !h.manager.HasPreservedData(botID)
 	if req.RestoreData && h.manager.HasPreservedData(botID) {
 		if err := h.manager.RestorePreservedData(ctx, botID); err != nil {
 			h.logger.Error("restore preserved data failed",
@@ -475,6 +489,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	}
 
 	h.manager.RecordContainerRunning(ctx, botID, containerID, image)
+	h.clearContainerSetupFailure(ctx, botID)
 
 	status, statusErr := h.manager.GetContainerInfo(ctx, botID)
 	if statusErr != nil {
@@ -484,10 +499,12 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	cdiDevices := gpu.Devices
 	containerPath := ""
 	responseBackend := workspaceBackend
+	runtimeBackend := ""
 	if status != nil {
 		cdiDevices = status.CDIDevices
 		containerPath = status.ContainerPath
 		responseBackend = status.WorkspaceBackend
+		runtimeBackend = status.RuntimeBackend
 	}
 
 	// Phase 3: Complete
@@ -496,6 +513,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 		Container: CreateContainerResponse{
 			ContainerID:      containerID,
 			WorkspaceBackend: responseBackend,
+			RuntimeBackend:   runtimeBackend,
 			ContainerPath:    containerPath,
 			Image:            image,
 			Snapshotter:      snapshotter,
@@ -507,6 +525,30 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	})
 
 	return nil
+}
+
+func (h *ContainerdHandler) recordContainerSetupFailure(ctx context.Context, botID, phase string, err error) {
+	if h.botService == nil {
+		return
+	}
+	if recordErr := h.botService.RecordContainerSetupFailure(ctx, botID, phase, err); recordErr != nil {
+		h.logger.Warn("record bot container setup failure failed",
+			slog.String("bot_id", botID),
+			slog.Any("error", recordErr),
+		)
+	}
+}
+
+func (h *ContainerdHandler) clearContainerSetupFailure(ctx context.Context, botID string) {
+	if h.botService == nil {
+		return
+	}
+	if err := h.botService.ClearContainerSetupFailure(ctx, botID); err != nil {
+		h.logger.Warn("clear bot container setup failure failed",
+			slog.String("bot_id", botID),
+			slog.Any("error", err),
+		)
+	}
 }
 
 // GetContainer godoc
@@ -532,6 +574,7 @@ func (h *ContainerdHandler) GetContainer(c echo.Context) error {
 	return c.JSON(http.StatusOK, GetContainerResponse{
 		ContainerID:      status.ContainerID,
 		WorkspaceBackend: status.WorkspaceBackend,
+		RuntimeBackend:   status.RuntimeBackend,
 		Image:            status.Image,
 		Status:           status.Status,
 		Namespace:        status.Namespace,

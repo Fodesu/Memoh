@@ -6,6 +6,8 @@ import (
 	"github.com/memohai/memoh/internal/mcp"
 )
 
+const ToolSearchMemory = "search_memory"
+
 // Provider is the unified interface for memory systems. Each provider type
 // (builtin, mem0, openviking, etc.) implements this independently with its
 // own storage, retrieval, and tool logic.
@@ -44,4 +46,11 @@ type Provider interface {
 type SourceSyncProvider interface {
 	Status(ctx context.Context, botID string) (MemoryStatusResponse, error)
 	Rebuild(ctx context.Context, botID string) (RebuildResult, error)
+}
+
+// SemanticCompactProvider is implemented by providers that can apply Memoh's
+// semantic memory compact contract: LLM merge, source archive, and derived
+// storage rebuild under the selected bot scope.
+type SemanticCompactProvider interface {
+	SemanticCompactCapability() MemoryCompactCapability
 }

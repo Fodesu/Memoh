@@ -26,6 +26,22 @@ func TestToolSessionContextStoreMergesLatestPromptContext(t *testing.T) {
 	}
 }
 
+func TestToolSessionContextMergePreservesSupportsImageInput(t *testing.T) {
+	base := ToolSessionContext{BotID: "bot-1"}
+	merged := MergeToolSessionContext(base, ToolSessionContext{SupportsImageInput: true})
+	if !merged.SupportsImageInput {
+		t.Fatalf("SupportsImageInput = false, want true")
+	}
+}
+
+func TestToolSessionContextMergePreservesUserInputCapability(t *testing.T) {
+	base := ToolSessionContext{BotID: "bot-1"}
+	merged := MergeToolSessionContext(base, ToolSessionContext{CanRequestUserInput: true})
+	if !merged.CanRequestUserInput {
+		t.Fatalf("CanRequestUserInput = false, want true")
+	}
+}
+
 func TestToolSessionContextStorePutPreservesExistingNonEmptyFields(t *testing.T) {
 	store := NewToolSessionContextStore()
 	store.Put(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"})
@@ -77,6 +93,33 @@ func TestToolSessionContextStoreRegisteredSinkReceivesToolEvents(t *testing.T) {
 	}
 	if len(delivered) != 1 || delivered[0].ToolName != "schedule_list" {
 		t.Fatalf("delivered = %#v", delivered)
+	}
+}
+
+func TestToolSessionContextStoreOldCleanupDoesNotRemoveNewerSink(t *testing.T) {
+	store := NewToolSessionContextStore()
+	session := ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"}
+	var first, second int
+	unregisterFirst := store.RegisterToolEventSink(session, func(ToolStreamEvent) {
+		first++
+	})
+	unregisterSecond := store.RegisterToolEventSink(session, func(ToolStreamEvent) {
+		second++
+	})
+	defer unregisterSecond()
+
+	unregisterFirst()
+
+	ok := store.AppendToolEvent(session, ToolStreamEvent{
+		Type:       "tool_call_start",
+		ToolCallID: "call-1",
+		ToolName:   "schedule_list",
+	})
+	if !ok {
+		t.Fatalf("AppendToolEvent delivered=false, want newer sink to remain")
+	}
+	if first != 0 || second != 1 {
+		t.Fatalf("sink calls: first=%d second=%d, want 0/1", first, second)
 	}
 }
 

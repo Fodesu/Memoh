@@ -9,18 +9,22 @@ import (
 )
 
 const (
-	memohHeaderBotID             = mcpgw.ToolHeaderBotID
-	memohHeaderChatID            = mcpgw.ToolHeaderChatID
-	memohHeaderRuntimeID         = mcpgw.ToolHeaderRuntimeID
-	memohHeaderSessionID         = mcpgw.ToolHeaderSessionID
-	memohHeaderStreamID          = mcpgw.ToolHeaderStreamID
-	memohHeaderSessionType       = mcpgw.ToolHeaderSessionType
-	memohHeaderRouteID           = mcpgw.ToolHeaderRouteID
-	memohHeaderChannelIdentityID = mcpgw.ToolHeaderChannelIdentityID
-	memohHeaderCurrentPlatform   = mcpgw.ToolHeaderCurrentPlatform
-	memohHeaderReplyTarget       = mcpgw.ToolHeaderReplyTarget
-	memohHeaderConversationType  = mcpgw.ToolHeaderConversationType
-	memohHeaderIsSubagent        = mcpgw.ToolHeaderIsSubagent
+	memohToolsMCPServerName       = "Memoh Tools"
+	memohToolsMCPServerSlug       = "Memoh_Tools"
+	memohHeaderBotID              = mcpgw.ToolHeaderBotID
+	memohHeaderChatID             = mcpgw.ToolHeaderChatID
+	memohHeaderRuntimeID          = mcpgw.ToolHeaderRuntimeID
+	memohHeaderRuntimeToken       = mcpgw.ToolHeaderRuntimeToken
+	memohHeaderSessionID          = mcpgw.ToolHeaderSessionID
+	memohHeaderStreamID           = mcpgw.ToolHeaderStreamID
+	memohHeaderSessionType        = mcpgw.ToolHeaderSessionType
+	memohHeaderRouteID            = mcpgw.ToolHeaderRouteID
+	memohHeaderChannelIdentityID  = mcpgw.ToolHeaderChannelIdentityID
+	memohHeaderCurrentPlatform    = mcpgw.ToolHeaderCurrentPlatform
+	memohHeaderReplyTarget        = mcpgw.ToolHeaderReplyTarget
+	memohHeaderConversationType   = mcpgw.ToolHeaderConversationType
+	memohHeaderIsSubagent         = mcpgw.ToolHeaderIsSubagent
+	memohHeaderSupportsImageInput = mcpgw.ToolHeaderSupportsImageInput
 )
 
 func memohToolsHTTPMCPServer(rawURL string, session mcpgw.ToolSessionContext) acp.McpServer {
@@ -30,7 +34,7 @@ func memohToolsHTTPMCPServer(rawURL string, session mcpgw.ToolSessionContext) ac
 	}
 	return acp.McpServer{
 		Http: &acp.McpServerHttpInline{
-			Name:    "Memoh Tools",
+			Name:    memohToolsMCPServerName,
 			Url:     rawURL,
 			Headers: memohToolsHTTPHeaders(session),
 		},
@@ -50,6 +54,7 @@ func memohToolsHTTPHeaders(session mcpgw.ToolSessionContext) []acp.HttpHeader {
 	add(memohHeaderBotID, session.BotID)
 	add(memohHeaderChatID, session.ChatID)
 	add(memohHeaderRuntimeID, session.RuntimeID)
+	add(memohHeaderRuntimeToken, session.RuntimeToken)
 	add(memohHeaderSessionID, session.SessionID)
 	add(memohHeaderStreamID, session.StreamID)
 	add(memohHeaderSessionType, session.SessionType)
@@ -61,5 +66,14 @@ func memohToolsHTTPHeaders(session mcpgw.ToolSessionContext) []acp.HttpHeader {
 	if session.IsSubagent {
 		add(memohHeaderIsSubagent, "true")
 	}
+	if session.SupportsImageInput {
+		add(memohHeaderSupportsImageInput, "true")
+	}
 	return headers
+}
+
+func isMemohToolsMCPServerName(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.EqualFold(name, memohToolsMCPServerName) ||
+		strings.EqualFold(name, memohToolsMCPServerSlug)
 }

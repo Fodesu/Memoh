@@ -12,6 +12,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
+	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/channel/route"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/heartbeat"
@@ -41,12 +42,13 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload sc
 	}
 
 	req := conversation.ChatRequest{
-		BotID:     botID,
-		ChatID:    botID,
-		SessionID: payload.SessionID,
-		Query:     payload.Command,
-		UserID:    payload.OwnerUserID,
-		Token:     token,
+		BotID:       botID,
+		ChatID:      botID,
+		SessionID:   payload.SessionID,
+		Query:       payload.Command,
+		UserID:      payload.OwnerUserID,
+		Token:       token,
+		SessionType: sessionmode.Schedule,
 	}
 	rc, err := r.resolve(ctx, req)
 	if err != nil {
@@ -54,7 +56,7 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload sc
 	}
 
 	cfg := rc.runConfig
-	cfg.SessionType = "schedule"
+	cfg.SessionType = sessionmode.Schedule
 	cfg.Identity.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
 
 	schedulePrompt := agentpkg.GenerateSchedulePrompt(agentpkg.Schedule{
@@ -98,13 +100,14 @@ func (r *Resolver) TriggerHeartbeat(ctx context.Context, botID string, payload h
 	}
 
 	req := conversation.ChatRequest{
-		BotID:     botID,
-		ChatID:    botID,
-		SessionID: payload.SessionID,
-		Query:     "heartbeat",
-		UserID:    payload.OwnerUserID,
-		Token:     token,
-		Model:     heartbeatModel,
+		BotID:       botID,
+		ChatID:      botID,
+		SessionID:   payload.SessionID,
+		Query:       "heartbeat",
+		UserID:      payload.OwnerUserID,
+		Token:       token,
+		Model:       heartbeatModel,
+		SessionType: sessionmode.Heartbeat,
 	}
 	rc, err := r.resolve(ctx, req)
 	if err != nil {
@@ -112,7 +115,7 @@ func (r *Resolver) TriggerHeartbeat(ctx context.Context, botID string, payload h
 	}
 
 	cfg := rc.runConfig
-	cfg.SessionType = "heartbeat"
+	cfg.SessionType = sessionmode.Heartbeat
 	cfg.Identity.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
 
 	var checklist string
@@ -291,6 +294,7 @@ func (r *Resolver) deliverBackgroundNotifications(ctx context.Context, botID, se
 		Query:          "[background notification]",
 		CurrentChannel: delivery.channelType,
 		ReplyTarget:    delivery.replyTarget,
+		SessionType:    sessionmode.BackgroundDelivery,
 	}
 	rc, err := r.resolve(ctx, req)
 	if err != nil {
@@ -298,13 +302,13 @@ func (r *Resolver) deliverBackgroundNotifications(ctx context.Context, botID, se
 	}
 
 	cfg := rc.runConfig
+	cfg.SessionType = sessionmode.BackgroundDelivery
 	// Inject drained notifications so the first LLM call sees them.
 	cfg.Messages = append(cfg.Messages, notifMessages...)
 	// Clear query so prepareRunConfig does not append a redundant user message.
 	cfg.Query = ""
-	// Use the natural session type — same system prompt, same tools, same
-	// personality as a regular conversation turn. Between-turn notifications
-	// should go through the same execution path as normal user messages.
+	// Use the dedicated background delivery mode: the model's normal text
+	// output is auto-delivered to the recovered route target below.
 	cfg = r.prepareRunConfig(ctx, cfg)
 
 	idleCtx, idleCancel := withIdleTimeout(ctx)
@@ -374,7 +378,7 @@ func (r *Resolver) deliverBackgroundNotifications(ctx context.Context, botID, se
 			continue
 		}
 
-		for _, uiMessage := range converter.HandleEvent(uiStreamEventFromAgentEvent(event)) {
+		for _, uiMessage := range converter.HandleEvent(conversation.UIStreamEventFromAgentEvent(event)) {
 			r.publishBackgroundAgentStream(botID, sessionID, map[string]any{
 				"type": "message",
 				"data": uiMessage,
@@ -412,7 +416,7 @@ func (r *Resolver) deliverBackgroundNotifications(ctx context.Context, botID, se
 
 	// Auto-deliver the agent's text response to the user through the normal
 	// outbound path, not through a special "send" tool call.
-	if responseText := strings.TrimSpace(text.String()); responseText != "" && r.outboundFn != nil {
+	if responseText, ok := backgroundDeliveryOutboundText(text.String()); ok && r.outboundFn != nil {
 		if err := r.outboundFn(ctx, botID, delivery.channelType, delivery.replyTarget, responseText); err != nil {
 			r.logger.Warn("background notification: outbound delivery failed",
 				slog.String("bot_id", botID),
@@ -425,11 +429,27 @@ func (r *Resolver) deliverBackgroundNotifications(ctx context.Context, botID, se
 	return nil
 }
 
+func backgroundDeliveryOutboundText(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" || text == "HEARTBEAT_OK" {
+		return "", false
+	}
+	return text, true
+}
+
 func (r *Resolver) storeBackgroundNotificationSnapshot(ctx context.Context, req conversation.ChatRequest, rc resolvedContext, notifMessages []sdk.Message, snap terminalSnapshot) error {
 	if len(snap.sdkMessages) == 0 {
 		return nil
 	}
 	outputMessages := sdkMessagesToModelMessages(snap.sdkMessages)
+	if !hasPersistableAssistantOutput(outputMessages) {
+		r.logger.Info("skip persisting background notification snapshot without assistant output",
+			slog.String("bot_id", req.BotID),
+			slog.String("session_id", req.SessionID),
+			slog.Int("messages", len(outputMessages)),
+		)
+		return nil
+	}
 	notifModelMessages := sdkMessagesToModelMessages(notifMessages)
 	roundMessages := append(append(make([]conversation.ModelMessage, 0, len(notifModelMessages)+len(outputMessages)), notifModelMessages...), outputMessages...)
 	return r.storeRound(ctx, req, roundMessages, rc.model.ID)
@@ -452,56 +472,4 @@ func (r *Resolver) publishBackgroundAgentStream(botID, sessionID string, stream 
 		BotID: botID,
 		Data:  data,
 	})
-}
-
-func uiStreamEventFromAgentEvent(event agentpkg.StreamEvent) conversation.UIMessageStreamEvent {
-	attachments := make([]conversation.UIAttachment, 0, len(event.Attachments))
-	for _, attachment := range event.Attachments {
-		attachments = append(attachments, conversation.UIAttachment{
-			ID:          strings.TrimSpace(attachment.ContentHash),
-			Type:        normalizeUIAttachmentType(attachment.Type, attachment.Mime),
-			Path:        strings.TrimSpace(attachment.Path),
-			URL:         strings.TrimSpace(attachment.URL),
-			Name:        strings.TrimSpace(attachment.Name),
-			ContentHash: strings.TrimSpace(attachment.ContentHash),
-			Mime:        strings.TrimSpace(attachment.Mime),
-			Size:        attachment.Size,
-			Metadata:    attachment.Metadata,
-		})
-	}
-
-	return conversation.UIMessageStreamEvent{
-		Type:        string(event.Type),
-		Delta:       event.Delta,
-		ToolName:    event.ToolName,
-		ToolCallID:  event.ToolCallID,
-		Input:       event.Input,
-		Output:      event.Result,
-		Progress:    event.Progress,
-		Attachments: attachments,
-		Error:       event.Error,
-		ApprovalID:  event.ApprovalID,
-		UserInputID: event.UserInputID,
-		ShortID:     event.ShortID,
-		Status:      event.Status,
-		Metadata:    event.Metadata,
-	}
-}
-
-func normalizeUIAttachmentType(kind, mime string) string {
-	normalizedKind := strings.ToLower(strings.TrimSpace(kind))
-	if normalizedKind != "" {
-		return normalizedKind
-	}
-	normalizedMime := strings.ToLower(strings.TrimSpace(mime))
-	switch {
-	case strings.HasPrefix(normalizedMime, "image/"):
-		return "image"
-	case strings.HasPrefix(normalizedMime, "audio/"):
-		return "audio"
-	case strings.HasPrefix(normalizedMime, "video/"):
-		return "video"
-	default:
-		return "file"
-	}
 }

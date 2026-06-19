@@ -35,6 +35,8 @@ import {
   writeCliPrefs,
   type CliStatus,
 } from './cli-integration'
+import { acceleratorForCommand, appKeyboardCommands, type AppKeyboardCommand } from '../shared/keyboard-commands'
+import { dispatchFocusedWindowCommand } from './window-commands'
 
 type DesktopRuntimeMode = 'local' | 'remote'
 
@@ -45,6 +47,7 @@ const LEGACY_REMOTE_PRODUCT_NAME = 'Memoh Online'
 const LEGACY_LOCAL_PRODUCT_NAME = 'Memoh'
 const DESKTOP_PRODUCT_NAME = DESKTOP_RUNTIME_MODE === 'remote' ? ONLINE_PRODUCT_NAME : LOCAL_PRODUCT_NAME
 const DEFAULT_REMOTE_BASE_URL = is.dev ? 'http://localhost:18080' : 'http://localhost:8080'
+const guardedExternalLinkWebContents = new WeakSet<Electron.WebContents>()
 
 interface RemoteProfile {
   baseUrl?: string
@@ -153,8 +156,7 @@ if (DESKTOP_RUNTIME_MODE === 'remote') {
 }
 
 const CHAT_DEFAULTS = { width: 1280, height: 800, minWidth: 960, minHeight: 600 }
-const SETTINGS_DEFAULTS = { width: 1080, height: 720, minWidth: 880, minHeight: 560 }
-type WindowKind = 'chat' | 'settings'
+type WindowKind = 'chat'
 type WindowDefaults = {
   width: number
   height: number
@@ -177,16 +179,8 @@ type TraySettingsItem = {
 }
 
 let chatWindow: BrowserWindow | null = null
-let settingsWindow: BrowserWindow | null = null
 let appTray: Tray | null = null
 
-// Pending settings-navigate target keyed by webContents id. Set by the
-// `window:open-settings` IPC when the settings window has not finished
-// loading yet (cold start, refresh, etc.) and drained by the per-window
-// `did-finish-load` listener attached at creation time. Storing on a Map
-// rather than a closure variable lets us stay correct if a future change
-// ever introduces multiple settings windows.
-const pendingSettingsNavigate = new Map<number, string>()
 let stoppingLocalProcesses = false
 let windowStatesCache: StoredWindowStates | null = null
 
@@ -387,13 +381,60 @@ app.on('will-quit', () => {
 })
 
 function applyExternalLinkHandler(window: BrowserWindow): void {
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+  attachExternalLinkGuards(window.webContents)
+}
+
+function normalizeExternalUrl(rawURL: unknown): { url: string, protocol: string, supported: boolean } {
+  const url = typeof rawURL === 'string' ? rawURL.trim() : ''
+  let protocol = ''
+  try {
+    protocol = new URL(url).protocol
+  } catch {
+    protocol = ''
+  }
+  return {
+    url,
+    protocol,
+    supported: ['http:', 'https:', 'mailto:'].includes(protocol),
+  }
+}
+
+function attachExternalLinkGuards(webContents: Electron.WebContents): void {
+  if (guardedExternalLinkWebContents.has(webContents)) return
+  guardedExternalLinkWebContents.add(webContents)
+
+  webContents.setWindowOpenHandler(({ url }) => {
+    const external = normalizeExternalUrl(url)
+    if (!external.supported) {
+      console.warn('blocked unsupported window.open URL', external.url || url)
+      return { action: 'deny' }
+    }
+    void shell.openExternal(external.url).catch((error) => {
+      console.error('failed to open external URL', external.url, error)
+    })
     return { action: 'deny' }
+  })
+
+  webContents.on('will-navigate', (event, url) => {
+    const external = normalizeExternalUrl(url)
+    if (external.protocol === 'about:' || (!external.supported && external.protocol !== 'file:')) {
+      console.warn('blocked unsupported navigation URL', external.url || url)
+      event.preventDefault()
+    }
   })
 }
 
-function loadRendererEntry(window: BrowserWindow, entry: 'index' | 'settings'): void {
+async function openExternalUrl(rawURL: unknown): Promise<void> {
+  const external = normalizeExternalUrl(rawURL)
+  if (!external.supported) {
+    const blockedURL = external.url || String(rawURL ?? '')
+    console.warn('blocked unsupported external URL', blockedURL)
+    throw new Error(`Unsupported external URL: ${blockedURL || 'empty URL'}`)
+  }
+  await shell.openExternal(external.url)
+}
+
+function loadRendererEntry(window: BrowserWindow, entry: 'index'): void {
   const base = process.env.ELECTRON_RENDERER_URL
   if (is.dev && base) {
     window.loadURL(`${base}/${entry}.html`)
@@ -450,7 +491,7 @@ const SETTINGS_TRAY_ITEMS: TraySettingsItem[] = [
 ]
 
 function openSettingsWindow(target?: string): void {
-  const window = ensureWindow('settings')
+  const window = ensureWindow('chat')
   focusWindow(window)
   if (target?.startsWith('/settings')) {
     dispatchSettingsNavigate(window, target)
@@ -617,7 +658,11 @@ function createChatWindow(): BrowserWindow {
   })
   attachWindowStatePersistence(window, 'chat', CHAT_DEFAULTS)
 
-  window.on('ready-to-show', () => {
+  // ready-to-show fires on initial load AND every subsequent full reload
+  // (including HMR-triggered full page reloads during AI-assisted editing).
+  // Guarding with `once` ensures the window shows only on the first load —
+  // it will never steal focus again on subsequent reloads.
+  window.once('ready-to-show', () => {
     restoreWindowMaximized(window, 'chat')
     window.show()
   })
@@ -635,61 +680,9 @@ function createChatWindow(): BrowserWindow {
   return window
 }
 
-function createSettingsWindow(): BrowserWindow {
-  const window = new BrowserWindow({
-    ...rememberedWindowOptions('settings', SETTINGS_DEFAULTS),
-    ...macWindowChromeOptions('memoh-settings'),
-    show: false,
-    autoHideMenuBar: true,
-    title: `${DESKTOP_PRODUCT_NAME} · Settings`,
-    icon: iconPng,
-    webPreferences: {
-      preload: join(__dirname, PRELOAD_FILE),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  })
-  attachWindowStatePersistence(window, 'settings', SETTINGS_DEFAULTS)
-  window.setParentWindow(null)
-  const webContentsId = window.webContents.id
-
-  window.on('ready-to-show', () => {
-    if (window.isDestroyed()) return
-    window.setParentWindow(null)
-    restoreWindowMaximized(window, 'settings')
-    window.show()
-  })
-  window.on('closed', () => {
-    pendingSettingsNavigate.delete(webContentsId)
-    settingsWindow = null
-  })
-
-  // Drain any queued navigate target as soon as the renderer is ready to
-  // receive IPC messages. Reusing `did-finish-load` keeps both fresh
-  // cold-starts and in-place refreshes working without extra coordination.
-  window.webContents.on('did-finish-load', () => {
-    const target = pendingSettingsNavigate.get(webContentsId)
-    if (!target) return
-    if (window.isDestroyed()) return
-    pendingSettingsNavigate.delete(webContentsId)
-    window.webContents.send('settings:navigate', target)
-  })
-
-  applyExternalLinkHandler(window)
-  loadRendererEntry(window, 'settings')
-  return window
-}
-
-function ensureWindow(kind: WindowKind): BrowserWindow {
-  if (kind === 'chat') {
-    if (!chatWindow || chatWindow.isDestroyed()) chatWindow = createChatWindow()
-    return chatWindow
-  }
-  if (!settingsWindow || settingsWindow.isDestroyed()) {
-    settingsWindow = createSettingsWindow()
-  }
-  return settingsWindow
+function ensureWindow(_kind: WindowKind): BrowserWindow {
+  if (!chatWindow || chatWindow.isDestroyed()) chatWindow = createChatWindow()
+  return chatWindow
 }
 
 function focusWindow(window: BrowserWindow): void {
@@ -699,15 +692,41 @@ function focusWindow(window: BrowserWindow): void {
 }
 
 function dispatchSettingsNavigate(window: BrowserWindow, target: string): void {
-  // If the renderer hasn't booted yet (cold start) or is mid-reload, we
-  // can't push the navigate event straight away — buffer it for the
-  // `did-finish-load` listener to drain. Otherwise send immediately so
-  // warm clicks feel instant.
   if (window.webContents.isLoading()) {
-    pendingSettingsNavigate.set(window.webContents.id, target)
+    window.webContents.once('did-finish-load', () => {
+      if (window.isDestroyed()) return
+      window.webContents.send('settings:navigate', target)
+    })
     return
   }
   window.webContents.send('settings:navigate', target)
+}
+
+// Renderer-supplied menu accelerators take precedence over the static table.
+// Keyed by command id (kebab-case AppKeyboardCommand). The renderer pushes the
+// current set whenever the Keyboard Shortcuts store mutates, and we rebuild
+// the menu so the native item's label and matching combo stay in sync.
+const menuAcceleratorOverrides = new Map<string, string>()
+
+function effectiveMenuAccelerator(command: AppKeyboardCommand): string | undefined {
+  return menuAcceleratorOverrides.get(command) ?? acceleratorForCommand(command)
+}
+
+// Derive the native Close accelerator from the renderer-pushed overrides,
+// falling back to the shared binding table's default. The focused window
+// decides whether the command closes an app tab or the window.
+function closeWindowMenuItem(): MenuItemConstructorOptions {
+  return {
+    label: 'Close',
+    accelerator: effectiveMenuAccelerator(appKeyboardCommands.closeCurrentWorkspaceTab),
+    click: () => {
+      dispatchFocusedWindowCommand(
+        chatWindow,
+        BrowserWindow.getFocusedWindow(),
+        appKeyboardCommands.closeCurrentWorkspaceTab,
+      )
+    },
+  }
 }
 
 // CLI install / menu helpers — kept above the whenReady block so the
@@ -835,7 +854,7 @@ async function rebuildAppMenu(): Promise<void> {
         label: 'Window',
         submenu: [
           { role: 'minimize' },
-          { role: 'close' },
+          closeWindowMenuItem(),
         ],
       },
     )
@@ -938,7 +957,7 @@ async function rebuildAppMenu(): Promise<void> {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
-        { role: 'close' },
+        closeWindowMenuItem(),
       ],
     },
   )
@@ -965,12 +984,13 @@ app.whenReady().then(async () => {
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+    attachExternalLinkGuards(window.webContents)
   })
 
   createAppTray()
 
   ipcMain.handle('window:open-settings', (_event, rawTarget: unknown) => {
-    const window = ensureWindow('settings')
+    const window = ensureWindow('chat')
     focusWindow(window)
     const target = typeof rawTarget === 'string' && rawTarget.startsWith('/settings')
       ? rawTarget
@@ -997,6 +1017,30 @@ app.whenReady().then(async () => {
     await uninstallCli()
     return detectCliState()
   })
+  ipcMain.handle('desktop:set-menu-accelerators', async (_event, rawPayload: unknown) => {
+    if (!rawPayload || typeof rawPayload !== 'object') return
+    const incoming = new Map<string, string>()
+    for (const [command, accelerator] of Object.entries(rawPayload as Record<string, unknown>)) {
+      if (typeof accelerator !== 'string' || !accelerator) continue
+      incoming.set(command, accelerator)
+    }
+    let changed = incoming.size !== menuAcceleratorOverrides.size
+    if (!changed) {
+      for (const [command, accelerator] of incoming) {
+        if (menuAcceleratorOverrides.get(command) !== accelerator) {
+          changed = true
+          break
+        }
+      }
+    }
+    if (!changed) return
+    menuAcceleratorOverrides.clear()
+    for (const [command, accelerator] of incoming) {
+      menuAcceleratorOverrides.set(command, accelerator)
+    }
+    await rebuildAppMenu()
+  })
+  ipcMain.handle('desktop:open-external-url', (_event, rawURL: unknown) => openExternalUrl(rawURL))
 
   // Cross-window Pinia Colada query-cache invalidation. Each renderer owns
   // an independent in-memory cache (separate Vue/Pinia instances per

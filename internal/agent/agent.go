@@ -14,6 +14,7 @@ import (
 
 	"github.com/memohai/memoh/internal/agent/background"
 	"github.com/memohai/memoh/internal/agent/tools"
+	"github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/userinput"
 	"github.com/memohai/memoh/internal/workspace/bridge"
@@ -24,6 +25,7 @@ type Agent struct {
 	client         *sdk.Client
 	toolProviders  []tools.ToolProvider
 	bridgeProvider bridge.Provider
+	hookService    *hooks.Service
 	logger         *slog.Logger
 }
 
@@ -36,6 +38,7 @@ func New(deps Deps) *Agent {
 	return &Agent{
 		client:         sdk.NewClient(),
 		bridgeProvider: deps.BridgeProvider,
+		hookService:    deps.HookService,
 		logger:         logger.With(slog.String("service", "agent")),
 	}
 }
@@ -67,7 +70,7 @@ func (a *Agent) Generate(ctx context.Context, cfg RunConfig) (*GenerateResult, e
 }
 
 func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCall) (sdk.ToolResultPart, error) {
-	sdkTools, err := a.assembleTools(ctx, cfg, tools.StreamEmitter(func(tools.ToolStreamEvent) {}))
+	sdkTools, _, err := a.assembleTools(ctx, cfg, nil, false)
 	if err != nil {
 		return sdk.ToolResultPart{}, fmt.Errorf("assemble tools: %w", err)
 	}
@@ -96,7 +99,7 @@ func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCal
 		return sdk.ToolResultPart{
 			ToolCallID: call.ToolCallID,
 			ToolName:   call.ToolName,
-			Result:     output,
+			Result:     publicReadMediaToolResult(output),
 		}, nil
 	}
 	return sdk.ToolResultPart{}, fmt.Errorf("tool %q not found", call.ToolName)
@@ -117,6 +120,18 @@ func sendEvent(ctx context.Context, ch chan<- StreamEvent, evt StreamEvent) bool
 func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
 	streamCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	aborted := false
+	turnError := ""
+	defer func() {
+		event := hooks.EventTurnEnd
+		if aborted || strings.TrimSpace(turnError) != "" {
+			event = hooks.EventTurnError
+			if strings.TrimSpace(turnError) == "" {
+				turnError = "agent run aborted"
+			}
+		}
+		a.runTurnHook(context.WithoutCancel(ctx), cfg, event, turnError)
+	}()
 
 	// Stream emitter: tools targeting the current conversation push
 	// side-effect events (attachments, reactions, speech) directly here.
@@ -127,16 +142,23 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 
 	var sdkTools []sdk.Tool
 	if cfg.SupportsToolCall {
+		var toolUsage string
 		var err error
-		sdkTools, err = a.assembleTools(streamCtx, cfg, streamEmitter)
+		sdkTools, toolUsage, err = a.assembleTools(streamCtx, cfg, streamEmitter, cfg.LiveToolStream)
 		if err != nil {
-			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Sprintf("assemble tools: %v", err)})
+			turnError = fmt.Sprintf("assemble tools: %v", err)
+			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 			return
+		}
+		if toolUsage != "" {
+			// Must run before buildGenerateOptions so prompt caching and
+			// background-notification steps see the usage-augmented text.
+			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
 		}
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
-
-	aborted := false
+	approvalTools := append([]sdk.Tool(nil), sdkTools...)
+	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
 
 	// Loop detection setup
 	var textLoopGuard *TextLoopGuard
@@ -215,24 +237,21 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 
-	// Drain background task notifications at step boundaries.
-	// Each notification is injected as a user message so the model
-	// discovers completed background work naturally.
-	if cfg.BackgroundManager != nil {
-		basePrepare := prepareStep
-		baseSystem := cfg.System // capture original system prompt to avoid accumulation
-		prepareStep = func(p *sdk.GenerateParams) *sdk.GenerateParams {
-			if basePrepare != nil {
-				if override := basePrepare(p); override != nil {
-					p = override
-				}
-			}
-			p = drainBackgroundNotifications(p, cfg.BackgroundManager, baseSystem, cfg.Identity.BotID, cfg.Identity.SessionID, a.logger)
-			return p
-		}
+	prepareStep = a.wrapPrepareStepWithModelHook(streamCtx, cfg, prepareStep)
+	var err error
+	cfg, err = a.applyBeforeModelCallHook(streamCtx, cfg, 0)
+	if err != nil {
+		turnError = err.Error()
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
+		return
 	}
-
-	opts := a.buildGenerateOptions(cfg, sdkTools, prepareStep)
+	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
+	modelStepIndex := 0
+	opts = append(opts, sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
+		a.runAfterModelCallHook(streamCtx, cfg, step, modelStepIndex)
+		modelStepIndex++
+		return nil
+	}))
 
 	retryCfg := cfg.Retry
 	if retryCfg.MaxAttempts <= 0 {
@@ -247,7 +266,8 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			break
 		}
 		if !isRetryableStreamError(err) {
-			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Sprintf("stream start: %v", err)})
+			turnError = fmt.Sprintf("stream start: %v", err)
+			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 			return
 		}
 		a.logger.Warn("stream start failed, retrying",
@@ -264,13 +284,15 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			return
 		}
 		if attempt+1 >= retryCfg.MaxAttempts {
-			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Sprintf("stream start: all %d attempts failed (last: %v)", retryCfg.MaxAttempts, err)})
+			turnError = fmt.Sprintf("stream start: all %d attempts failed (last: %v)", retryCfg.MaxAttempts, err)
+			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 			return
 		}
 		delay := retryDelay(attempt, retryCfg)
 		if delay > 0 {
 			if err := sleepWithContext(streamCtx, delay); err != nil {
-				sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Sprintf("stream start: context cancelled during retry: %v", err)})
+				turnError = fmt.Sprintf("stream start: context cancelled during retry: %v", err)
+				sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 				return
 			}
 		}
@@ -464,6 +486,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			if isAskUserArgumentParseError(errMsg) {
 				continue
 			}
+			turnError = errMsg
 			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: errMsg})
 
 			// Mid-stream retry: if the error is retryable, attempt to continue
@@ -473,9 +496,12 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			if isRetryableStreamError(p.Error) {
 				streamResult, aborted = a.runMidStreamRetry(
 					ctx, streamCtx, cancel, toolLoopAbortCallIDs,
-					ch, cfg, sdkTools, prepareStep, streamResult,
+					ch, cfg, sdkTools, approvalTools, prepareStep, streamResult,
 					stepNumber, errMsg, &allText, textLoopProbeBuffer,
 				)
+				if !aborted {
+					turnError = ""
+				}
 			} else {
 				aborted = true
 			}
@@ -566,9 +592,18 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	sendEvent(deliveryCtx, ch, termEvent)
 }
 
-func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (*GenerateResult, error) {
+func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *GenerateResult, retErr error) {
 	genCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	defer func() {
+		event := hooks.EventTurnEnd
+		errMsg := ""
+		if retErr != nil {
+			event = hooks.EventTurnError
+			errMsg = retErr.Error()
+		}
+		a.runTurnHook(context.WithoutCancel(ctx), cfg, event, errMsg)
+	}()
 	loopAbort := newLoopAbortState()
 
 	// Collecting emitter: tools push side-effect events here during generation.
@@ -580,13 +615,21 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (*GenerateResult
 
 	var sdkTools []sdk.Tool
 	if cfg.SupportsToolCall {
+		var toolUsage string
 		var err error
-		sdkTools, err = a.assembleTools(genCtx, cfg, collectEmitter)
+		sdkTools, toolUsage, err = a.assembleTools(genCtx, cfg, collectEmitter, false)
 		if err != nil {
 			return nil, fmt.Errorf("assemble tools: %w", err)
 		}
+		if toolUsage != "" {
+			// Must run before buildGenerateOptions so prompt caching and
+			// background-notification steps see the usage-augmented text.
+			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
+		}
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
+	approvalTools := append([]sdk.Tool(nil), sdkTools...)
+	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
 
 	var toolLoopGuard *ToolLoopGuard
 	var textLoopGuard *TextLoopGuard
@@ -605,24 +648,17 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (*GenerateResult
 		prepareStep = readMediaState.prepareStep
 	}
 
-	// Drain background task notifications at step boundaries (non-streaming).
-	if cfg.BackgroundManager != nil {
-		basePrepare := prepareStep
-		baseSystem := cfg.System
-		prepareStep = func(p *sdk.GenerateParams) *sdk.GenerateParams {
-			if basePrepare != nil {
-				if override := basePrepare(p); override != nil {
-					p = override
-				}
-			}
-			p = drainBackgroundNotifications(p, cfg.BackgroundManager, baseSystem, cfg.Identity.BotID, cfg.Identity.SessionID, a.logger)
-			return p
-		}
+	prepareStep = a.wrapPrepareStepWithModelHook(genCtx, cfg, prepareStep)
+	cfg, err := a.applyBeforeModelCallHook(genCtx, cfg, 0)
+	if err != nil {
+		return nil, err
 	}
-
-	opts := a.buildGenerateOptions(cfg, sdkTools, prepareStep)
+	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
+	modelStepIndex := 0
 	opts = append(opts,
 		sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
+			a.runAfterModelCallHook(genCtx, cfg, step, modelStepIndex)
+			modelStepIndex++
 			if cfg.LoopDetection.Enabled {
 				if toolLoopAbortCallIDs.Any() {
 					loopAbort.Set(ErrToolLoopDetected)
@@ -689,10 +725,26 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (*GenerateResult
 	}, nil
 }
 
-func (*Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
+func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
 	system, messages, tools := models.ApplyPromptCache(
 		cfg.Model, cfg.PromptCacheTTL, cfg.System, cfg.Messages, tools,
 	)
+	if cfg.BackgroundManager != nil {
+		basePrepare := prepareStep
+		baseSystem := captureBackgroundSystem(system, messages)
+		logger := slog.Default()
+		if a != nil && a.logger != nil {
+			logger = a.logger
+		}
+		prepareStep = func(p *sdk.GenerateParams) *sdk.GenerateParams {
+			if basePrepare != nil {
+				if override := basePrepare(p); override != nil {
+					p = override
+				}
+			}
+			return drainBackgroundNotifications(p, cfg.BackgroundManager, baseSystem, cfg.Identity.BotID, cfg.Identity.SessionID, logger)
+		}
+	}
 	opts := []sdk.GenerateOption{
 		sdk.WithModel(cfg.Model),
 		sdk.WithMessages(messages),
@@ -702,8 +754,12 @@ func (*Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, prepareStep 
 	if len(tools) > 0 && cfg.SupportsToolCall {
 		opts = append(opts, sdk.WithTools(tools))
 	}
-	if cfg.ToolApprovalHandler != nil {
-		opts = append(opts, sdk.WithApprovalHandler(cfg.ToolApprovalHandler))
+	approvalHandler := cfg.ToolApprovalHandler
+	if a != nil && a.hookService != nil {
+		approvalHandler = a.wrapApprovalHandlerWithHooks(cfg, approvalTools, approvalHandler)
+	}
+	if approvalHandler != nil {
+		opts = append(opts, sdk.WithApprovalHandler(approvalHandler))
 	}
 
 	// Wrap the existing prepareStep (if any) with mid-task context pruning.
@@ -732,21 +788,26 @@ func (*Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, prepareStep 
 		ClientType:            models.ResolveClientType(cfg.Model),
 		ChatCompletionsCompat: cfg.ChatCompletionsCompat,
 		ReasoningConfig: &models.ReasoningConfig{
-			Enabled:  cfg.ReasoningEffort != "",
-			Disabled: cfg.ReasoningDisabled,
-			Effort:   cfg.ReasoningEffort,
+			Active:    cfg.ReasoningActive,
+			Disabled:  cfg.ReasoningDisabled,
+			Adaptive:  cfg.ReasoningAdaptive,
+			Effort:    cfg.ReasoningEffort,
+			OffEffort: cfg.ReasoningOffEffort,
 		},
 	})...)
 	return opts
 }
 
-// assembleTools collects tools from all registered ToolProviders.
-// emitter is injected into the session context so that tools targeting the
-// current conversation can push side-effect events (attachments, reactions,
-// speech) directly into the agent stream.
-func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.StreamEmitter) ([]sdk.Tool, error) {
+// assembleTools collects tools from all registered ToolProviders, along with
+// the group-level usage guidance contributed by providers that also implement
+// tools.ToolUsage. Usage guidance is gathered only from providers that actually
+// returned tools for this session, so it stays in lockstep with registration
+// (see tools.ToolUsage). emitter is injected into the session context so that
+// tools targeting the current conversation can push side-effect events
+// (attachments, reactions, speech) directly into the agent stream.
+func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.StreamEmitter, liveStream bool) ([]sdk.Tool, string, error) {
 	if len(a.toolProviders) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
 	skillsMap := make(map[string]tools.SkillDetail, len(cfg.Skills))
 	for _, s := range cfg.Skills {
@@ -757,45 +818,87 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 		}
 	}
 	session := tools.SessionContext{
-		BotID:              cfg.Identity.BotID,
-		ChatID:             cfg.Identity.ChatID,
-		SessionID:          cfg.Identity.SessionID,
-		SessionType:        cfg.SessionType,
-		ChannelIdentityID:  cfg.Identity.ChannelIdentityID,
-		SessionToken:       cfg.Identity.SessionToken,
-		CurrentPlatform:    cfg.Identity.CurrentPlatform,
-		ReplyTarget:        cfg.Identity.ReplyTarget,
-		ConversationType:   cfg.Identity.ConversationType,
-		SupportsImageInput: cfg.SupportsImageInput,
-		IsSubagent:         cfg.Identity.IsSubagent,
-		Skills:             skillsMap,
-		TimezoneLocation:   cfg.Identity.TimezoneLocation,
-		Emitter:            emitter,
+		BotID:               cfg.Identity.BotID,
+		ChatID:              cfg.Identity.ChatID,
+		SessionID:           cfg.Identity.SessionID,
+		SessionType:         cfg.SessionType,
+		ChannelIdentityID:   cfg.Identity.ChannelIdentityID,
+		SessionToken:        cfg.Identity.SessionToken,
+		CurrentPlatform:     cfg.Identity.CurrentPlatform,
+		ReplyTarget:         cfg.Identity.ReplyTarget,
+		ConversationType:    cfg.Identity.ConversationType,
+		CanRequestUserInput: cfg.CanRequestUserInput,
+		SupportsImageInput:  cfg.SupportsImageInput,
+		IsSubagent:          cfg.Identity.IsSubagent,
+		Skills:              skillsMap,
+		TimezoneLocation:    cfg.Identity.TimezoneLocation,
+		Emitter:             emitter,
+		LiveStream:          liveStream,
 	}
 
 	var allTools []sdk.Tool
+	type usageRegistration struct {
+		provider tools.ToolUsage
+	}
+	var usageRegistrations []usageRegistration
+	var usageSections []string
 	for _, provider := range a.toolProviders {
 		providerTools, err := provider.Tools(ctx, session)
 		if err != nil {
 			a.logger.Warn("tool provider failed", slog.Any("error", err))
 			continue
 		}
+		if len(providerTools) == 0 {
+			continue
+		}
 		allTools = append(allTools, providerTools...)
-	}
-	if cfg.ToolApprovalHandler != nil {
-		allTools = markApprovalTools(allTools)
-	}
-	return allTools, nil
-}
-
-func markApprovalTools(tools []sdk.Tool) []sdk.Tool {
-	for i := range tools {
-		switch tools[i].Name {
-		case "write", "edit", "exec":
-			tools[i].RequireApproval = true
+		// Collect group-level usage guidance only from providers that actually
+		// contributed tools this session, so guidance and registration share
+		// one gating decision and cannot drift apart.
+		if usageProvider, ok := provider.(tools.ToolUsage); ok {
+			usageRegistrations = append(usageRegistrations, usageRegistration{provider: usageProvider})
 		}
 	}
-	return tools
+	if cfg.ToolApprovalHandler != nil || a.hookService != nil {
+		allTools = markApprovalTools(allTools)
+	}
+	availableTools := tools.NewAvailableTools(allTools)
+	for _, registration := range usageRegistrations {
+		if text := strings.TrimSpace(registration.provider.Usage(ctx, session, availableTools)); text != "" {
+			usageSections = append(usageSections, text)
+		}
+	}
+	usage := ""
+	if len(usageSections) > 0 {
+		usage = "## Tool usage\n\n" + strings.Join(usageSections, "\n\n")
+	}
+	return allTools, usage, nil
+}
+
+func appendToolUsageToSystem(system, toolUsage string) string {
+	system = strings.TrimSpace(system)
+	toolUsage = strings.TrimSpace(toolUsage)
+	if toolUsage == "" {
+		return system
+	}
+	if system == "" {
+		return toolUsage
+	}
+	const workspaceAnchor = "\n## Workspace instruction files"
+	if idx := strings.Index(system, workspaceAnchor); idx >= 0 {
+		return strings.TrimSpace(system[:idx]) + "\n\n" + toolUsage + "\n" + system[idx:]
+	}
+	return strings.TrimSpace(system + "\n\n" + toolUsage)
+}
+
+func markApprovalTools(sdkTools []sdk.Tool) []sdk.Tool {
+	for i := range sdkTools {
+		switch sdkTools[i].Name {
+		case tools.ToolWrite().String(), tools.ToolEdit().String(), tools.ToolApplyPatch().String(), tools.ToolExec().String():
+			sdkTools[i].RequireApproval = true
+		}
+	}
+	return sdkTools
 }
 
 func approvalShortID(metadata map[string]any) int {
@@ -854,6 +957,7 @@ func annotateDeferredApproval(messages []sdk.Message, approval sdk.ToolApprovalR
 					"short_id":    approvalShortID(approval.Metadata),
 					"status":      "pending",
 					"can_approve": true,
+					"operation":   approval.Metadata["operation"],
 				}
 			}
 			annotated[msgIdx].Content[partIdx] = call
@@ -872,7 +976,7 @@ func isUserInputMetadata(metadata map[string]any) bool {
 }
 
 func isAskUserArgumentParseError(message string) bool {
-	return strings.Contains(message, `unmarshal tool call arguments for "ask_user"`)
+	return strings.Contains(message, `unmarshal tool call arguments for "`+tools.ToolAskUser().String()+`"`)
 }
 
 // toolStreamEventToAgentEvent converts a tool-layer ToolStreamEvent into an
@@ -910,18 +1014,14 @@ func toolStreamEventToAgentEvent(evt tools.ToolStreamEvent) StreamEvent {
 func drainBackgroundNotifications(
 	p *sdk.GenerateParams,
 	mgr *background.Manager,
-	baseSystem string,
+	baseSystem backgroundSystem,
 	botID, sessionID string,
 	logger *slog.Logger,
 ) *sdk.GenerateParams {
 	// Inject running tasks summary into system prompt so the model
 	// knows about ongoing background work even after compaction.
 	// Always start from baseSystem to avoid accumulating summaries across steps.
-	if summary := mgr.RunningTasksSummary(botID, sessionID); summary != "" {
-		p.System = baseSystem + "\n\n" + summary
-	} else {
-		p.System = baseSystem
-	}
+	injectBackgroundSummary(p, baseSystem, mgr.RunningTasksSummary(botID, sessionID))
 
 	notifications := mgr.DrainNotifications(botID, sessionID)
 	for _, n := range notifications {
@@ -934,6 +1034,102 @@ func drainBackgroundNotifications(
 		)
 	}
 	return p
+}
+
+type backgroundSystem struct {
+	system             string
+	promotedSystemText string
+	hasPromotedSystem  bool
+}
+
+func captureBackgroundSystem(system string, messages []sdk.Message) backgroundSystem {
+	base := backgroundSystem{system: system}
+	if len(messages) == 0 || messages[0].Role != sdk.MessageRoleSystem || len(messages[0].Content) == 0 {
+		return base
+	}
+	first, ok := messages[0].Content[0].(sdk.TextPart)
+	if !ok {
+		return base
+	}
+	base.promotedSystemText = first.Text
+	base.hasPromotedSystem = true
+	return base
+}
+
+func injectBackgroundSummary(p *sdk.GenerateParams, baseSystem backgroundSystem, summary string) {
+	summary = strings.TrimSpace(summary)
+	if strings.TrimSpace(baseSystem.system) != "" {
+		p.System = baseSystem.system
+		if summary != "" {
+			p.System += "\n\n" + summary
+		}
+		return
+	}
+
+	if baseSystem.hasPromotedSystem {
+		text := strings.TrimSpace(baseSystem.promotedSystemText)
+		if len(p.Messages) == 0 || p.Messages[0].Role != sdk.MessageRoleSystem || len(p.Messages[0].Content) == 0 {
+			p.System = text
+			if summary != "" {
+				p.System = strings.TrimSpace(p.System + "\n\n" + summary)
+			}
+			return
+		}
+		first, ok := p.Messages[0].Content[0].(sdk.TextPart)
+		if !ok {
+			p.System = text
+			if summary != "" {
+				p.System = strings.TrimSpace(p.System + "\n\n" + summary)
+			}
+			return
+		}
+		first.Text = text
+		p.Messages[0].Content[0] = first
+		p.Messages = removeGeneratedBackgroundSystemMessages(p.Messages)
+		if summary != "" {
+			next := make([]sdk.Message, 0, len(p.Messages)+1)
+			next = append(next, p.Messages[0])
+			next = append(next, backgroundSummarySystemMessage(summary))
+			next = append(next, p.Messages[1:]...)
+			p.Messages = next
+		}
+		p.System = ""
+		return
+	}
+
+	if summary != "" {
+		p.System = summary
+		return
+	}
+	p.System = ""
+}
+
+func backgroundSummarySystemMessage(summary string) sdk.Message {
+	return sdk.SystemMessage(summary)
+}
+
+func removeGeneratedBackgroundSystemMessages(messages []sdk.Message) []sdk.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]sdk.Message, 0, len(messages))
+	for _, msg := range messages {
+		if !isBackgroundSummarySystemMessage(msg) {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+func isBackgroundSummarySystemMessage(msg sdk.Message) bool {
+	if msg.Role != sdk.MessageRoleSystem || len(msg.Content) != 1 {
+		return false
+	}
+	part, ok := msg.Content[0].(sdk.TextPart)
+	return ok &&
+		part.CacheControl == nil &&
+		part.ProviderMetadata == nil &&
+		strings.HasPrefix(strings.TrimSpace(part.Text), "Currently running background tasks:")
 }
 
 func wrapToolsWithLoopGuard(tools []sdk.Tool, guard *ToolLoopGuard, abortCallIDs *toolAbortRegistry) []sdk.Tool {
@@ -1080,6 +1276,7 @@ func (a *Agent) runMidStreamRetry(
 	ch chan<- StreamEvent,
 	cfg RunConfig,
 	sdkTools []sdk.Tool,
+	approvalTools []sdk.Tool,
 	prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams,
 	prevResult *sdk.StreamResult,
 	stepNumber int,
@@ -1123,7 +1320,7 @@ func (a *Agent) runMidStreamRetry(
 		// media resolution, and other prepare-step logic — same as initial stream.
 		retryCfgCopy := cfg
 		retryCfgCopy.Messages = prevResult.Messages
-		retryOpts := a.buildGenerateOptions(retryCfgCopy, sdkTools, prepareStep)
+		retryOpts := a.buildGenerateOptions(retryCfgCopy, sdkTools, approvalTools, prepareStep)
 
 		retryResult, retryErr := a.client.StreamText(streamCtx, retryOpts...)
 		if retryErr != nil {

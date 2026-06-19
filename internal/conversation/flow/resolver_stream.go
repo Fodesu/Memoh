@@ -87,6 +87,19 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 		doneTurn := r.enterSessionTurn(ctx, streamReq.BotID, streamReq.SessionID)
 		defer doneTurn()
 
+		if streamReq.RawQuery == "" {
+			streamReq.RawQuery = strings.TrimSpace(streamReq.Query)
+		}
+		streamReq, err := r.applyUserMessageHook(ctx, streamReq)
+		if err != nil {
+			r.logger.Error("agent stream user message hook failed",
+				slog.String("bot_id", streamReq.BotID),
+				slog.String("chat_id", streamReq.ChatID),
+				slog.Any("error", err),
+			)
+			errCh <- err
+			return
+		}
 		rc, err := r.resolve(ctx, streamReq)
 		if err != nil {
 			r.logger.Error("agent stream resolve failed",
@@ -97,14 +110,13 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 			errCh <- err
 			return
 		}
-		if streamReq.RawQuery == "" {
-			streamReq.RawQuery = strings.TrimSpace(streamReq.Query)
-		}
 		streamReq.Query = rc.query
 
 		go r.maybeGenerateSessionTitle(context.WithoutCancel(ctx), streamReq, streamReq.Query)
 
 		cfg := rc.runConfig
+		cfg.LiveToolStream = true
+		cfg.CanRequestUserInput = r.canDeliverUserInputStream()
 		cfg = r.prepareRunConfig(ctx, cfg)
 
 		// Wrap with idle timeout: if no events arrive within the adaptive timeout, cancel the stream.
@@ -236,6 +248,18 @@ func (r *Resolver) StreamChatWS(
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
 	defer doneTurn()
 
+	if req.RawQuery == "" {
+		req.RawQuery = strings.TrimSpace(req.Query)
+	}
+	var err error
+	req, err = r.applyUserMessageHook(ctx, req)
+	if err != nil {
+		r.logger.Error("StreamChatWS: user message hook failed",
+			slog.String("bot_id", req.BotID),
+			slog.Any("error", err),
+		)
+		return err
+	}
 	rc, err := r.resolve(ctx, req)
 	if err != nil {
 		r.logger.Error("StreamChatWS: resolve failed",
@@ -243,9 +267,6 @@ func (r *Resolver) StreamChatWS(
 			slog.Any("error", err),
 		)
 		return fmt.Errorf("resolve: %w", err)
-	}
-	if req.RawQuery == "" {
-		req.RawQuery = strings.TrimSpace(req.Query)
 	}
 	req.Query = rc.query
 
@@ -263,6 +284,8 @@ func (r *Resolver) StreamChatWS(
 	}()
 
 	cfg := rc.runConfig
+	cfg.LiveToolStream = true
+	cfg.CanRequestUserInput = r.canDeliverUserInputWS(eventCh)
 	cfg = r.prepareRunConfig(streamCtx, cfg)
 
 	// Wrap with idle timeout: if no events arrive within the adaptive timeout, cancel the stream.

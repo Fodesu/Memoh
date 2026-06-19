@@ -17,15 +17,16 @@ import (
 )
 
 type ToolApprovalResponseInput struct {
-	BotID                  string
-	SessionID              string
-	ActorChannelIdentityID string
-	ApprovalID             string
-	ExplicitID             string
-	ReplyExternalMessageID string
-	Decision               string
-	Reason                 string
-	ChatToken              string
+	BotID                      string
+	SessionID                  string
+	ActorChannelIdentityID     string
+	ApprovalID                 string
+	ExplicitID                 string
+	ReplyExternalMessageID     string
+	Decision                   string
+	Reason                     string
+	ChatToken                  string
+	SuppressActivePromptAttach bool
 }
 
 func (r *Resolver) RespondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
@@ -88,17 +89,46 @@ func (r *Resolver) isACPToolApprovalSession(ctx context.Context, sessionID strin
 }
 
 func (r *Resolver) respondACPToolApproval(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+	if !r.toolApproval.CanRespond(target) {
+		_, err := r.toolApproval.Reject(ctx, target.ID, "", "tool approval expired: the requesting tool call is no longer waiting")
+		if err != nil && !errors.Is(err, toolapproval.ErrAlreadyDecided) {
+			return err
+		}
+		return emitApprovalAck(ctx, eventCh)
+	}
+	var activePrompt *acpActivePromptSubscription
+	if eventCh != nil && !input.SuppressActivePromptAttach {
+		activePrompt, _ = r.subscribeACPActivePrompt(
+			firstNonEmpty(target.BotID, input.BotID),
+			firstNonEmpty(target.SessionID, input.SessionID),
+		)
+	}
 	switch strings.ToLower(strings.TrimSpace(input.Decision)) {
 	case "approve", "approved":
 		if _, err := r.toolApproval.Approve(ctx, target.ID, input.ActorChannelIdentityID, input.Reason); err != nil {
+			if activePrompt != nil {
+				activePrompt.release()
+			}
 			return err
 		}
 	case "reject", "rejected":
 		if _, err := r.toolApproval.Reject(ctx, target.ID, input.ActorChannelIdentityID, input.Reason); err != nil {
+			if activePrompt != nil {
+				activePrompt.release()
+			}
 			return err
 		}
 	default:
+		if activePrompt != nil {
+			activePrompt.release()
+		}
 		return fmt.Errorf("unknown tool approval decision %q", input.Decision)
+	}
+	if activePrompt != nil {
+		return forwardACPActivePrompt(ctx, activePrompt, eventCh, acpActivePromptForwardOptions{
+			SkipToolCallID: target.ToolCallID,
+			SkipApprovalID: target.ID,
+		})
 	}
 	return emitApprovalAck(ctx, eventCh)
 }
@@ -111,20 +141,15 @@ func emitApprovalAck(ctx context.Context, eventCh chan<- WSStreamEvent) error {
 		{Type: agentpkg.EventAgentStart},
 		{Type: agentpkg.EventAgentEnd},
 	} {
-		data, err := json.Marshal(event)
-		if err != nil {
+		if err := sendAgentStreamEvent(ctx, eventCh, event); err != nil {
 			return err
-		}
-		select {
-		case eventCh <- json.RawMessage(data):
-		case <-ctx.Done():
-			return ctx.Err()
 		}
 	}
 	return nil
 }
 
 func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Request, input ToolApprovalResponseInput) (sdk.ToolResultPart, error) {
+	req = withLocalWebReplyTarget(req)
 	resolved, err := r.ResolveRunConfig(ctx,
 		input.BotID,
 		req.SessionID,
@@ -145,6 +170,7 @@ func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Req
 }
 
 func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
+	approval = withLocalWebReplyTarget(approval)
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	storeReq := conversation.ChatRequest{
 		BotID:                   input.BotID,
@@ -163,6 +189,7 @@ func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval tool
 }
 
 func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+	approval = withLocalWebReplyTarget(approval)
 	resolved, err := r.ResolveRunConfig(ctx,
 		input.BotID,
 		approval.SessionID,
@@ -187,6 +214,8 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 	cfg := resolved.RunConfig
 	cfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(sanitizeMessages(messages)))
 	cfg.Query = ""
+	cfg.LiveToolStream = eventCh != nil
+	cfg.CanRequestUserInput = r.canDeliverUserInputWS(eventCh)
 	cfg = r.prepareRunConfig(ctx, cfg)
 
 	req := conversation.ChatRequest{
@@ -229,6 +258,13 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 		}
 	}
 	return nil
+}
+
+func withLocalWebReplyTarget(req toolapproval.Request) toolapproval.Request {
+	if strings.EqualFold(strings.TrimSpace(req.SourcePlatform), "web") && strings.TrimSpace(req.ReplyTarget) == "" {
+		req.ReplyTarget = strings.TrimSpace(req.BotID)
+	}
+	return req
 }
 
 func rejectedToolResultText(reason string) string {

@@ -10,10 +10,27 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tele "gopkg.in/telebot.v4"
 
 	"github.com/memohai/memoh/internal/channel"
 )
+
+// newStubTelegramBot builds a telebot bot suitable for tests that need a
+// concrete *tele.Bot (e.g. for Me access) without making network calls. The
+// URL points at a closed local port so any accidental API call fails fast
+// instead of hanging.
+func newStubTelegramBot(t *testing.T) *tele.Bot {
+	t.Helper()
+	bot, err := tele.NewBot(tele.Settings{
+		Token:   "test",
+		URL:     "http://127.0.0.1:1",
+		Offline: true,
+	})
+	if err != nil {
+		t.Fatalf("create stub telegram bot: %v", err)
+	}
+	return bot
+}
 
 func TestResolveTelegramSender(t *testing.T) {
 	t.Parallel()
@@ -22,8 +39,8 @@ func TestResolveTelegramSender(t *testing.T) {
 	if externalID != "" || displayName != "" || len(attrs) != 0 {
 		t.Fatalf("expected empty sender")
 	}
-	msg := &tgbotapi.Message{
-		From: &tgbotapi.User{ID: 123, UserName: "alice"},
+	msg := &tele.Message{
+		Sender: &tele.User{ID: 123, Username: "alice"},
 	}
 	externalID, displayName, attrs = resolveTelegramSender(msg)
 	if externalID != "123" || displayName != "@alice" {
@@ -39,7 +56,7 @@ func TestIsTelegramBotMentioned(t *testing.T) {
 
 	t.Run("text mention", func(t *testing.T) {
 		t.Parallel()
-		msg := &tgbotapi.Message{
+		msg := &tele.Message{
 			Text: "hello @MemohBot",
 		}
 		if !isTelegramBotMentioned(msg, "memohbot") {
@@ -49,11 +66,11 @@ func TestIsTelegramBotMentioned(t *testing.T) {
 
 	t.Run("entity text mention matching bot", func(t *testing.T) {
 		t.Parallel()
-		msg := &tgbotapi.Message{
-			Entities: []tgbotapi.MessageEntity{
+		msg := &tele.Message{
+			Entities: []tele.MessageEntity{
 				{
-					Type: "text_mention",
-					User: &tgbotapi.User{IsBot: true, UserName: "memohbot"},
+					Type: tele.EntityTMention,
+					User: &tele.User{IsBot: true, Username: "memohbot"},
 				},
 			},
 		}
@@ -64,11 +81,11 @@ func TestIsTelegramBotMentioned(t *testing.T) {
 
 	t.Run("entity text mention other bot", func(t *testing.T) {
 		t.Parallel()
-		msg := &tgbotapi.Message{
-			Entities: []tgbotapi.MessageEntity{
+		msg := &tele.Message{
+			Entities: []tele.MessageEntity{
 				{
-					Type: "text_mention",
-					User: &tgbotapi.User{IsBot: true, UserName: "otherbot"},
+					Type: tele.EntityTMention,
+					User: &tele.User{IsBot: true, Username: "otherbot"},
 				},
 			},
 		}
@@ -79,7 +96,7 @@ func TestIsTelegramBotMentioned(t *testing.T) {
 
 	t.Run("not mentioned", func(t *testing.T) {
 		t.Parallel()
-		msg := &tgbotapi.Message{
+		msg := &tele.Message{
 			Text: "hello everyone",
 		}
 		if isTelegramBotMentioned(msg, "memohbot") {
@@ -163,11 +180,11 @@ func TestBuildTelegramReplyRef(t *testing.T) {
 	if buildTelegramReplyRef(nil, "123") != nil {
 		t.Fatal("nil msg should return nil")
 	}
-	msg := &tgbotapi.Message{}
+	msg := &tele.Message{}
 	if buildTelegramReplyRef(msg, "123") != nil {
 		t.Fatal("msg without ReplyToMessage should return nil")
 	}
-	msg.ReplyToMessage = &tgbotapi.Message{MessageID: 42}
+	msg.ReplyTo = &tele.Message{ID: 42}
 	ref := buildTelegramReplyRef(msg, "  -100  ")
 	if ref == nil {
 		t.Fatal("expected non-nil ref")
@@ -181,10 +198,10 @@ func TestBuildTelegramReplyRef(t *testing.T) {
 func TestBuildTelegramForwardRefFromChannel(t *testing.T) {
 	t.Parallel()
 
-	ref := buildTelegramForwardRef(&tgbotapi.Message{
-		ForwardFromChat:      &tgbotapi.Chat{ID: -10001, Title: "Source Channel", UserName: "source_channel"},
-		ForwardFromMessageID: 99,
-		ForwardDate:          1710000000,
+	ref := buildTelegramForwardRef(&tele.Message{
+		OriginalChat:      &tele.Chat{ID: -10001, Title: "Source Channel", Username: "source_channel"},
+		OriginalMessageID: 99,
+		OriginalUnixtime:  1710000000,
 	})
 	if ref == nil {
 		t.Fatal("expected forward ref")
@@ -202,14 +219,14 @@ func TestTelegramInboundKeepsForwardOutOfText(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	inbound, ok := adapter.toInboundTelegramMessage(nil, channel.ChannelConfig{}, &tgbotapi.Message{
-		MessageID:            10,
-		Date:                 1710000000,
-		Chat:                 &tgbotapi.Chat{ID: -10001, Type: "group", Title: "Test Group"},
-		From:                 &tgbotapi.User{ID: 42, UserName: "sender"},
-		Text:                 "forwarded body",
-		ForwardFromChat:      &tgbotapi.Chat{ID: -10002, Title: "Source Channel"},
-		ForwardFromMessageID: 11,
+	inbound, ok := adapter.toInboundTelegramMessage(nil, channel.ChannelConfig{}, &tele.Message{
+		ID:                10,
+		Unixtime:          1710000000,
+		Chat:              &tele.Chat{ID: -10001, Type: tele.ChatGroup, Title: "Test Group"},
+		Sender:            &tele.User{ID: 42, Username: "sender"},
+		Text:              "forwarded body",
+		OriginalChat:      &tele.Chat{ID: -10002, Title: "Source Channel"},
+		OriginalMessageID: 11,
 	}, "forwarded body", nil, nil)
 	if !ok {
 		t.Fatal("expected inbound message")
@@ -222,60 +239,32 @@ func TestTelegramInboundKeepsForwardOutOfText(t *testing.T) {
 	}
 }
 
-func TestPickTelegramPhoto(t *testing.T) {
-	t.Parallel()
-
-	if got := pickTelegramPhoto(nil); got.FileID != "" {
-		t.Fatalf("nil should return zero: %+v", got)
-	}
-	if got := pickTelegramPhoto([]tgbotapi.PhotoSize{}); got.FileID != "" {
-		t.Fatalf("empty slice should return zero: %+v", got)
-	}
-	one := tgbotapi.PhotoSize{FileID: "a", FileSize: 100, Width: 10, Height: 10}
-	if got := pickTelegramPhoto([]tgbotapi.PhotoSize{one}); got.FileID != "a" {
-		t.Fatalf("single photo should return it: %+v", got)
-	}
-	photos := []tgbotapi.PhotoSize{
-		{FileID: "small", FileSize: 100, Width: 100, Height: 100},
-		{FileID: "large", FileSize: 500, Width: 200, Height: 200},
-	}
-	if got := pickTelegramPhoto(photos); got.FileID != "large" {
-		t.Fatalf("should pick largest by size: %+v", got)
-	}
-}
-
 func TestBuildTelegramMediaGroupInboundMessageAggregatesAttachments(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	bot := &tgbotapi.BotAPI{
-		Token: "test",
-		Self:  tgbotapi.User{ID: 1001, UserName: "memohbot"},
-	}
+	bot := newStubTelegramBot(t)
+	bot.Me = &tele.User{ID: 1001, Username: "memohbot"}
 	cfg := channel.ChannelConfig{}
-	first := &tgbotapi.Message{
-		MessageID:    101,
-		MediaGroupID: "group-1",
-		Date:         1710000000,
-		Chat:         &tgbotapi.Chat{ID: -10001, Type: "group", Title: "G1"},
-		From:         &tgbotapi.User{ID: 10, UserName: "alice"},
-		Photo: []tgbotapi.PhotoSize{
-			{FileID: "photo-1", Width: 320, Height: 240, FileSize: 10},
-		},
+	first := &tele.Message{
+		ID:       101,
+		AlbumID:  "group-1",
+		Unixtime: 1710000000,
+		Chat:     &tele.Chat{ID: -10001, Type: tele.ChatGroup, Title: "G1"},
+		Sender:   &tele.User{ID: 10, Username: "alice"},
+		Photo:    &tele.Photo{File: tele.File{FileID: "photo-1", FileSize: 10}, Width: 320, Height: 240},
 	}
-	second := &tgbotapi.Message{
-		MessageID:    102,
-		MediaGroupID: "group-1",
-		Date:         1710000001,
-		Chat:         &tgbotapi.Chat{ID: -10001, Type: "group", Title: "G1"},
-		From:         &tgbotapi.User{ID: 10, UserName: "alice"},
-		Caption:      "album caption",
-		Photo: []tgbotapi.PhotoSize{
-			{FileID: "photo-2", Width: 640, Height: 480, FileSize: 20},
-		},
+	second := &tele.Message{
+		ID:       102,
+		AlbumID:  "group-1",
+		Unixtime: 1710000001,
+		Chat:     &tele.Chat{ID: -10001, Type: tele.ChatGroup, Title: "G1"},
+		Sender:   &tele.User{ID: 10, Username: "alice"},
+		Caption:  "album caption",
+		Photo:    &tele.Photo{File: tele.File{FileID: "photo-2", FileSize: 20}, Width: 640, Height: 480},
 	}
 
-	inbound, ok := adapter.buildTelegramMediaGroupInboundMessage(bot, cfg, []*tgbotapi.Message{first, second})
+	inbound, ok := adapter.buildTelegramMediaGroupInboundMessage(bot, cfg, []*tele.Message{first, second})
 	if !ok {
 		t.Fatal("expected grouped inbound message")
 	}
@@ -306,18 +295,16 @@ func TestBuildTelegramInboundMessageIncludesUpdateIDMetadata(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	bot := &tgbotapi.BotAPI{
-		Token: "test",
-		Self:  tgbotapi.User{ID: 1001, UserName: "memohbot"},
-	}
-	update := tgbotapi.Update{
-		UpdateID: 777,
-		Message: &tgbotapi.Message{
-			MessageID: 101,
-			Date:      1710000000,
-			Text:      "hello",
-			Chat:      &tgbotapi.Chat{ID: 123, Type: "private"},
-			From:      &tgbotapi.User{ID: 10, UserName: "alice"},
+	bot := newStubTelegramBot(t)
+	bot.Me = &tele.User{ID: 1001, Username: "memohbot"}
+	update := &tele.Update{
+		ID: 777,
+		Message: &tele.Message{
+			ID:       101,
+			Unixtime: 1710000000,
+			Text:     "hello",
+			Chat:     &tele.Chat{ID: 123, Type: tele.ChatPrivate},
+			Sender:   &tele.User{ID: 10, Username: "alice"},
 		},
 	}
 
@@ -327,6 +314,63 @@ func TestBuildTelegramInboundMessageIncludesUpdateIDMetadata(t *testing.T) {
 	}
 	if got := inbound.Metadata["update_id"]; got != 777 {
 		t.Fatalf("unexpected update_id metadata: %#v", got)
+	}
+}
+
+func TestBuildTelegramInboundMessage_PlainFormatWhenNoEntities(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewTelegramAdapter(nil)
+	bot := newStubTelegramBot(t)
+	bot.Me = &tele.User{ID: 1, Username: "memohbot"}
+	update := &tele.Update{
+		ID: 1,
+		Message: &tele.Message{
+			ID:     1,
+			Text:   "plain text only",
+			Chat:   &tele.Chat{ID: 1, Type: tele.ChatPrivate},
+			Sender: &tele.User{ID: 1, Username: "alice"},
+		},
+	}
+	inbound, ok := adapter.buildTelegramInboundMessage(bot, channel.ChannelConfig{}, update)
+	if !ok {
+		t.Fatal("expected inbound message")
+	}
+	if inbound.Message.Format != channel.MessageFormatPlain {
+		t.Fatalf("expected plain format when no entities, got %q", inbound.Message.Format)
+	}
+	if len(inbound.Message.Parts) != 0 {
+		t.Fatalf("expected no Parts, got %+v", inbound.Message.Parts)
+	}
+}
+
+func TestBuildTelegramInboundMessage_RichFormatWhenEntitiesPopulateParts(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewTelegramAdapter(nil)
+	bot := newStubTelegramBot(t)
+	bot.Me = &tele.User{ID: 1, Username: "memohbot"}
+	update := &tele.Update{
+		ID: 1,
+		Message: &tele.Message{
+			ID:     1,
+			Text:   "hi shout bye",
+			Chat:   &tele.Chat{ID: 1, Type: tele.ChatPrivate},
+			Sender: &tele.User{ID: 1, Username: "alice"},
+			Entities: tele.Entities{
+				{Type: tele.EntityBold, Offset: 3, Length: 5},
+			},
+		},
+	}
+	inbound, ok := adapter.buildTelegramInboundMessage(bot, channel.ChannelConfig{}, update)
+	if !ok {
+		t.Fatal("expected inbound message")
+	}
+	if len(inbound.Message.Parts) == 0 {
+		t.Fatalf("expected Parts populated from bold entity, got empty")
+	}
+	if inbound.Message.Format != channel.MessageFormatRich {
+		t.Fatalf("expected rich format when Parts populate, got %q", inbound.Message.Format)
 	}
 }
 
@@ -402,8 +446,8 @@ func TestTelegramAdapter_OpenStreamEmptyTarget(t *testing.T) {
 func TestResolveTelegramSender_SenderChat(t *testing.T) {
 	t.Parallel()
 
-	msg := &tgbotapi.Message{
-		SenderChat: &tgbotapi.Chat{ID: 456, UserName: "group", Title: "My Group"},
+	msg := &tele.Message{
+		SenderChat: &tele.Chat{ID: 456, Username: "group", Title: "My Group"},
 	}
 	externalID, displayName, attrs := resolveTelegramSender(msg)
 	if externalID != "456" {
@@ -417,70 +461,45 @@ func TestResolveTelegramSender_SenderChat(t *testing.T) {
 	}
 }
 
-func TestBuildTelegramAudio(t *testing.T) {
+func TestTelegramRecipient_NumericChatID(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := buildTelegramAudio("@channel", tgbotapi.FileID("f1"))
+	r, chatID, err := telegramRecipient("12345")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ChannelUsername != "@channel" {
-		t.Fatalf("unexpected channel: %s", cfg.ChannelUsername)
+	if r.Recipient() != "12345" {
+		t.Fatalf("unexpected recipient: %q", r.Recipient())
 	}
-	_, err = buildTelegramAudio("invalid", tgbotapi.FileID("f1"))
+	if chatID != 12345 {
+		t.Fatalf("unexpected chatID: %d", chatID)
+	}
+}
+
+func TestTelegramRecipient_ChannelUsername(t *testing.T) {
+	t.Parallel()
+
+	r, chatID, err := telegramRecipient("@channel")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Recipient() != "@channel" {
+		t.Fatalf("unexpected recipient: %q", r.Recipient())
+	}
+	if chatID != 0 {
+		t.Fatalf("expected zero chatID for channel username: %d", chatID)
+	}
+}
+
+func TestTelegramRecipient_Invalid(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := telegramRecipient("invalid")
 	if err == nil {
-		t.Fatal("invalid target should return error")
+		t.Fatal("expected error for invalid target")
 	}
 	if !strings.Contains(err.Error(), "chat_id") {
 		t.Fatalf("expected chat_id in error: %v", err)
-	}
-}
-
-func TestBuildTelegramVoice(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := buildTelegramVoice("@ch", tgbotapi.FileID("f1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.ChannelUsername != "@ch" {
-		t.Fatalf("unexpected channel: %s", cfg.ChannelUsername)
-	}
-	_, err = buildTelegramVoice("x", tgbotapi.FileID("f1"))
-	if err == nil {
-		t.Fatal("invalid target should return error")
-	}
-}
-
-func TestBuildTelegramVideo(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := buildTelegramVideo("@ch", tgbotapi.FileID("f1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.ChannelUsername != "@ch" {
-		t.Fatalf("unexpected channel: %s", cfg.ChannelUsername)
-	}
-	_, err = buildTelegramVideo("bad", tgbotapi.FileID("f1"))
-	if err == nil {
-		t.Fatal("invalid target should return error")
-	}
-}
-
-func TestBuildTelegramAnimation(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := buildTelegramAnimation("@ch", tgbotapi.FileID("f1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.ChannelUsername != "@ch" {
-		t.Fatalf("unexpected channel: %s", cfg.ChannelUsername)
-	}
-	_, err = buildTelegramAnimation("x", tgbotapi.FileID("f1"))
-	if err == nil {
-		t.Fatal("invalid target should return error")
 	}
 }
 
@@ -647,11 +666,16 @@ func TestIsTelegramMessageNotModified(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{"plain error", errors.New("network error"), false},
-		{"other api error", tgbotapi.Error{Code: 400, Message: "Bad Request: chat not found"}, false},
-		{"message is not modified", tgbotapi.Error{Code: 400, Message: productionMessageNotModified}, true},
-		{"production exact", tgbotapi.Error{Code: 400, Message: productionMessageNotModified}, true},
-		{"same text but code 500", tgbotapi.Error{Code: 500, Message: "message is not modified"}, false},
-		{"wrapped same", fmt.Errorf("wrapped: %w", tgbotapi.Error{Code: 400, Message: "Bad Request: message is not modified"}), true},
+		{"other api error", &tele.Error{Code: 400, Description: "Bad Request: chat not found"}, false},
+		{"message is not modified", &tele.Error{Code: 400, Description: productionMessageNotModified}, true},
+		{"production exact", &tele.Error{Code: 400, Description: productionMessageNotModified}, true},
+		{"same text but code 500", &tele.Error{Code: 500, Description: "message is not modified"}, false},
+		{"wrapped same", fmt.Errorf("wrapped: %w", &tele.Error{Code: 400, Description: "Bad Request: message is not modified"}), true},
+		// telebot only types errors whose description matches a sentinel; longer or
+		// novel variants of "message is not modified" arrive as fmt.Errorf strings
+		// shaped "telegram: <description> (<code>)" with no *tele.Error in the chain.
+		{"telebot fmt-wrapped variant", errors.New("telegram: Bad Request: message is not modified: caption is unchanged (400)"), true},
+		{"telebot fmt-wrapped wrong code", errors.New("telegram: Bad Request: message is not modified (500)"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -673,14 +697,21 @@ func TestIsTelegramEditUnrecoverable(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{"plain error", errors.New("network error"), false},
-		{"message to edit not found", tgbotapi.Error{Code: 400, Message: "Bad Request: message to edit not found"}, true},
-		{"message can't be edited", tgbotapi.Error{Code: 400, Message: "Bad Request: message can't be edited"}, true},
-		{"message_id_invalid", tgbotapi.Error{Code: 400, Message: "Bad Request: MESSAGE_ID_INVALID"}, true},
-		{"not modified is not this", tgbotapi.Error{Code: 400, Message: "Bad Request: message is not modified"}, false},
-		{"transient chat not found", tgbotapi.Error{Code: 400, Message: "Bad Request: chat not found"}, false},
-		{"rate limit not terminal", tgbotapi.Error{Code: 429, Message: "Too Many Requests"}, false},
-		{"same text but code 500", tgbotapi.Error{Code: 500, Message: "message to edit not found"}, false},
-		{"wrapped terminal", fmt.Errorf("wrapped: %w", tgbotapi.Error{Code: 400, Message: "Bad Request: message to edit not found"}), true},
+		{"message to edit not found", &tele.Error{Code: 400, Description: "Bad Request: message to edit not found"}, true},
+		{"message can't be edited", &tele.Error{Code: 400, Description: "Bad Request: message can't be edited"}, true},
+		{"message_id_invalid", &tele.Error{Code: 400, Description: "Bad Request: MESSAGE_ID_INVALID"}, true},
+		{"not modified is not this", &tele.Error{Code: 400, Description: "Bad Request: message is not modified"}, false},
+		{"transient chat not found", &tele.Error{Code: 400, Description: "Bad Request: chat not found"}, false},
+		{"rate limit not terminal", &tele.Error{Code: 429, Description: "Too Many Requests"}, false},
+		{"same text but code 500", &tele.Error{Code: 500, Description: "message to edit not found"}, false},
+		{"wrapped terminal", fmt.Errorf("wrapped: %w", &tele.Error{Code: 400, Description: "Bad Request: message to edit not found"}), true},
+		// telebot has no sentinel for these; extractOk emits the raw fmt.Errorf
+		// shape, which used to slip past the *tele.Error check and broke the
+		// streaming final-edit recovery path.
+		{"telebot fmt-wrapped not found", errors.New("telegram: Bad Request: message to edit not found (400)"), true},
+		{"telebot fmt-wrapped message_id_invalid", errors.New("telegram: Bad Request: MESSAGE_ID_INVALID (400)"), true},
+		{"telebot fmt-wrapped wrong code", errors.New("telegram: Bad Request: message to edit not found (500)"), false},
+		{"telebot fmt-wrapped unrelated", errors.New("telegram: Bad Request: chat not found (400)"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -701,8 +732,8 @@ func TestIsTelegramTooManyRequests(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"429", tgbotapi.Error{Code: 429, Message: "Too Many Requests"}, true},
-		{"400", tgbotapi.Error{Code: 400, Message: "Bad Request"}, false},
+		{"429", &tele.Error{Code: 429, Description: "Too Many Requests"}, true},
+		{"400", &tele.Error{Code: 400, Description: "Bad Request"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -723,8 +754,8 @@ func TestGetTelegramRetryAfter(t *testing.T) {
 		want time.Duration
 	}{
 		{"nil", nil, 0},
-		{"no retry_after", tgbotapi.Error{Code: 429, Message: "Too Many Requests"}, 0},
-		{"retry_after 2", tgbotapi.Error{Code: 429, Message: "Too Many Requests", ResponseParameters: tgbotapi.ResponseParameters{RetryAfter: 2}}, 2 * time.Second},
+		{"no retry_after", &tele.Error{Code: 429, Description: "Too Many Requests"}, 0},
+		{"retry_after 2", tele.FloodError{RetryAfter: 2}, 2 * time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -807,17 +838,13 @@ func TestEditTelegramMessageText_429ReturnsError(t *testing.T) {
 
 	var sendCalls int
 	origSend := sendEditForTest
-	sendEditForTest = func(_ *tgbotapi.BotAPI, _ tgbotapi.EditMessageTextConfig) error {
+	sendEditForTest = func(_ *tele.Bot, _ int64, _ int, _ string, _ string) error {
 		sendCalls++
-		return tgbotapi.Error{
-			Code:               429,
-			Message:            "Too Many Requests",
-			ResponseParameters: tgbotapi.ResponseParameters{RetryAfter: 1},
-		}
+		return tele.FloodError{RetryAfter: 1}
 	}
 	defer func() { sendEditForTest = origSend }()
 
-	bot := &tgbotapi.BotAPI{Token: "test"}
+	bot := &tele.Bot{Token: "test"}
 	err := editTelegramMessageText(bot, 1, 1, "hi", "")
 	if err == nil {
 		t.Fatal("editTelegramMessageText on 429 should return error for caller to handle")
@@ -889,8 +916,8 @@ func TestResolveTelegramFile_PlatformKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := file.(tgbotapi.FileID); !ok {
-		t.Fatalf("expected FileID, got %T", file)
+	if file.FileID != "file_id_123" {
+		t.Fatalf("expected FileID populated, got %+v", file)
 	}
 }
 
@@ -905,8 +932,8 @@ func TestResolveTelegramFile_PublicURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := file.(tgbotapi.FileURL); !ok {
-		t.Fatalf("expected FileURL, got %T", file)
+	if file.FileURL != "https://example.com/img.png" {
+		t.Fatalf("expected FileURL populated, got %+v", file)
 	}
 }
 
@@ -925,15 +952,15 @@ func TestResolveTelegramFile_Upload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	fb, ok := file.(tgbotapi.FileBytes)
-	if !ok {
-		t.Fatalf("expected FileBytes, got %T", file)
+	if file.FileReader == nil {
+		t.Fatalf("expected FileReader populated, got %+v", file)
 	}
-	if fb.Name != "test.png" {
-		t.Fatalf("expected name test.png, got %q", fb.Name)
+	body, readErr := io.ReadAll(file.FileReader)
+	if readErr != nil {
+		t.Fatalf("read upload bytes: %v", readErr)
 	}
-	if string(fb.Bytes) != "png-bytes" {
-		t.Fatalf("expected png-bytes, got %q", string(fb.Bytes))
+	if string(body) != "png-bytes" {
+		t.Fatalf("expected png-bytes, got %q", string(body))
 	}
 }
 

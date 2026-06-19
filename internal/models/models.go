@@ -39,7 +39,7 @@ func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 
 // Create adds a new model to the database.
 func (s *Service) Create(ctx context.Context, req AddRequest) (AddResponse, error) {
-	model := Model(req)
+	model := req.toModel(ResolveEnable(req.Enable, true))
 	if err := model.Validate(); err != nil {
 		return AddResponse{}, fmt.Errorf("validation failed: %w", err)
 	}
@@ -58,6 +58,7 @@ func (s *Service) Create(ctx context.Context, req AddRequest) (AddResponse, erro
 		ModelID:    model.ModelID,
 		ProviderID: providerID,
 		Type:       string(model.Type),
+		Enable:     model.Enable,
 		Config:     configJSON,
 	}
 
@@ -227,6 +228,28 @@ func (s *Service) ListByProviderIDAndType(ctx context.Context, providerID string
 	return s.convertToGetResponseList(dbModels), nil
 }
 
+// GetByProviderAndModelID retrieves a model by provider and model_id.
+func (s *Service) GetByProviderAndModelID(ctx context.Context, providerID, modelID string) (GetResponse, error) {
+	if strings.TrimSpace(providerID) == "" {
+		return GetResponse{}, errors.New("provider id is required")
+	}
+	if strings.TrimSpace(modelID) == "" {
+		return GetResponse{}, errors.New("model_id is required")
+	}
+	uuid, err := db.ParseUUID(providerID)
+	if err != nil {
+		return GetResponse{}, fmt.Errorf("invalid provider id: %w", err)
+	}
+	dbModel, err := s.queries.GetModelByProviderAndModelID(ctx, sqlc.GetModelByProviderAndModelIDParams{
+		ProviderID: uuid,
+		ModelID:    modelID,
+	})
+	if err != nil {
+		return GetResponse{}, fmt.Errorf("failed to get model by provider and model_id: %w", err)
+	}
+	return s.convertToGetResponse(dbModel), nil
+}
+
 // UpdateByID updates a model by its internal UUID.
 func (s *Service) UpdateByID(ctx context.Context, id string, req UpdateRequest) (GetResponse, error) {
 	uuid, err := db.ParseUUID(id)
@@ -234,7 +257,12 @@ func (s *Service) UpdateByID(ctx context.Context, id string, req UpdateRequest) 
 		return GetResponse{}, fmt.Errorf("invalid ID: %w", err)
 	}
 
-	model := Model(req)
+	current, err := s.queries.GetModelByID(ctx, uuid)
+	if err != nil {
+		return GetResponse{}, fmt.Errorf("failed to load model: %w", err)
+	}
+
+	model := req.toModel(ResolveEnable(req.Enable, current.Enable))
 	if err := model.Validate(); err != nil {
 		return GetResponse{}, fmt.Errorf("validation failed: %w", err)
 	}
@@ -254,6 +282,7 @@ func (s *Service) UpdateByID(ctx context.Context, id string, req UpdateRequest) 
 		ModelID:    model.ModelID,
 		ProviderID: providerID,
 		Type:       string(model.Type),
+		Enable:     model.Enable,
 		Config:     configJSON,
 	}
 
@@ -272,6 +301,15 @@ func (s *Service) UpdateByID(ctx context.Context, id string, req UpdateRequest) 
 	return s.convertToGetResponse(updated), nil
 }
 
+// UpdateByProviderAndModelID updates a model within one provider namespace.
+func (s *Service) UpdateByProviderAndModelID(ctx context.Context, providerID, modelID string, req UpdateRequest) (GetResponse, error) {
+	current, err := s.GetByProviderAndModelID(ctx, providerID, modelID)
+	if err != nil {
+		return GetResponse{}, err
+	}
+	return s.UpdateByID(ctx, current.ID, req)
+}
+
 // UpdateByModelID updates a model by its model_id field.
 func (s *Service) UpdateByModelID(ctx context.Context, modelID string, req UpdateRequest) (GetResponse, error) {
 	if modelID == "" {
@@ -282,7 +320,7 @@ func (s *Service) UpdateByModelID(ctx context.Context, modelID string, req Updat
 		return GetResponse{}, fmt.Errorf("failed to update model: %w", err)
 	}
 
-	model := Model(req)
+	model := req.toModel(ResolveEnable(req.Enable, current.Enable))
 	if err := model.Validate(); err != nil {
 		return GetResponse{}, fmt.Errorf("validation failed: %w", err)
 	}
@@ -302,6 +340,7 @@ func (s *Service) UpdateByModelID(ctx context.Context, modelID string, req Updat
 		ModelID:    model.ModelID,
 		ProviderID: providerID,
 		Type:       string(model.Type),
+		Enable:     model.Enable,
 		Config:     configJSON,
 	}
 
@@ -380,6 +419,7 @@ func (s *Service) convertToGetResponse(dbModel sqlc.Model) GetResponse {
 		Model: Model{
 			ModelID: dbModel.ModelID,
 			Type:    ModelType(dbModel.Type),
+			Enable:  dbModel.Enable,
 		},
 	}
 
@@ -483,12 +523,14 @@ func SelectMemoryModel(ctx context.Context, modelsService *Service, queries dbst
 
 // SelectMemoryModelForBot selects a chat model for memory operations.
 // If botID is provided, it attempts to use the bot's configured chat model first,
-// falling back to the first enabled chat model globally.
+// falling back to the first enabled chat model globally. Models or providers
+// that the user has disabled are skipped so memory extraction/decision/compact
+// never quietly run on a row hidden from the UI.
 func SelectMemoryModelForBot(ctx context.Context, modelsService *Service, queries dbstore.Queries, chatModelID string) (GetResponse, sqlc.Provider, error) {
 	// If a specific model is configured (e.g. bot's chat_model_id), try to use it.
 	if chatModelID = strings.TrimSpace(chatModelID); chatModelID != "" {
 		model, err := modelsService.GetByModelID(ctx, chatModelID)
-		if err == nil && model.Type == ModelTypeChat {
+		if err == nil && model.Type == ModelTypeChat && model.Enable {
 			provider, pErr := FetchProviderByID(ctx, queries, model.ProviderID)
 			if pErr == nil && provider.Enable {
 				return model, provider, nil
@@ -496,7 +538,7 @@ func SelectMemoryModelForBot(ctx context.Context, modelsService *Service, querie
 		}
 		// UUID-based lookup fallback
 		model, err = modelsService.GetByID(ctx, chatModelID)
-		if err == nil && model.Type == ModelTypeChat {
+		if err == nil && model.Type == ModelTypeChat && model.Enable {
 			provider, pErr := FetchProviderByID(ctx, queries, model.ProviderID)
 			if pErr == nil && provider.Enable {
 				return model, provider, nil
