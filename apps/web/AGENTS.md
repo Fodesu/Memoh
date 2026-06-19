@@ -247,7 +247,7 @@ The app uses a two-section layout architecture:
 | `/bot/:botName?` | bot | *(null stub)* | Chat with optional bot name param; active session in Pinia/localStorage |
 | `/chat/:botName?` | — | redirect | Legacy alias → `/bot/:botName?` |
 
-Chat routes register **null stub components** in the router. The real UI (`MainSection`: sidebar + dockview) mounts **persistently in `App.vue`**, not via `<RouterView>`, so chat survives settings navigation without unmount/relayout (see § Layout System).
+Chat routes register **null stub components** in the router. The real UI (`MainSection`: sidebar + dockview) mounts **persistently in `App.vue`**, not via `<RouterView>`, so chat survives route changes into `/settings` without unmount/relayout (see § Layout System).
 
 ### Settings Section (`/settings`)
 
@@ -270,6 +270,7 @@ Chat routes register **null stub components** in the router. The real UI (`MainS
 | `/settings/usage` | usage | `usage/index.vue` | Token usage statistics |
 | `/settings/people` | people | `people/index.vue` | User management (admin only) |
 | `/settings/appearance` | appearance | `appearance/index.vue` | Theme, locale, and appearance settings |
+| `/settings/keyboard` | keyboard | `keyboard-shortcuts/index.vue` | Keyboard shortcut settings |
 | `/settings/profile` | profile | `profile/index.vue` | User profile settings |
 | `/settings/platform` | platform | `platform/index.vue` | Platform management |
 | `/settings/about` | about | `about/index.vue` | About page |
@@ -298,18 +299,18 @@ Chat routes register **null stub components** in the router. The real UI (`MainS
 
 The shell splits into three layers (`App.vue` is the orchestrator):
 
-1. **Persistent chat shell** — `MainSection` (`pages/main-section/`) mounts in `App.vue` whenever the route is chat (`home` / `bot`) **or** settings (`/settings/*`). It stays full-size behind the settings overlay so dockview layout and message scroll survive settings navigation (KeepAlive cannot do this — detaching the subtree caused relayout/flash regressions).
+1. **Persistent chat area** — `MainSection` (`pages/main-section/`) mounts in `App.vue` whenever the route is chat (`home` / `bot`) **or** settings (`/settings/*`). It stays full-size while settings pages are active so dockview layout and message scroll survive route changes between chat and `/settings` (KeepAlive cannot do this; detaching the subtree caused relayout/flash regressions).
 
 2. **Chat section internals** (`MainSection` — hand-rolled flex, no `MainLayout`):
    - On macOS desktop a 36px full-width drag strip clears the traffic lights; web has no strip.
    - **Sidebar** (`components/sidebar/`) — Activity rail (44px icon column: bot switcher avatar on top, Sessions/Files/Search views, Settings gear at bottom) + a resizable, collapsible side panel. Clicking the active rail icon toggles the panel open/closed. Files view is hidden without `workspace_read`.
    - **ChatWorkspace** (`pages/home/components/chat-workspace.vue`) — [dockview-vue](https://dockview.dev) host for the center area.
 
-3. **Settings overlay** — `pages/settings-section/` renders as a **fixed full-screen overlay** on top of the persistent chat shell (visibility toggle, not v-if). Uses `MainLayout` with:
-   - **SettingsSidebar** (`components/settings-sidebar/`) — Collapsible settings navigation. Top has a "back to chat" button that restores the last selected bot/session. Menu items include Bots, Providers, Web Search, Memory, Voice, Email, Supermarket, Usage, People (admin), Appearance, Profile, Platform, and About.
+3. **Settings section** — `pages/settings-section/` renders in a fixed full-screen layer (visibility toggle, not v-if). Uses `MainLayout` with:
+   - **SettingsSidebar** (`components/settings-sidebar/`) — Collapsible `/settings` route sidebar. Top has a "back to chat" button that restores the last selected bot/session. Menu items include Bots, Providers, Web Search, Memory, Voice, Email, Supermarket, Usage, People (admin), Appearance, Keyboard, Profile, Platform, and About.
    - **SidebarInset** — `<KeepAlive>` wrapped `<RouterView>` for settings pages.
 
-4. **Auth-boundary pages** (`/login`, `/onboarding`, `/oauth/*`, `/dev/*`) — Neither `MainSection` nor the settings overlay mounts; `<RouterView>` renders them full-screen alone.
+4. **Auth-boundary pages** (`/login`, `/onboarding`, `/oauth/*`, `/dev/*`) — Neither `MainSection` nor the settings section mounts; `<RouterView>` renders them full-screen alone.
 
 5. **Home/Chat content** (inside `MainSection` → `ChatWorkspace`):
    - Panel types: `chat` (singleton, content follows the active session), `file`, `terminal`, `browser`, `display`. Floating groups are disabled; panels use `renderer: 'always'` so terminals / iframes / WebRTC survive tab switches.
