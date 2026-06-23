@@ -35,13 +35,19 @@ CREATE TABLE bots (
   id TEXT PRIMARY KEY
 );
 CREATE TABLE bot_sessions (
-  id TEXT PRIMARY KEY
+  id TEXT PRIMARY KEY,
+  head_turn_id TEXT,
+  deleted_at TEXT
 );
 CREATE TABLE bot_channel_routes (
   id TEXT PRIMARY KEY
 );
 CREATE TABLE channel_identities (
   id TEXT PRIMARY KEY
+);
+CREATE TABLE bot_history_turns (
+  id TEXT PRIMARY KEY,
+  parent_turn_id TEXT
 );
 CREATE TABLE bot_history_messages (
   id TEXT PRIMARY KEY
@@ -65,6 +71,7 @@ CREATE TABLE user_input_requests (
   assistant_message_id TEXT REFERENCES bot_history_messages(id) ON DELETE SET NULL,
   tool_result_message_id TEXT REFERENCES bot_history_messages(id) ON DELETE SET NULL,
   prompt_message_id TEXT REFERENCES bot_history_messages(id) ON DELETE SET NULL,
+  persist_turn_id TEXT REFERENCES bot_history_turns(id) ON DELETE SET NULL,
   prompt_external_message_id TEXT NOT NULL DEFAULT '',
   source_platform TEXT NOT NULL DEFAULT '',
   reply_target TEXT NOT NULL DEFAULT '',
@@ -78,8 +85,12 @@ CREATE TABLE user_input_requests (
   CONSTRAINT user_input_status_check CHECK (status IN ('pending', 'submitted', 'canceled', 'expired', 'failed')),
   CONSTRAINT user_input_short_id_unique UNIQUE (session_id, short_id)
 );
-CREATE UNIQUE INDEX user_input_tool_call_unique
-  ON user_input_requests(session_id, tool_call_id);
+CREATE UNIQUE INDEX user_input_tool_call_legacy_unique
+  ON user_input_requests(session_id, tool_call_id)
+  WHERE persist_turn_id IS NULL;
+CREATE UNIQUE INDEX user_input_tool_call_turn_unique
+  ON user_input_requests(session_id, tool_call_id, persist_turn_id)
+  WHERE persist_turn_id IS NOT NULL;
 `)
 	if _, err := conn.ExecContext(ctx, `INSERT INTO bots (id) VALUES (?)`, testBotID); err != nil {
 		t.Fatalf("insert bot: %v", err)

@@ -282,7 +282,7 @@ func (q *Queries) CountMessagesBySession(ctx context.Context, sessionID pgtype.U
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return 0, errSQLiteQueriesNotConfigured
 	}
-	var sqliteSessionID sql.NullString
+	var sqliteSessionID string
 	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
 		return 0, err
 	}
@@ -2306,7 +2306,7 @@ func (q *Queries) GetLatestAssistantUsage(ctx context.Context, sessionID pgtype.
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return 0, errSQLiteQueriesNotConfigured
 	}
-	var sqliteSessionID sql.NullString
+	var sqliteSessionID string
 	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
 		return 0, err
 	}
@@ -2743,7 +2743,7 @@ func (q *Queries) GetSessionCacheStats(ctx context.Context, sessionID pgtype.UUI
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.GetSessionCacheStatsRow{}, errSQLiteQueriesNotConfigured
 	}
-	var sqliteSessionID sql.NullString
+	var sqliteSessionID string
 	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
 		return pgsqlc.GetSessionCacheStatsRow{}, err
 	}
@@ -2762,7 +2762,7 @@ func (q *Queries) GetSessionUsedSkills(ctx context.Context, sessionID pgtype.UUI
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return nil, errSQLiteQueriesNotConfigured
 	}
-	var sqliteSessionID sql.NullString
+	var sqliteSessionID string
 	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
 		return nil, err
 	}
@@ -3734,7 +3734,7 @@ func (q *Queries) ListMessagesBySession(ctx context.Context, sessionID pgtype.UU
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return nil, errSQLiteQueriesNotConfigured
 	}
-	var sqliteSessionID sql.NullString
+	var sqliteSessionID string
 	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
 		return nil, err
 	}
@@ -4504,7 +4504,7 @@ func (q *Queries) ListUncompactedMessagesBySession(ctx context.Context, sessionI
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return nil, errSQLiteQueriesNotConfigured
 	}
-	var sqliteSessionID sql.NullString
+	var sqliteSessionID string
 	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
 		return nil, err
 	}

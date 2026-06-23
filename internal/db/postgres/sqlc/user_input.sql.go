@@ -22,7 +22,7 @@ WHERE bot_id = $2
   AND session_id = $3
   AND status = 'pending'
   AND (expires_at IS NULL OR expires_at > now())
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type CancelPendingUserInputsBySessionParams struct {
@@ -59,6 +59,7 @@ func (q *Queries) CancelPendingUserInputsBySession(ctx context.Context, arg Canc
 			&i.AssistantMessageID,
 			&i.ToolResultMessageID,
 			&i.PromptMessageID,
+			&i.PersistTurnID,
 			&i.PromptExternalMessageID,
 			&i.SourcePlatform,
 			&i.ReplyTarget,
@@ -90,7 +91,7 @@ SET status = 'canceled',
 WHERE id = $3
   AND status = 'pending'
   AND (expires_at IS NULL OR expires_at > now())
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type CancelUserInputRequestParams struct {
@@ -121,6 +122,7 @@ func (q *Queries) CancelUserInputRequest(ctx context.Context, arg CancelUserInpu
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -158,6 +160,7 @@ INSERT INTO user_input_requests (
   ui_payload_json,
   provider_metadata,
   requested_by_channel_identity_id,
+  persist_turn_id,
   source_platform,
   reply_target,
   conversation_type,
@@ -177,10 +180,11 @@ INSERT INTO user_input_requests (
   $11,
   $12,
   $13,
-  $14
+  $14,
+  $15
 FROM locked_session
 CROSS JOIN next_short_id
-ON CONFLICT (session_id, tool_call_id) DO UPDATE
+ON CONFLICT (session_id, tool_call_id) WHERE persist_turn_id IS NULL DO UPDATE
 SET input_json = EXCLUDED.input_json,
     ui_payload_json = EXCLUDED.ui_payload_json,
     provider_metadata = EXCLUDED.provider_metadata,
@@ -192,7 +196,7 @@ SET input_json = EXCLUDED.input_json,
     updated_at = now()
 WHERE user_input_requests.status = 'pending'
   AND (user_input_requests.expires_at IS NULL OR user_input_requests.expires_at > now())
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type CreateUserInputRequestParams struct {
@@ -206,6 +210,7 @@ type CreateUserInputRequestParams struct {
 	UiPayloadJson                []byte             `json:"ui_payload_json"`
 	ProviderMetadata             []byte             `json:"provider_metadata"`
 	RequestedByChannelIdentityID pgtype.UUID        `json:"requested_by_channel_identity_id"`
+	PersistTurnID                pgtype.UUID        `json:"persist_turn_id"`
 	SourcePlatform               string             `json:"source_platform"`
 	ReplyTarget                  string             `json:"reply_target"`
 	ConversationType             string             `json:"conversation_type"`
@@ -224,6 +229,7 @@ func (q *Queries) CreateUserInputRequest(ctx context.Context, arg CreateUserInpu
 		arg.UiPayloadJson,
 		arg.ProviderMetadata,
 		arg.RequestedByChannelIdentityID,
+		arg.PersistTurnID,
 		arg.SourcePlatform,
 		arg.ReplyTarget,
 		arg.ConversationType,
@@ -249,6 +255,140 @@ func (q *Queries) CreateUserInputRequest(ctx context.Context, arg CreateUserInpu
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
+		&i.PromptExternalMessageID,
+		&i.SourcePlatform,
+		&i.ReplyTarget,
+		&i.ConversationType,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.RespondedAt,
+		&i.CanceledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createUserInputRequestForTurn = `-- name: CreateUserInputRequestForTurn :one
+WITH locked_session AS (
+  SELECT id
+  FROM bot_sessions
+  WHERE id = $2
+  FOR UPDATE
+),
+next_short_id AS (
+  SELECT COALESCE(MAX(user_input_requests.short_id), 0) + 1 AS short_id
+  FROM locked_session
+  LEFT JOIN user_input_requests ON user_input_requests.session_id = locked_session.id
+)
+INSERT INTO user_input_requests (
+  bot_id,
+  session_id,
+  route_id,
+  channel_identity_id,
+  tool_call_id,
+  tool_name,
+  short_id,
+  input_json,
+  ui_payload_json,
+  provider_metadata,
+  requested_by_channel_identity_id,
+  persist_turn_id,
+  source_platform,
+  reply_target,
+  conversation_type,
+  expires_at
+) SELECT
+  $1,
+  $2,
+  $3,
+  $4,
+  $5,
+  $6,
+  next_short_id.short_id,
+  $7,
+  $8,
+  $9,
+  $10,
+  $11,
+  $12,
+  $13,
+  $14,
+  $15
+FROM locked_session
+CROSS JOIN next_short_id
+ON CONFLICT (session_id, tool_call_id, persist_turn_id) WHERE persist_turn_id IS NOT NULL DO UPDATE
+SET input_json = EXCLUDED.input_json,
+    ui_payload_json = EXCLUDED.ui_payload_json,
+    provider_metadata = EXCLUDED.provider_metadata,
+    requested_by_channel_identity_id = EXCLUDED.requested_by_channel_identity_id,
+    source_platform = EXCLUDED.source_platform,
+    reply_target = EXCLUDED.reply_target,
+    conversation_type = EXCLUDED.conversation_type,
+    expires_at = EXCLUDED.expires_at,
+    updated_at = now()
+WHERE user_input_requests.status = 'pending'
+  AND (user_input_requests.expires_at IS NULL OR user_input_requests.expires_at > now())
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+`
+
+type CreateUserInputRequestForTurnParams struct {
+	BotID                        pgtype.UUID        `json:"bot_id"`
+	SessionID                    pgtype.UUID        `json:"session_id"`
+	RouteID                      pgtype.UUID        `json:"route_id"`
+	ChannelIdentityID            pgtype.UUID        `json:"channel_identity_id"`
+	ToolCallID                   string             `json:"tool_call_id"`
+	ToolName                     string             `json:"tool_name"`
+	InputJson                    []byte             `json:"input_json"`
+	UiPayloadJson                []byte             `json:"ui_payload_json"`
+	ProviderMetadata             []byte             `json:"provider_metadata"`
+	RequestedByChannelIdentityID pgtype.UUID        `json:"requested_by_channel_identity_id"`
+	PersistTurnID                pgtype.UUID        `json:"persist_turn_id"`
+	SourcePlatform               string             `json:"source_platform"`
+	ReplyTarget                  string             `json:"reply_target"`
+	ConversationType             string             `json:"conversation_type"`
+	ExpiresAt                    pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateUserInputRequestForTurn(ctx context.Context, arg CreateUserInputRequestForTurnParams) (UserInputRequest, error) {
+	row := q.db.QueryRow(ctx, createUserInputRequestForTurn,
+		arg.BotID,
+		arg.SessionID,
+		arg.RouteID,
+		arg.ChannelIdentityID,
+		arg.ToolCallID,
+		arg.ToolName,
+		arg.InputJson,
+		arg.UiPayloadJson,
+		arg.ProviderMetadata,
+		arg.RequestedByChannelIdentityID,
+		arg.PersistTurnID,
+		arg.SourcePlatform,
+		arg.ReplyTarget,
+		arg.ConversationType,
+		arg.ExpiresAt,
+	)
+	var i UserInputRequest
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.RouteID,
+		&i.ChannelIdentityID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.ShortID,
+		&i.Status,
+		&i.InputJson,
+		&i.UiPayloadJson,
+		&i.ResultJson,
+		&i.ProviderMetadata,
+		&i.RequestedByChannelIdentityID,
+		&i.RespondedByChannelIdentityID,
+		&i.AssistantMessageID,
+		&i.ToolResultMessageID,
+		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -270,7 +410,7 @@ SET status = 'failed',
 WHERE id = $2
   AND status = 'pending'
   AND (expires_at IS NULL OR expires_at > now())
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type FailUserInputRequestParams struct {
@@ -300,6 +440,7 @@ func (q *Queries) FailUserInputRequest(ctx context.Context, arg FailUserInputReq
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -314,13 +455,25 @@ func (q *Queries) FailUserInputRequest(ctx context.Context, arg FailUserInputReq
 }
 
 const getLatestPendingUserInputBySession = `-- name: GetLatestPendingUserInputBySession :one
-SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
-FROM user_input_requests
-WHERE bot_id = $1
-  AND session_id = $2
-  AND status = 'pending'
-  AND (expires_at IS NULL OR expires_at > now())
-ORDER BY created_at DESC, short_id DESC
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  WHERE s.id = $2
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+WHERE uir.bot_id = $1
+  AND uir.session_id = $2
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+ORDER BY uir.created_at DESC, uir.short_id DESC
 LIMIT 1
 `
 
@@ -351,6 +504,7 @@ func (q *Queries) GetLatestPendingUserInputBySession(ctx context.Context, arg Ge
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -365,14 +519,26 @@ func (q *Queries) GetLatestPendingUserInputBySession(ctx context.Context, arg Ge
 }
 
 const getPendingUserInputByReplyMessage = `-- name: GetPendingUserInputByReplyMessage :one
-SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
-FROM user_input_requests
-WHERE bot_id = $1
-  AND session_id = $2
-  AND prompt_external_message_id = $3
-  AND status = 'pending'
-  AND (expires_at IS NULL OR expires_at > now())
-ORDER BY created_at DESC
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  WHERE s.id = $2
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+WHERE uir.bot_id = $1
+  AND uir.session_id = $2
+  AND uir.prompt_external_message_id = $3
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+ORDER BY uir.created_at DESC
 LIMIT 1
 `
 
@@ -404,6 +570,7 @@ func (q *Queries) GetPendingUserInputByReplyMessage(ctx context.Context, arg Get
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -418,13 +585,25 @@ func (q *Queries) GetPendingUserInputByReplyMessage(ctx context.Context, arg Get
 }
 
 const getPendingUserInputBySessionShortID = `-- name: GetPendingUserInputBySessionShortID :one
-SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
-FROM user_input_requests
-WHERE bot_id = $1
-  AND session_id = $2
-  AND short_id = $3
-  AND status = 'pending'
-  AND (expires_at IS NULL OR expires_at > now())
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  WHERE s.id = $2
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+WHERE uir.bot_id = $1
+  AND uir.session_id = $2
+  AND uir.short_id = $3
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
 `
 
 type GetPendingUserInputBySessionShortIDParams struct {
@@ -455,6 +634,7 @@ func (q *Queries) GetPendingUserInputBySessionShortID(ctx context.Context, arg G
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -469,7 +649,7 @@ func (q *Queries) GetPendingUserInputBySessionShortID(ctx context.Context, arg G
 }
 
 const getUserInputRequest = `-- name: GetUserInputRequest :one
-SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 FROM user_input_requests
 WHERE id = $1
 `
@@ -496,6 +676,7 @@ func (q *Queries) GetUserInputRequest(ctx context.Context, id pgtype.UUID) (User
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -510,10 +691,11 @@ func (q *Queries) GetUserInputRequest(ctx context.Context, id pgtype.UUID) (User
 }
 
 const getUserInputRequestBySessionToolCall = `-- name: GetUserInputRequestBySessionToolCall :one
-SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 FROM user_input_requests
 WHERE session_id = $1
   AND tool_call_id = $2
+  AND persist_turn_id IS NULL
 `
 
 type GetUserInputRequestBySessionToolCallParams struct {
@@ -543,6 +725,57 @@ func (q *Queries) GetUserInputRequestBySessionToolCall(ctx context.Context, arg 
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
+		&i.PromptExternalMessageID,
+		&i.SourcePlatform,
+		&i.ReplyTarget,
+		&i.ConversationType,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.RespondedAt,
+		&i.CanceledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserInputRequestBySessionToolCallTurn = `-- name: GetUserInputRequestBySessionToolCallTurn :one
+SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+FROM user_input_requests
+WHERE session_id = $1
+  AND tool_call_id = $2
+  AND persist_turn_id = $3
+`
+
+type GetUserInputRequestBySessionToolCallTurnParams struct {
+	SessionID     pgtype.UUID `json:"session_id"`
+	ToolCallID    string      `json:"tool_call_id"`
+	PersistTurnID pgtype.UUID `json:"persist_turn_id"`
+}
+
+func (q *Queries) GetUserInputRequestBySessionToolCallTurn(ctx context.Context, arg GetUserInputRequestBySessionToolCallTurnParams) (UserInputRequest, error) {
+	row := q.db.QueryRow(ctx, getUserInputRequestBySessionToolCallTurn, arg.SessionID, arg.ToolCallID, arg.PersistTurnID)
+	var i UserInputRequest
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.RouteID,
+		&i.ChannelIdentityID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.ShortID,
+		&i.Status,
+		&i.InputJson,
+		&i.UiPayloadJson,
+		&i.ResultJson,
+		&i.ProviderMetadata,
+		&i.RequestedByChannelIdentityID,
+		&i.RespondedByChannelIdentityID,
+		&i.AssistantMessageID,
+		&i.ToolResultMessageID,
+		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -557,13 +790,25 @@ func (q *Queries) GetUserInputRequestBySessionToolCall(ctx context.Context, arg 
 }
 
 const listPendingUserInputsBySession = `-- name: ListPendingUserInputsBySession :many
-SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
-FROM user_input_requests
-WHERE bot_id = $1
-  AND session_id = $2
-  AND status = 'pending'
-  AND (expires_at IS NULL OR expires_at > now())
-ORDER BY created_at ASC, short_id ASC
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  WHERE s.id = $2
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+WHERE uir.bot_id = $1
+  AND uir.session_id = $2
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+ORDER BY uir.created_at ASC, uir.short_id ASC
 `
 
 type ListPendingUserInputsBySessionParams struct {
@@ -599,6 +844,7 @@ func (q *Queries) ListPendingUserInputsBySession(ctx context.Context, arg ListPe
 			&i.AssistantMessageID,
 			&i.ToolResultMessageID,
 			&i.PromptMessageID,
+			&i.PersistTurnID,
 			&i.PromptExternalMessageID,
 			&i.SourcePlatform,
 			&i.ReplyTarget,
@@ -620,11 +866,23 @@ func (q *Queries) ListPendingUserInputsBySession(ctx context.Context, arg ListPe
 }
 
 const listUserInputsBySession = `-- name: ListUserInputsBySession :many
-SELECT id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
-FROM user_input_requests
-WHERE bot_id = $1
-  AND session_id = $2
-ORDER BY created_at ASC, short_id ASC
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  WHERE s.id = $2
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+WHERE uir.bot_id = $1
+  AND uir.session_id = $2
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+ORDER BY uir.created_at ASC, uir.short_id ASC
 `
 
 type ListUserInputsBySessionParams struct {
@@ -660,6 +918,7 @@ func (q *Queries) ListUserInputsBySession(ctx context.Context, arg ListUserInput
 			&i.AssistantMessageID,
 			&i.ToolResultMessageID,
 			&i.PromptMessageID,
+			&i.PersistTurnID,
 			&i.PromptExternalMessageID,
 			&i.SourcePlatform,
 			&i.ReplyTarget,
@@ -690,7 +949,7 @@ SET status = 'submitted',
 WHERE id = $3
   AND status = 'pending'
   AND (expires_at IS NULL OR expires_at > now())
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type SubmitUserInputRequestParams struct {
@@ -721,6 +980,7 @@ func (q *Queries) SubmitUserInputRequest(ctx context.Context, arg SubmitUserInpu
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -739,7 +999,7 @@ UPDATE user_input_requests
 SET assistant_message_id = $1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type UpdateUserInputAssistantMessageParams struct {
@@ -769,6 +1029,7 @@ func (q *Queries) UpdateUserInputAssistantMessage(ctx context.Context, arg Updat
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -788,7 +1049,7 @@ SET prompt_message_id = $1,
     prompt_external_message_id = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type UpdateUserInputPromptMessageParams struct {
@@ -819,6 +1080,7 @@ func (q *Queries) UpdateUserInputPromptMessage(ctx context.Context, arg UpdateUs
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,
@@ -837,7 +1099,7 @@ UPDATE user_input_requests
 SET tool_result_message_id = $1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, short_id, status, input_json, ui_payload_json, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, persist_turn_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at
 `
 
 type UpdateUserInputToolResultMessageParams struct {
@@ -867,6 +1129,7 @@ func (q *Queries) UpdateUserInputToolResultMessage(ctx context.Context, arg Upda
 		&i.AssistantMessageID,
 		&i.ToolResultMessageID,
 		&i.PromptMessageID,
+		&i.PersistTurnID,
 		&i.PromptExternalMessageID,
 		&i.SourcePlatform,
 		&i.ReplyTarget,

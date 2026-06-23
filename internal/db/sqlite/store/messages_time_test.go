@@ -28,12 +28,20 @@ CREATE TABLE channel_identities (
 );
 CREATE TABLE bot_sessions (
   id TEXT PRIMARY KEY,
+  head_turn_id TEXT,
+  deleted_at TEXT,
   channel_type TEXT
+);
+CREATE TABLE bot_history_turns (
+  id TEXT PRIMARY KEY,
+  parent_turn_id TEXT
 );
 CREATE TABLE bot_history_messages (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL,
   session_id TEXT,
+  turn_id TEXT,
+  turn_message_seq INTEGER,
   sender_channel_identity_id TEXT,
   sender_account_user_id TEXT,
   source_message_id TEXT,
@@ -50,10 +58,14 @@ CREATE TABLE bot_history_messages (
 
 	botID := "00000000-0000-0000-0000-000000002001"
 	sessionID := "00000000-0000-0000-0000-000000002002"
-	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, channel_type) VALUES (?, ?)`, sessionID, "local"); err != nil {
+	turnID := "00000000-0000-0000-0000-000000002005"
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_history_turns (id) VALUES (?)`, turnID); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, head_turn_id, channel_type) VALUES (?, ?, ?)`, sessionID, turnID, "local"); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
-	for _, item := range []struct {
+	for index, item := range []struct {
 		id      string
 		role    string
 		content string
@@ -62,11 +74,13 @@ CREATE TABLE bot_history_messages (
 		{"00000000-0000-0000-0000-000000002004", "assistant", `{"role":"assistant","content":"hi"}`},
 	} {
 		_, err := conn.ExecContext(ctx, `
-INSERT INTO bot_history_messages (id, bot_id, session_id, role, content, created_at)
-VALUES (?, ?, ?, ?, ?, ?)`,
+INSERT INTO bot_history_messages (id, bot_id, session_id, turn_id, turn_message_seq, role, content, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			item.id,
 			botID,
 			sessionID,
+			turnID,
+			index+1,
 			item.role,
 			item.content,
 			"2026-06-13 19:53:50",

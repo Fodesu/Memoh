@@ -1,7 +1,139 @@
+-- name: CreateHistoryTurn :one
+INSERT INTO bot_history_turns (
+  bot_id,
+  owner_session_id,
+  parent_turn_id
+)
+VALUES (
+  sqlc.arg(bot_id),
+  sqlc.narg(owner_session_id)::uuid,
+  sqlc.narg(parent_turn_id)::uuid
+)
+RETURNING *;
+
+-- name: UpdateHistoryTurnRequestMessage :one
+UPDATE bot_history_turns
+SET request_message_id = sqlc.narg(request_message_id)::uuid,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: UpdateHistoryTurnFinalAssistantMessage :one
+UPDATE bot_history_turns
+SET final_assistant_message_id = sqlc.narg(final_assistant_message_id)::uuid,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: GetNextTurnMessageSeq :one
+SELECT (COALESCE(MAX(turn_message_seq), 0) + 1)::bigint AS next_seq
+FROM bot_history_messages
+WHERE turn_id = sqlc.arg(turn_id);
+
+-- name: GetHistoryTurnByID :one
+SELECT *
+FROM bot_history_turns
+WHERE id = sqlc.arg(id);
+
+-- name: ListOwnedHistoryTurnsForSessionDelete :many
+SELECT *
+FROM bot_history_turns
+WHERE owner_session_id = sqlc.arg(session_id)
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListHistoryTurnPathFromHead :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.*, 0::bigint AS depth
+  FROM bot_history_turns t
+  WHERE t.id = sqlc.arg(head_turn_id)
+  UNION ALL
+  SELECT p.*, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT
+  t.*
+FROM visible_turns vt
+JOIN bot_history_turns t ON t.id = vt.id
+ORDER BY vt.depth ASC;
+
+-- name: ListOtherActiveSessionVisibleTurnIDs :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_sessions source ON source.id = sqlc.arg(session_id)
+  WHERE s.id <> source.id
+    AND s.bot_id = source.bot_id
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT DISTINCT visible_turns.id
+FROM visible_turns;
+
+-- name: DeleteMessagesByTurnID :exec
+DELETE FROM bot_history_messages
+WHERE turn_id = sqlc.arg(turn_id);
+
+-- name: DeleteHistoryTurnByID :exec
+DELETE FROM bot_history_turns
+WHERE id = sqlc.arg(id);
+
+-- name: GetVisibleAssistantMessageTurnForFork :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  WHERE s.id = sqlc.arg(session_id)
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT
+  m.id AS message_id,
+  m.role,
+  m.turn_id,
+  t.parent_turn_id
+FROM bot_history_messages m
+JOIN visible_turns vt ON vt.id = m.turn_id
+JOIN bot_history_turns t ON t.id = m.turn_id
+WHERE m.id = sqlc.arg(message_id)
+LIMIT 1;
+
+-- name: GetVisibleUserMessageTurnForRewrite :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions s
+  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  WHERE s.id = sqlc.arg(session_id)
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT
+  m.id AS message_id,
+  m.turn_id,
+  t.parent_turn_id
+FROM bot_history_messages m
+JOIN visible_turns vt ON vt.id = m.turn_id
+JOIN bot_history_turns t ON t.id = m.turn_id
+WHERE m.id = sqlc.arg(message_id)
+  AND m.role = 'user'
+LIMIT 1;
+
 -- name: CreateMessage :one
 INSERT INTO bot_history_messages (
   bot_id,
   session_id,
+  turn_id,
+  turn_message_seq,
   sender_channel_identity_id,
   sender_account_user_id,
   source_message_id,
@@ -17,6 +149,8 @@ INSERT INTO bot_history_messages (
 VALUES (
   sqlc.arg(bot_id),
   sqlc.narg(session_id)::uuid,
+  sqlc.narg(turn_id)::uuid,
+  sqlc.narg(turn_message_seq)::bigint,
   sqlc.narg(sender_channel_identity_id)::uuid,
   sqlc.narg(sender_user_id)::uuid,
   sqlc.narg(external_message_id)::text,
@@ -33,6 +167,8 @@ RETURNING
   id,
   bot_id,
   session_id,
+  turn_id,
+  turn_message_seq,
   sender_channel_identity_id,
   sender_account_user_id AS sender_user_id,
   source_message_id AS external_message_id,
@@ -50,6 +186,8 @@ SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -72,10 +210,23 @@ ORDER BY m.created_at ASC
 LIMIT 10000;
 
 -- name: ListMessagesBySession :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -90,11 +241,11 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_history_messages m
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
-WHERE m.session_id = sqlc.arg(session_id)
-ORDER BY m.created_at ASC
+ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC
 LIMIT 10000;
 
 -- name: ListMessagesSince :many
@@ -102,6 +253,8 @@ SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -124,10 +277,23 @@ WHERE m.bot_id = sqlc.arg(bot_id)
 ORDER BY m.created_at ASC;
 
 -- name: ListMessagesSinceBySession :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -142,18 +308,20 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_history_messages m
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
-WHERE m.session_id = sqlc.arg(session_id)
-  AND m.created_at >= sqlc.arg(created_at)
-ORDER BY m.created_at ASC;
+WHERE m.created_at >= sqlc.arg(created_at)
+ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC;
 
 -- name: ListActiveMessagesSince :many
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -178,10 +346,23 @@ WHERE m.bot_id = sqlc.arg(bot_id)
 ORDER BY m.created_at ASC;
 
 -- name: ListActiveMessagesSinceBySession :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -197,19 +378,60 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_history_messages m
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
-WHERE m.session_id = sqlc.arg(session_id)
-  AND m.created_at >= sqlc.arg(created_at)
+WHERE m.created_at >= sqlc.arg(created_at)
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-ORDER BY m.created_at ASC;
+ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC;
+
+-- name: ListActiveMessagesSinceByTurn :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_history_turns t
+  WHERE t.id = sqlc.arg(head_turn_id)
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.event_id,
+  m.display_text,
+  m.compact_id,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
+LEFT JOIN bot_sessions s ON s.id = m.session_id
+WHERE m.created_at >= sqlc.arg(created_at)
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC;
 
 -- name: ListMessagesBefore :many
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -233,10 +455,23 @@ ORDER BY m.created_at DESC
 LIMIT sqlc.arg(max_count);
 
 -- name: ListMessagesBeforeBySession :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -251,12 +486,27 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_history_messages m
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
+LEFT JOIN bot_history_messages cursor_message ON cursor_message.id = sqlc.narg(before_id)::uuid
+LEFT JOIN visible_turns cursor_turn ON cursor_turn.id = cursor_message.turn_id
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
-WHERE m.session_id = sqlc.arg(session_id)
-  AND m.created_at < sqlc.arg(created_at)
-ORDER BY m.created_at DESC
+WHERE (
+  (
+    sqlc.narg(before_id)::uuid IS NOT NULL
+    AND cursor_turn.id IS NOT NULL
+    AND (
+      (-vt.depth, COALESCE(m.turn_message_seq, 0)::bigint, m.created_at, m.id)
+      < (-cursor_turn.depth, COALESCE(cursor_message.turn_message_seq, 0)::bigint, cursor_message.created_at, cursor_message.id)
+    )
+  )
+  OR (
+    sqlc.narg(before_id)::uuid IS NULL
+    AND m.created_at < sqlc.arg(created_at)
+  )
+)
+ORDER BY vt.depth ASC, COALESCE(m.turn_message_seq, 9223372036854775807) DESC, m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
 -- name: ListMessagesLatest :many
@@ -264,6 +514,8 @@ SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -286,10 +538,23 @@ ORDER BY m.created_at DESC
 LIMIT sqlc.arg(max_count);
 
 -- name: ListMessagesLatestBySession :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -304,18 +569,31 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_history_messages m
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
-WHERE m.session_id = sqlc.arg(session_id)
-ORDER BY m.created_at DESC
+ORDER BY vt.depth ASC, COALESCE(m.turn_message_seq, 9223372036854775807) DESC, m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
 -- name: GetMessageByExternalIDBySession :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -330,19 +608,32 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_history_messages m
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
-WHERE m.session_id = sqlc.arg(session_id)
-  AND m.source_message_id = sqlc.arg(external_message_id)
-ORDER BY m.created_at DESC
+WHERE m.source_message_id = sqlc.arg(external_message_id)
+ORDER BY vt.depth ASC, COALESCE(m.turn_message_seq, 9223372036854775807) DESC, m.created_at DESC, m.id DESC
 LIMIT 1;
 
 -- name: ListMessagesAfterBySession :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
   m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
   m.sender_channel_identity_id,
   m.sender_account_user_id AS sender_user_id,
   m.source_message_id AS external_message_id,
@@ -357,12 +648,27 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_history_messages m
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
+LEFT JOIN bot_history_messages cursor_message ON cursor_message.id = sqlc.narg(after_id)::uuid
+LEFT JOIN visible_turns cursor_turn ON cursor_turn.id = cursor_message.turn_id
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
-WHERE m.session_id = sqlc.arg(session_id)
-  AND m.created_at > sqlc.arg(created_at)
-ORDER BY m.created_at ASC
+WHERE (
+  (
+    sqlc.narg(after_id)::uuid IS NOT NULL
+    AND cursor_turn.id IS NOT NULL
+    AND (
+      (-vt.depth, COALESCE(m.turn_message_seq, 0)::bigint, m.created_at, m.id)
+      > (-cursor_turn.depth, COALESCE(cursor_message.turn_message_seq, 0)::bigint, cursor_message.created_at, cursor_message.id)
+    )
+  )
+  OR (
+    sqlc.narg(after_id)::uuid IS NULL
+    AND m.created_at > sqlc.arg(created_at)
+  )
+)
+ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC
 LIMIT sqlc.arg(max_count);
 
 -- name: CountMessagesByBot :one
@@ -371,6 +677,10 @@ WHERE bot_id = sqlc.arg(bot_id);
 
 -- name: DeleteMessagesByBot :exec
 DELETE FROM bot_history_messages
+WHERE bot_id = sqlc.arg(bot_id);
+
+-- name: DeleteHistoryTurnsByBot :exec
+DELETE FROM bot_history_turns
 WHERE bot_id = sqlc.arg(bot_id);
 
 -- name: DeleteMessagesBySession :exec
@@ -462,6 +772,18 @@ GROUP BY
 ORDER BY rr.last_observed_at DESC;
 
 -- name: SearchMessages :many
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE sqlc.narg(session_id)::uuid IS NOT NULL
+    AND bs.id = sqlc.narg(session_id)::uuid
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
 SELECT
   m.id,
   m.bot_id,
@@ -476,7 +798,7 @@ FROM bot_history_messages m
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
 WHERE m.bot_id = sqlc.arg(bot_id)
-  AND (sqlc.narg(session_id)::uuid IS NULL OR m.session_id = sqlc.narg(session_id)::uuid)
+  AND (sqlc.narg(session_id)::uuid IS NULL OR m.turn_id IN (SELECT id FROM visible_turns))
   AND (sqlc.narg(contact_id)::uuid IS NULL OR m.sender_channel_identity_id = sqlc.narg(contact_id)::uuid)
   AND (sqlc.narg(start_time)::timestamptz IS NULL OR m.created_at >= sqlc.narg(start_time)::timestamptz)
   AND (sqlc.narg(end_time)::timestamptz IS NULL OR m.created_at <= sqlc.narg(end_time)::timestamptz)
@@ -501,8 +823,19 @@ SET compact_id = $1
 WHERE id = ANY($2::uuid[]);
 
 -- name: ListUncompactedMessagesBySession :many
-SELECT id, bot_id, session_id, role, content, usage, sender_channel_identity_id, compact_id, created_at
-FROM bot_history_messages
-WHERE session_id = $1
-  AND compact_id IS NULL
-ORDER BY created_at ASC;
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions bs
+  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT m.id, m.bot_id, m.session_id, m.role, m.content, m.usage, m.sender_channel_identity_id, m.compact_id, m.created_at
+FROM visible_turns vt
+JOIN bot_history_messages m ON m.turn_id = vt.id
+WHERE m.compact_id IS NULL
+ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC;
