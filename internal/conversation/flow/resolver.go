@@ -103,7 +103,7 @@ type Resolver struct {
 	// response; nil means storeUserInputResultAndContinue. Test seam.
 	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
 	sessionTurnMu       sync.Mutex
-	sessionTurnRefs     map[string]int // key: "botID:sessionID" → active turn refcount
+	sessionTurnLocks    map[string]*sync.Mutex // key: "botID:sessionID" → turn write lock
 	timeout             time.Duration
 	clockLocation       *time.Location
 	logger              *slog.Logger
@@ -156,7 +156,7 @@ func NewResolver(
 		settingsService:  settingsService,
 		accountService:   accountService,
 		streamHTTPClient: streamHTTPClient,
-		sessionTurnRefs:  make(map[string]int),
+		sessionTurnLocks: make(map[string]*sync.Mutex),
 		timeout:          timeout,
 		clockLocation:    clockLocation,
 		logger:           log.With(slog.String("service", "conversation_resolver")),
@@ -295,6 +295,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		ConversationType:  req.ConversationType,
 		SessionToken:      req.ChatToken,
 		SessionType:       req.SessionType,
+		PersistTurnID:     req.PersistTurnID,
 		Model:             req.Model,
 		Provider:          req.Provider,
 		ReasoningEffort:   req.ReasoningEffort,
@@ -334,7 +335,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	if usePipeline {
 		messages = r.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 	} else if r.conversationSvc != nil {
-		loaded, loadErr := r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
+		loaded, loadErr := r.loadMessagesForRequest(ctx, req, defaultMaxContextMinutes)
 		if loadErr != nil {
 			r.logger.Error("resolve: loadMessages failed",
 				slog.String("bot_id", req.BotID),
@@ -364,7 +365,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 			)
 			r.runCompactionSync(ctx, req, estimatedTokens)
 			// Reload messages after compaction.
-			loaded, loadErr = r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
+			loaded, loadErr = r.loadMessagesForRequest(ctx, req, defaultMaxContextMinutes)
 			if loadErr != nil {
 				r.logger.Error("resolve: reload messages after compaction failed",
 					slog.String("bot_id", req.BotID),
@@ -475,10 +476,14 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
 	defer doneTurn()
 
+	var err error
+	req, err = r.pinPersistTurn(ctx, req)
+	if err != nil {
+		return conversation.ChatResponse{}, err
+	}
 	if req.RawQuery == "" {
 		req.RawQuery = strings.TrimSpace(req.Query)
 	}
-	var err error
 	req, err = r.applyUserMessageHook(ctx, req)
 	if err != nil {
 		return conversation.ChatResponse{}, err
@@ -505,7 +510,11 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 		storeReq.UserMessagePersisted = true
 	}
 	roundMessages := prependUserMessage(storeReq.Query, outputMessages)
-	if err := r.storeRound(ctx, storeReq, roundMessages, rc.model.ID); err != nil {
+	stored, err := r.storeRoundWithContext(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{})
+	if err != nil {
+		return conversation.ChatResponse{}, err
+	}
+	if err := r.updateSessionHeadTurn(ctx, storeReq, stored.TurnID); err != nil {
 		return conversation.ChatResponse{}, err
 	}
 
@@ -534,6 +543,7 @@ type baseRunConfigParams struct {
 	ConversationType  string
 	SessionToken      string //nolint:gosec // session credential material, not a hardcoded secret
 	SessionType       string
+	PersistTurnID     string
 	Model             string
 	Provider          string
 	ReasoningEffort   string // caller-provided override (empty = use bot default)
@@ -851,6 +861,7 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 				SourcePlatform:               p.CurrentPlatform,
 				ReplyTarget:                  p.ReplyTarget,
 				ConversationType:             p.ConversationType,
+				PersistTurnID:                p.PersistTurnID,
 			})
 			if err != nil {
 				return sdk.ToolApprovalResult{}, err
@@ -881,6 +892,7 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			SourcePlatform:               p.CurrentPlatform,
 			ReplyTarget:                  p.ReplyTarget,
 			ConversationType:             p.ConversationType,
+			PersistTurnID:                p.PersistTurnID,
 		}
 		forcedApprovalReason, forcedApproval := agentpkg.HookForcedApprovalReason(ctx)
 		if r.toolApproval == nil {
@@ -992,11 +1004,7 @@ func buildModelSelectionRequest(p baseRunConfigParams, chatID string) conversati
 // The caller is responsible for filling RunConfig.Messages.
 // Used by the discuss driver to reuse the resolver's model/tools/prompt pipeline.
 func (r *Resolver) ResolveRunConfig(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string) (pipelinepkg.ResolveRunConfigResult, error) {
-	if strings.TrimSpace(botID) == "" {
-		return pipelinepkg.ResolveRunConfigResult{}, errors.New("bot id is required")
-	}
-
-	cfg, chatModel, _, err := r.buildBaseRunConfig(ctx, baseRunConfigParams{
+	return r.resolveRunConfig(ctx, baseRunConfigParams{
 		BotID:             botID,
 		SessionID:         sessionID,
 		ChannelIdentityID: channelIdentityID,
@@ -1004,8 +1012,19 @@ func (r *Resolver) ResolveRunConfig(ctx context.Context, botID, sessionID, chann
 		ReplyTarget:       replyTarget,
 		ConversationType:  conversationType,
 		SessionToken:      chatToken,
-		SessionType:       r.resolveRunConfigSessionType(ctx, sessionID),
 	})
+}
+
+func (r *Resolver) resolveRunConfig(ctx context.Context, p baseRunConfigParams) (pipelinepkg.ResolveRunConfigResult, error) {
+	if strings.TrimSpace(p.BotID) == "" {
+		return pipelinepkg.ResolveRunConfigResult{}, errors.New("bot id is required")
+	}
+
+	if strings.TrimSpace(p.SessionType) == "" {
+		p.SessionType = r.resolveRunConfigSessionType(ctx, p.SessionID)
+	}
+
+	cfg, chatModel, _, err := r.buildBaseRunConfig(ctx, p)
 	if err != nil {
 		return pipelinepkg.ResolveRunConfigResult{}, err
 	}

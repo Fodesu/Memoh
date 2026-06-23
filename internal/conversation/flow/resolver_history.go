@@ -27,17 +27,19 @@ type messageWithUsage struct {
 	CompactID         string
 }
 
-func (r *Resolver) loadMessages(ctx context.Context, chatID string, sessionID string, maxContextMinutes int) ([]messageWithUsage, error) {
+func (r *Resolver) loadMessagesForRequest(ctx context.Context, req conversation.ChatRequest, maxContextMinutes int) ([]messageWithUsage, error) {
 	if r.messageService == nil {
 		return nil, nil
 	}
 	since := time.Now().UTC().Add(-time.Duration(maxContextMinutes) * time.Minute)
 	var msgs []messagepkg.Message
 	var err error
-	if strings.TrimSpace(sessionID) != "" {
-		msgs, err = r.messageService.ListActiveSinceBySession(ctx, sessionID, since)
+	if contextHeadTurnID := strings.TrimSpace(contextHeadTurnID(req)); contextHeadTurnID != "" {
+		msgs, err = r.messageService.ListActiveSinceByTurn(ctx, contextHeadTurnID, since)
+	} else if strings.TrimSpace(req.SessionID) != "" {
+		msgs, err = r.messageService.ListActiveSinceBySession(ctx, req.SessionID, since)
 	} else {
-		msgs, err = r.messageService.ListActiveSince(ctx, chatID, since)
+		msgs, err = r.messageService.ListActiveSince(ctx, req.ChatID, since)
 	}
 	if err != nil {
 		return nil, err
@@ -47,7 +49,7 @@ func (r *Resolver) loadMessages(ctx context.Context, chatID string, sessionID st
 		var mm conversation.ModelMessage
 		if err := json.Unmarshal(m.Content, &mm); err != nil {
 			r.logger.Warn("loadMessages: content unmarshal failed, treating as raw text",
-				slog.String("chat_id", chatID), slog.Any("error", err))
+				slog.String("chat_id", req.ChatID), slog.Any("error", err))
 			mm = conversation.ModelMessage{Role: m.Role, Content: m.Content}
 		} else {
 			mm.Role = m.Role
@@ -73,6 +75,19 @@ func (r *Resolver) loadMessages(ctx context.Context, chatID string, sessionID st
 		})
 	}
 	return result, nil
+}
+
+func contextHeadTurnID(req conversation.ChatRequest) string {
+	if headTurnID := strings.TrimSpace(req.ContextHeadTurnID); headTurnID != "" {
+		return headTurnID
+	}
+	if strings.TrimSpace(req.RewriteTargetMessageID) != "" {
+		return ""
+	}
+	if strings.TrimSpace(req.PersistTurnID) != "" && req.ContextHeadTurnPinned {
+		return strings.TrimSpace(req.PersistTurnID)
+	}
+	return ""
 }
 
 func dedupePersistedCurrentUserMessage(messages []messageWithUsage, req conversation.ChatRequest) []messageWithUsage {

@@ -159,18 +159,34 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 		UiPayloadJson:                uiPayloadJSON,
 		ProviderMetadata:             providerMetadata,
 		RequestedByChannelIdentityID: requestedByID,
+		PersistTurnID:                optionalUUID(input.PersistTurnID),
 		SourcePlatform:               strings.TrimSpace(input.SourcePlatform),
 		ReplyTarget:                  strings.TrimSpace(input.ReplyTarget),
 		ConversationType:             strings.TrimSpace(input.ConversationType),
 		ExpiresAt:                    optionalTime(input.ExpiresAt),
 	}
-	row, err := s.queries.CreateUserInputRequest(ctx, params)
+	var row sqlc.UserInputRequest
+	if params.PersistTurnID.Valid {
+		row, err = s.queries.CreateUserInputRequestForTurn(ctx, sqlc.CreateUserInputRequestForTurnParams(params))
+	} else {
+		row, err = s.queries.CreateUserInputRequest(ctx, params)
+	}
 	if err != nil {
 		if errors.Is(mapLookupErr(err), ErrNotFound) {
-			existing, getErr := s.queries.GetUserInputRequestBySessionToolCall(ctx, sqlc.GetUserInputRequestBySessionToolCallParams{
-				SessionID:  sessionID,
-				ToolCallID: toolCallID,
-			})
+			var existing sqlc.UserInputRequest
+			var getErr error
+			if params.PersistTurnID.Valid {
+				existing, getErr = s.queries.GetUserInputRequestBySessionToolCallTurn(ctx, sqlc.GetUserInputRequestBySessionToolCallTurnParams{
+					SessionID:     sessionID,
+					ToolCallID:    toolCallID,
+					PersistTurnID: params.PersistTurnID,
+				})
+			} else {
+				existing, getErr = s.queries.GetUserInputRequestBySessionToolCall(ctx, sqlc.GetUserInputRequestBySessionToolCallParams{
+					SessionID:  sessionID,
+					ToolCallID: toolCallID,
+				})
+			}
 			if getErr == nil {
 				existingReq := requestFromRow(existing)
 				if existingReq.Status != StatusPending {
@@ -679,6 +695,9 @@ func requestFromRow(row sqlc.UserInputRequest) Request {
 	}
 	if row.ChannelIdentityID.Valid {
 		req.ChannelIdentityID = uuid.UUID(row.ChannelIdentityID.Bytes).String()
+	}
+	if row.PersistTurnID.Valid {
+		req.PersistTurnID = uuid.UUID(row.PersistTurnID.Bytes).String()
 	}
 	if row.RespondedAt.Valid {
 		responded := row.RespondedAt.Time

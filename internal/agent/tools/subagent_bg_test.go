@@ -181,6 +181,10 @@ func (*fakeAgentMessageService) ListActiveSinceBySession(context.Context, string
 	return nil, nil
 }
 
+func (*fakeAgentMessageService) ListActiveSinceByTurn(context.Context, string, time.Time) ([]messagepkg.Message, error) {
+	return nil, nil
+}
+
 func (*fakeAgentMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }

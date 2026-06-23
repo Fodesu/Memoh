@@ -93,9 +93,8 @@ turn_seeds AS (
 linked_seeds AS (
   SELECT
     current.*,
-    COALESCE(previous.turn_id, s.head_turn_id) AS parent_turn_id
+    previous.turn_id AS parent_turn_id
   FROM turn_seeds current
-  JOIN bot_sessions s ON s.id = current.session_id
   LEFT JOIN turn_seeds previous
     ON previous.session_id = current.session_id
    AND previous.turn_pos = current.turn_pos - 1

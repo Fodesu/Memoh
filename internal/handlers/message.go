@@ -552,9 +552,7 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 	}
 	sessionID := strings.TrimSpace(c.QueryParam("session_id"))
 	if sessionID != "" {
-		if err := h.messageService.DeleteBySession(c.Request().Context(), sessionID); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
+		return echo.NewHTTPError(http.StatusBadRequest, "session-scoped message deletion is not supported")
 	} else {
 		if err := h.messageService.DeleteByBot(c.Request().Context(), botID); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

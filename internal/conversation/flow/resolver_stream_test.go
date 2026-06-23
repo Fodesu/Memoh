@@ -53,6 +53,10 @@ func (*recordingMessageService) ListActiveSinceBySession(context.Context, string
 	return nil, nil
 }
 
+func (*recordingMessageService) ListActiveSinceByTurn(context.Context, string, time.Time) ([]messagepkg.Message, error) {
+	return nil, nil
+}
+
 func (*recordingMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
@@ -160,6 +164,40 @@ func TestPersistTerminalSnapshotSkipsEmptyAssistantSnapshot(t *testing.T) {
 
 	if len(messages.persisted) != 0 {
 		t.Fatalf("expected empty assistant terminal snapshot not to persist, got %#v", messages.persisted)
+	}
+}
+
+func TestStoreRoundUsesPinnedTurnForEveryMessage(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+
+	req := conversation.ChatRequest{
+		BotID:         "bot-1",
+		SessionID:     "session-1",
+		PersistTurnID: "turn-1",
+		Query:         "hello",
+	}
+	err := resolver.storeRoundWithOptions(context.Background(), req, []conversation.ModelMessage{
+		{Role: "user", Content: conversation.NewTextContent("hello")},
+		{Role: "assistant", Content: conversation.NewTextContent("thinking")},
+		{Role: "tool", ToolCallID: "tool-1", Content: conversation.NewTextContent("ok")},
+		{Role: "assistant", Content: conversation.NewTextContent("done")},
+	}, "", storeRoundOptions{AllowPendingToolCalls: true})
+	if err != nil {
+		t.Fatalf("storeRoundWithOptions() error = %v", err)
+	}
+	if len(messages.persisted) != 4 {
+		t.Fatalf("persisted %d messages, want 4", len(messages.persisted))
+	}
+	for i, persisted := range messages.persisted {
+		if persisted.TurnID != "turn-1" {
+			t.Fatalf("persisted[%d].TurnID = %q, want turn-1", i, persisted.TurnID)
+		}
 	}
 }
 

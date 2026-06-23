@@ -5,8 +5,6 @@ PRAGMA foreign_keys = OFF;
 
 BEGIN;
 
-DROP TABLE IF EXISTS bot_history_turns;
-
 ALTER TABLE bot_sessions RENAME TO bot_sessions_old;
 CREATE TABLE bot_sessions (
   id TEXT PRIMARY KEY,
@@ -124,7 +122,7 @@ SELECT
 FROM bot_history_messages_old;
 DROP TABLE bot_history_messages_old;
 
-CREATE TABLE bot_history_turns (
+CREATE TABLE IF NOT EXISTS bot_history_turns (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   owner_session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,

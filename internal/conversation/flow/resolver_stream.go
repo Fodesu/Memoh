@@ -87,10 +87,21 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 		doneTurn := r.enterSessionTurn(ctx, streamReq.BotID, streamReq.SessionID)
 		defer doneTurn()
 
+		var err error
+		streamReq, err = r.pinPersistTurn(ctx, streamReq)
+		if err != nil {
+			r.logger.Error("agent stream pin persist turn failed",
+				slog.String("bot_id", streamReq.BotID),
+				slog.String("chat_id", streamReq.ChatID),
+				slog.Any("error", err),
+			)
+			errCh <- err
+			return
+		}
 		if streamReq.RawQuery == "" {
 			streamReq.RawQuery = strings.TrimSpace(streamReq.Query)
 		}
-		streamReq, err := r.applyUserMessageHook(ctx, streamReq)
+		streamReq, err = r.applyUserMessageHook(ctx, streamReq)
 		if err != nil {
 			r.logger.Error("agent stream user message hook failed",
 				slog.String("bot_id", streamReq.BotID),
@@ -248,10 +259,18 @@ func (r *Resolver) StreamChatWS(
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
 	defer doneTurn()
 
+	var err error
+	req, err = r.pinPersistTurn(ctx, req)
+	if err != nil {
+		r.logger.Error("StreamChatWS: pin persist turn failed",
+			slog.String("bot_id", req.BotID),
+			slog.Any("error", err),
+		)
+		return err
+	}
 	if req.RawQuery == "" {
 		req.RawQuery = strings.TrimSpace(req.Query)
 	}
-	var err error
 	req, err = r.applyUserMessageHook(ctx, req)
 	if err != nil {
 		r.logger.Error("StreamChatWS: user message hook failed",
@@ -411,9 +430,13 @@ func (r *Resolver) persistTerminalSnapshot(ctx context.Context, req conversation
 		roundMessages = interleaveInjectedMessages(roundMessages, *rc.injectedRecords)
 	}
 
-	if err := r.storeRoundWithOptions(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{
+	stored, err := r.storeRoundWithContext(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{
 		AllowPendingToolCalls: snap.deferredToolID != "",
-	}); err != nil {
+	})
+	if err != nil {
+		return err
+	}
+	if err := r.updateSessionHeadTurn(ctx, storeReq, stored.TurnID); err != nil {
 		return err
 	}
 

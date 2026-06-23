@@ -332,6 +332,65 @@ func mustSessionJSON(value map[string]any) []byte {
 	return data
 }
 
+func TestSoftDeleteCleansOnlyUnsharedOwnedTurns(t *testing.T) {
+	sessionID := "00000000-0000-0000-0000-000000000010"
+	sharedTurnID := mustPGUUID("00000000-0000-0000-0000-000000000011")
+	privateTurnID := mustPGUUID("00000000-0000-0000-0000-000000000012")
+	queries := &softDeleteCleanupQueries{
+		ownedTurns: []sqlc.BotHistoryTurn{
+			{ID: privateTurnID},
+			{ID: sharedTurnID},
+		},
+		sharedTurnIDs: []pgtype.UUID{sharedTurnID},
+	}
+	svc := NewService(nil, queries, nil)
+
+	if err := svc.SoftDelete(context.Background(), sessionID); err != nil {
+		t.Fatalf("SoftDelete() error = %v", err)
+	}
+	if !queries.softDeleted {
+		t.Fatal("session was not soft deleted")
+	}
+	if len(queries.deletedMessageTurns) != 1 || queries.deletedMessageTurns[0] != privateTurnID {
+		t.Fatalf("deleted message turns = %v, want private turn only", queries.deletedMessageTurns)
+	}
+	if len(queries.deletedTurns) != 1 || queries.deletedTurns[0] != privateTurnID {
+		t.Fatalf("deleted turns = %v, want private turn only", queries.deletedTurns)
+	}
+}
+
+type softDeleteCleanupQueries struct {
+	dbstore.Queries
+	softDeleted         bool
+	ownedTurns          []sqlc.BotHistoryTurn
+	sharedTurnIDs       []pgtype.UUID
+	deletedMessageTurns []pgtype.UUID
+	deletedTurns        []pgtype.UUID
+}
+
+func (q *softDeleteCleanupQueries) SoftDeleteSession(context.Context, pgtype.UUID) error {
+	q.softDeleted = true
+	return nil
+}
+
+func (q *softDeleteCleanupQueries) ListOwnedHistoryTurnsForSessionDelete(context.Context, pgtype.UUID) ([]sqlc.BotHistoryTurn, error) {
+	return q.ownedTurns, nil
+}
+
+func (q *softDeleteCleanupQueries) ListOtherActiveSessionVisibleTurnIDs(context.Context, pgtype.UUID) ([]pgtype.UUID, error) {
+	return q.sharedTurnIDs, nil
+}
+
+func (q *softDeleteCleanupQueries) DeleteMessagesByTurnID(_ context.Context, id pgtype.UUID) error {
+	q.deletedMessageTurns = append(q.deletedMessageTurns, id)
+	return nil
+}
+
+func (q *softDeleteCleanupQueries) DeleteHistoryTurnByID(_ context.Context, id pgtype.UUID) error {
+	q.deletedTurns = append(q.deletedTurns, id)
+	return nil
+}
+
 // pagedQueriesStub captures the params handed to the paged session queries so
 // the test can assert that the service forwards botID, types, cursor, and
 // limit without modification.

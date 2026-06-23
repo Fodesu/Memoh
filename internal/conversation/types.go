@@ -246,6 +246,12 @@ type ChatRequest struct {
 	ForwardSender             string           `json:"-"`
 	ForwardDate               int64            `json:"-"`
 	UserMessagePersisted      bool             `json:"-"`
+	PersistTurnID             string           `json:"-"`
+	PersistBaseHeadTurnID     string           `json:"-"`
+	PersistBaseHeadTurnPinned bool             `json:"-"`
+	ContextHeadTurnID         string           `json:"-"`
+	ContextHeadTurnPinned     bool             `json:"-"`
+	RewriteTargetMessageID    string           `json:"-"`
 	EventID                   string           `json:"-"`
 	RawQuery                  string           `json:"-"`
 	ToolHTTPURL               string           `json:"-"`

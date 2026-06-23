@@ -24,6 +24,8 @@ type Message struct {
 	ID                      string          `json:"id"`
 	BotID                   string          `json:"bot_id"`
 	SessionID               string          `json:"session_id,omitempty"`
+	TurnID                  string          `json:"turn_id,omitempty"`
+	TurnMessageSeq          int64           `json:"turn_message_seq,omitempty"`
 	SenderChannelIdentityID string          `json:"sender_channel_identity_id,omitempty"`
 	SenderUserID            string          `json:"sender_user_id,omitempty"`
 	SenderDisplayName       string          `json:"sender_display_name,omitempty"`
@@ -59,6 +61,8 @@ type AssetRef struct {
 type PersistInput struct {
 	BotID                   string
 	SessionID               string
+	TurnID                  string
+	TurnMessageSeq          int64
 	SenderChannelIdentityID string
 	SenderUserID            string
 	ExternalMessageID       string
@@ -94,6 +98,7 @@ type Service interface {
 	ListBySession(ctx context.Context, sessionID string) ([]Message, error)
 	ListSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error)
 	ListActiveSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error)
+	ListActiveSinceByTurn(ctx context.Context, headTurnID string, since time.Time) ([]Message, error)
 	ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]Message, error)
 	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error)
 	LocateByExternalIDBySession(ctx context.Context, sessionID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error)

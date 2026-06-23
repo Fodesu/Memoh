@@ -128,6 +128,7 @@ func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req user
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		SessionID:               req.SessionID,
+		PersistTurnID:           req.PersistTurnID,
 		SourceChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          req.SourcePlatform,
 		ReplyTarget:             req.ReplyTarget,
@@ -142,20 +143,28 @@ func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req user
 
 func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.Request, input UserInputResponseInput, eventCh chan<- WSStreamEvent) error {
 	req = withLocalWebUserInputReplyTarget(req)
-	resolved, err := r.ResolveRunConfig(ctx,
-		input.BotID,
-		req.SessionID,
-		firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
-		req.SourcePlatform,
-		req.ReplyTarget,
-		req.ConversationType,
-		input.ChatToken,
-	)
+	resolved, err := r.resolveRunConfig(ctx, baseRunConfigParams{
+		BotID:             input.BotID,
+		SessionID:         req.SessionID,
+		ChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
+		CurrentPlatform:   req.SourcePlatform,
+		ReplyTarget:       req.ReplyTarget,
+		ConversationType:  req.ConversationType,
+		SessionToken:      input.ChatToken,
+		PersistTurnID:     req.PersistTurnID,
+	})
 	if err != nil {
 		return err
 	}
 
-	loaded, err := r.loadMessages(ctx, input.BotID, req.SessionID, defaultMaxContextMinutes)
+	contextReq := conversation.ChatRequest{
+		BotID:                 input.BotID,
+		ChatID:                input.BotID,
+		SessionID:             req.SessionID,
+		PersistTurnID:         req.PersistTurnID,
+		ContextHeadTurnPinned: strings.TrimSpace(req.PersistTurnID) != "",
+	}
+	loaded, err := r.loadMessagesForRequest(ctx, contextReq, defaultMaxContextMinutes)
 	if err != nil {
 		return err
 	}
@@ -174,6 +183,7 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		SessionID:               req.SessionID,
+		PersistTurnID:           req.PersistTurnID,
 		SourceChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          req.SourcePlatform,
 		ReplyTarget:             req.ReplyTarget,

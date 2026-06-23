@@ -368,6 +368,7 @@ FROM bot_history_messages m
 JOIN visible_turns vt ON vt.id = m.turn_id
 JOIN bot_history_turns t ON t.id = m.turn_id
 WHERE m.id = ?1
+  AND m.role = 'assistant'
 LIMIT 1
 `
 
@@ -2172,7 +2173,7 @@ func (q *Queries) UpdateHistoryTurnFinalAssistantMessage(ctx context.Context, ar
 
 const updateHistoryTurnRequestMessage = `-- name: UpdateHistoryTurnRequestMessage :one
 UPDATE bot_history_turns
-SET request_message_id = ?1,
+SET request_message_id = COALESCE(request_message_id, ?1),
     updated_at = CURRENT_TIMESTAMP
 WHERE id = ?2
 RETURNING id, bot_id, owner_session_id, parent_turn_id, request_message_id, final_assistant_message_id, created_at, updated_at

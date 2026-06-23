@@ -30,6 +30,9 @@ type Session struct {
 	Type                  string         `json:"type"`
 	Title                 string         `json:"title"`
 	Metadata              map[string]any `json:"metadata,omitempty"`
+	HeadTurnID            string         `json:"head_turn_id,omitempty"`
+	ForkedFromSessionID   string         `json:"forked_from_session_id,omitempty"`
+	ForkedFromTurnID      string         `json:"forked_from_turn_id,omitempty"`
 	ParentSessionID       string         `json:"parent_session_id,omitempty"`
 	CreatedByUserID       string         `json:"created_by_user_id,omitempty"`
 	CreatedAt             time.Time      `json:"created_at"`
@@ -87,14 +90,17 @@ func IsUserFacingType(typ string) bool {
 
 // CreateInput holds input for creating a new session.
 type CreateInput struct {
-	BotID           string
-	RouteID         string
-	ChannelType     string
-	Type            string
-	Title           string
-	Metadata        map[string]any
-	ParentSessionID string
-	CreatedByUserID string
+	BotID               string
+	RouteID             string
+	ChannelType         string
+	Type                string
+	Title               string
+	Metadata            map[string]any
+	HeadTurnID          string
+	ForkedFromSessionID string
+	ForkedFromTurnID    string
+	ParentSessionID     string
+	CreatedByUserID     string
 }
 
 // Service manages bot chat sessions.
@@ -172,16 +178,31 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Session, error
 	if err != nil {
 		return Session{}, fmt.Errorf("invalid created by user id: %w", err)
 	}
+	pgHeadTurnID, err := parseOptionalUUID(input.HeadTurnID)
+	if err != nil {
+		return Session{}, fmt.Errorf("invalid head turn id: %w", err)
+	}
+	pgForkedFromSessionID, err := parseOptionalUUID(input.ForkedFromSessionID)
+	if err != nil {
+		return Session{}, fmt.Errorf("invalid forked from session id: %w", err)
+	}
+	pgForkedFromTurnID, err := parseOptionalUUID(input.ForkedFromTurnID)
+	if err != nil {
+		return Session{}, fmt.Errorf("invalid forked from turn id: %w", err)
+	}
 
 	row, err := s.queries.CreateSession(ctx, sqlc.CreateSessionParams{
-		BotID:           pgBotID,
-		RouteID:         pgRouteID,
-		ChannelType:     channelType,
-		Type:            sessionType,
-		Title:           input.Title,
-		Metadata:        metaBytes,
-		ParentSessionID: pgParentSessionID,
-		CreatedByUserID: pgCreatedByUserID,
+		BotID:               pgBotID,
+		RouteID:             pgRouteID,
+		ChannelType:         channelType,
+		Type:                sessionType,
+		Title:               input.Title,
+		Metadata:            metaBytes,
+		HeadTurnID:          pgHeadTurnID,
+		ForkedFromSessionID: pgForkedFromSessionID,
+		ForkedFromTurnID:    pgForkedFromTurnID,
+		ParentSessionID:     pgParentSessionID,
+		CreatedByUserID:     pgCreatedByUserID,
 	})
 	if err != nil {
 		return Session{}, err
@@ -588,7 +609,69 @@ func (s *Service) SoftDelete(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("invalid session id: %w", err)
 	}
-	return s.queries.SoftDeleteSession(ctx, pgID)
+	if err := s.queries.SoftDeleteSession(ctx, pgID); err != nil {
+		return err
+	}
+	s.cleanupDeletedSessionTurns(ctx, pgID)
+	return nil
+}
+
+type sessionTurnCleanupQueries interface {
+	ListOwnedHistoryTurnsForSessionDelete(context.Context, pgtype.UUID) ([]sqlc.BotHistoryTurn, error)
+	ListOtherActiveSessionVisibleTurnIDs(context.Context, pgtype.UUID) ([]pgtype.UUID, error)
+	DeleteMessagesByTurnID(context.Context, pgtype.UUID) error
+	DeleteHistoryTurnByID(context.Context, pgtype.UUID) error
+}
+
+func (s *Service) cleanupDeletedSessionTurns(ctx context.Context, sessionID pgtype.UUID) {
+	queries, ok := s.queries.(sessionTurnCleanupQueries)
+	if !ok {
+		return
+	}
+	owned, err := queries.ListOwnedHistoryTurnsForSessionDelete(ctx, sessionID)
+	if err != nil {
+		s.logger.Warn("list owned history turns for deleted session failed",
+			slog.String("session_id", sessionID.String()),
+			slog.Any("error", err))
+		return
+	}
+	if len(owned) == 0 {
+		return
+	}
+	sharedRows, err := queries.ListOtherActiveSessionVisibleTurnIDs(ctx, sessionID)
+	if err != nil {
+		s.logger.Warn("list shared history turns for deleted session failed",
+			slog.String("session_id", sessionID.String()),
+			slog.Any("error", err))
+		return
+	}
+	shared := make(map[pgtype.UUID]struct{}, len(sharedRows))
+	for _, id := range sharedRows {
+		if id.Valid {
+			shared[id] = struct{}{}
+		}
+	}
+	for _, turn := range owned {
+		if !turn.ID.Valid {
+			continue
+		}
+		if _, ok := shared[turn.ID]; ok {
+			continue
+		}
+		if err := queries.DeleteMessagesByTurnID(ctx, turn.ID); err != nil {
+			s.logger.Warn("delete messages for session history turn failed",
+				slog.String("session_id", sessionID.String()),
+				slog.String("turn_id", turn.ID.String()),
+				slog.Any("error", err))
+			continue
+		}
+		if err := queries.DeleteHistoryTurnByID(ctx, turn.ID); err != nil {
+			s.logger.Warn("delete session history turn failed",
+				slog.String("session_id", sessionID.String()),
+				slog.String("turn_id", turn.ID.String()),
+				slog.Any("error", err))
+		}
+	}
 }
 
 func (s *Service) MessageCount(ctx context.Context, sessionID string) (int64, error) {
@@ -670,6 +753,18 @@ func (s *Service) EnsureActiveSession(ctx context.Context, botID, routeID, chann
 }
 
 func toSession(row sqlc.BotSession) Session {
+	headTurnID := ""
+	if row.HeadTurnID.Valid {
+		headTurnID = row.HeadTurnID.String()
+	}
+	forkedFromSessionID := ""
+	if row.ForkedFromSessionID.Valid {
+		forkedFromSessionID = row.ForkedFromSessionID.String()
+	}
+	forkedFromTurnID := ""
+	if row.ForkedFromTurnID.Valid {
+		forkedFromTurnID = row.ForkedFromTurnID.String()
+	}
 	parentID := ""
 	if row.ParentSessionID.Valid {
 		parentID = row.ParentSessionID.String()
@@ -679,17 +774,20 @@ func toSession(row sqlc.BotSession) Session {
 		createdByUserID = row.CreatedByUserID.String()
 	}
 	return Session{
-		ID:              row.ID.String(),
-		BotID:           row.BotID.String(),
-		RouteID:         row.RouteID.String(),
-		ChannelType:     dbpkg.TextToString(row.ChannelType),
-		Type:            row.Type,
-		Title:           row.Title,
-		Metadata:        parseJSONMap(row.Metadata),
-		ParentSessionID: parentID,
-		CreatedByUserID: createdByUserID,
-		CreatedAt:       row.CreatedAt.Time,
-		UpdatedAt:       row.UpdatedAt.Time,
+		ID:                  row.ID.String(),
+		BotID:               row.BotID.String(),
+		RouteID:             row.RouteID.String(),
+		ChannelType:         dbpkg.TextToString(row.ChannelType),
+		Type:                row.Type,
+		Title:               row.Title,
+		Metadata:            parseJSONMap(row.Metadata),
+		HeadTurnID:          headTurnID,
+		ForkedFromSessionID: forkedFromSessionID,
+		ForkedFromTurnID:    forkedFromTurnID,
+		ParentSessionID:     parentID,
+		CreatedByUserID:     createdByUserID,
+		CreatedAt:           row.CreatedAt.Time,
+		UpdatedAt:           row.UpdatedAt.Time,
 	}
 }
 
@@ -759,6 +857,18 @@ func parseJSONMap(data []byte) map[string]any {
 }
 
 func toSessionFromListRow(row sqlc.ListSessionsByBotRow) Session {
+	headTurnID := ""
+	if row.HeadTurnID.Valid {
+		headTurnID = row.HeadTurnID.String()
+	}
+	forkedFromSessionID := ""
+	if row.ForkedFromSessionID.Valid {
+		forkedFromSessionID = row.ForkedFromSessionID.String()
+	}
+	forkedFromTurnID := ""
+	if row.ForkedFromTurnID.Valid {
+		forkedFromTurnID = row.ForkedFromTurnID.String()
+	}
 	parentID := ""
 	if row.ParentSessionID.Valid {
 		parentID = row.ParentSessionID.String()
@@ -775,6 +885,9 @@ func toSessionFromListRow(row sqlc.ListSessionsByBotRow) Session {
 		Type:                  row.Type,
 		Title:                 row.Title,
 		Metadata:              parseJSONMap(row.Metadata),
+		HeadTurnID:            headTurnID,
+		ForkedFromSessionID:   forkedFromSessionID,
+		ForkedFromTurnID:      forkedFromTurnID,
 		ParentSessionID:       parentID,
 		CreatedByUserID:       createdByUserID,
 		CreatedAt:             row.CreatedAt.Time,
@@ -785,6 +898,18 @@ func toSessionFromListRow(row sqlc.ListSessionsByBotRow) Session {
 }
 
 func toSessionFromUserListRow(row sqlc.ListSessionsByBotAndCreatedByUserRow) Session {
+	headTurnID := ""
+	if row.HeadTurnID.Valid {
+		headTurnID = row.HeadTurnID.String()
+	}
+	forkedFromSessionID := ""
+	if row.ForkedFromSessionID.Valid {
+		forkedFromSessionID = row.ForkedFromSessionID.String()
+	}
+	forkedFromTurnID := ""
+	if row.ForkedFromTurnID.Valid {
+		forkedFromTurnID = row.ForkedFromTurnID.String()
+	}
 	parentID := ""
 	if row.ParentSessionID.Valid {
 		parentID = row.ParentSessionID.String()
@@ -801,6 +926,9 @@ func toSessionFromUserListRow(row sqlc.ListSessionsByBotAndCreatedByUserRow) Ses
 		Type:                  row.Type,
 		Title:                 row.Title,
 		Metadata:              parseJSONMap(row.Metadata),
+		HeadTurnID:            headTurnID,
+		ForkedFromSessionID:   forkedFromSessionID,
+		ForkedFromTurnID:      forkedFromTurnID,
 		ParentSessionID:       parentID,
 		CreatedByUserID:       createdByUserID,
 		CreatedAt:             row.CreatedAt.Time,
@@ -814,6 +942,7 @@ func toSessionFromPagedRow(row sqlc.ListSessionsByBotPagedRow) Session {
 	return sessionFromPagedColumns(pagedColumns{
 		ID: row.ID, BotID: row.BotID, RouteID: row.RouteID, ChannelType: row.ChannelType,
 		Type: row.Type, Title: row.Title, Metadata: row.Metadata,
+		HeadTurnID: row.HeadTurnID, ForkedFromSessionID: row.ForkedFromSessionID, ForkedFromTurnID: row.ForkedFromTurnID,
 		ParentSessionID: row.ParentSessionID, CreatedByUserID: row.CreatedByUserID,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		RouteMetadata: row.RouteMetadata, RouteConversationType: row.RouteConversationType,
@@ -824,6 +953,7 @@ func toSessionFromUserPagedRow(row sqlc.ListSessionsByBotAndCreatedByUserPagedRo
 	return sessionFromPagedColumns(pagedColumns{
 		ID: row.ID, BotID: row.BotID, RouteID: row.RouteID, ChannelType: row.ChannelType,
 		Type: row.Type, Title: row.Title, Metadata: row.Metadata,
+		HeadTurnID: row.HeadTurnID, ForkedFromSessionID: row.ForkedFromSessionID, ForkedFromTurnID: row.ForkedFromTurnID,
 		ParentSessionID: row.ParentSessionID, CreatedByUserID: row.CreatedByUserID,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		RouteMetadata: row.RouteMetadata, RouteConversationType: row.RouteConversationType,
@@ -848,6 +978,9 @@ type pagedColumns struct {
 	UpdatedAt             pgtype.Timestamptz
 	RouteMetadata         []byte
 	RouteConversationType pgtype.Text
+	HeadTurnID            pgtype.UUID
+	ForkedFromSessionID   pgtype.UUID
+	ForkedFromTurnID      pgtype.UUID
 }
 
 func sessionFromPagedColumns(c pagedColumns) Session {
@@ -867,6 +1000,9 @@ func sessionFromPagedColumns(c pagedColumns) Session {
 		Type:                  c.Type,
 		Title:                 c.Title,
 		Metadata:              parseJSONMap(c.Metadata),
+		HeadTurnID:            uuidString(c.HeadTurnID),
+		ForkedFromSessionID:   uuidString(c.ForkedFromSessionID),
+		ForkedFromTurnID:      uuidString(c.ForkedFromTurnID),
 		ParentSessionID:       parentID,
 		CreatedByUserID:       createdByUserID,
 		CreatedAt:             c.CreatedAt.Time,
@@ -874,4 +1010,11 @@ func sessionFromPagedColumns(c pagedColumns) Session {
 		RouteMetadata:         parseJSONMap(c.RouteMetadata),
 		RouteConversationType: dbpkg.TextToString(c.RouteConversationType),
 	}
+}
+
+func uuidString(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return id.String()
 }

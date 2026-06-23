@@ -1064,6 +1064,25 @@ func (q *Queries) CreateMemoryProvider(ctx context.Context, arg pgsqlc.CreateMem
 	return result, nil
 }
 
+func (q *Queries) CreateHistoryTurn(ctx context.Context, arg pgsqlc.CreateHistoryTurnParams) (pgsqlc.BotHistoryTurn, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotHistoryTurn{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.CreateHistoryTurnParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	out, err := q.store.queries.CreateHistoryTurn(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.BotHistoryTurn{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotHistoryTurn
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) CreateMessage(ctx context.Context, arg pgsqlc.CreateMessageParams) (pgsqlc.CreateMessageRow, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.CreateMessageRow{}, errSQLiteQueriesNotConfigured
@@ -1311,6 +1330,25 @@ func (q *Queries) CreateToolApprovalRequest(ctx context.Context, arg pgsqlc.Crea
 	return result, nil
 }
 
+func (q *Queries) CreateToolApprovalRequestForTurn(ctx context.Context, arg pgsqlc.CreateToolApprovalRequestForTurnParams) (pgsqlc.ToolApprovalRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.ToolApprovalRequest{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.CreateToolApprovalRequestForTurnParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.ToolApprovalRequest{}, err
+	}
+	out, err := q.store.queries.CreateToolApprovalRequestForTurn(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.ToolApprovalRequest{}, mapQueryErr(err)
+	}
+	var result pgsqlc.ToolApprovalRequest
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.ToolApprovalRequest{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) CreateUser(ctx context.Context, arg pgsqlc.CreateUserParams) (pgsqlc.User, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.User{}, errSQLiteQueriesNotConfigured
@@ -1519,6 +1557,42 @@ func (q *Queries) DeleteMessageAssets(ctx context.Context, messageID pgtype.UUID
 		return err
 	}
 	err := q.store.queries.DeleteMessageAssets(ctx, sqliteMessageID)
+	return mapQueryErr(err)
+}
+
+func (q *Queries) DeleteHistoryTurnByID(ctx context.Context, id pgtype.UUID) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteID string
+	if err := convertValue(id, &sqliteID); err != nil {
+		return err
+	}
+	err := q.store.queries.DeleteHistoryTurnByID(ctx, sqliteID)
+	return mapQueryErr(err)
+}
+
+func (q *Queries) DeleteMessagesByTurnID(ctx context.Context, turnID pgtype.UUID) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteTurnID sql.NullString
+	if err := convertValue(turnID, &sqliteTurnID); err != nil {
+		return err
+	}
+	err := q.store.queries.DeleteMessagesByTurnID(ctx, sqliteTurnID)
+	return mapQueryErr(err)
+}
+
+func (q *Queries) DeleteHistoryTurnsByBot(ctx context.Context, botID pgtype.UUID) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteBotID string
+	if err := convertValue(botID, &sqliteBotID); err != nil {
+		return err
+	}
+	err := q.store.queries.DeleteHistoryTurnsByBot(ctx, sqliteBotID)
 	return mapQueryErr(err)
 }
 
@@ -2116,6 +2190,25 @@ func (q *Queries) GetChatSettings(ctx context.Context, id pgtype.UUID) (pgsqlc.G
 	return result, nil
 }
 
+func (q *Queries) GetHistoryTurnByID(ctx context.Context, id pgtype.UUID) (pgsqlc.BotHistoryTurn, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotHistoryTurn{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteID string
+	if err := convertValue(id, &sqliteID); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	out, err := q.store.queries.GetHistoryTurnByID(ctx, sqliteID)
+	if err != nil {
+		return pgsqlc.BotHistoryTurn{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotHistoryTurn
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) GetCompactionLogByID(ctx context.Context, id pgtype.UUID) (pgsqlc.BotHistoryMessageCompact, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.BotHistoryMessageCompact{}, errSQLiteQueriesNotConfigured
@@ -2317,6 +2410,40 @@ func (q *Queries) GetLatestAssistantUsage(ctx context.Context, sessionID pgtype.
 	var result int64
 	if err := convertValue(out, &result); err != nil {
 		return 0, err
+	}
+	return result, nil
+}
+
+func (q *Queries) GetNextTurnMessageSeq(ctx context.Context, turnID pgtype.UUID) (int64, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return 0, errSQLiteQueriesNotConfigured
+	}
+	var sqliteTurnID sql.NullString
+	if err := convertValue(turnID, &sqliteTurnID); err != nil {
+		return 0, err
+	}
+	out, err := q.store.queries.GetNextTurnMessageSeq(ctx, sqliteTurnID)
+	if err != nil {
+		return 0, mapQueryErr(err)
+	}
+	return out, nil
+}
+
+func (q *Queries) GetVisibleUserMessageTurnForRewrite(ctx context.Context, arg pgsqlc.GetVisibleUserMessageTurnForRewriteParams) (pgsqlc.GetVisibleUserMessageTurnForRewriteRow, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.GetVisibleUserMessageTurnForRewriteRow{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.GetVisibleUserMessageTurnForRewriteParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.GetVisibleUserMessageTurnForRewriteRow{}, err
+	}
+	out, err := q.store.queries.GetVisibleUserMessageTurnForRewrite(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.GetVisibleUserMessageTurnForRewriteRow{}, mapQueryErr(err)
+	}
+	var result pgsqlc.GetVisibleUserMessageTurnForRewriteRow
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.GetVisibleUserMessageTurnForRewriteRow{}, err
 	}
 	return result, nil
 }
@@ -3161,6 +3288,67 @@ func (q *Queries) ListActiveMessagesSinceBySession(ctx context.Context, arg pgsq
 	var result []pgsqlc.ListActiveMessagesSinceBySessionRow
 	if err := convertValue(out, &result); err != nil {
 		return nil, err
+	}
+	return result, nil
+}
+
+func (q *Queries) ListActiveMessagesSinceByTurn(ctx context.Context, arg pgsqlc.ListActiveMessagesSinceByTurnParams) ([]pgsqlc.ListActiveMessagesSinceByTurnRow, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.ListActiveMessagesSinceByTurnParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ListActiveMessagesSinceByTurn(ctx, sqliteArg)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.ListActiveMessagesSinceByTurnRow
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (q *Queries) ListOwnedHistoryTurnsForSessionDelete(ctx context.Context, sessionID pgtype.UUID) ([]pgsqlc.BotHistoryTurn, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteSessionID sql.NullString
+	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ListOwnedHistoryTurnsForSessionDelete(ctx, sqliteSessionID)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.BotHistoryTurn
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (q *Queries) ListOtherActiveSessionVisibleTurnIDs(ctx context.Context, sessionID pgtype.UUID) ([]pgtype.UUID, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteSessionID string
+	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ListOtherActiveSessionVisibleTurnIDs(ctx, sqliteSessionID)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	result := make([]pgtype.UUID, 0, len(out))
+	for _, item := range out {
+		var id pgtype.UUID
+		if err := convertValue(item, &id); err != nil {
+			return nil, err
+		}
+		result = append(result, id)
 	}
 	return result, nil
 }
@@ -5414,6 +5602,82 @@ func (q *Queries) UpdateSessionTypeAndMetadata(ctx context.Context, arg pgsqlc.U
 	return result, nil
 }
 
+func (q *Queries) UpdateSessionHeadTurn(ctx context.Context, arg pgsqlc.UpdateSessionHeadTurnParams) (pgsqlc.BotSession, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotSession{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.UpdateSessionHeadTurnParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	out, err := q.store.queries.UpdateSessionHeadTurn(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.BotSession{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotSession
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) UpdateSessionHeadTurnIfCurrent(ctx context.Context, arg pgsqlc.UpdateSessionHeadTurnIfCurrentParams) (pgsqlc.BotSession, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotSession{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.UpdateSessionHeadTurnIfCurrentParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	out, err := q.store.queries.UpdateSessionHeadTurnIfCurrent(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.BotSession{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotSession
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) UpdateHistoryTurnFinalAssistantMessage(ctx context.Context, arg pgsqlc.UpdateHistoryTurnFinalAssistantMessageParams) (pgsqlc.BotHistoryTurn, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotHistoryTurn{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.UpdateHistoryTurnFinalAssistantMessageParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	out, err := q.store.queries.UpdateHistoryTurnFinalAssistantMessage(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.BotHistoryTurn{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotHistoryTurn
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) UpdateHistoryTurnRequestMessage(ctx context.Context, arg pgsqlc.UpdateHistoryTurnRequestMessageParams) (pgsqlc.BotHistoryTurn, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotHistoryTurn{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.UpdateHistoryTurnRequestMessageParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	out, err := q.store.queries.UpdateHistoryTurnRequestMessage(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.BotHistoryTurn{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotHistoryTurn
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotHistoryTurn{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) UpdateSessionTitle(ctx context.Context, arg pgsqlc.UpdateSessionTitleParams) (pgsqlc.BotSession, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.BotSession{}, errSQLiteQueriesNotConfigured
@@ -5818,6 +6082,25 @@ func (q *Queries) CreateUserInputRequest(ctx context.Context, arg pgsqlc.CreateU
 	return result, nil
 }
 
+func (q *Queries) CreateUserInputRequestForTurn(ctx context.Context, arg pgsqlc.CreateUserInputRequestForTurnParams) (pgsqlc.UserInputRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.UserInputRequest{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.CreateUserInputRequestForTurnParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	out, err := q.store.queries.CreateUserInputRequestForTurn(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.UserInputRequest{}, mapQueryErr(err)
+	}
+	var result pgsqlc.UserInputRequest
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) FailUserInputRequest(ctx context.Context, arg pgsqlc.FailUserInputRequestParams) (pgsqlc.UserInputRequest, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.UserInputRequest{}, errSQLiteQueriesNotConfigured
@@ -5922,6 +6205,25 @@ func (q *Queries) GetUserInputRequestBySessionToolCall(ctx context.Context, arg 
 		return pgsqlc.UserInputRequest{}, err
 	}
 	out, err := q.store.queries.GetUserInputRequestBySessionToolCall(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.UserInputRequest{}, mapQueryErr(err)
+	}
+	var result pgsqlc.UserInputRequest
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) GetUserInputRequestBySessionToolCallTurn(ctx context.Context, arg pgsqlc.GetUserInputRequestBySessionToolCallTurnParams) (pgsqlc.UserInputRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.UserInputRequest{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.GetUserInputRequestBySessionToolCallTurnParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	out, err := q.store.queries.GetUserInputRequestBySessionToolCallTurn(ctx, sqliteArg)
 	if err != nil {
 		return pgsqlc.UserInputRequest{}, mapQueryErr(err)
 	}

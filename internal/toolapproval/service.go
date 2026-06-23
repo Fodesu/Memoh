@@ -106,7 +106,7 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 	if err := s.runApprovalHook(ctx, hooks.EventBeforeApprovalCreate, input, Request{}, true); err != nil {
 		return Request{}, err
 	}
-	row, err := s.queries.CreateToolApprovalRequest(ctx, sqlc.CreateToolApprovalRequestParams{
+	params := sqlc.CreateToolApprovalRequestParams{
 		BotID:                        botID,
 		SessionID:                    sessionID,
 		RouteID:                      optionalUUID(input.RouteID),
@@ -117,10 +117,17 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 		ToolInput:                    toolInput,
 		RequestedByChannelIdentityID: requestedByID,
 		RequestedMessageID:           optionalUUID(input.RequestedMessageID),
+		PersistTurnID:                optionalUUID(input.PersistTurnID),
 		SourcePlatform:               strings.TrimSpace(input.SourcePlatform),
 		ReplyTarget:                  strings.TrimSpace(input.ReplyTarget),
 		ConversationType:             strings.TrimSpace(input.ConversationType),
-	})
+	}
+	var row sqlc.ToolApprovalRequest
+	if params.PersistTurnID.Valid {
+		row, err = s.queries.CreateToolApprovalRequestForTurn(ctx, sqlc.CreateToolApprovalRequestForTurnParams(params))
+	} else {
+		row, err = s.queries.CreateToolApprovalRequest(ctx, params)
+	}
 	if err != nil {
 		return Request{}, err
 	}
@@ -557,6 +564,9 @@ func requestFromRow(row sqlc.ToolApprovalRequest) Request {
 	}
 	if row.ChannelIdentityID.Valid {
 		req.ChannelIdentityID = uuid.UUID(row.ChannelIdentityID.Bytes).String()
+	}
+	if row.PersistTurnID.Valid {
+		req.PersistTurnID = uuid.UUID(row.PersistTurnID.Bytes).String()
 	}
 	if row.DecidedByChannelIdentityID.Valid {
 		req.DecidedByUser = true

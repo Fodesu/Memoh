@@ -19,7 +19,7 @@ RETURNING *;
 
 -- name: UpdateHistoryTurnRequestMessage :one
 UPDATE bot_history_turns
-SET request_message_id = sqlc.narg(request_message_id),
+SET request_message_id = COALESCE(request_message_id, sqlc.narg(request_message_id)),
     updated_at = CURRENT_TIMESTAMP
 WHERE id = sqlc.arg(id)
 RETURNING *;
@@ -137,6 +137,7 @@ FROM bot_history_messages m
 JOIN visible_turns vt ON vt.id = m.turn_id
 JOIN bot_history_turns t ON t.id = m.turn_id
 WHERE m.id = sqlc.arg(message_id)
+  AND m.role = 'assistant'
 LIMIT 1;
 
 -- name: GetVisibleUserMessageTurnForRewrite :one
