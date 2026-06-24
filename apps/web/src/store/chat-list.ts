@@ -41,11 +41,15 @@ import {
   type UIToolMessage,
   type UIUserInput,
   type WSUserInputAnswer,
+  type FetchMessagesUIResult,
+  type UITurnGraphNode,
   type UITurn,
   type UIUserTurn,
+  type UIAssistantTurn,
   type UIStreamEvent,
   fetchBots,
   fetchMessagesUI,
+  forkSessionFromMessage as requestForkSessionFromMessage,
   sendLocalChannelMessage,
   streamBotSessionsActivityEvents,
   streamSessionMessageEvents,
@@ -99,6 +103,7 @@ export interface FsChangeEvent {
 export interface ChatUserTurn {
   id: string
   serverId?: string
+  turnId?: string
   role: 'user'
   text: string
   attachments: AttachmentItem[]
@@ -123,6 +128,7 @@ export interface ChatUserTurn {
 export interface ChatAssistantTurn {
   id: string
   serverId?: string
+  turnId?: string
   role: 'assistant'
   messages: ContentBlock[]
   timestamp: string
@@ -159,6 +165,7 @@ export interface BackgroundTask {
 export interface ChatSystemTurn {
   id: string
   serverId?: string
+  turnId?: string
   role: 'system'
   kind: 'background_task'
   backgroundTask: BackgroundTask
@@ -250,6 +257,31 @@ interface EphemeralAssistantError {
   content: string
   timestamp: string
   userText?: string
+}
+
+interface SessionTurnGraphNodeState {
+  turnId: string
+  parentTurnId?: string
+  items: UITurn[]
+}
+
+interface SessionTurnGraphState {
+  defaultHeadTurnId: string
+  headTurnIds: string[]
+  nodes: Map<string, SessionTurnGraphNodeState>
+}
+
+export interface TurnVariantState {
+  turnId: string
+  index: number
+  total: number
+  previousHeadTurnId?: string
+  nextHeadTurnId?: string
+}
+
+type TurnVariantOption = {
+  turnId: string
+  headTurnId: string
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -445,6 +477,8 @@ export const useChatStore = defineStore('chat', () => {
   let sessionListRefreshPromise: { botId: string; promise: Promise<void> } | null = null
   const latestBackgroundTasks = new Map<string, BackgroundTask>()
   const ephemeralAssistantErrors = new Map<string, EphemeralAssistantError[]>()
+  const turnGraphs = reactive(new Map<string, SessionTurnGraphState>())
+  const selectedHeadTurnIds = reactive(new Map<string, string>())
   // Two independent streams replace the deleted bot-wide messages SSE:
   // - sessionMessagesStream follows the active sessionId and feeds the
   //   transcript (server pushes a small backlog + live messages for that
@@ -572,6 +606,8 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value = sessions.value.filter(session => session.id !== id)
     sessionById.delete(id)
     forgetRememberedSession(id)
+    turnGraphs.delete(id)
+    selectedHeadTurnIds.delete(id)
   }
 
   const activeChatReadOnly = computed(() => {
@@ -873,6 +909,7 @@ export const useChatStore = defineStore('chat', () => {
     if (turn.role === 'user') {
       return {
         id: String(turn.id ?? nextId()),
+        turnId: (turn.turn_id ?? '').trim() || undefined,
         role: 'user',
         text: turn.text ?? '',
         attachments: (turn.attachments ?? []).map(normalizeAttachment),
@@ -897,6 +934,7 @@ export const useChatStore = defineStore('chat', () => {
       const latest = rememberBackgroundTask(task)
       return {
         id: String(turn.id ?? `system-${latest.taskId}`),
+        turnId: (turn.turn_id ?? '').trim() || undefined,
         role: 'system',
         kind: 'background_task',
         backgroundTask: latest,
@@ -908,6 +946,7 @@ export const useChatStore = defineStore('chat', () => {
 
     return {
       id: String(turn.id ?? nextId()),
+      turnId: (turn.turn_id ?? '').trim() || undefined,
       role: 'assistant',
       messages: (turn.messages ?? []).map(normalizeUIMessage),
       timestamp: normalizeTimestamp(turn.timestamp),
@@ -1085,6 +1124,269 @@ export const useChatStore = defineStore('chat', () => {
     messages.splice(0, messages.length, ...next)
   }
 
+  function normalizeGraphNode(node: UITurnGraphNode): SessionTurnGraphNodeState | null {
+    const turnId = node.turn_id?.trim()
+    if (!turnId) return null
+    return {
+      turnId,
+      parentTurnId: node.parent_turn_id?.trim() || undefined,
+      items: node.items ?? [],
+    }
+  }
+
+  function graphPathTurnIds(graph: SessionTurnGraphState, headTurnId: string): string[] {
+    const path: string[] = []
+    const seen = new Set<string>()
+    for (let turnId = headTurnId.trim(); turnId;) {
+      if (seen.has(turnId)) break
+      const node = graph.nodes.get(turnId)
+      if (!node) break
+      seen.add(turnId)
+      path.push(turnId)
+      turnId = node.parentTurnId ?? ''
+    }
+    return path.reverse()
+  }
+
+  function graphItemsForHead(graph: SessionTurnGraphState, headTurnId: string): UITurn[] {
+    const items: UITurn[] = []
+    for (const turnId of graphPathTurnIds(graph, headTurnId)) {
+      const node = graph.nodes.get(turnId)
+      if (node) items.push(...node.items)
+    }
+    return items
+  }
+
+  function selectedHeadForSession(targetSessionId?: string | null): string {
+    const sid = (targetSessionId ?? sessionId.value ?? '').trim()
+    if (!sid) return ''
+    return selectedHeadTurnIds.get(sid)?.trim() || turnGraphs.get(sid)?.defaultHeadTurnId || ''
+  }
+
+  function selectedHeadForRequest(targetSessionId?: string | null): string | undefined {
+    return selectedHeadForSession(targetSessionId).trim() || undefined
+  }
+
+  function resetSelectedHeadForSession(targetSessionId?: string | null) {
+    const sid = (targetSessionId ?? sessionId.value ?? '').trim()
+    if (!sid) return
+    selectedHeadTurnIds.delete(sid)
+  }
+
+  function replaceMessagesFromGraph(targetSessionId: string) {
+    const graph = turnGraphs.get(targetSessionId)
+    if (!graph) return
+    const selectedHead = selectedHeadForSession(targetSessionId)
+    const turns = selectedHead ? graphItemsForHead(graph, selectedHead) : []
+    replaceMessages(turns, targetSessionId)
+  }
+
+  function applySessionTurnGraph(targetSessionId: string, payload: FetchMessagesUIResult) {
+    const sid = targetSessionId.trim()
+    if (!sid) return
+    const nodes = new Map<string, SessionTurnGraphNodeState>()
+    for (const rawNode of payload.nodes ?? []) {
+      const node = normalizeGraphNode(rawNode)
+      if (node) nodes.set(node.turnId, node)
+    }
+    const headTurnIds = (payload.head_turn_ids ?? [])
+      .map(id => id.trim())
+      .filter(id => id && nodes.has(id))
+    const defaultHead = payload.default_head_turn_id?.trim() || headTurnIds[0] || ''
+    const graph: SessionTurnGraphState = {
+      defaultHeadTurnId: defaultHead,
+      headTurnIds,
+      nodes,
+    }
+    turnGraphs.set(sid, graph)
+    const selected = selectedHeadTurnIds.get(sid)?.trim() ?? ''
+    if (selected && headTurnIds.includes(selected)) {
+      selectedHeadTurnIds.set(sid, selected)
+    } else if (defaultHead) {
+      selectedHeadTurnIds.set(sid, defaultHead)
+    } else {
+      selectedHeadTurnIds.delete(sid)
+    }
+    replaceMessagesFromGraph(sid)
+  }
+
+  function clearSessionTurnGraph(targetSessionId?: string | null) {
+    const sid = (targetSessionId ?? sessionId.value ?? '').trim()
+    if (!sid) return
+    turnGraphs.delete(sid)
+    selectedHeadTurnIds.delete(sid)
+  }
+
+  function headPathSet(graph: SessionTurnGraphState, headTurnId: string): Set<string> {
+    return new Set(graphPathTurnIds(graph, headTurnId))
+  }
+
+  function firstUserTurnInNode(node: SessionTurnGraphNodeState): UIUserTurn | null {
+    return (node.items.find((item): item is UIUserTurn => item.role === 'user') ?? null)
+  }
+
+  function firstAssistantTurnInNode(node: SessionTurnGraphNodeState): UIAssistantTurn | null {
+    return (node.items.find((item): item is UIAssistantTurn => item.role === 'assistant') ?? null)
+  }
+
+  function normalizeRequestVariantText(text?: string): string {
+    return (text ?? '')
+      .split('\n')
+      .filter(line => !/^\[attachment:\w+\]\s/.test(line.trim()))
+      .join('\n')
+      .trim()
+  }
+
+  function attachmentSignature(att: UIAttachment): string {
+    return [
+      (att.content_hash ?? '').trim(),
+      (att.name ?? '').trim(),
+      (att.mime ?? '').trim(),
+      String(att.size ?? ''),
+    ].join(':')
+  }
+
+  function requestVariantKey(turn: UIUserTurn | null): string {
+    if (!turn) return ''
+    const attachments = (turn.attachments ?? [])
+      .map(attachmentSignature)
+      .sort()
+      .join('|')
+    return `${normalizeRequestVariantText(turn.text)}\u0000${attachments}`
+  }
+
+  function turnTimestamp(graph: SessionTurnGraphState, turnId: string): string {
+    const node = graph.nodes.get(turnId)
+    return node?.items[0]?.timestamp ?? ''
+  }
+
+  function sortTurnIdsByTimestamp(graph: SessionTurnGraphState, turnIds: string[]): string[] {
+    return [...turnIds].sort((a, b) => {
+      const left = turnTimestamp(graph, a)
+      const right = turnTimestamp(graph, b)
+      if (left !== right) return left.localeCompare(right)
+      return a.localeCompare(b)
+    })
+  }
+
+  function siblingTurnIdsForNode(graph: SessionTurnGraphState, node: SessionTurnGraphNodeState): string[] {
+    return sortTurnIdsByTimestamp(
+      graph,
+      [...graph.nodes.values()]
+        .filter(candidate => (candidate.parentTurnId ?? '') === (node.parentTurnId ?? ''))
+        .map(candidate => candidate.turnId),
+    )
+  }
+
+  function optionForTurn(
+    graph: SessionTurnGraphState,
+    turnId: string,
+    selectedHead: string,
+    getHeadPath: (headId: string) => Set<string>,
+  ): TurnVariantOption | null {
+    const headTurnId = getHeadPath(selectedHead).has(turnId)
+      ? selectedHead
+      : graph.headTurnIds.find(headId => getHeadPath(headId).has(turnId))
+    return headTurnId ? { turnId, headTurnId } : null
+  }
+
+  function buildVariantState(turnId: string, options: TurnVariantOption[]): TurnVariantState | null {
+    if (options.length <= 1) return null
+    const index = options.findIndex(item => item.turnId === turnId)
+    if (index < 0) return null
+    return {
+      turnId,
+      index,
+      total: options.length,
+      previousHeadTurnId: index > 0 ? options[index - 1]?.headTurnId : undefined,
+      nextHeadTurnId: index + 1 < options.length ? options[index + 1]?.headTurnId : undefined,
+    }
+  }
+
+  function variantContextForMessage(messageId: string) {
+    const sid = (sessionId.value ?? '').trim()
+    const graph = turnGraphs.get(sid)
+    if (!sid || !graph) return null
+    const message = messages.find(item => item.id === messageId)
+    const turnId = message?.turnId?.trim()
+    if (!turnId) return null
+    const node = graph.nodes.get(turnId)
+    if (!node) return null
+
+    const pathByHead = new Map<string, Set<string>>()
+    const selectedHead = selectedHeadForSession(sid)
+    const getHeadPath = (headId: string) => {
+      let path = pathByHead.get(headId)
+      if (!path) {
+        path = headPathSet(graph, headId)
+        pathByHead.set(headId, path)
+      }
+      return path
+    }
+
+    return { graph, message, node, turnId, selectedHead, getHeadPath }
+  }
+
+  function requestVariantStateForMessage(messageId: string): TurnVariantState | null {
+    const ctx = variantContextForMessage(messageId)
+    if (!ctx || ctx.message?.role !== 'user') return null
+
+    const siblings = siblingTurnIdsForNode(ctx.graph, ctx.node)
+    if (siblings.length <= 1) return null
+
+    const requestGroups = new Map<string, string>()
+    for (const siblingTurnId of siblings) {
+      const siblingNode = ctx.graph.nodes.get(siblingTurnId)
+      if (!siblingNode) continue
+      const key = requestVariantKey(firstUserTurnInNode(siblingNode))
+      if (!key) continue
+      const existing = requestGroups.get(key)
+      if (existing && !ctx.getHeadPath(ctx.selectedHead).has(siblingTurnId)) continue
+      requestGroups.set(key, siblingTurnId)
+    }
+
+    const targetKey = requestVariantKey(firstUserTurnInNode(ctx.node))
+    const targetTurnId = targetKey ? requestGroups.get(targetKey) : undefined
+    if (!targetTurnId) return null
+
+    const siblingOptions = [...requestGroups.values()]
+      .map(siblingTurnId => optionForTurn(ctx.graph, siblingTurnId, ctx.selectedHead, ctx.getHeadPath))
+      .filter((item): item is { turnId: string; headTurnId: string } => item !== null)
+    return buildVariantState(targetTurnId, siblingOptions)
+  }
+
+  function responseVariantStateForMessage(messageId: string): TurnVariantState | null {
+    const ctx = variantContextForMessage(messageId)
+    if (!ctx || ctx.message?.role !== 'assistant') return null
+    if (!firstAssistantTurnInNode(ctx.node)) return null
+
+    const requestKey = requestVariantKey(firstUserTurnInNode(ctx.node))
+    if (!requestKey) return null
+    const siblings = siblingTurnIdsForNode(ctx.graph, ctx.node)
+      .filter((siblingTurnId) => {
+        const siblingNode = ctx.graph.nodes.get(siblingTurnId)
+        return siblingNode ? requestVariantKey(firstUserTurnInNode(siblingNode)) === requestKey : false
+      })
+    if (siblings.length <= 1) return null
+
+    const siblingOptions = siblings
+      .map(siblingTurnId => optionForTurn(ctx.graph, siblingTurnId, ctx.selectedHead, ctx.getHeadPath))
+      .filter((item): item is { turnId: string; headTurnId: string } => item !== null)
+    return buildVariantState(ctx.turnId, siblingOptions)
+  }
+
+  function selectTurnVariant(headTurnId: string): boolean {
+    const sid = (sessionId.value ?? '').trim()
+    const head = headTurnId.trim()
+    const graph = turnGraphs.get(sid)
+    if (!sid || !head || !graph || !graph.headTurnIds.includes(head)) return false
+    selectedHeadTurnIds.set(sid, head)
+    replaceMessagesFromGraph(sid)
+    hasLoadedOlder.value = false
+    hasMoreOlder.value = false
+    return true
+  }
+
   function sortChatMessages(items: ChatMessage[]): ChatMessage[] {
     return [...items].sort((a, b) => {
       const at = Date.parse(a.timestamp)
@@ -1252,6 +1554,15 @@ export const useChatStore = defineStore('chat', () => {
     if (idx >= 0) messages.splice(idx, 1)
   }
 
+  function replaceTailFromTurn(turn: ChatMessage, replacements: ChatMessage[]) {
+    const idx = messages.indexOf(turn)
+    if (idx < 0) {
+      messages.push(...replacements)
+      return
+    }
+    messages.splice(idx, messages.length - idx, ...replacements)
+  }
+
   function createOptimisticAssistantTurn(): ChatAssistantTurn {
     return {
       id: nextId(),
@@ -1278,6 +1589,83 @@ export const useChatStore = defineStore('chat', () => {
       streaming: false,
       isSelf: true,
       __optimistic: true,
+    }
+  }
+
+  function cloneUserTurnForRetry(source: ChatUserTurn): ChatUserTurn {
+    return {
+      ...createOptimisticUserTurn(source.text, []),
+      attachments: source.attachments.map(attachment => ({ ...attachment })),
+    }
+  }
+
+  function cloneUserTurnForEdit(source: ChatUserTurn, text: string): ChatUserTurn {
+    return {
+      ...createOptimisticUserTurn(text, []),
+      attachments: source.attachments.map(attachment => ({ ...attachment })),
+    }
+  }
+
+  interface RewriteMessageInput {
+    botId: string
+    sessionId: string
+    sourceUserTurn: ChatUserTurn | null
+    optimisticUserTurn: ChatUserTurn | null
+    send: (ws: ChatWebSocket, streamId: string, modelId?: string, reasoningEffort?: string) => void
+  }
+
+  async function runRewriteMessage(input: RewriteMessageInput): Promise<SendMessageResult> {
+    const bid = input.botId.trim()
+    const sid = input.sessionId.trim()
+    if (!bid || !sid) return { ok: false, stage: 'startup' }
+
+    const streamId = createStreamId()
+    const modelId = overrideModelId.value || undefined
+    const effort = overrideReasoningEffort.value
+    const reasoningEffort = effort || undefined
+    const ws = ensureWebSocket(bid)
+    let assistantTurn: ChatAssistantTurn | null = null
+    let uiStarted = false
+    try {
+      if (!ws?.connected) {
+        throw new StreamFailureError('WebSocket is not connected', 'startup')
+      }
+      assistantTurn = createOptimisticAssistantTurn()
+      const completion = trackAssistantStream(streamId, assistantTurn, bid, sid)
+      if (input.sourceUserTurn && input.optimisticUserTurn) {
+        replaceTailFromTurn(input.sourceUserTurn, [
+          input.optimisticUserTurn,
+          assistantTurn,
+        ])
+      } else {
+        appendTurnToSession(bid, sid, assistantTurn)
+      }
+      uiStarted = true
+      loading.value = true
+      input.send(ws, streamId, modelId, reasoningEffort)
+      await completion
+      resetSelectedHeadForSession(sid)
+      await refreshCurrentSession(bid, sid)
+      assistantTurn.streaming = false
+      loading.value = false
+      return { ok: true }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error('Unknown error')
+      const isAbort = err.name === 'AbortError'
+      const stage: SendMessageStage = err instanceof StreamFailureError
+        ? err.stage
+        : (uiStarted ? 'stream' : 'startup')
+      if (assistantTurn && uiStarted) {
+        assistantTurn.streaming = false
+        if (!isAbort && !assistantTurn.messages.some(block => block.type === 'error')) {
+          appendAssistantError(assistantTurn, bid, sid, err.message)
+        }
+      }
+      forgetAssistantStream(streamId)
+      loading.value = isSessionStreaming(sessionId.value)
+      if (isAbort) return { ok: false, stage: 'stream', error: err.message }
+      if (stage === 'startup') toast.error(err.message)
+      return { ok: false, stage, error: err.message }
     }
   }
 
@@ -1638,11 +2026,11 @@ export const useChatStore = defineStore('chat', () => {
       await refreshPromise.promise
     }
 
-    const promise = (async () => {
-      const turns = await fetchMessagesUI(bid, sid, { limit: PAGE_SIZE })
-      // The user may have switched away while the request was in flight. Drop
-      // the result silently — the new session has its own load underway.
-      if (currentBotId.value !== bid || sessionId.value !== sid) return
+	    const promise = (async () => {
+	      const payload = await fetchMessagesUI(bid, sid, { limit: PAGE_SIZE })
+	      // The user may have switched away while the request was in flight. Drop
+	      // the result silently — the new session has its own load underway.
+	      if (currentBotId.value !== bid || sessionId.value !== sid) return
       // Pick replace vs merge by whether the user has scrolled back to load
       // older history. When older pages are present we MUST preserve them
       // (otherwise an SSE-triggered refresh wipes the prepended history).
@@ -1652,11 +2040,15 @@ export const useChatStore = defineStore('chat', () => {
       // comparison, because client/server clock skew on a fresh session's
       // first send could otherwise flip the decision and duplicate the user
       // turn.
-      if (hasLoadedOlder.value) {
-        mergeMessages(turns, sid)
-      } else {
-        replaceMessages(turns, sid)
-        // We cannot infer end-of-history from `turns.length < PAGE_SIZE`: the
+	      if (hasLoadedOlder.value && !(payload.nodes?.length)) {
+	        mergeMessages(payload.items, sid)
+	      } else {
+	        if (payload.nodes?.length) {
+	          applySessionTurnGraph(sid, payload)
+	        } else {
+	          replaceMessages(payload.items, sid)
+	        }
+	        // We cannot infer end-of-history from `turns.length < PAGE_SIZE`: the
         // server pages by raw `bot_history_messages` rows but returns merged
         // UI turns (multi-row user/assistant groups collapsed into one). A 30-
         // row page collapses to ~28 turns even when the session has thousands
@@ -1939,6 +2331,10 @@ export const useChatStore = defineStore('chat', () => {
     const bid = currentBotId.value ?? ''
     const sid = sessionId.value ?? ''
     if (!bid || !sid || loadingOlder.value || !hasMoreOlder.value) return 0
+    if (turnGraphs.has(sid)) {
+      hasMoreOlder.value = false
+      return 0
+    }
     const first = messages[0]
     if (!first?.timestamp) return 0
 
@@ -1952,10 +2348,11 @@ export const useChatStore = defineStore('chat', () => {
       const MAX_DEDUP_HOPS = 4
       let cursor = first.timestamp
       for (let hop = 0; hop < MAX_DEDUP_HOPS; hop++) {
-        const turns = await fetchMessagesUI(bid, sid, {
-          limit: PAGE_SIZE,
-          before: cursor,
-        })
+	        const payload = await fetchMessagesUI(bid, sid, {
+	          limit: PAGE_SIZE,
+	          before: cursor,
+	        })
+	        const turns = payload.items
 
         if (turns.length === 0) {
           hasMoreOlder.value = false
@@ -2296,6 +2693,7 @@ export const useChatStore = defineStore('chat', () => {
     upsertSession(created)
     sessionId.value = created.id
     replaceMessages([])
+    clearSessionTurnGraph(created.id)
     hasMoreOlder.value = false
     hasLoadedOlder.value = false
     if (runtimeId) {
@@ -2424,6 +2822,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionId.value = created.id
     draftIntent.value = false
     replaceMessages([])
+    clearSessionTurnGraph(created.id)
     hasMoreOlder.value = false
     hasLoadedOlder.value = false
   }
@@ -2623,6 +3022,87 @@ export const useChatStore = defineStore('chat', () => {
     return updated
   }
 
+  async function forkMessage(messageId: string): Promise<boolean> {
+    const bid = (currentBotId.value ?? '').trim()
+    const sid = (sessionId.value ?? '').trim()
+    const mid = messageId.trim()
+    if (!bid || !sid || !mid || activeChatReadOnly.value || streaming.value) return false
+    try {
+      const forked = await requestForkSessionFromMessage(bid, sid, mid, selectedHeadForRequest(sid))
+      upsertSession(forked)
+      sessionId.value = forked.id
+      draftIntent.value = false
+      switchActiveSession(forked.id)
+      void refreshSessionsList(bid)
+      return true
+    } catch (error) {
+      console.error('Failed to fork session:', error)
+      const message = error instanceof Error ? error.message : 'Failed to fork session'
+      toast.error(message)
+      return false
+    }
+  }
+
+  async function retryMessage(messageId: string): Promise<SendMessageResult> {
+    const mid = messageId.trim()
+    const bid = (currentBotId.value ?? '').trim()
+    const sid = (sessionId.value ?? '').trim()
+    if (!mid || !bid || !sid || streaming.value || activeChatReadOnly.value) {
+      return { ok: false, stage: 'startup' }
+    }
+    const target = messages.find((message): message is ChatAssistantTurn => message.role === 'assistant' && message.id === mid)
+    if (!target) return { ok: false, stage: 'startup' }
+    const sourceUserTurn = findUserTurnBeforeAssistant(target)
+    if (!sourceUserTurn) return { ok: false, stage: 'startup' }
+    return runRewriteMessage({
+      botId: bid,
+      sessionId: sid,
+      sourceUserTurn,
+      optimisticUserTurn: cloneUserTurnForRetry(sourceUserTurn),
+      send(ws, streamId, modelId, reasoningEffort) {
+        ws.send({
+          type: 'retry_message',
+          stream_id: streamId,
+          session_id: sid,
+          base_head_turn_id: selectedHeadForRequest(sid),
+          retry_message_id: mid,
+          model_id: modelId,
+          reasoning_effort: reasoningEffort,
+        })
+      },
+    })
+  }
+
+  async function editMessage(messageId: string, text: string): Promise<SendMessageResult> {
+    const mid = messageId.trim()
+    const trimmed = text.trim()
+    const bid = (currentBotId.value ?? '').trim()
+    const sid = (sessionId.value ?? '').trim()
+    if (!mid || !trimmed || !bid || !sid || streaming.value || activeChatReadOnly.value) {
+      return { ok: false, stage: 'startup' }
+    }
+    const target = messages.find((message): message is ChatUserTurn => message.role === 'user' && message.id === mid)
+    if (!target || target.__optimistic === true) return { ok: false, stage: 'startup' }
+    return runRewriteMessage({
+      botId: bid,
+      sessionId: sid,
+      sourceUserTurn: target,
+      optimisticUserTurn: cloneUserTurnForEdit(target, trimmed),
+      send(ws, streamId, modelId, reasoningEffort) {
+        ws.send({
+          type: 'edit_message',
+          stream_id: streamId,
+          session_id: sid,
+          base_head_turn_id: selectedHeadForRequest(sid),
+          edit_message_id: mid,
+          text: trimmed,
+          model_id: modelId,
+          reasoning_effort: reasoningEffort,
+        })
+      },
+    })
+  }
+
   async function sendMessage(text: string, attachments?: ChatAttachment[]): Promise<SendMessageResult> {
     const trimmed = text.trim()
     if ((!trimmed && !attachments?.length) || streaming.value || !currentBotId.value) return { ok: false, stage: 'startup' }
@@ -2666,6 +3146,7 @@ export const useChatStore = defineStore('chat', () => {
           stream_id: sendStreamId,
           text: trimmed,
           session_id: sid,
+          base_head_turn_id: selectedHeadForRequest(sid),
           attachments,
           model_id: modelId,
           reasoning_effort: reasoningEffort,
@@ -2673,7 +3154,11 @@ export const useChatStore = defineStore('chat', () => {
         await completion
         await refreshCurrentSession(bid, sid)
       } else {
-        await sendLocalChannelMessage(bid, trimmed, attachments, { modelId, reasoningEffort })
+        await sendLocalChannelMessage(bid, trimmed, attachments, {
+          modelId,
+          reasoningEffort,
+          selectedHeadTurnId: selectedHeadForRequest(sid),
+        })
         await refreshCurrentSession(bid, sid)
       }
 
@@ -2800,6 +3285,7 @@ export const useChatStore = defineStore('chat', () => {
   function clearMessages() {
     abort()
     replaceMessages([])
+    clearSessionTurnGraph()
     hasMoreOlder.value = false
     hasLoadedOlder.value = false
   }
@@ -2875,6 +3361,12 @@ export const useChatStore = defineStore('chat', () => {
     removeChat: removeSession,
     deleteChat: removeSession,
     renameSession,
+    forkMessage,
+    retryMessage,
+    editMessage,
+    requestVariantStateForMessage,
+    responseVariantStateForMessage,
+    selectTurnVariant,
     sendMessage,
     respondToolApproval,
     respondUserInput,

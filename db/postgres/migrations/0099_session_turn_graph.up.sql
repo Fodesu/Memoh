@@ -8,6 +8,8 @@ ALTER TABLE IF EXISTS bot_history_messages
 ALTER TABLE IF EXISTS bot_sessions
   DROP CONSTRAINT IF EXISTS fk_bot_sessions_head_turn;
 ALTER TABLE IF EXISTS bot_sessions
+  DROP CONSTRAINT IF EXISTS fk_bot_sessions_default_head_turn;
+ALTER TABLE IF EXISTS bot_sessions
   DROP CONSTRAINT IF EXISTS fk_bot_sessions_forked_from_turn;
 ALTER TABLE IF EXISTS tool_approval_requests
   DROP CONSTRAINT IF EXISTS fk_tool_approval_persist_turn;
@@ -25,6 +27,7 @@ DROP INDEX IF EXISTS idx_bot_history_turns_owner_session;
 DROP INDEX IF EXISTS idx_bot_history_turns_parent;
 DROP INDEX IF EXISTS idx_bot_history_messages_turn;
 DROP INDEX IF EXISTS idx_bot_history_messages_turn_seq_unique;
+DROP INDEX IF EXISTS idx_bot_session_turn_heads_head;
 
 CREATE TABLE IF NOT EXISTS bot_history_turns (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -37,7 +40,15 @@ CREATE TABLE IF NOT EXISTS bot_history_turns (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS head_turn_id UUID;
+CREATE TABLE IF NOT EXISTS bot_session_turn_heads (
+  session_id UUID NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
+  head_turn_id UUID NOT NULL REFERENCES bot_history_turns(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, head_turn_id)
+);
+
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS default_head_turn_id UUID;
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS forked_from_session_id UUID REFERENCES bot_sessions(id) ON DELETE SET NULL;
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS forked_from_turn_id UUID;
 
@@ -180,7 +191,7 @@ turn_heads AS (
   ) aggregated
 ),
 heads AS (
-  SELECT session_id, turn_id AS head_turn_id
+  SELECT session_id, turn_id AS default_head_turn_id
   FROM (
     SELECT
       turn_heads.*,
@@ -190,15 +201,22 @@ heads AS (
   WHERE rn = 1
 )
 UPDATE bot_sessions s
-SET head_turn_id = heads.head_turn_id
+SET default_head_turn_id = heads.default_head_turn_id
 FROM heads
 WHERE s.id = heads.session_id
-  AND s.head_turn_id IS NULL;
+  AND s.default_head_turn_id IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_bot_sessions_head_turn ON bot_sessions(head_turn_id) WHERE head_turn_id IS NOT NULL;
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
+SELECT id, default_head_turn_id
+FROM bot_sessions
+WHERE default_head_turn_id IS NOT NULL
+ON CONFLICT (session_id, head_turn_id) DO NOTHING;
+
+CREATE INDEX IF NOT EXISTS idx_bot_sessions_default_head_turn ON bot_sessions(default_head_turn_id) WHERE default_head_turn_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_forked_from_session ON bot_sessions(forked_from_session_id) WHERE forked_from_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_forked_from_turn ON bot_sessions(forked_from_turn_id) WHERE forked_from_turn_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_active_updated ON bot_sessions(bot_id, updated_at DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_bot_session_turn_heads_head ON bot_session_turn_heads(head_turn_id);
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_bot_created ON bot_history_turns(bot_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_owner_session ON bot_history_turns(owner_session_id, created_at, id) WHERE owner_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_parent ON bot_history_turns(parent_turn_id) WHERE parent_turn_id IS NOT NULL;
@@ -249,11 +267,11 @@ WHERE request.id = ranked.id
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'fk_bot_sessions_head_turn'
+    SELECT 1 FROM pg_constraint WHERE conname = 'fk_bot_sessions_default_head_turn'
   ) THEN
     ALTER TABLE bot_sessions
-      ADD CONSTRAINT fk_bot_sessions_head_turn
-      FOREIGN KEY (head_turn_id) REFERENCES bot_history_turns(id) ON DELETE SET NULL;
+      ADD CONSTRAINT fk_bot_sessions_default_head_turn
+      FOREIGN KEY (default_head_turn_id) REFERENCES bot_history_turns(id) ON DELETE SET NULL;
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'fk_bot_sessions_forked_from_turn'

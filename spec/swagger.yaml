@@ -2489,6 +2489,8 @@ definitions:
     type: object
   handlers.LocalChannelMessageRequest:
     properties:
+      base_head_turn_id:
+        type: string
       message:
         $ref: '#/definitions/channel.Message'
       model_id:
@@ -2978,6 +2980,13 @@ definitions:
       provider:
         type: string
     type: object
+  handlers.forkSessionRequest:
+    properties:
+      base_head_turn_id:
+        type: string
+      message_id:
+        type: string
+    type: object
   handlers.fsOpResponse:
     properties:
       ok:
@@ -3360,6 +3369,10 @@ definitions:
         type: string
       source_reply_to_message_id:
         type: string
+      turn_id:
+        type: string
+      turn_message_seq:
+        type: integer
       usage:
         items:
           type: integer
@@ -4088,6 +4101,12 @@ definitions:
       created_at:
         type: string
       created_by_user_id:
+        type: string
+      default_head_turn_id:
+        type: string
+      forked_from_session_id:
+        type: string
+      forked_from_turn_id:
         type: string
       id:
         type: string
@@ -8567,6 +8586,49 @@ paths:
       summary: Trigger immediate context compaction
       tags:
       - compaction
+  /bots/{bot_id}/sessions/{session_id}/fork:
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Source session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Fork source message
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.forkSessionRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/session.Session'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Fork a chat session from an assistant reply
+      tags:
+      - sessions
   /bots/{bot_id}/sessions/{session_id}/messages/events:
     get:
       description: |-

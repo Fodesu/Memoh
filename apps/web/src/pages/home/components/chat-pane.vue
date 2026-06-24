@@ -86,7 +86,14 @@
                   :on-reply-click="handleReplyJump"
                   :is-scrolling="isScrolling"
                   :is-last-message="index === messages.length - 1"
+                  :can-edit-message="!streaming && !activeChatReadOnly"
+                  :request-variant-state="chatStore.requestVariantStateForMessage(msg.id)"
+                  :response-variant-state="chatStore.responseVariantStateForMessage(msg.id)"
                   @active="isActiveEl"
+                  @edit-message="handleEditMessage"
+                  @fork-message="handleForkMessage"
+                  @retry-message="handleRetryMessage"
+                  @select-variant="handleSelectVariant"
                 />
               </div>
             </div>
@@ -2340,6 +2347,26 @@ async function handleReplyJump(messageId: string) {
   if (locatedId) {
     await scrollToMessage(locatedId)
   }
+}
+
+function handleForkMessage(messageId: string) {
+  void chatStore.forkMessage(messageId)
+}
+
+function handleRetryMessage(messageId: string) {
+  void chatStore.retryMessage(messageId)
+}
+
+function handleSelectVariant(headTurnId: string) {
+  chatStore.selectTurnVariant(headTurnId)
+}
+
+function handleEditMessage(messageId: string, text: string, done: (started: boolean) => void) {
+  void chatStore.editMessage(messageId, text).then((result) => {
+    done(result.ok || result.stage === 'stream')
+  }).catch(() => {
+    done(false)
+  })
 }
 
 function handleKeydown(e: KeyboardEvent) {

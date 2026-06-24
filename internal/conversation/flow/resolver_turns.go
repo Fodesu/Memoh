@@ -13,7 +13,60 @@ import (
 	"github.com/memohai/memoh/internal/conversation"
 	dbpkg "github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/memohai/memoh/internal/db/store"
 )
+
+type TurnRunMode string
+
+const (
+	TurnRunModeLegacy       TurnRunMode = "legacy"
+	TurnRunModeNormal       TurnRunMode = "normal"
+	TurnRunModeRewrite      TurnRunMode = "rewrite"
+	TurnRunModeContinuation TurnRunMode = "continuation"
+)
+
+type TurnContextScopeKind string
+
+const (
+	ContextScopeEmpty       TurnContextScopeKind = "empty"
+	ContextScopeTurnHead    TurnContextScopeKind = "turn_head"
+	ContextScopeSessionHead TurnContextScopeKind = "session_head"
+	ContextScopeBotHistory  TurnContextScopeKind = "bot_history"
+)
+
+type TurnContextScope struct {
+	Kind   TurnContextScopeKind
+	TurnID string
+}
+
+type VariantTransitionAction string
+
+const (
+	VariantTransitionNone             VariantTransitionAction = "none"
+	VariantTransitionContinueSelected VariantTransitionAction = "continue_selected"
+	VariantTransitionCreateSibling    VariantTransitionAction = "create_sibling"
+	VariantTransitionResumePending    VariantTransitionAction = "resume_pending"
+)
+
+type VariantTransition struct {
+	Action             VariantTransitionAction
+	SessionID          string
+	SelectedHeadTurnID string
+}
+
+type TurnRun struct {
+	Mode          TurnRunMode
+	PersistTurnID string
+	Context       TurnContextScope
+	Turn          TurnPersistencePlan
+	Variant       VariantTransition
+}
+
+type TurnPersistencePlan struct {
+	BotID          string
+	OwnerSessionID string
+	ParentTurnID   string
+}
 
 func sessionTurnKey(botID, sessionID string) string {
 	return strings.TrimSpace(botID) + ":" + strings.TrimSpace(sessionID)
@@ -49,36 +102,302 @@ func (r *Resolver) enterSessionTurn(_ context.Context, botID, sessionID string) 
 
 type turnStore interface {
 	CreateHistoryTurn(context.Context, dbsqlc.CreateHistoryTurnParams) (dbsqlc.BotHistoryTurn, error)
+	CreateSessionTurnHead(context.Context, dbsqlc.CreateSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
 	GetSessionByID(context.Context, pgtype.UUID) (dbsqlc.BotSession, error)
+	GetSessionTurnHead(context.Context, dbsqlc.GetSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
 	GetVisibleUserMessageTurnForRewrite(context.Context, dbsqlc.GetVisibleUserMessageTurnForRewriteParams) (dbsqlc.GetVisibleUserMessageTurnForRewriteRow, error)
-	UpdateSessionHeadTurn(context.Context, dbsqlc.UpdateSessionHeadTurnParams) (dbsqlc.BotSession, error)
-	UpdateSessionHeadTurnIfCurrent(context.Context, dbsqlc.UpdateSessionHeadTurnIfCurrentParams) (dbsqlc.BotSession, error)
+	ReplaceSessionTurnHead(context.Context, dbsqlc.ReplaceSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
+	UpdateSessionDefaultHeadTurnIfValid(context.Context, dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams) (dbsqlc.BotSession, error)
 }
 
-func (r *Resolver) pinPersistTurn(ctx context.Context, req conversation.ChatRequest) (conversation.ChatRequest, error) {
-	if r == nil || r.queries == nil || strings.TrimSpace(req.PersistTurnID) != "" {
-		return req, nil
+type sessionHeadStore interface {
+	GetSessionByID(context.Context, pgtype.UUID) (dbsqlc.BotSession, error)
+	GetSessionTurnHead(context.Context, dbsqlc.GetSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
+}
+
+type turnTxRunner interface {
+	RunInTx(ctx context.Context, fn func(dbstore.Queries) error) error
+}
+
+type selectedSessionHead struct {
+	HeadTurnID pgtype.UUID
+}
+
+func legacyTurnRun(req conversation.ChatRequest) TurnRun {
+	scope := TurnContextScope{Kind: ContextScopeBotHistory}
+	if strings.TrimSpace(req.SessionID) != "" {
+		scope = TurnContextScope{Kind: ContextScopeSessionHead}
+	}
+	return TurnRun{
+		Mode:    TurnRunModeLegacy,
+		Context: scope,
+	}
+}
+
+func continuationTurnRun(sessionID, persistTurnID string) TurnRun {
+	sessionID = strings.TrimSpace(sessionID)
+	persistTurnID = strings.TrimSpace(persistTurnID)
+	if persistTurnID == "" {
+		scope := TurnContextScope{Kind: ContextScopeBotHistory}
+		if sessionID != "" {
+			scope = TurnContextScope{Kind: ContextScopeSessionHead}
+		}
+		return TurnRun{
+			Mode:    TurnRunModeContinuation,
+			Context: scope,
+		}
+	}
+	return TurnRun{
+		Mode:          TurnRunModeContinuation,
+		PersistTurnID: persistTurnID,
+		Context: TurnContextScope{
+			Kind:   ContextScopeTurnHead,
+			TurnID: persistTurnID,
+		},
+		Variant: VariantTransition{
+			Action:             variantTransitionActionForTurnRun(TurnRunModeContinuation, sessionID),
+			SessionID:          sessionID,
+			SelectedHeadTurnID: persistTurnID,
+		},
+	}
+}
+
+func contextScopeFromParentTurn(parentTurnID pgtype.UUID) TurnContextScope {
+	if !parentTurnID.Valid {
+		return TurnContextScope{Kind: ContextScopeEmpty}
+	}
+	return TurnContextScope{
+		Kind:   ContextScopeTurnHead,
+		TurnID: parentTurnID.String(),
+	}
+}
+
+func turnRunAllowsPipelineContext(run TurnRun) bool {
+	switch run.Context.Kind {
+	case ContextScopeSessionHead, ContextScopeBotHistory:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Resolver) prepareTurnRun(ctx context.Context, req conversation.ChatRequest) (TurnRun, error) {
+	return r.prepareTurnRunWithRewriteAnchor(ctx, req, nil)
+}
+
+func (r *Resolver) prepareTurnRunWithRewriteAnchor(ctx context.Context, req conversation.ChatRequest, rewriteAnchor *conversation.TurnAnchor) (TurnRun, error) {
+	if r == nil || r.queries == nil {
+		return legacyTurnRun(req), nil
 	}
 	botID := strings.TrimSpace(req.BotID)
 	sessionID := strings.TrimSpace(req.SessionID)
 	if botID == "" || sessionID == "" {
-		return req, nil
+		return legacyTurnRun(req), nil
 	}
 	store, ok := r.queries.(turnStore)
 	if !ok {
-		return req, nil
-	}
-	pgBotID, err := dbpkg.ParseUUID(botID)
-	if err != nil {
-		return req, fmt.Errorf("pin persist turn: invalid bot id: %w", err)
+		return legacyTurnRun(req), nil
 	}
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
-		return req, fmt.Errorf("pin persist turn: invalid session id: %w", err)
+		return TurnRun{}, fmt.Errorf("prepare turn run: invalid session id: %w", err)
 	}
-	parentTurnID, baseHeadTurnID, contextHeadTurnPinned, err := r.resolvePersistParentTurn(ctx, store, pgSessionID, req)
+	mode, parentTurnID, selectedHead, err := r.resolveTurnRunParent(ctx, store, pgSessionID, req, rewriteAnchor)
 	if err != nil {
-		return req, err
+		return TurnRun{}, err
+	}
+	selectedHeadID := ""
+	if selectedHead.HeadTurnID.Valid {
+		selectedHeadID = selectedHead.HeadTurnID.String()
+	}
+	return TurnRun{
+		Mode:    mode,
+		Context: contextScopeFromParentTurn(parentTurnID),
+		Turn: TurnPersistencePlan{
+			BotID:          botID,
+			OwnerSessionID: sessionID,
+			ParentTurnID:   uuidString(parentTurnID),
+		},
+		Variant: VariantTransition{
+			Action:             variantTransitionActionForTurnRun(mode, sessionID),
+			SessionID:          sessionID,
+			SelectedHeadTurnID: selectedHeadID,
+		},
+	}, nil
+}
+
+func (*Resolver) resolveTurnRunParent(ctx context.Context, store turnStore, sessionID pgtype.UUID, req conversation.ChatRequest, rewriteAnchor *conversation.TurnAnchor) (TurnRunMode, pgtype.UUID, selectedSessionHead, error) {
+	if rewriteAnchor != nil {
+		if rewriteAnchor.Role != conversation.TurnAnchorRoleUser {
+			return "", pgtype.UUID{}, selectedSessionHead{}, errors.New("prepare turn run: rewrite anchor is not a user message")
+		}
+		if strings.TrimSpace(rewriteAnchor.SelectedHeadTurnID) == "" {
+			return "", pgtype.UUID{}, selectedSessionHead{}, errors.New("prepare turn run: rewrite anchor selected head turn id is required")
+		}
+		selectedHead, err := resolveSelectedSessionHead(ctx, store, sessionID, rewriteAnchor.SelectedHeadTurnID)
+		if err != nil {
+			return "", pgtype.UUID{}, selectedSessionHead{}, fmt.Errorf("prepare turn run: validate rewrite anchor selected head: %w", err)
+		}
+		parentTurnID, err := parseOptionalUUID(rewriteAnchor.ParentTurnID)
+		if err != nil {
+			return "", pgtype.UUID{}, selectedSessionHead{}, fmt.Errorf("prepare turn run: invalid rewrite anchor parent turn id: %w", err)
+		}
+		return TurnRunModeRewrite, parentTurnID, selectedHead, nil
+	}
+
+	selectedHead, err := resolveSelectedSessionHead(ctx, store, sessionID, req.SelectedHeadTurnID)
+	if err != nil {
+		return "", pgtype.UUID{}, selectedSessionHead{}, err
+	}
+
+	rewriteTargetID := strings.TrimSpace(req.RewriteTargetMessageID)
+	if rewriteTargetID != "" {
+		anchor, err := resolveVisibleUserTurnAnchor(ctx, store, sessionID, selectedHead.HeadTurnID, rewriteTargetID)
+		if err != nil {
+			return "", pgtype.UUID{}, selectedSessionHead{}, err
+		}
+		parentTurnID, err := parseOptionalUUID(anchor.ParentTurnID)
+		if err != nil {
+			return "", pgtype.UUID{}, selectedSessionHead{}, fmt.Errorf("prepare turn run: invalid rewrite anchor parent turn id: %w", err)
+		}
+		return TurnRunModeRewrite, parentTurnID, selectedHead, nil
+	}
+
+	return TurnRunModeNormal, selectedHead.HeadTurnID, selectedHead, nil
+}
+
+func resolveSelectedSessionHead(ctx context.Context, store sessionHeadStore, sessionID pgtype.UUID, requestedHeadTurnID string) (selectedSessionHead, error) {
+	sess, err := store.GetSessionByID(ctx, sessionID)
+	if err != nil {
+		return selectedSessionHead{}, fmt.Errorf("prepare turn run: get session: %w", err)
+	}
+	selectedHeadID := sess.DefaultHeadTurnID
+	if requestedHead := strings.TrimSpace(requestedHeadTurnID); requestedHead != "" {
+		parsed, err := dbpkg.ParseUUID(requestedHead)
+		if err != nil {
+			return selectedSessionHead{}, fmt.Errorf("prepare turn run: invalid selected head turn id: %w", err)
+		}
+		if _, err := store.GetSessionTurnHead(ctx, dbsqlc.GetSessionTurnHeadParams{
+			SessionID:  sessionID,
+			HeadTurnID: parsed,
+		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return selectedSessionHead{}, errors.New("prepare turn run: selected head is not valid for this session")
+			}
+			return selectedSessionHead{}, fmt.Errorf("prepare turn run: validate selected head: %w", err)
+		}
+		selectedHeadID = parsed
+	} else if selectedHeadID.Valid {
+		if _, err := store.GetSessionTurnHead(ctx, dbsqlc.GetSessionTurnHeadParams{
+			SessionID:  sessionID,
+			HeadTurnID: selectedHeadID,
+		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return selectedSessionHead{}, errors.New("prepare turn run: default head is not valid for this session")
+			}
+			return selectedSessionHead{}, fmt.Errorf("prepare turn run: validate default head: %w", err)
+		}
+	}
+	return selectedSessionHead{HeadTurnID: selectedHeadID}, nil
+}
+
+func resolveVisibleUserTurnAnchor(ctx context.Context, store turnStore, sessionID pgtype.UUID, selectedHeadTurnID pgtype.UUID, messageID string) (conversation.TurnAnchor, error) {
+	pgMessageID, err := dbpkg.ParseUUID(messageID)
+	if err != nil {
+		return conversation.TurnAnchor{}, fmt.Errorf("prepare turn run: invalid rewrite target message id: %w", err)
+	}
+	row, err := store.GetVisibleUserMessageTurnForRewrite(ctx, dbsqlc.GetVisibleUserMessageTurnForRewriteParams{
+		MessageID:      pgMessageID,
+		BaseHeadTurnID: selectedHeadTurnID,
+		SessionID:      sessionID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return conversation.TurnAnchor{}, errors.New("prepare turn run: rewrite target is not a visible user message")
+		}
+		return conversation.TurnAnchor{}, fmt.Errorf("prepare turn run: resolve rewrite target: %w", err)
+	}
+	return conversation.TurnAnchor{
+		Role:               conversation.TurnAnchorRoleUser,
+		MessageID:          row.MessageID.String(),
+		TurnID:             row.TurnID.String(),
+		ParentTurnID:       uuidString(row.ParentTurnID),
+		SelectedHeadTurnID: selectedHeadTurnID.String(),
+	}, nil
+}
+
+func parseOptionalUUID(id string) (pgtype.UUID, error) {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return pgtype.UUID{}, nil
+	}
+	return dbpkg.ParseUUID(trimmed)
+}
+
+func uuidString(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return id.String()
+}
+
+func variantTransitionActionForTurnRun(mode TurnRunMode, sessionID string) VariantTransitionAction {
+	if strings.TrimSpace(sessionID) == "" {
+		return VariantTransitionNone
+	}
+	switch mode {
+	case TurnRunModeNormal:
+		return VariantTransitionContinueSelected
+	case TurnRunModeRewrite:
+		return VariantTransitionCreateSibling
+	case TurnRunModeContinuation:
+		return VariantTransitionResumePending
+	default:
+		return VariantTransitionNone
+	}
+}
+
+func normalizeVariantTransitionAction(action VariantTransitionAction) VariantTransitionAction {
+	if action == "" {
+		return VariantTransitionNone
+	}
+	return action
+}
+
+func (r *Resolver) ensurePersistTurn(ctx context.Context, run *TurnRun) (string, error) {
+	if run == nil {
+		return "", nil
+	}
+	if turnID := strings.TrimSpace(run.PersistTurnID); turnID != "" {
+		return turnID, nil
+	}
+	r.persistTurnMu.Lock()
+	defer r.persistTurnMu.Unlock()
+	if turnID := strings.TrimSpace(run.PersistTurnID); turnID != "" {
+		return turnID, nil
+	}
+	plan := run.Turn
+	if strings.TrimSpace(plan.BotID) == "" || strings.TrimSpace(plan.OwnerSessionID) == "" {
+		return "", nil
+	}
+	if r == nil || r.queries == nil {
+		return "", nil
+	}
+	store, ok := r.queries.(turnStore)
+	if !ok {
+		return "", nil
+	}
+	pgBotID, err := dbpkg.ParseUUID(plan.BotID)
+	if err != nil {
+		return "", fmt.Errorf("ensure persist turn: invalid bot id: %w", err)
+	}
+	pgSessionID, err := dbpkg.ParseUUID(plan.OwnerSessionID)
+	if err != nil {
+		return "", fmt.Errorf("ensure persist turn: invalid session id: %w", err)
+	}
+	parentTurnID, err := parseOptionalUUID(plan.ParentTurnID)
+	if err != nil {
+		return "", fmt.Errorf("ensure persist turn: invalid parent turn id: %w", err)
 	}
 	turn, err := store.CreateHistoryTurn(ctx, dbsqlc.CreateHistoryTurnParams{
 		BotID:          pgBotID,
@@ -86,55 +405,29 @@ func (r *Resolver) pinPersistTurn(ctx context.Context, req conversation.ChatRequ
 		ParentTurnID:   parentTurnID,
 	})
 	if err != nil {
-		return req, fmt.Errorf("pin persist turn: create history turn: %w", err)
+		return "", fmt.Errorf("ensure persist turn: create history turn: %w", err)
 	}
-	req.PersistTurnID = turn.ID.String()
-	if baseHeadTurnID.Valid {
-		req.PersistBaseHeadTurnID = baseHeadTurnID.String()
-	}
-	req.PersistBaseHeadTurnPinned = true
-	if parentTurnID.Valid {
-		req.ContextHeadTurnID = parentTurnID.String()
-	}
-	req.ContextHeadTurnPinned = contextHeadTurnPinned
-	return req, nil
+	run.PersistTurnID = turn.ID.String()
+	return run.PersistTurnID, nil
 }
 
-func (*Resolver) resolvePersistParentTurn(ctx context.Context, store turnStore, sessionID pgtype.UUID, req conversation.ChatRequest) (pgtype.UUID, pgtype.UUID, bool, error) {
-	sess, err := store.GetSessionByID(ctx, sessionID)
-	if err != nil {
-		return pgtype.UUID{}, pgtype.UUID{}, false, fmt.Errorf("pin persist turn: get session: %w", err)
-	}
-	baseHeadTurnID := sess.HeadTurnID
-
-	rewriteTargetID := strings.TrimSpace(req.RewriteTargetMessageID)
-	if rewriteTargetID != "" {
-		pgMessageID, err := dbpkg.ParseUUID(rewriteTargetID)
-		if err != nil {
-			return pgtype.UUID{}, pgtype.UUID{}, false, fmt.Errorf("pin persist turn: invalid rewrite target message id: %w", err)
-		}
-		row, err := store.GetVisibleUserMessageTurnForRewrite(ctx, dbsqlc.GetVisibleUserMessageTurnForRewriteParams{
-			MessageID: pgMessageID,
-			SessionID: sessionID,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return pgtype.UUID{}, pgtype.UUID{}, false, errors.New("pin persist turn: rewrite target is not a visible user message")
-			}
-			return pgtype.UUID{}, pgtype.UUID{}, false, fmt.Errorf("pin persist turn: resolve rewrite target: %w", err)
-		}
-		return row.ParentTurnID, baseHeadTurnID, true, nil
-	}
-
-	return baseHeadTurnID, baseHeadTurnID, false, nil
-}
-
-func (r *Resolver) updateSessionHeadTurn(ctx context.Context, req conversation.ChatRequest, turnID string) error {
+func (r *Resolver) applyVariantTransition(ctx context.Context, run *TurnRun, turnID string) error {
 	if r == nil || r.queries == nil {
 		return nil
 	}
-	sessionID := strings.TrimSpace(req.SessionID)
+	if run == nil {
+		return nil
+	}
+	transition := run.Variant
+	transition.Action = normalizeVariantTransitionAction(transition.Action)
+	if transition.Action == VariantTransitionNone {
+		return nil
+	}
+	sessionID := strings.TrimSpace(transition.SessionID)
 	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		turnID = strings.TrimSpace(run.PersistTurnID)
+	}
 	if sessionID == "" || turnID == "" {
 		return nil
 	}
@@ -144,41 +437,62 @@ func (r *Resolver) updateSessionHeadTurn(ctx context.Context, req conversation.C
 	}
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
-		return fmt.Errorf("update session head: invalid session id: %w", err)
+		return fmt.Errorf("apply variant transition: invalid session id: %w", err)
 	}
 	pgTurnID, err := dbpkg.ParseUUID(turnID)
 	if err != nil {
-		return fmt.Errorf("update session head: invalid turn id: %w", err)
+		return fmt.Errorf("apply variant transition: invalid turn id: %w", err)
 	}
-	expectedText := strings.TrimSpace(req.PersistBaseHeadTurnID)
-	useCompareAndSet := req.PersistBaseHeadTurnPinned
-	if !useCompareAndSet && strings.TrimSpace(req.PersistTurnID) != "" {
-		expectedText = strings.TrimSpace(req.PersistTurnID)
-		useCompareAndSet = true
-	}
-	if useCompareAndSet {
-		var expectedHeadTurnID pgtype.UUID
-		if expectedText != "" {
-			parsed, err := dbpkg.ParseUUID(expectedText)
-			if err != nil {
-				return fmt.Errorf("update session head: invalid expected turn id: %w", err)
+	selectedHeadText := strings.TrimSpace(transition.SelectedHeadTurnID)
+	update := func(store turnStore) error {
+		switch transition.Action {
+		case VariantTransitionContinueSelected:
+			if selectedHeadText == "" {
+				if _, err := store.CreateSessionTurnHead(ctx, dbsqlc.CreateSessionTurnHeadParams{
+					SessionID:  pgSessionID,
+					HeadTurnID: pgTurnID,
+				}); err != nil {
+					return fmt.Errorf("apply variant transition: create initial turn head: %w", err)
+				}
+			} else {
+				pgSelectedHeadTurnID, err := dbpkg.ParseUUID(selectedHeadText)
+				if err != nil {
+					return fmt.Errorf("apply variant transition: invalid selected head turn id: %w", err)
+				}
+				if _, err := store.ReplaceSessionTurnHead(ctx, dbsqlc.ReplaceSessionTurnHeadParams{
+					TargetSessionID: pgSessionID,
+					OldHeadTurnID:   pgSelectedHeadTurnID,
+					NewHeadTurnID:   pgTurnID,
+				}); err != nil {
+					return fmt.Errorf("apply variant transition: continue selected head %q: %w", selectedHeadText, err)
+				}
 			}
-			expectedHeadTurnID = parsed
+		case VariantTransitionCreateSibling, VariantTransitionResumePending:
+			if _, err := store.CreateSessionTurnHead(ctx, dbsqlc.CreateSessionTurnHeadParams{
+				SessionID:  pgSessionID,
+				HeadTurnID: pgTurnID,
+			}); err != nil {
+				return fmt.Errorf("apply variant transition: create turn head: %w", err)
+			}
+		default:
+			return fmt.Errorf("apply variant transition: unknown action %q", transition.Action)
 		}
-		if _, err := store.UpdateSessionHeadTurnIfCurrent(ctx, dbsqlc.UpdateSessionHeadTurnIfCurrentParams{
-			ID:                 pgSessionID,
-			HeadTurnID:         pgTurnID,
-			ExpectedHeadTurnID: expectedHeadTurnID,
+		if _, err := store.UpdateSessionDefaultHeadTurnIfValid(ctx, dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams{
+			ID:                pgSessionID,
+			DefaultHeadTurnID: pgTurnID,
 		}); err != nil {
-			return fmt.Errorf("update session head: expected head %q no longer current: %w", expectedText, err)
+			return fmt.Errorf("apply variant transition: update default head: %w", err)
 		}
 		return nil
 	}
-	if _, err := store.UpdateSessionHeadTurn(ctx, dbsqlc.UpdateSessionHeadTurnParams{
-		ID:         pgSessionID,
-		HeadTurnID: pgTurnID,
-	}); err != nil {
-		return fmt.Errorf("update session head: %w", err)
+	if runner, ok := r.queries.(turnTxRunner); ok && runner != nil {
+		return runner.RunInTx(ctx, func(q dbstore.Queries) error {
+			txStore, ok := q.(turnStore)
+			if !ok {
+				return errors.New("apply variant transition: transaction queries do not support turn updates")
+			}
+			return update(txStore)
+		})
 	}
-	return nil
+	return update(store)
 }

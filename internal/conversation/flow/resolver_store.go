@@ -14,7 +14,8 @@ import (
 )
 
 func (r *Resolver) storeRound(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string) error {
-	return r.storeRoundWithOptions(ctx, req, messages, modelID, storeRoundOptions{})
+	run := legacyTurnRun(req)
+	return r.storeRoundWithOptions(ctx, req, &run, messages, modelID, storeRoundOptions{})
 }
 
 type storeRoundOptions struct {
@@ -28,12 +29,12 @@ type storedRoundContext struct {
 	TurnID string
 }
 
-func (r *Resolver) storeRoundWithOptions(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) error {
-	_, err := r.storeRoundWithContext(ctx, req, messages, modelID, opts)
+func (r *Resolver) storeRoundWithOptions(ctx context.Context, req conversation.ChatRequest, run *TurnRun, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) error {
+	_, err := r.storeRoundWithContext(ctx, req, run, messages, modelID, opts)
 	return err
 }
 
-func (r *Resolver) storeRoundWithContext(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) (storedRoundContext, error) {
+func (r *Resolver) storeRoundWithContext(ctx context.Context, req conversation.ChatRequest, run *TurnRun, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) (storedRoundContext, error) {
 	fullRound := make([]conversation.ModelMessage, 0, len(messages))
 
 	// When the user message was already persisted by a channel adapter, skip
@@ -70,7 +71,7 @@ func (r *Resolver) storeRoundWithContext(ctx context.Context, req conversation.C
 		return storedRoundContext{}, nil
 	}
 
-	stored, err := r.storeMessages(ctx, req, filtered, modelID, opts)
+	stored, err := r.storeMessages(ctx, req, run, filtered, modelID, opts)
 	if err != nil {
 		return storedRoundContext{}, err
 	}
@@ -117,14 +118,18 @@ func (r *Resolver) StoreRound(ctx context.Context, botID, sessionID, channelIden
 	return r.storeRound(ctx, req, modelMessages, modelID)
 }
 
-func (r *Resolver) storeMessages(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) (storedRoundContext, error) {
+func (r *Resolver) storeMessages(ctx context.Context, req conversation.ChatRequest, run *TurnRun, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) (storedRoundContext, error) {
 	if r.messageService == nil {
 		return storedRoundContext{}, nil
 	}
 	if strings.TrimSpace(req.BotID) == "" {
 		return storedRoundContext{}, nil
 	}
-	turnID := strings.TrimSpace(req.PersistTurnID)
+	turnID, err := r.ensurePersistTurn(ctx, run)
+	if err != nil {
+		return storedRoundContext{}, err
+	}
+	turnID = strings.TrimSpace(turnID)
 	storedAny := false
 
 	// Check bot setting for full tool result persistence.

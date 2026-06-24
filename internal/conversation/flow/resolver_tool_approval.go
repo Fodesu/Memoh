@@ -198,18 +198,18 @@ func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Req
 func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
 	approval = withLocalWebReplyTarget(approval)
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
+	run := continuationTurnRun(approval.SessionID, approval.PersistTurnID)
 	storeReq := conversation.ChatRequest{
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		SessionID:               approval.SessionID,
-		PersistTurnID:           approval.PersistTurnID,
 		SourceChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          approval.SourcePlatform,
 		ReplyTarget:             approval.ReplyTarget,
 		ConversationType:        approval.ConversationType,
 		UserMessagePersisted:    true,
 	}
-	if err := r.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
+	if err := r.storeRoundWithOptions(ctx, storeReq, &run, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
 		return err
 	}
 	return r.continueToolApprovalSession(ctx, approval, input, eventCh)
@@ -231,14 +231,13 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 		return err
 	}
 
+	run := continuationTurnRun(approval.SessionID, approval.PersistTurnID)
 	contextReq := conversation.ChatRequest{
-		BotID:                 input.BotID,
-		ChatID:                input.BotID,
-		SessionID:             approval.SessionID,
-		PersistTurnID:         approval.PersistTurnID,
-		ContextHeadTurnPinned: strings.TrimSpace(approval.PersistTurnID) != "",
+		BotID:     input.BotID,
+		ChatID:    input.BotID,
+		SessionID: approval.SessionID,
 	}
-	loaded, err := r.loadMessagesForRequest(ctx, contextReq, defaultMaxContextMinutes)
+	loaded, err := r.loadMessagesForTurnRun(ctx, contextReq, run, defaultMaxContextMinutes)
 	if err != nil {
 		return err
 	}
@@ -257,7 +256,6 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		SessionID:               approval.SessionID,
-		PersistTurnID:           approval.PersistTurnID,
 		SourceChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          approval.SourcePlatform,
 		ReplyTarget:             approval.ReplyTarget,
@@ -277,6 +275,7 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 				if storeErr := r.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
 					req,
+					&run,
 					resolvedContext{model: models.GetResponse{ID: resolved.ModelID}},
 					snap,
 				); storeErr != nil {

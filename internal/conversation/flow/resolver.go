@@ -104,6 +104,7 @@ type Resolver struct {
 	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
 	sessionTurnMu       sync.Mutex
 	sessionTurnLocks    map[string]*sync.Mutex // key: "botID:sessionID" → turn write lock
+	persistTurnMu       sync.Mutex
 	timeout             time.Duration
 	clockLocation       *time.Location
 	logger              *slog.Logger
@@ -272,7 +273,7 @@ type resolvedContext struct {
 	estimatedTokens             int // estimated input token count for compaction
 }
 
-func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {
+func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest, run *TurnRun) (resolvedContext, error) {
 	if strings.TrimSpace(req.Query) == "" && len(req.Attachments) == 0 {
 		return resolvedContext{}, errors.New("query or attachments is required")
 	}
@@ -295,10 +296,13 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		ConversationType:  req.ConversationType,
 		SessionToken:      req.ChatToken,
 		SessionType:       req.SessionType,
-		PersistTurnID:     req.PersistTurnID,
-		Model:             req.Model,
-		Provider:          req.Provider,
-		ReasoningEffort:   req.ReasoningEffort,
+		PersistTurnID:     run.PersistTurnID,
+		EnsurePersistTurnID: func(ctx context.Context) (string, error) {
+			return r.ensurePersistTurn(ctx, run)
+		},
+		Model:           req.Model,
+		Provider:        req.Provider,
+		ReasoningEffort: req.ReasoningEffort,
 	})
 	if err != nil {
 		r.logger.Error("resolve: buildBaseRunConfig failed",
@@ -318,7 +322,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	// the rendered event stream (RC) + bot turn responses (TR) instead of
 	// loading raw history from bot_history_messages. The current inbound
 	// message is already in the RC, so it must not be appended again.
-	usePipeline := r.pipeline != nil && strings.TrimSpace(req.SessionID) != ""
+	usePipeline := r.pipeline != nil && strings.TrimSpace(req.SessionID) != "" && turnRunAllowsPipelineContext(*run)
 	if usePipeline {
 		if _, loaded := r.pipeline.GetIC(strings.TrimSpace(req.SessionID)); !loaded {
 			usePipeline = false
@@ -335,7 +339,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	if usePipeline {
 		messages = r.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 	} else if r.conversationSvc != nil {
-		loaded, loadErr := r.loadMessagesForRequest(ctx, req, defaultMaxContextMinutes)
+		loaded, loadErr := r.loadMessagesForTurnRun(ctx, req, *run, defaultMaxContextMinutes)
 		if loadErr != nil {
 			r.logger.Error("resolve: loadMessages failed",
 				slog.String("bot_id", req.BotID),
@@ -365,7 +369,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 			)
 			r.runCompactionSync(ctx, req, estimatedTokens)
 			// Reload messages after compaction.
-			loaded, loadErr = r.loadMessagesForRequest(ctx, req, defaultMaxContextMinutes)
+			loaded, loadErr = r.loadMessagesForTurnRun(ctx, req, *run, defaultMaxContextMinutes)
 			if loadErr != nil {
 				r.logger.Error("resolve: reload messages after compaction failed",
 					slog.String("bot_id", req.BotID),
@@ -477,7 +481,7 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 	defer doneTurn()
 
 	var err error
-	req, err = r.pinPersistTurn(ctx, req)
+	run, err := r.prepareTurnRun(ctx, req)
 	if err != nil {
 		return conversation.ChatResponse{}, err
 	}
@@ -488,7 +492,7 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 	if err != nil {
 		return conversation.ChatResponse{}, err
 	}
-	rc, err := r.resolve(ctx, req)
+	rc, err := r.resolve(ctx, req, &run)
 	if err != nil {
 		return conversation.ChatResponse{}, err
 	}
@@ -510,11 +514,11 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 		storeReq.UserMessagePersisted = true
 	}
 	roundMessages := prependUserMessage(storeReq.Query, outputMessages)
-	stored, err := r.storeRoundWithContext(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{})
+	stored, err := r.storeRoundWithContext(ctx, storeReq, &run, roundMessages, rc.model.ID, storeRoundOptions{})
 	if err != nil {
 		return conversation.ChatResponse{}, err
 	}
-	if err := r.updateSessionHeadTurn(ctx, storeReq, stored.TurnID); err != nil {
+	if err := r.applyVariantTransition(ctx, &run, stored.TurnID); err != nil {
 		return conversation.ChatResponse{}, err
 	}
 
@@ -532,21 +536,22 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 // baseRunConfigParams holds parameters for buildBaseRunConfig that differ
 // between chat and discuss callers.
 type baseRunConfigParams struct {
-	BotID             string
-	ChatID            string
-	SessionID         string
-	RouteID           string
-	UserID            string
-	ChannelIdentityID string
-	CurrentPlatform   string
-	ReplyTarget       string
-	ConversationType  string
-	SessionToken      string //nolint:gosec // session credential material, not a hardcoded secret
-	SessionType       string
-	PersistTurnID     string
-	Model             string
-	Provider          string
-	ReasoningEffort   string // caller-provided override (empty = use bot default)
+	BotID               string
+	ChatID              string
+	SessionID           string
+	RouteID             string
+	UserID              string
+	ChannelIdentityID   string
+	CurrentPlatform     string
+	ReplyTarget         string
+	ConversationType    string
+	SessionToken        string //nolint:gosec // session credential material, not a hardcoded secret
+	SessionType         string
+	PersistTurnID       string
+	EnsurePersistTurnID func(context.Context) (string, error)
+	Model               string
+	Provider            string
+	ReasoningEffort     string // caller-provided override (empty = use bot default)
 }
 
 // buildBaseRunConfig creates a RunConfig with model, credentials, skills,
@@ -849,6 +854,10 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			// No ExpiresAt here: chat-flow requests have no in-process
 			// waiter — the run pauses and resumes whenever the user answers,
 			// even much later. Only waiter-backed (ACP/MCP) requests expire.
+			persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
+			if err != nil {
+				return sdk.ToolApprovalResult{}, err
+			}
 			req, err := r.userInput.CreatePending(ctx, userinput.CreatePendingInput{
 				BotID:                        p.BotID,
 				SessionID:                    p.SessionID,
@@ -861,7 +870,7 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 				SourcePlatform:               p.CurrentPlatform,
 				ReplyTarget:                  p.ReplyTarget,
 				ConversationType:             p.ConversationType,
-				PersistTurnID:                p.PersistTurnID,
+				PersistTurnID:                persistTurnID,
 			})
 			if err != nil {
 				return sdk.ToolApprovalResult{}, err
@@ -914,6 +923,11 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			}
 		}
 		if !isInteractiveApprovalSession(p.SessionType) {
+			persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
+			if err != nil {
+				return sdk.ToolApprovalResult{}, err
+			}
+			input.PersistTurnID = persistTurnID
 			req, err := r.toolApproval.CreatePending(ctx, input)
 			if err != nil {
 				return sdk.ToolApprovalResult{}, err
@@ -931,6 +945,11 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			}, call.ToolName), nil
 		}
 		if forcedApproval {
+			persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
+			if err != nil {
+				return sdk.ToolApprovalResult{}, err
+			}
+			input.PersistTurnID = persistTurnID
 			req, err := r.toolApproval.CreatePending(ctx, input)
 			if err != nil {
 				return sdk.ToolApprovalResult{}, err
@@ -941,16 +960,28 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 				Metadata:   approvalResultMetadata(req),
 			}, nil
 		}
-		eval, err := r.toolApproval.Evaluate(ctx, input)
+		persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
+		if err != nil {
+			return sdk.ToolApprovalResult{}, err
+		}
+		input.PersistTurnID = persistTurnID
+		req, err := r.toolApproval.CreatePending(ctx, input)
 		if err != nil {
 			return sdk.ToolApprovalResult{}, err
 		}
 		return sdk.ToolApprovalResult{
 			Decision:   sdk.ToolApprovalDecisionDeferred,
-			ApprovalID: eval.Request.ID,
-			Metadata:   approvalResultMetadata(eval.Request),
+			ApprovalID: req.ID,
+			Metadata:   approvalResultMetadata(req),
 		}, nil
 	}
+}
+
+func ensurePersistTurnIDForPending(ctx context.Context, p baseRunConfigParams) (string, error) {
+	if p.EnsurePersistTurnID != nil {
+		return p.EnsurePersistTurnID(ctx)
+	}
+	return strings.TrimSpace(p.PersistTurnID), nil
 }
 
 func approvalResultMetadata(req toolapproval.Request) map[string]any {

@@ -206,6 +206,35 @@ func TestCreateACPAgentSessionDefaultsProjectPath(t *testing.T) {
 	}
 }
 
+func TestCreateWithDefaultHeadCreatesTurnHeadInTransaction(t *testing.T) {
+	botID := "00000000-0000-0000-0000-000000000001"
+	headID := "00000000-0000-0000-0000-000000000003"
+	queries := &createTurnHeadQueries{}
+	svc := NewService(nil, queries, nil)
+
+	created, err := svc.Create(context.Background(), CreateInput{
+		BotID:             botID,
+		Type:              TypeChat,
+		Title:             "Fork",
+		DefaultHeadTurnID: headID,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if !queries.inTx {
+		t.Fatal("Create() did not use transaction")
+	}
+	if created.DefaultHeadTurnID != headID {
+		t.Fatalf("DefaultHeadTurnID = %q, want %q", created.DefaultHeadTurnID, headID)
+	}
+	if queries.createdHead.SessionID != queries.createdSessionID {
+		t.Fatalf("turn head session = %v, want created session %v", queries.createdHead.SessionID, queries.createdSessionID)
+	}
+	if queries.createdHead.HeadTurnID.String() != headID {
+		t.Fatalf("turn head = %s, want %s", queries.createdHead.HeadTurnID.String(), headID)
+	}
+}
+
 func TestUpdateTypeAndMetadataACPAgentRunsPolicy(t *testing.T) {
 	botID := "00000000-0000-0000-0000-000000000001"
 	sessionID := "00000000-0000-0000-0000-000000000002"
@@ -264,6 +293,40 @@ type createACPQueries struct {
 	bot          sqlc.GetBotByIDRow
 	sessions     []sqlc.ListSessionsByBotRow
 	createParams sqlc.CreateSessionParams
+}
+
+type createTurnHeadQueries struct {
+	dbstore.Queries
+	inTx             bool
+	createdSessionID pgtype.UUID
+	createdHead      sqlc.CreateSessionTurnHeadParams
+}
+
+func (q *createTurnHeadQueries) RunInTx(_ context.Context, fn func(dbstore.Queries) error) error {
+	q.inTx = true
+	return fn(q)
+}
+
+func (q *createTurnHeadQueries) CreateSession(_ context.Context, params sqlc.CreateSessionParams) (sqlc.BotSession, error) {
+	q.createdSessionID = mustPGUUID("00000000-0000-0000-0000-000000000002")
+	return sqlc.BotSession{
+		ID:                q.createdSessionID,
+		BotID:             params.BotID,
+		Type:              params.Type,
+		Title:             params.Title,
+		Metadata:          params.Metadata,
+		DefaultHeadTurnID: params.DefaultHeadTurnID,
+		CreatedAt:         pgtype.Timestamptz{Valid: true},
+		UpdatedAt:         pgtype.Timestamptz{Valid: true},
+	}, nil
+}
+
+func (q *createTurnHeadQueries) CreateSessionTurnHead(_ context.Context, params sqlc.CreateSessionTurnHeadParams) (sqlc.BotSessionTurnHead, error) {
+	q.createdHead = params
+	return sqlc.BotSessionTurnHead{
+		SessionID:  params.SessionID,
+		HeadTurnID: params.HeadTurnID,
+	}, nil
 }
 
 func (q *createACPQueries) GetBotByID(context.Context, pgtype.UUID) (sqlc.GetBotByIDRow, error) {
@@ -351,6 +414,9 @@ func TestSoftDeleteCleansOnlyUnsharedOwnedTurns(t *testing.T) {
 	if !queries.softDeleted {
 		t.Fatal("session was not soft deleted")
 	}
+	if !queries.deletedHeads {
+		t.Fatal("session turn heads were not deleted")
+	}
 	if len(queries.deletedMessageTurns) != 1 || queries.deletedMessageTurns[0] != privateTurnID {
 		t.Fatalf("deleted message turns = %v, want private turn only", queries.deletedMessageTurns)
 	}
@@ -362,6 +428,7 @@ func TestSoftDeleteCleansOnlyUnsharedOwnedTurns(t *testing.T) {
 type softDeleteCleanupQueries struct {
 	dbstore.Queries
 	softDeleted         bool
+	deletedHeads        bool
 	ownedTurns          []sqlc.BotHistoryTurn
 	sharedTurnIDs       []pgtype.UUID
 	deletedMessageTurns []pgtype.UUID
@@ -370,6 +437,11 @@ type softDeleteCleanupQueries struct {
 
 func (q *softDeleteCleanupQueries) SoftDeleteSession(context.Context, pgtype.UUID) error {
 	q.softDeleted = true
+	return nil
+}
+
+func (q *softDeleteCleanupQueries) DeleteSessionTurnHeads(context.Context, pgtype.UUID) error {
+	q.deletedHeads = true
 	return nil
 }
 

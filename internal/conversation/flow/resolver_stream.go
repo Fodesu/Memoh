@@ -88,9 +88,9 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 		defer doneTurn()
 
 		var err error
-		streamReq, err = r.pinPersistTurn(ctx, streamReq)
+		run, err := r.prepareTurnRun(ctx, streamReq)
 		if err != nil {
-			r.logger.Error("agent stream pin persist turn failed",
+			r.logger.Error("agent stream prepare turn run failed",
 				slog.String("bot_id", streamReq.BotID),
 				slog.String("chat_id", streamReq.ChatID),
 				slog.Any("error", err),
@@ -111,7 +111,7 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 			errCh <- err
 			return
 		}
-		rc, err := r.resolve(ctx, streamReq)
+		rc, err := r.resolve(ctx, streamReq, &run)
 		if err != nil {
 			r.logger.Error("agent stream resolve failed",
 				slog.String("bot_id", streamReq.BotID),
@@ -174,7 +174,7 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 						// Use WithoutCancel so persistence still succeeds even
 						// when the parent ctx has already been cancelled by a
 						// client disconnect or idle timeout.
-						if storeErr := r.persistTerminalSnapshot(context.WithoutCancel(ctx), streamReq, rc, snap); storeErr != nil {
+						if storeErr := r.persistTerminalSnapshot(context.WithoutCancel(ctx), streamReq, &run, rc, snap); storeErr != nil {
 							r.logger.Error("stream persist failed", slog.Any("error", storeErr))
 						} else {
 							stored = true
@@ -203,7 +203,7 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 		if !stored {
 			switch {
 			case hasSnapshot:
-				r.persistPartialResult(ctx, streamReq, rc, lastSnapshot.sdkMessages, toolCallCount, idleCancel.DidFire(), hasVisibleOutput)
+				r.persistPartialResult(ctx, streamReq, &run, rc, lastSnapshot.sdkMessages, toolCallCount, idleCancel.DidFire(), hasVisibleOutput)
 			default:
 				r.logger.Info("skip persisting failed startup stream",
 					slog.String("bot_id", streamReq.BotID),
@@ -245,6 +245,16 @@ func (r *Resolver) StreamChatWS(
 	eventCh chan<- WSStreamEvent,
 	abortCh <-chan struct{},
 ) error {
+	return r.streamChatWSWithRewriteAnchor(ctx, req, nil, eventCh, abortCh)
+}
+
+func (r *Resolver) streamChatWSWithRewriteAnchor(
+	ctx context.Context,
+	req conversation.ChatRequest,
+	rewriteAnchor *conversation.TurnAnchor,
+	eventCh chan<- WSStreamEvent,
+	abortCh <-chan struct{},
+) error {
 	if ok, err := r.isACPAgentSession(ctx, req); err != nil {
 		r.logger.Error("StreamChatWS: ACP session check failed",
 			slog.String("bot_id", req.BotID),
@@ -260,9 +270,9 @@ func (r *Resolver) StreamChatWS(
 	defer doneTurn()
 
 	var err error
-	req, err = r.pinPersistTurn(ctx, req)
+	run, err := r.prepareTurnRunWithRewriteAnchor(ctx, req, rewriteAnchor)
 	if err != nil {
-		r.logger.Error("StreamChatWS: pin persist turn failed",
+		r.logger.Error("StreamChatWS: prepare turn run failed",
 			slog.String("bot_id", req.BotID),
 			slog.Any("error", err),
 		)
@@ -279,7 +289,7 @@ func (r *Resolver) StreamChatWS(
 		)
 		return err
 	}
-	rc, err := r.resolve(ctx, req)
+	rc, err := r.resolve(ctx, req, &run)
 	if err != nil {
 		r.logger.Error("StreamChatWS: resolve failed",
 			slog.String("bot_id", req.BotID),
@@ -350,7 +360,7 @@ func (r *Resolver) StreamChatWS(
 				lastSnapshot = snap
 				hasSnapshot = true
 				if !stored {
-					if storeErr := r.persistTerminalSnapshot(context.WithoutCancel(ctx), req, rc, snap); storeErr != nil {
+					if storeErr := r.persistTerminalSnapshot(context.WithoutCancel(ctx), req, &run, rc, snap); storeErr != nil {
 						r.logger.Error("ws persist failed", slog.Any("error", storeErr))
 					} else {
 						stored = true
@@ -372,7 +382,7 @@ func (r *Resolver) StreamChatWS(
 	if !stored {
 		switch {
 		case hasSnapshot:
-			r.persistPartialResult(ctx, req, rc, lastSnapshot.sdkMessages, toolCallCount, idleCancel.DidFire(), hasVisibleOutput)
+			r.persistPartialResult(ctx, req, &run, rc, lastSnapshot.sdkMessages, toolCallCount, idleCancel.DidFire(), hasVisibleOutput)
 		default:
 			r.logger.Info("skip persisting failed startup ws stream",
 				slog.String("bot_id", req.BotID),
@@ -409,7 +419,7 @@ func (r *Resolver) StreamChatWS(
 // persistTerminalSnapshot stores the SDK messages produced by an agent run
 // (or partial run) into bot history. Triggers compaction when usage data
 // indicates the context is large.
-func (r *Resolver) persistTerminalSnapshot(ctx context.Context, req conversation.ChatRequest, rc resolvedContext, snap terminalSnapshot) error {
+func (r *Resolver) persistTerminalSnapshot(ctx context.Context, req conversation.ChatRequest, run *TurnRun, rc resolvedContext, snap terminalSnapshot) error {
 	outputMessages := sdkMessagesToModelMessages(snap.sdkMessages)
 	if !hasPersistableAssistantOutput(outputMessages) {
 		r.logger.Info("skip persisting terminal snapshot without assistant output",
@@ -430,13 +440,13 @@ func (r *Resolver) persistTerminalSnapshot(ctx context.Context, req conversation
 		roundMessages = interleaveInjectedMessages(roundMessages, *rc.injectedRecords)
 	}
 
-	stored, err := r.storeRoundWithContext(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{
+	stored, err := r.storeRoundWithContext(ctx, storeReq, run, roundMessages, rc.model.ID, storeRoundOptions{
 		AllowPendingToolCalls: snap.deferredToolID != "",
 	})
 	if err != nil {
 		return err
 	}
-	if err := r.updateSessionHeadTurn(ctx, storeReq, stored.TurnID); err != nil {
+	if err := r.applyVariantTransition(ctx, run, stored.TurnID); err != nil {
 		return err
 	}
 
@@ -468,6 +478,7 @@ func hasPersistableAssistantOutput(messages []conversation.ModelMessage) bool {
 func (r *Resolver) persistPartialResult(
 	ctx context.Context,
 	req conversation.ChatRequest,
+	run *TurnRun,
 	rc resolvedContext,
 	partialMessages []sdk.Message,
 	toolCallCount int,
@@ -481,7 +492,7 @@ func (r *Resolver) persistPartialResult(
 		// synthetic error tool_results for any tool_calls that never received
 		// a real result, preserving the assistant ↔ tool pairing required by
 		// downstream provider serializers (especially Anthropic).
-		err := r.persistTerminalSnapshot(persistCtx, req, rc, terminalSnapshot{
+		err := r.persistTerminalSnapshot(persistCtx, req, run, rc, terminalSnapshot{
 			sdkMessages: partialMessages,
 		})
 		if err == nil {

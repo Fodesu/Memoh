@@ -1,5 +1,6 @@
 ALTER TABLE IF EXISTS bot_channel_routes DROP CONSTRAINT IF EXISTS fk_bot_channel_routes_active_session;
 ALTER TABLE IF EXISTS bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_head_turn;
+ALTER TABLE IF EXISTS bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_default_head_turn;
 ALTER TABLE IF EXISTS bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_forked_from_turn;
 ALTER TABLE IF EXISTS bot_history_turns DROP CONSTRAINT IF EXISTS fk_bot_history_turns_request_message;
 ALTER TABLE IF EXISTS bot_history_turns DROP CONSTRAINT IF EXISTS fk_bot_history_turns_final_assistant_message;

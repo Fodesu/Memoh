@@ -61,7 +61,8 @@ ORDER BY vt.depth ASC;
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   JOIN bot_sessions source ON source.id = sqlc.arg(session_id)
   WHERE s.id <> source.id
     AND s.bot_id = source.bot_id
@@ -73,6 +74,24 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT DISTINCT visible_turns.id
 FROM visible_turns;
+
+-- name: ListSessionTurnGraphTurns :many
+WITH RECURSIVE graph_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = sqlc.arg(session_id)
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN graph_turns gt ON gt.parent_turn_id = p.id
+)
+SELECT t.*
+FROM graph_turns gt
+JOIN bot_history_turns t ON t.id = gt.id
+ORDER BY t.created_at ASC, t.id ASC;
 
 -- name: DeleteMessagesByTurnID :exec
 DELETE FROM bot_history_messages
@@ -86,7 +105,9 @@ WHERE id = sqlc.arg(id);
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.head_turn_id = sqlc.arg(base_head_turn_id)
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
   UNION ALL
@@ -106,11 +127,43 @@ WHERE m.id = sqlc.arg(message_id)
   AND m.role = 'assistant'
 LIMIT 1;
 
+-- name: GetVisibleAssistantTurnForRetry :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.head_turn_id = sqlc.arg(base_head_turn_id)
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = sqlc.arg(session_id)
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT
+  assistant.id AS assistant_message_id,
+  assistant.turn_id,
+  t.parent_turn_id,
+  request.id AS request_message_id,
+  request.content AS request_content,
+  request.display_text AS request_display_text
+FROM bot_history_messages assistant
+JOIN visible_turns vt ON vt.id = assistant.turn_id
+JOIN bot_history_turns t ON t.id = assistant.turn_id
+JOIN bot_history_messages request ON request.id = t.request_message_id
+WHERE assistant.id = sqlc.arg(message_id)
+  AND assistant.role = 'assistant'
+  AND request.role = 'user'
+LIMIT 1;
+
 -- name: GetVisibleUserMessageTurnForRewrite :one
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.head_turn_id = sqlc.arg(base_head_turn_id)
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
   UNION ALL
@@ -214,7 +267,7 @@ LIMIT 10000;
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -249,6 +302,45 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id
 ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC
 LIMIT 10000;
 
+-- name: ListMessagesBySessionTurnGraph :many
+WITH RECURSIVE graph_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions bs
+  JOIN bot_session_turn_heads h ON h.session_id = bs.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE bs.id = sqlc.arg(session_id)
+    AND bs.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN graph_turns gt ON gt.parent_turn_id = p.id
+)
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.turn_id,
+  m.turn_message_seq,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.event_id,
+  m.display_text,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform
+FROM graph_turns gt
+JOIN bot_history_messages m ON m.turn_id = gt.id
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
+LEFT JOIN bot_sessions s ON s.id = m.session_id
+ORDER BY m.created_at ASC, COALESCE(m.turn_message_seq, 0) ASC, m.id ASC;
+
 -- name: ListMessagesSince :many
 SELECT
   m.id,
@@ -281,7 +373,7 @@ ORDER BY m.created_at ASC;
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -350,7 +442,7 @@ ORDER BY m.created_at ASC;
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -459,7 +551,7 @@ LIMIT sqlc.arg(max_count);
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -542,7 +634,7 @@ LIMIT sqlc.arg(max_count);
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -581,7 +673,7 @@ LIMIT sqlc.arg(max_count);
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -621,7 +713,7 @@ LIMIT 1;
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -776,7 +868,7 @@ ORDER BY rr.last_observed_at DESC;
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE sqlc.narg(session_id)::uuid IS NOT NULL
     AND bs.id = sqlc.narg(session_id)::uuid
     AND bs.deleted_at IS NULL
@@ -827,7 +919,7 @@ WHERE id = ANY($2::uuid[]);
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL

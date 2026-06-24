@@ -18,9 +18,11 @@ DROP INDEX IF EXISTS idx_bot_history_turns_request;
 DROP INDEX IF EXISTS idx_bot_history_turns_parent;
 DROP INDEX IF EXISTS idx_bot_history_turns_owner_session;
 DROP INDEX IF EXISTS idx_bot_history_turns_bot_created;
+DROP INDEX IF EXISTS idx_bot_session_turn_heads_head;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_session;
 DROP INDEX IF EXISTS idx_bot_sessions_head_turn;
+DROP INDEX IF EXISTS idx_bot_sessions_default_head_turn;
 
 CREATE TABLE bot_sessions_0024_down (
   id TEXT PRIMARY KEY,
@@ -128,6 +130,7 @@ FROM bot_history_messages;
 DROP TABLE bot_history_messages;
 ALTER TABLE bot_history_messages_0024_down RENAME TO bot_history_messages;
 
+DROP TABLE IF EXISTS bot_session_turn_heads;
 DROP TABLE IF EXISTS bot_history_turns;
 
 CREATE TABLE tool_approval_requests_0024_down (

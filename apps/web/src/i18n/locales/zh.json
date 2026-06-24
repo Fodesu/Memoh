@@ -391,6 +391,9 @@
       "retry": "重试",
       "fork": "分叉",
       "more": "更多",
+      "previousVariant": "上一回复",
+      "nextVariant": "下一回复",
+      "variants": "第 {current}/{total} 个回复",
       "readAloud": "朗读"
     },
     "process": {

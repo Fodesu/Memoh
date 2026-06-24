@@ -3,6 +3,8 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -27,19 +29,28 @@ type messageWithUsage struct {
 	CompactID         string
 }
 
-func (r *Resolver) loadMessagesForRequest(ctx context.Context, req conversation.ChatRequest, maxContextMinutes int) ([]messageWithUsage, error) {
+func (r *Resolver) loadMessagesForTurnRun(ctx context.Context, req conversation.ChatRequest, run TurnRun, maxContextMinutes int) ([]messageWithUsage, error) {
 	if r.messageService == nil {
 		return nil, nil
 	}
 	since := time.Now().UTC().Add(-time.Duration(maxContextMinutes) * time.Minute)
 	var msgs []messagepkg.Message
 	var err error
-	if contextHeadTurnID := strings.TrimSpace(contextHeadTurnID(req)); contextHeadTurnID != "" {
-		msgs, err = r.messageService.ListActiveSinceByTurn(ctx, contextHeadTurnID, since)
-	} else if strings.TrimSpace(req.SessionID) != "" {
+	switch run.Context.Kind {
+	case ContextScopeEmpty:
+		return nil, nil
+	case ContextScopeTurnHead:
+		headTurnID := strings.TrimSpace(run.Context.TurnID)
+		if headTurnID == "" {
+			return nil, errors.New("turn context requires turn id")
+		}
+		msgs, err = r.messageService.ListActiveSinceByTurn(ctx, headTurnID, since)
+	case ContextScopeSessionHead:
 		msgs, err = r.messageService.ListActiveSinceBySession(ctx, req.SessionID, since)
-	} else {
+	case ContextScopeBotHistory:
 		msgs, err = r.messageService.ListActiveSince(ctx, req.ChatID, since)
+	default:
+		return nil, fmt.Errorf("unknown turn context scope %q", run.Context.Kind)
 	}
 	if err != nil {
 		return nil, err
@@ -75,19 +86,6 @@ func (r *Resolver) loadMessagesForRequest(ctx context.Context, req conversation.
 		})
 	}
 	return result, nil
-}
-
-func contextHeadTurnID(req conversation.ChatRequest) string {
-	if headTurnID := strings.TrimSpace(req.ContextHeadTurnID); headTurnID != "" {
-		return headTurnID
-	}
-	if strings.TrimSpace(req.RewriteTargetMessageID) != "" {
-		return ""
-	}
-	if strings.TrimSpace(req.PersistTurnID) != "" && req.ContextHeadTurnPinned {
-		return strings.TrimSpace(req.PersistTurnID)
-	}
-	return ""
 }
 
 func dedupePersistedCurrentUserMessage(messages []messageWithUsage, req conversation.ChatRequest) []messageWithUsage {

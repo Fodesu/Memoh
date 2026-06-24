@@ -2,9 +2,9 @@
   <!-- One reserved row under every turn. The height is always present so the
        layout never jumps; only visibility toggles. While the turn is still
        streaming the row stays fully hidden (no hover reveal) — actions on an
-       in-flight answer are meaningless. The latest FINISHED turn keeps it
-       visible; every other turn reveals it on pointer/focus within the turn's
-       hover scope (group/msg, set on the message content wrapper).
+       in-flight answer are meaningless. Finished turns reveal it on
+       pointer/focus within the turn's hover scope (group/msg, set on the
+       message content wrapper).
 
        Alignment differs by role on purpose:
        - assistant (`start`): the hover hit-area overflows the text's left edge
@@ -63,9 +63,65 @@
         </TooltipContent>
       </Tooltip>
 
-      <!-- ASSISTANT role: "more" menu — timestamp only for now. Share, retry,
-           read-aloud, and user edit are intentionally withheld until wired. -->
+      <!-- ASSISTANT role: reply-level actions. Share/read-aloud stay withheld
+           until their flows are wired. -->
+      <template v-if="role === 'user'">
+        <Tooltip v-if="canEdit">
+          <TooltipTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              :class="actionIconClass"
+              :aria-label="t('chat.actions.edit')"
+              @click="emit('edit')"
+            >
+              <PencilLine class="size-[18px]" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {{ t('chat.actions.edit') }}
+          </TooltipContent>
+        </Tooltip>
+      </template>
+
       <template v-if="role === 'assistant'">
+        <Tooltip v-if="canRetry">
+          <TooltipTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              :class="actionIconClass"
+              :aria-label="t('chat.actions.retry')"
+              @click="emit('retry')"
+            >
+              <RotateCcw class="size-[18px]" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {{ t('chat.actions.retry') }}
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip v-if="canFork">
+          <TooltipTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              :class="actionIconClass"
+              :aria-label="t('chat.actions.fork')"
+              @click="emit('fork')"
+            >
+              <Split class="size-[18px] rotate-90" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {{ t('chat.actions.fork') }}
+          </TooltipContent>
+        </Tooltip>
+
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
             <Button
@@ -94,6 +150,52 @@
           </DropdownMenuContent>
         </DropdownMenu>
       </template>
+
+      <div
+        v-if="variantState"
+        class="flex items-center justify-center text-muted-foreground"
+        :aria-label="t('chat.actions.variants', { current: variantState.index + 1, total: variantState.total })"
+      >
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              :class="actionIconClass"
+              :disabled="!variantState.previousHeadTurnId"
+              :aria-label="t('chat.actions.previousVariant')"
+              @click="switchVariant(variantState.previousHeadTurnId)"
+            >
+              <ChevronLeft class="size-[18px]" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {{ t('chat.actions.previousVariant') }}
+          </TooltipContent>
+        </Tooltip>
+        <span class="px-0.5 text-label font-medium tabular-nums text-muted-foreground">
+          {{ variantState.index + 1 }}/{{ variantState.total }}
+        </span>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              :class="actionIconClass"
+              :disabled="!variantState.nextHeadTurnId"
+              :aria-label="t('chat.actions.nextVariant')"
+              @click="switchVariant(variantState.nextHeadTurnId)"
+            >
+              <ChevronRight class="size-[18px]" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {{ t('chat.actions.nextVariant') }}
+          </TooltipContent>
+        </Tooltip>
+      </div>
     </TooltipProvider>
   </div>
 </template>
@@ -101,9 +203,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ChevronLeft, ChevronRight, PencilLine, RotateCcw, Split } from 'lucide-vue-next'
 import CopyConnectedIcon from './copy-connected-icon.vue'
 import CheckDrawIcon from './check-draw-icon.vue'
 import DotsIcon from './dots-icon.vue'
+import type { TurnVariantState } from '@/store/chat-list'
 import {
   Button,
   Tooltip,
@@ -125,6 +229,17 @@ const props = defineProps<{
   persistent?: boolean
   streaming?: boolean
   align?: 'start' | 'end'
+  canEdit?: boolean
+  canFork?: boolean
+  canRetry?: boolean
+  variantState?: TurnVariantState | null
+}>()
+
+const emit = defineEmits<{
+  edit: []
+  fork: []
+  retry: []
+  selectVariant: [headTurnId: string]
 }>()
 
 const { t } = useI18n()
@@ -147,5 +262,11 @@ async function handleCopy() {
   copied.value = true
   if (resetTimer) clearTimeout(resetTimer)
   resetTimer = setTimeout(() => { copied.value = false }, 1500)
+}
+
+function switchVariant(headTurnId?: string) {
+  const head = headTurnId?.trim()
+  if (!head) return
+  emit('selectVariant', head)
 }
 </script>

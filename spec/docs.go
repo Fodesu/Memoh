@@ -6483,6 +6483,71 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/sessions/{session_id}/fork": {
+            "post": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Fork a chat session from an assistant reply",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Source session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fork source message",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.forkSessionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/session.Session"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions/{session_id}/messages/events": {
             "get": {
                 "description": "SSE stream that pushes a server-fixed backlog of the last 50\nmessages, then streams future message_created and\nsession_title_updated events scoped to this session only.",
@@ -16147,6 +16212,9 @@ const docTemplate = `{
         "handlers.LocalChannelMessageRequest": {
             "type": "object",
             "properties": {
+                "base_head_turn_id": {
+                    "type": "string"
+                },
                 "message": {
                     "$ref": "#/definitions/channel.Message"
                 },
@@ -16895,6 +16963,17 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.forkSessionRequest": {
+            "type": "object",
+            "properties": {
+                "base_head_turn_id": {
+                    "type": "string"
+                },
+                "message_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.fsOpResponse": {
             "type": "object",
             "properties": {
@@ -17475,6 +17554,12 @@ const docTemplate = `{
                 },
                 "source_reply_to_message_id": {
                     "type": "string"
+                },
+                "turn_id": {
+                    "type": "string"
+                },
+                "turn_message_seq": {
+                    "type": "integer"
                 },
                 "usage": {
                     "type": "array",
@@ -18561,6 +18646,15 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "created_by_user_id": {
+                    "type": "string"
+                },
+                "default_head_turn_id": {
+                    "type": "string"
+                },
+                "forked_from_session_id": {
+                    "type": "string"
+                },
+                "forked_from_turn_id": {
                     "type": "string"
                 },
                 "id": {

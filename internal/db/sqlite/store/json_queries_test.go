@@ -36,7 +36,7 @@ CREATE TABLE bot_sessions (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL,
   type TEXT NOT NULL,
-  head_turn_id TEXT,
+  default_head_turn_id TEXT,
   parent_session_id TEXT,
   deleted_at TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -76,7 +76,7 @@ CREATE TABLE bot_history_messages (
 	if err != nil {
 		t.Fatalf("insert model: %v", err)
 	}
-	_, err = conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, bot_id, type, head_turn_id, updated_at) VALUES (?, ?, ?, ?, ?)`, sessionID, botID, "chat", turnID, "2026-05-01 01:00:00")
+	_, err = conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, bot_id, type, default_head_turn_id, updated_at) VALUES (?, ?, ?, ?, ?)`, sessionID, botID, "chat", turnID, "2026-05-01 01:00:00")
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
 	}

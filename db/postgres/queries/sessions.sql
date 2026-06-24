@@ -1,7 +1,7 @@
 -- name: CreateSession :one
 INSERT INTO bot_sessions (
   bot_id, route_id, channel_type, type, title, metadata,
-  head_turn_id, forked_from_session_id, forked_from_turn_id,
+  default_head_turn_id, forked_from_session_id, forked_from_turn_id,
   parent_session_id, created_by_user_id
 )
 VALUES (
@@ -11,7 +11,7 @@ VALUES (
   sqlc.arg(type),
   sqlc.arg(title),
   sqlc.arg(metadata),
-  sqlc.narg(head_turn_id)::uuid,
+  sqlc.narg(default_head_turn_id)::uuid,
   sqlc.narg(forked_from_session_id)::uuid,
   sqlc.narg(forked_from_turn_id)::uuid,
   sqlc.narg(parent_session_id)::uuid,
@@ -33,7 +33,7 @@ WHERE id = $1;
 -- name: ListSessionsByBot :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata,
-  s.head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
+  s.default_head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
   s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
   r.metadata AS route_metadata,
   r.conversation_type AS route_conversation_type
@@ -46,7 +46,7 @@ ORDER BY s.updated_at DESC;
 -- name: ListSessionsByBotAndCreatedByUser :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata,
-  s.head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
+  s.default_head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
   s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
   r.metadata AS route_metadata,
   r.conversation_type AS route_conversation_type
@@ -63,7 +63,7 @@ ORDER BY s.updated_at DESC;
 -- filtering, pass every known type.
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata,
-  s.head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
+  s.default_head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
   s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
   r.metadata AS route_metadata,
   r.conversation_type AS route_conversation_type
@@ -86,7 +86,7 @@ LIMIT sqlc.arg(limit_count)::int;
 -- name: ListSessionsByBotAndCreatedByUserPaged :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata,
-  s.head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
+  s.default_head_turn_id, s.forked_from_session_id, s.forked_from_turn_id,
   s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
   r.metadata AS route_metadata,
   r.conversation_type AS route_conversation_type
@@ -142,22 +142,61 @@ UPDATE bot_sessions
 SET updated_at = now()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
--- name: UpdateSessionHeadTurn :one
+-- name: CreateSessionTurnHead :one
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
+VALUES (sqlc.arg(session_id), sqlc.arg(head_turn_id))
+ON CONFLICT (session_id, head_turn_id) DO UPDATE
+SET updated_at = now()
+RETURNING *;
+
+-- name: GetSessionTurnHead :one
+SELECT *
+FROM bot_session_turn_heads
+WHERE session_id = sqlc.arg(session_id)
+  AND head_turn_id = sqlc.arg(head_turn_id);
+
+-- name: ListSessionTurnHeads :many
+SELECT *
+FROM bot_session_turn_heads
+WHERE session_id = sqlc.arg(session_id)
+ORDER BY created_at ASC, head_turn_id ASC;
+
+-- name: ReplaceSessionTurnHead :one
+WITH removed AS (
+  DELETE FROM bot_session_turn_heads h
+  WHERE h.session_id = sqlc.arg(target_session_id)
+    AND h.head_turn_id = sqlc.arg(old_head_turn_id)
+  RETURNING h.session_id
+)
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
+SELECT removed.session_id, sqlc.arg(new_head_turn_id)
+FROM removed
+ON CONFLICT (session_id, head_turn_id) DO UPDATE
+SET updated_at = now()
+RETURNING *;
+
+-- name: DeleteSessionTurnHeads :exec
+DELETE FROM bot_session_turn_heads
+WHERE session_id = sqlc.arg(session_id);
+
+-- name: UpdateSessionDefaultHeadTurn :one
 UPDATE bot_sessions
-SET head_turn_id = sqlc.narg(head_turn_id)::uuid,
+SET default_head_turn_id = sqlc.narg(default_head_turn_id)::uuid,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL
 RETURNING *;
 
--- name: UpdateSessionHeadTurnIfCurrent :one
+-- name: UpdateSessionDefaultHeadTurnIfValid :one
 UPDATE bot_sessions
-SET head_turn_id = sqlc.narg(head_turn_id)::uuid,
+SET default_head_turn_id = sqlc.arg(default_head_turn_id),
     updated_at = now()
 WHERE id = sqlc.arg(id)
   AND deleted_at IS NULL
-  AND (
-    head_turn_id = sqlc.narg(expected_head_turn_id)::uuid
-    OR (head_turn_id IS NULL AND sqlc.narg(expected_head_turn_id)::uuid IS NULL)
+  AND EXISTS (
+    SELECT 1
+    FROM bot_session_turn_heads h
+    WHERE h.session_id = bot_sessions.id
+      AND h.head_turn_id = sqlc.arg(default_head_turn_id)
   )
 RETURNING *;
 
@@ -182,7 +221,7 @@ WHERE bot_id = sqlc.arg(bot_id) AND deleted_at IS NULL;
 
 -- name: ClearSessionTurnPointersByBot :exec
 UPDATE bot_sessions
-SET head_turn_id = NULL,
+SET default_head_turn_id = NULL,
     forked_from_session_id = NULL,
     forked_from_turn_id = NULL,
     updated_at = now()

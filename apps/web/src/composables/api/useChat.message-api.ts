@@ -11,6 +11,7 @@ import type {
   BotSessionActivityEvent,
   ChatAttachment,
   FetchMessagesOptions,
+  FetchMessagesUIResult,
   Message,
   SessionMessageStreamEvent,
   UITurn,
@@ -40,7 +41,7 @@ export async function fetchMessagesUI(
   botId: string,
   sessionId: string,
   options?: FetchMessagesOptions,
-): Promise<UITurn[]> {
+): Promise<FetchMessagesUIResult> {
   const sid = sessionId.trim()
   if (!sid) throw new Error('session id is required')
   const response = await client.get({
@@ -55,7 +56,13 @@ export async function fetchMessagesUI(
     throwOnError: true,
   })
 
-  return (response.data as { items?: UITurn[] } | undefined)?.items ?? []
+  const data = response.data as FetchMessagesUIResult | undefined
+  return {
+    items: data?.items ?? [],
+    default_head_turn_id: data?.default_head_turn_id,
+    head_turn_ids: data?.head_turn_ids ?? [],
+    nodes: data?.nodes ?? [],
+  }
 }
 
 export interface LocateMessageResult {
@@ -93,6 +100,7 @@ export async function locateMessageUI(
 export interface SendMessageOverrides {
   modelId?: string
   reasoningEffort?: string
+  selectedHeadTurnId?: string
 }
 
 export async function sendLocalChannelMessage(
@@ -117,9 +125,10 @@ export async function sendLocalChannelMessage(
   const body: Record<string, unknown> = { message: msg }
   if (overrides?.modelId) body.model_id = overrides.modelId
   if (overrides?.reasoningEffort) body.reasoning_effort = overrides.reasoningEffort
+  if (overrides?.selectedHeadTurnId) body.base_head_turn_id = overrides.selectedHeadTurnId
   await postBotsByBotIdLocalMessages({
     path: { bot_id: botId },
-    body: body as { message: ChannelMessage; model_id?: string; reasoning_effort?: string },
+    body: body as { message: ChannelMessage; model_id?: string; reasoning_effort?: string; base_head_turn_id?: string },
     throwOnError: true,
   })
 }

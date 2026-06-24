@@ -87,7 +87,7 @@ WHERE id = sqlc.arg(id);
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
   UNION ALL
@@ -107,7 +107,7 @@ WHERE tar.bot_id = sqlc.arg(bot_id)
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
   UNION ALL
@@ -128,7 +128,7 @@ LIMIT 1;
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
   UNION ALL
@@ -187,7 +187,7 @@ RETURNING *;
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
   UNION ALL
@@ -207,7 +207,7 @@ ORDER BY tar.created_at ASC, tar.short_id ASC;
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
   UNION ALL

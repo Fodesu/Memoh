@@ -36,7 +36,7 @@ CREATE TABLE bots (
 );
 CREATE TABLE bot_sessions (
   id TEXT PRIMARY KEY,
-  head_turn_id TEXT,
+  default_head_turn_id TEXT,
   deleted_at TEXT
 );
 CREATE TABLE bot_channel_routes (

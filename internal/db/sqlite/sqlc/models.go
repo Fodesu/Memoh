@@ -229,7 +229,7 @@ type BotSession struct {
 	Type                string         `json:"type"`
 	Title               string         `json:"title"`
 	Metadata            string         `json:"metadata"`
-	HeadTurnID          sql.NullString `json:"head_turn_id"`
+	DefaultHeadTurnID   sql.NullString `json:"default_head_turn_id"`
 	ForkedFromSessionID sql.NullString `json:"forked_from_session_id"`
 	ForkedFromTurnID    sql.NullString `json:"forked_from_turn_id"`
 	ParentSessionID     sql.NullString `json:"parent_session_id"`
@@ -249,6 +249,13 @@ type BotSessionEvent struct {
 	SenderChannelIdentityID sql.NullString `json:"sender_channel_identity_id"`
 	ReceivedAtMs            int64          `json:"received_at_ms"`
 	CreatedAt               string         `json:"created_at"`
+}
+
+type BotSessionTurnHead struct {
+	SessionID  string `json:"session_id"`
+	HeadTurnID string `json:"head_turn_id"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 type BotStorageBinding struct {

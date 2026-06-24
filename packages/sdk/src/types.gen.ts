@@ -1497,6 +1497,7 @@ export type HandlersListSnapshotsResponse = {
 };
 
 export type HandlersLocalChannelMessageRequest = {
+    base_head_turn_id?: string;
     message?: ChannelMessage;
     model_id?: string;
     reasoning_effort?: string;
@@ -1793,6 +1794,11 @@ export type HandlersEmailOAuthStatusResponse = {
     provider?: string;
 };
 
+export type HandlersForkSessionRequest = {
+    base_head_turn_id?: string;
+    message_id?: string;
+};
+
 export type HandlersFsOpResponse = {
     ok?: boolean;
     revision?: string;
@@ -2034,6 +2040,8 @@ export type MessageMessage = {
     sender_user_id?: string;
     session_id?: string;
     source_reply_to_message_id?: string;
+    turn_id?: string;
+    turn_message_seq?: number;
     usage?: Array<number>;
 };
 
@@ -2438,6 +2446,9 @@ export type SessionSession = {
     channel_type?: string;
     created_at?: string;
     created_by_user_id?: string;
+    default_head_turn_id?: string;
+    forked_from_session_id?: string;
+    forked_from_turn_id?: string;
     id?: string;
     metadata?: {
         [key: string]: unknown;
@@ -7923,6 +7934,55 @@ export type PostBotsByBotIdSessionsBySessionIdCompactResponses = {
 };
 
 export type PostBotsByBotIdSessionsBySessionIdCompactResponse = PostBotsByBotIdSessionsBySessionIdCompactResponses[keyof PostBotsByBotIdSessionsBySessionIdCompactResponses];
+
+export type PostBotsByBotIdSessionsBySessionIdForkData = {
+    /**
+     * Fork source message
+     */
+    body: HandlersForkSessionRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Source session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/fork';
+};
+
+export type PostBotsByBotIdSessionsBySessionIdForkErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdForkError = PostBotsByBotIdSessionsBySessionIdForkErrors[keyof PostBotsByBotIdSessionsBySessionIdForkErrors];
+
+export type PostBotsByBotIdSessionsBySessionIdForkResponses = {
+    /**
+     * Created
+     */
+    201: SessionSession;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdForkResponse = PostBotsByBotIdSessionsBySessionIdForkResponses[keyof PostBotsByBotIdSessionsBySessionIdForkResponses];
 
 export type GetBotsByBotIdSessionsBySessionIdMessagesEventsData = {
     body?: never;

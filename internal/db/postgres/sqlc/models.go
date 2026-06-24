@@ -228,7 +228,7 @@ type BotSession struct {
 	Type                string             `json:"type"`
 	Title               string             `json:"title"`
 	Metadata            []byte             `json:"metadata"`
-	HeadTurnID          pgtype.UUID        `json:"head_turn_id"`
+	DefaultHeadTurnID   pgtype.UUID        `json:"default_head_turn_id"`
 	ForkedFromSessionID pgtype.UUID        `json:"forked_from_session_id"`
 	ForkedFromTurnID    pgtype.UUID        `json:"forked_from_turn_id"`
 	ParentSessionID     pgtype.UUID        `json:"parent_session_id"`
@@ -248,6 +248,13 @@ type BotSessionEvent struct {
 	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
 	ReceivedAtMs            int64              `json:"received_at_ms"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+}
+
+type BotSessionTurnHead struct {
+	SessionID  pgtype.UUID        `json:"session_id"`
+	HeadTurnID pgtype.UUID        `json:"head_turn_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
 type BotStorageBinding struct {

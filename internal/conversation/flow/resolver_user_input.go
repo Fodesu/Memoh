@@ -124,18 +124,18 @@ func (r *Resolver) RespondUserInput(ctx context.Context, input UserInputResponse
 func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
 	req = withLocalWebUserInputReplyTarget(req)
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
+	run := continuationTurnRun(req.SessionID, req.PersistTurnID)
 	storeReq := conversation.ChatRequest{
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		SessionID:               req.SessionID,
-		PersistTurnID:           req.PersistTurnID,
 		SourceChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          req.SourcePlatform,
 		ReplyTarget:             req.ReplyTarget,
 		ConversationType:        req.ConversationType,
 		UserMessagePersisted:    true,
 	}
-	if err := r.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
+	if err := r.storeRoundWithOptions(ctx, storeReq, &run, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
 		return err
 	}
 	return r.continueUserInputSession(ctx, req, input, eventCh)
@@ -157,14 +157,13 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 		return err
 	}
 
+	run := continuationTurnRun(req.SessionID, req.PersistTurnID)
 	contextReq := conversation.ChatRequest{
-		BotID:                 input.BotID,
-		ChatID:                input.BotID,
-		SessionID:             req.SessionID,
-		PersistTurnID:         req.PersistTurnID,
-		ContextHeadTurnPinned: strings.TrimSpace(req.PersistTurnID) != "",
+		BotID:     input.BotID,
+		ChatID:    input.BotID,
+		SessionID: req.SessionID,
 	}
-	loaded, err := r.loadMessagesForRequest(ctx, contextReq, defaultMaxContextMinutes)
+	loaded, err := r.loadMessagesForTurnRun(ctx, contextReq, run, defaultMaxContextMinutes)
 	if err != nil {
 		return err
 	}
@@ -183,7 +182,6 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		SessionID:               req.SessionID,
-		PersistTurnID:           req.PersistTurnID,
 		SourceChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          req.SourcePlatform,
 		ReplyTarget:             req.ReplyTarget,
@@ -203,6 +201,7 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 				if storeErr := r.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
 					chatReq,
+					&run,
 					resolvedContext{model: models.GetResponse{ID: resolved.ModelID}},
 					snap,
 				); storeErr != nil {

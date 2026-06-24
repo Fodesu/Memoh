@@ -11,6 +11,9 @@ export interface SessionSummary {
   title: string
   metadata?: Record<string, unknown>
   parent_session_id?: string
+  default_head_turn_id?: string
+  forked_from_session_id?: string
+  forked_from_turn_id?: string
   created_at?: string
   updated_at?: string
   route_metadata?: Record<string, unknown>
@@ -243,6 +246,7 @@ export type UIMessage = UITextMessage | UIReasoningMessage | UIToolMessage | UIA
 
 export interface UIUserTurn {
   role: 'user'
+  turn_id?: string
   text: string
   attachments?: UIAttachment[]
   reply?: UIReplyRef
@@ -258,6 +262,7 @@ export interface UIUserTurn {
 
 export interface UIAssistantTurn {
   role: 'assistant'
+  turn_id?: string
   messages: UIMessage[]
   timestamp: string
   platform?: string
@@ -267,6 +272,7 @@ export interface UIAssistantTurn {
 
 export interface UISystemTurn {
   role: 'system'
+  turn_id?: string
   kind?: 'background_task' | string
   background_task?: UIBackgroundTask
   timestamp: string
@@ -275,6 +281,19 @@ export interface UISystemTurn {
 }
 
 export type UITurn = UIUserTurn | UIAssistantTurn | UISystemTurn
+
+export interface UITurnGraphNode {
+  turn_id: string
+  parent_turn_id?: string
+  items: UITurn[]
+}
+
+export interface FetchMessagesUIResult {
+  items: UITurn[]
+  default_head_turn_id?: string
+  head_turn_ids?: string[]
+  nodes?: UITurnGraphNode[]
+}
 
 export interface UIStreamStartEvent {
   type: 'start'

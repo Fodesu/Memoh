@@ -26,6 +26,10 @@ type DBService struct {
 	publisher event.Publisher
 }
 
+type txRunner interface {
+	RunInTx(ctx context.Context, fn func(dbstore.Queries) error) error
+}
+
 // NewService creates a message service.
 func NewService(log *slog.Logger, queries dbstore.Queries, publishers ...event.Publisher) *DBService {
 	if log == nil {
@@ -83,13 +87,7 @@ func (s *DBService) Persist(ctx context.Context, input PersistInput) (Message, e
 	if len(content) == 0 {
 		content = []byte("{}")
 	}
-	if !pgTurnID.Valid && pgSessionID.Valid {
-		pgTurnID, err = s.createFallbackTurn(ctx, pgBotID, pgSessionID, input.Role)
-		if err != nil {
-			return Message{}, err
-		}
-	}
-	row, err := s.createMessageWithTurnSeqRetry(ctx, createMessageWithSeqInput{
+	result, err := s.persistMessageAtomic(ctx, createMessageWithSeqInput{
 		BotID:                   pgBotID,
 		SessionID:               pgSessionID,
 		TurnID:                  pgTurnID,
@@ -105,40 +103,9 @@ func (s *DBService) Persist(ctx context.Context, input PersistInput) (Message, e
 		ModelID:                 pgModelID,
 		EventID:                 pgEventID,
 		DisplayText:             input.DisplayText,
-	})
+	}, input.Assets)
 	if err != nil {
 		return Message{}, err
-	}
-
-	result := toMessageFromCreate(row)
-	if pgTurnID.Valid {
-		s.updateTurnPointers(ctx, pgTurnID, result)
-	}
-
-	for _, ref := range input.Assets {
-		pgMsgID := row.ID
-		role := ref.Role
-		if strings.TrimSpace(role) == "" {
-			role = "attachment"
-		}
-		contentHash := strings.TrimSpace(ref.ContentHash)
-		if contentHash == "" {
-			s.logger.Warn("skip asset ref without content_hash")
-			continue
-		}
-		if ref.Ordinal < math.MinInt32 || ref.Ordinal > math.MaxInt32 {
-			return Message{}, fmt.Errorf("asset ordinal out of range: %d", ref.Ordinal)
-		}
-		if _, assetErr := s.queries.CreateMessageAsset(ctx, sqlc.CreateMessageAssetParams{
-			MessageID:   pgMsgID,
-			Role:        role,
-			Ordinal:     int32(ref.Ordinal),
-			ContentHash: contentHash,
-			Name:        ref.Name,
-			Metadata:    marshalMetadata(ref.Metadata),
-		}); assetErr != nil {
-			s.logger.Warn("create message asset link failed", slog.String("message_id", result.ID), slog.Any("error", assetErr))
-		}
 	}
 
 	if len(input.Assets) > 0 {
@@ -362,6 +329,68 @@ func (s *DBService) ListBeforeBySession(ctx context.Context, sessionID string, b
 	return msgs, nil
 }
 
+func (s *DBService) GetSessionTurnGraph(ctx context.Context, sessionID string) (SessionTurnGraph, error) {
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return SessionTurnGraph{}, err
+	}
+
+	sess, err := s.queries.GetSessionByID(ctx, pgSessionID)
+	if err != nil {
+		return SessionTurnGraph{}, err
+	}
+	headRows, err := s.queries.ListSessionTurnHeads(ctx, pgSessionID)
+	if err != nil {
+		return SessionTurnGraph{}, err
+	}
+	turnRows, err := s.queries.ListSessionTurnGraphTurns(ctx, pgSessionID)
+	if err != nil {
+		return SessionTurnGraph{}, err
+	}
+	messageRows, err := s.queries.ListMessagesBySessionTurnGraph(ctx, pgSessionID)
+	if err != nil {
+		return SessionTurnGraph{}, err
+	}
+
+	graph := SessionTurnGraph{
+		DefaultHeadTurnID: uuidToString(sess.DefaultHeadTurnID),
+		HeadTurnIDs:       make([]string, 0, len(headRows)),
+		Nodes:             make([]SessionTurnGraphNode, 0, len(turnRows)),
+	}
+	for _, head := range headRows {
+		if id := uuidToString(head.HeadTurnID); id != "" {
+			graph.HeadTurnIDs = append(graph.HeadTurnIDs, id)
+		}
+	}
+
+	messagesByTurn := make(map[string][]Message, len(turnRows))
+	messages := make([]Message, 0, len(messageRows))
+	for _, row := range messageRows {
+		msg := toMessageFromSessionTurnGraphRow(row)
+		if msg.TurnID == "" {
+			continue
+		}
+		messages = append(messages, msg)
+	}
+	s.enrichAssets(ctx, messages)
+	for _, msg := range messages {
+		messagesByTurn[msg.TurnID] = append(messagesByTurn[msg.TurnID], msg)
+	}
+
+	for _, turn := range turnRows {
+		turnID := uuidToString(turn.ID)
+		if turnID == "" {
+			continue
+		}
+		graph.Nodes = append(graph.Nodes, SessionTurnGraphNode{
+			TurnID:       turnID,
+			ParentTurnID: uuidToString(turn.ParentTurnID),
+			Messages:     messagesByTurn[turnID],
+		})
+	}
+	return graph, nil
+}
+
 func (s *DBService) LocateByExternalIDBySession(ctx context.Context, sessionID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
@@ -468,54 +497,71 @@ func (s *DBService) DeleteBySession(ctx context.Context, sessionID string) error
 	return s.queries.DeleteMessagesBySession(ctx, pgSessionID)
 }
 
-func (s *DBService) createFallbackTurn(ctx context.Context, botID, sessionID pgtype.UUID, role string) (pgtype.UUID, error) {
+func createFallbackTurn(ctx context.Context, q dbstore.Queries, botID, sessionID pgtype.UUID, role string) (pgtype.UUID, error) {
 	for attempts := 0; attempts < 2; attempts++ {
-		sess, err := s.queries.GetSessionByID(ctx, sessionID)
+		sess, err := q.GetSessionByID(ctx, sessionID)
 		if err != nil {
 			return pgtype.UUID{}, fmt.Errorf("get session for history turn: %w", err)
 		}
-		if sess.HeadTurnID.Valid {
-			head, err := s.queries.GetHistoryTurnByID(ctx, sess.HeadTurnID)
+		baseHeadTurnID := sess.DefaultHeadTurnID
+		if baseHeadTurnID.Valid {
+			head, err := q.GetHistoryTurnByID(ctx, baseHeadTurnID)
 			if err != nil {
 				return pgtype.UUID{}, fmt.Errorf("get session head turn: %w", err)
 			}
 			if canAppendFallbackMessageToTurn(head, sessionID, role) {
-				return sess.HeadTurnID, nil
+				return baseHeadTurnID, nil
 			}
 		}
 
-		turn, err := s.queries.CreateHistoryTurn(ctx, sqlc.CreateHistoryTurnParams{
+		turn, err := q.CreateHistoryTurn(ctx, sqlc.CreateHistoryTurnParams{
 			BotID:          botID,
 			OwnerSessionID: sessionID,
-			ParentTurnID:   sess.HeadTurnID,
+			ParentTurnID:   baseHeadTurnID,
 		})
 		if err != nil {
 			return pgtype.UUID{}, fmt.Errorf("create history turn: %w", err)
 		}
-		if _, err := s.queries.UpdateSessionHeadTurnIfCurrent(ctx, sqlc.UpdateSessionHeadTurnIfCurrentParams{
-			ID:                 sessionID,
-			HeadTurnID:         turn.ID,
-			ExpectedHeadTurnID: sess.HeadTurnID,
-		}); err != nil {
-			_ = s.queries.DeleteHistoryTurnByID(ctx, turn.ID)
-			if errors.Is(err, pgx.ErrNoRows) {
-				continue
+		if baseHeadTurnID.Valid {
+			if _, err := q.ReplaceSessionTurnHead(ctx, sqlc.ReplaceSessionTurnHeadParams{
+				TargetSessionID: sessionID,
+				OldHeadTurnID:   baseHeadTurnID,
+				NewHeadTurnID:   turn.ID,
+			}); err != nil {
+				_ = q.DeleteHistoryTurnByID(ctx, turn.ID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				return pgtype.UUID{}, fmt.Errorf("replace session turn head: %w", err)
 			}
-			return pgtype.UUID{}, fmt.Errorf("update session head turn: %w", err)
+		} else {
+			if _, err := q.CreateSessionTurnHead(ctx, sqlc.CreateSessionTurnHeadParams{
+				SessionID:  sessionID,
+				HeadTurnID: turn.ID,
+			}); err != nil {
+				_ = q.DeleteHistoryTurnByID(ctx, turn.ID)
+				return pgtype.UUID{}, fmt.Errorf("create session turn head: %w", err)
+			}
+		}
+		if _, err := q.UpdateSessionDefaultHeadTurnIfValid(ctx, sqlc.UpdateSessionDefaultHeadTurnIfValidParams{
+			ID:                sessionID,
+			DefaultHeadTurnID: turn.ID,
+		}); err != nil {
+			return pgtype.UUID{}, fmt.Errorf("update session default head turn: %w", err)
 		}
 		return turn.ID, nil
 	}
-	sess, err := s.queries.GetSessionByID(ctx, sessionID)
+	sess, err := q.GetSessionByID(ctx, sessionID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("get session for history turn after retry: %w", err)
 	}
-	if sess.HeadTurnID.Valid {
-		head, err := s.queries.GetHistoryTurnByID(ctx, sess.HeadTurnID)
+	if sess.DefaultHeadTurnID.Valid {
+		head, err := q.GetHistoryTurnByID(ctx, sess.DefaultHeadTurnID)
 		if err != nil {
 			return pgtype.UUID{}, fmt.Errorf("get session head turn after retry: %w", err)
 		}
 		if canAppendFallbackMessageToTurn(head, sessionID, role) {
-			return sess.HeadTurnID, nil
+			return sess.DefaultHeadTurnID, nil
 		}
 	}
 	return pgtype.UUID{}, errors.New("session head changed while creating history turn")
@@ -533,14 +579,14 @@ func canAppendFallbackMessageToTurn(turn sqlc.BotHistoryTurn, sessionID pgtype.U
 	}
 }
 
-func (s *DBService) resolveTurnMessageSeq(ctx context.Context, turnID pgtype.UUID, explicit int64) (pgtype.Int8, error) {
+func resolveTurnMessageSeq(ctx context.Context, q dbstore.Queries, turnID pgtype.UUID, explicit int64) (pgtype.Int8, error) {
 	if !turnID.Valid {
 		return pgtype.Int8{}, nil
 	}
 	if explicit > 0 {
 		return pgtype.Int8{Int64: explicit, Valid: true}, nil
 	}
-	seq, err := s.queries.GetNextTurnMessageSeq(ctx, turnID)
+	seq, err := q.GetNextTurnMessageSeq(ctx, turnID)
 	if err != nil {
 		return pgtype.Int8{}, fmt.Errorf("get next turn message seq: %w", err)
 	}
@@ -565,56 +611,119 @@ type createMessageWithSeqInput struct {
 	DisplayText             string
 }
 
-func (s *DBService) createMessageWithTurnSeqRetry(ctx context.Context, input createMessageWithSeqInput) (sqlc.CreateMessageRow, error) {
+func (s *DBService) persistMessageAtomic(ctx context.Context, input createMessageWithSeqInput, assets []AssetRef) (Message, error) {
 	const maxAttempts = 3
 	for attempt := 0; ; attempt++ {
-		turnMessageSeq, err := s.resolveTurnMessageSeq(ctx, input.TurnID, input.ExplicitTurnMessageSeq)
-		if err != nil {
-			return sqlc.CreateMessageRow{}, err
-		}
-		row, err := s.queries.CreateMessage(ctx, sqlc.CreateMessageParams{
-			BotID:                   input.BotID,
-			SessionID:               input.SessionID,
-			TurnID:                  input.TurnID,
-			TurnMessageSeq:          turnMessageSeq,
-			SenderChannelIdentityID: input.SenderChannelIdentityID,
-			SenderUserID:            input.SenderUserID,
-			ExternalMessageID:       toPgText(input.ExternalMessageID),
-			SourceReplyToMessageID:  toPgText(input.SourceReplyToMessageID),
-			Role:                    input.Role,
-			Content:                 input.Content,
-			Metadata:                input.Metadata,
-			Usage:                   input.Usage,
-			ModelID:                 input.ModelID,
-			EventID:                 input.EventID,
-			DisplayText:             toPgText(input.DisplayText),
+		var result Message
+		err := s.runInTx(ctx, func(q dbstore.Queries) error {
+			txInput := input
+			if !txInput.TurnID.Valid && txInput.SessionID.Valid {
+				turnID, err := createFallbackTurn(ctx, q, txInput.BotID, txInput.SessionID, txInput.Role)
+				if err != nil {
+					return err
+				}
+				txInput.TurnID = turnID
+			}
+			row, err := createMessageWithTurnSeq(ctx, q, txInput)
+			if err != nil {
+				return err
+			}
+			result = toMessageFromCreate(row)
+			if txInput.TurnID.Valid {
+				if err := updateTurnPointers(ctx, q, txInput.TurnID, result); err != nil {
+					return err
+				}
+			}
+			if err := createMessageAssetLinks(ctx, q, row.ID, result.ID, assets); err != nil {
+				return err
+			}
+			return nil
 		})
 		if err == nil {
-			return row, nil
+			return result, nil
 		}
-		if input.ExplicitTurnMessageSeq > 0 || !input.TurnID.Valid || attempt+1 >= maxAttempts || !dbpkg.IsUniqueViolation(err) {
-			return sqlc.CreateMessageRow{}, err
+		if input.ExplicitTurnMessageSeq > 0 || (!input.TurnID.Valid && !input.SessionID.Valid) || attempt+1 >= maxAttempts || !dbpkg.IsUniqueViolation(err) {
+			return Message{}, err
 		}
 	}
 }
 
-func (s *DBService) updateTurnPointers(ctx context.Context, turnID pgtype.UUID, msg Message) {
+func (s *DBService) runInTx(ctx context.Context, fn func(dbstore.Queries) error) error {
+	if runner, ok := s.queries.(txRunner); ok && runner != nil {
+		return runner.RunInTx(ctx, fn)
+	}
+	return fn(s.queries)
+}
+
+func createMessageWithTurnSeq(ctx context.Context, q dbstore.Queries, input createMessageWithSeqInput) (sqlc.CreateMessageRow, error) {
+	turnMessageSeq, err := resolveTurnMessageSeq(ctx, q, input.TurnID, input.ExplicitTurnMessageSeq)
+	if err != nil {
+		return sqlc.CreateMessageRow{}, err
+	}
+	return q.CreateMessage(ctx, sqlc.CreateMessageParams{
+		BotID:                   input.BotID,
+		SessionID:               input.SessionID,
+		TurnID:                  input.TurnID,
+		TurnMessageSeq:          turnMessageSeq,
+		SenderChannelIdentityID: input.SenderChannelIdentityID,
+		SenderUserID:            input.SenderUserID,
+		ExternalMessageID:       toPgText(input.ExternalMessageID),
+		SourceReplyToMessageID:  toPgText(input.SourceReplyToMessageID),
+		Role:                    input.Role,
+		Content:                 input.Content,
+		Metadata:                input.Metadata,
+		Usage:                   input.Usage,
+		ModelID:                 input.ModelID,
+		EventID:                 input.EventID,
+		DisplayText:             toPgText(input.DisplayText),
+	})
+}
+
+func updateTurnPointers(ctx context.Context, q dbstore.Queries, turnID pgtype.UUID, msg Message) error {
 	switch strings.TrimSpace(msg.Role) {
 	case "user":
-		if _, err := s.queries.UpdateHistoryTurnRequestMessage(ctx, sqlc.UpdateHistoryTurnRequestMessageParams{
+		if _, err := q.UpdateHistoryTurnRequestMessage(ctx, sqlc.UpdateHistoryTurnRequestMessageParams{
 			ID:               turnID,
 			RequestMessageID: uuidFromString(msg.ID),
 		}); err != nil {
-			s.logger.Warn("update history turn request message failed", slog.String("message_id", msg.ID), slog.Any("error", err))
+			return fmt.Errorf("update history turn request message: %w", err)
 		}
 	case "assistant":
-		if _, err := s.queries.UpdateHistoryTurnFinalAssistantMessage(ctx, sqlc.UpdateHistoryTurnFinalAssistantMessageParams{
+		if _, err := q.UpdateHistoryTurnFinalAssistantMessage(ctx, sqlc.UpdateHistoryTurnFinalAssistantMessageParams{
 			ID:                      turnID,
 			FinalAssistantMessageID: uuidFromString(msg.ID),
 		}); err != nil {
-			s.logger.Warn("update history turn final assistant message failed", slog.String("message_id", msg.ID), slog.Any("error", err))
+			return fmt.Errorf("update history turn final assistant message: %w", err)
 		}
 	}
+	return nil
+}
+
+func createMessageAssetLinks(ctx context.Context, q dbstore.Queries, messageID pgtype.UUID, messageIDText string, assets []AssetRef) error {
+	for _, ref := range assets {
+		role := ref.Role
+		if strings.TrimSpace(role) == "" {
+			role = "attachment"
+		}
+		contentHash := strings.TrimSpace(ref.ContentHash)
+		if contentHash == "" {
+			continue
+		}
+		if ref.Ordinal < math.MinInt32 || ref.Ordinal > math.MaxInt32 {
+			return fmt.Errorf("asset ordinal out of range: %d", ref.Ordinal)
+		}
+		if _, err := q.CreateMessageAsset(ctx, sqlc.CreateMessageAssetParams{
+			MessageID:   messageID,
+			Role:        role,
+			Ordinal:     int32(ref.Ordinal),
+			ContentHash: contentHash,
+			Name:        ref.Name,
+			Metadata:    marshalMetadata(ref.Metadata),
+		}); err != nil {
+			return fmt.Errorf("create message asset link for %s: %w", messageIDText, err)
+		}
+	}
+	return nil
 }
 
 // --- Conversion helpers ---
@@ -676,6 +785,30 @@ func toMessageFromListRow(row sqlc.ListMessagesRow) Message {
 }
 
 func toMessageFromSessionListRow(row sqlc.ListMessagesBySessionRow) Message {
+	return toMessageFields(
+		row.ID,
+		row.BotID,
+		row.SessionID,
+		row.TurnID,
+		row.TurnMessageSeq,
+		row.SenderChannelIdentityID,
+		row.SenderUserID,
+		row.SenderDisplayName,
+		row.SenderAvatarUrl,
+		row.Platform,
+		row.ExternalMessageID,
+		row.SourceReplyToMessageID,
+		row.Role,
+		row.Content,
+		row.Metadata,
+		row.Usage,
+		row.EventID,
+		row.DisplayText,
+		row.CreatedAt,
+	)
+}
+
+func toMessageFromSessionTurnGraphRow(row sqlc.ListMessagesBySessionTurnGraphRow) Message {
 	return toMessageFields(
 		row.ID,
 		row.BotID,

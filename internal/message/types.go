@@ -82,6 +82,18 @@ type LocateResult struct {
 	TargetID string
 }
 
+type SessionTurnGraphNode struct {
+	TurnID       string    `json:"turn_id"`
+	ParentTurnID string    `json:"parent_turn_id,omitempty"`
+	Messages     []Message `json:"messages"`
+}
+
+type SessionTurnGraph struct {
+	DefaultHeadTurnID string                 `json:"default_head_turn_id,omitempty"`
+	HeadTurnIDs       []string               `json:"head_turn_ids"`
+	Nodes             []SessionTurnGraphNode `json:"nodes"`
+}
+
 // Writer defines write behavior needed by the inbound router.
 type Writer interface {
 	Persist(ctx context.Context, input PersistInput) (Message, error)
@@ -101,6 +113,7 @@ type Service interface {
 	ListActiveSinceByTurn(ctx context.Context, headTurnID string, since time.Time) ([]Message, error)
 	ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]Message, error)
 	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error)
+	GetSessionTurnGraph(ctx context.Context, sessionID string) (SessionTurnGraph, error)
 	LocateByExternalIDBySession(ctx context.Context, sessionID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error)
 	DeleteByBot(ctx context.Context, botID string) error
 	DeleteBySession(ctx context.Context, sessionID string) error

@@ -84,6 +84,7 @@ type UIUserInput struct {
 // UITurn is the normalized chat turn used by the web frontend.
 type UITurn struct {
 	Role              string            `json:"role"`
+	TurnID            string            `json:"turn_id,omitempty"`
 	Kind              string            `json:"kind,omitempty"`
 	Messages          []UIMessage       `json:"messages,omitempty"`
 	Text              string            `json:"text,omitempty"`

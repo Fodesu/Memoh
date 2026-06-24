@@ -28,7 +28,7 @@ CREATE TABLE channel_identities (
 );
 CREATE TABLE bot_sessions (
   id TEXT PRIMARY KEY,
-  head_turn_id TEXT,
+  default_head_turn_id TEXT,
   deleted_at TEXT,
   channel_type TEXT
 );
@@ -62,7 +62,7 @@ CREATE TABLE bot_history_messages (
 	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_history_turns (id) VALUES (?)`, turnID); err != nil {
 		t.Fatalf("insert turn: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, head_turn_id, channel_type) VALUES (?, ?, ?)`, sessionID, turnID, "local"); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, default_head_turn_id, channel_type) VALUES (?, ?, ?)`, sessionID, turnID, "local"); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	for index, item := range []struct {

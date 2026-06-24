@@ -448,7 +448,7 @@ const getLatestPendingUserInputBySession = `-- name: GetLatestPendingUserInputBy
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
   UNION ALL
@@ -512,7 +512,7 @@ const getPendingUserInputByReplyMessage = `-- name: GetPendingUserInputByReplyMe
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
   UNION ALL
@@ -578,7 +578,7 @@ const getPendingUserInputBySessionShortID = `-- name: GetPendingUserInputBySessi
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
   UNION ALL
@@ -783,7 +783,7 @@ const listPendingUserInputsBySession = `-- name: ListPendingUserInputsBySession 
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
   UNION ALL
@@ -862,7 +862,7 @@ const listUserInputsBySession = `-- name: ListUserInputsBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
   UNION ALL

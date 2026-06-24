@@ -75,6 +75,12 @@ func (h *MessageHandler) SetBackgroundManager(mgr *background.Manager) {
 	h.bgManager = mgr
 }
 
+type sessionTurnGraphUINode struct {
+	TurnID       string                `json:"turn_id"`
+	ParentTurnID string                `json:"parent_turn_id,omitempty"`
+	Items        []conversation.UITurn `json:"items"`
+}
+
 // Register registers all conversation routes.
 func (h *MessageHandler) Register(e *echo.Echo) {
 	botGroup := e.Group("/bots/:bot_id")
@@ -192,20 +198,15 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 	}
 	h.fillAssetMimeFromStorage(c.Request().Context(), botID, messages)
 	if format == "ui" {
+		if !hasBefore {
+			graph, err := h.messageService.GetSessionTurnGraph(c.Request().Context(), sessionID)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+			return c.JSON(http.StatusOK, h.sessionTurnGraphUIResponse(c.Request().Context(), botID, sessionID, graph))
+		}
 		items := conversation.ConvertMessagesToUITurns(messages)
-		if h.bgManager != nil {
-			conversation.ApplyBackgroundTaskSnapshots(items, h.backgroundTaskSnapshots(botID, sessionID))
-		}
-		if h.toolApproval != nil {
-			if approvals, err := h.toolApproval.ListBySession(c.Request().Context(), botID, sessionID); err == nil {
-				mergeToolApprovals(items, approvals, h.toolApprovalCanApproveFn(c.Request().Context(), sessionID))
-			}
-		}
-		if h.userInput != nil {
-			if requests, err := h.userInput.ListBySession(c.Request().Context(), botID, sessionID); err == nil {
-				mergeUserInputs(items, requests, h.userInput.CanRespond)
-			}
-		}
+		h.decorateUITurns(c.Request().Context(), botID, sessionID, items)
 		return c.JSON(http.StatusOK, map[string]any{
 			"items": items,
 		})
@@ -271,19 +272,7 @@ func (h *MessageHandler) LocateMessage(c echo.Context) error {
 
 	h.fillAssetMimeFromStorage(c.Request().Context(), botID, located.Messages)
 	items := conversation.ConvertMessagesToUITurns(located.Messages)
-	if h.bgManager != nil {
-		conversation.ApplyBackgroundTaskSnapshots(items, h.backgroundTaskSnapshots(botID, sessionID))
-	}
-	if h.toolApproval != nil {
-		if approvals, err := h.toolApproval.ListBySession(c.Request().Context(), botID, sessionID); err == nil {
-			mergeToolApprovals(items, approvals, h.toolApprovalCanApproveFn(c.Request().Context(), sessionID))
-		}
-	}
-	if h.userInput != nil {
-		if requests, err := h.userInput.ListBySession(c.Request().Context(), botID, sessionID); err == nil {
-			mergeUserInputs(items, requests, h.userInput.CanRespond)
-		}
-	}
+	h.decorateUITurns(c.Request().Context(), botID, sessionID, items)
 	return c.JSON(http.StatusOK, map[string]any{
 		"items":                      items,
 		"target_id":                  located.TargetID,
@@ -346,6 +335,61 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (h *MessageHandler) sessionTurnGraphUIResponse(ctx context.Context, botID, sessionID string, graph messagepkg.SessionTurnGraph) map[string]any {
+	nodes := make([]sessionTurnGraphUINode, 0, len(graph.Nodes))
+	itemsByTurn := make(map[string][]conversation.UITurn, len(graph.Nodes))
+	parentByTurn := make(map[string]string, len(graph.Nodes))
+
+	for _, node := range graph.Nodes {
+		items := conversation.ConvertMessagesToUITurns(node.Messages)
+		h.decorateUITurns(ctx, botID, sessionID, items)
+		nodes = append(nodes, sessionTurnGraphUINode{
+			TurnID:       node.TurnID,
+			ParentTurnID: node.ParentTurnID,
+			Items:        items,
+		})
+		itemsByTurn[node.TurnID] = items
+		parentByTurn[node.TurnID] = node.ParentTurnID
+	}
+
+	defaultItems := make([]conversation.UITurn, 0)
+	seen := map[string]bool{}
+	var path []string
+	for turnID := strings.TrimSpace(graph.DefaultHeadTurnID); turnID != ""; turnID = strings.TrimSpace(parentByTurn[turnID]) {
+		if seen[turnID] {
+			break
+		}
+		seen[turnID] = true
+		path = append(path, turnID)
+	}
+	for i := len(path) - 1; i >= 0; i-- {
+		defaultItems = append(defaultItems, itemsByTurn[path[i]]...)
+	}
+
+	return map[string]any{
+		"items":                defaultItems,
+		"default_head_turn_id": graph.DefaultHeadTurnID,
+		"head_turn_ids":        graph.HeadTurnIDs,
+		"nodes":                nodes,
+	}
+}
+
+func (h *MessageHandler) decorateUITurns(ctx context.Context, botID, sessionID string, items []conversation.UITurn) {
+	if h.bgManager != nil {
+		conversation.ApplyBackgroundTaskSnapshots(items, h.backgroundTaskSnapshots(botID, sessionID))
+	}
+	if h.toolApproval != nil {
+		if approvals, err := h.toolApproval.ListBySession(ctx, botID, sessionID); err == nil {
+			mergeToolApprovals(items, approvals, h.toolApprovalCanApproveFn(ctx, sessionID))
+		}
+	}
+	if h.userInput != nil {
+		if requests, err := h.userInput.ListBySession(ctx, botID, sessionID); err == nil {
+			mergeUserInputs(items, requests, h.userInput.CanRespond)
+		}
+	}
 }
 
 func (h *MessageHandler) toolApprovalCanApproveFn(ctx context.Context, sessionID string) func(toolapproval.Request) bool {

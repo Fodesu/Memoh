@@ -82,6 +82,7 @@ type Queries interface {
 	CreateSearchProvider(ctx context.Context, arg dbsqlc.CreateSearchProviderParams) (dbsqlc.SearchProvider, error)
 	CreateSession(ctx context.Context, arg dbsqlc.CreateSessionParams) (dbsqlc.BotSession, error)
 	CreateSessionEvent(ctx context.Context, arg dbsqlc.CreateSessionEventParams) (pgtype.UUID, error)
+	CreateSessionTurnHead(ctx context.Context, arg dbsqlc.CreateSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
 	CreateStorageProvider(ctx context.Context, arg dbsqlc.CreateStorageProviderParams) (dbsqlc.StorageProvider, error)
 	CreateToolApprovalRequest(ctx context.Context, arg dbsqlc.CreateToolApprovalRequestParams) (dbsqlc.ToolApprovalRequest, error)
 	CreateToolApprovalRequestForTurn(ctx context.Context, arg dbsqlc.CreateToolApprovalRequestForTurnParams) (dbsqlc.ToolApprovalRequest, error)
@@ -123,6 +124,7 @@ type Queries interface {
 	DeleteScheduleLogsBySchedule(ctx context.Context, scheduleID pgtype.UUID) error
 	DeleteSearchProvider(ctx context.Context, id pgtype.UUID) error
 	DeleteSettingsByBotID(ctx context.Context, id pgtype.UUID) error
+	DeleteSessionTurnHeads(ctx context.Context, sessionID pgtype.UUID) error
 	DeleteUserProviderOAuthToken(ctx context.Context, arg dbsqlc.DeleteUserProviderOAuthTokenParams) error
 	EvaluateBotACLRule(ctx context.Context, arg dbsqlc.EvaluateBotACLRuleParams) (string, error)
 	FailUserInputRequest(ctx context.Context, arg dbsqlc.FailUserInputRequestParams) (dbsqlc.UserInputRequest, error)
@@ -162,6 +164,8 @@ type Queries interface {
 	GetFetchProviderByName(ctx context.Context, name string) (dbsqlc.FetchProvider, error)
 	GetHistoryTurnByID(ctx context.Context, id pgtype.UUID) (dbsqlc.BotHistoryTurn, error)
 	GetLatestAssistantUsage(ctx context.Context, sessionID pgtype.UUID) (int64, error)
+	GetVisibleAssistantMessageTurnForFork(ctx context.Context, arg dbsqlc.GetVisibleAssistantMessageTurnForForkParams) (dbsqlc.GetVisibleAssistantMessageTurnForForkRow, error)
+	GetVisibleAssistantTurnForRetry(ctx context.Context, arg dbsqlc.GetVisibleAssistantTurnForRetryParams) (dbsqlc.GetVisibleAssistantTurnForRetryRow, error)
 	GetLatestPendingToolApprovalBySession(ctx context.Context, arg dbsqlc.GetLatestPendingToolApprovalBySessionParams) (dbsqlc.ToolApprovalRequest, error)
 	GetLatestPendingUserInputBySession(ctx context.Context, arg dbsqlc.GetLatestPendingUserInputBySessionParams) (dbsqlc.UserInputRequest, error)
 	GetLatestSessionIDByBot(ctx context.Context, botID pgtype.UUID) (pgtype.UUID, error)
@@ -186,6 +190,7 @@ type Queries interface {
 	GetSearchProviderByName(ctx context.Context, name string) (dbsqlc.SearchProvider, error)
 	GetSessionByID(ctx context.Context, id pgtype.UUID) (dbsqlc.BotSession, error)
 	GetSessionCacheStats(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.GetSessionCacheStatsRow, error)
+	GetSessionTurnHead(ctx context.Context, arg dbsqlc.GetSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
 	GetSessionUsedSkills(ctx context.Context, sessionID pgtype.UUID) ([]string, error)
 	GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (dbsqlc.GetSettingsByBotIDRow, error)
 	GetSnapshotByContainerAndRuntimeName(ctx context.Context, arg dbsqlc.GetSnapshotByContainerAndRuntimeNameParams) (dbsqlc.Snapshot, error)
@@ -250,6 +255,7 @@ type Queries interface {
 	ListMessagesBefore(ctx context.Context, arg dbsqlc.ListMessagesBeforeParams) ([]dbsqlc.ListMessagesBeforeRow, error)
 	ListMessagesBeforeBySession(ctx context.Context, arg dbsqlc.ListMessagesBeforeBySessionParams) ([]dbsqlc.ListMessagesBeforeBySessionRow, error)
 	ListMessagesBySession(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListMessagesBySessionRow, error)
+	ListMessagesBySessionTurnGraph(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListMessagesBySessionTurnGraphRow, error)
 	ListMessagesLatest(ctx context.Context, arg dbsqlc.ListMessagesLatestParams) ([]dbsqlc.ListMessagesLatestRow, error)
 	ListMessagesLatestBySession(ctx context.Context, arg dbsqlc.ListMessagesLatestBySessionParams) ([]dbsqlc.ListMessagesLatestBySessionRow, error)
 	ListMessagesSince(ctx context.Context, arg dbsqlc.ListMessagesSinceParams) ([]dbsqlc.ListMessagesSinceRow, error)
@@ -274,6 +280,8 @@ type Queries interface {
 	ListSearchProvidersByProvider(ctx context.Context, provider string) ([]dbsqlc.SearchProvider, error)
 	ListSessionEventsBySession(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.BotSessionEvent, error)
 	ListSessionEventsBySessionAfter(ctx context.Context, arg dbsqlc.ListSessionEventsBySessionAfterParams) ([]dbsqlc.BotSessionEvent, error)
+	ListSessionTurnGraphTurns(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.BotHistoryTurn, error)
+	ListSessionTurnHeads(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.BotSessionTurnHead, error)
 	ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]dbsqlc.ListSessionsByBotRow, error)
 	ListSessionsByBotAndCreatedByUser(ctx context.Context, arg dbsqlc.ListSessionsByBotAndCreatedByUserParams) ([]dbsqlc.ListSessionsByBotAndCreatedByUserRow, error)
 	ListSessionsByBotAndCreatedByUserPaged(ctx context.Context, arg dbsqlc.ListSessionsByBotAndCreatedByUserPagedParams) ([]dbsqlc.ListSessionsByBotAndCreatedByUserPagedRow, error)
@@ -305,6 +313,7 @@ type Queries interface {
 	RejectToolApprovalRequest(ctx context.Context, arg dbsqlc.RejectToolApprovalRequestParams) (dbsqlc.ToolApprovalRequest, error)
 	RedeemChannelLinkCode(ctx context.Context, arg dbsqlc.RedeemChannelLinkCodeParams) (dbsqlc.UserChannelIdentityBinding, error)
 	RemoveChatParticipant(ctx context.Context, arg dbsqlc.RemoveChatParticipantParams) error
+	ReplaceSessionTurnHead(ctx context.Context, arg dbsqlc.ReplaceSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
 	SaveMatrixSyncSinceToken(ctx context.Context, arg dbsqlc.SaveMatrixSyncSinceTokenParams) (int64, error)
 	SearchAccounts(ctx context.Context, arg dbsqlc.SearchAccountsParams) ([]dbsqlc.User, error)
 	SearchChannelIdentities(ctx context.Context, arg dbsqlc.SearchChannelIdentitiesParams) ([]dbsqlc.ChannelIdentity, error)
@@ -353,9 +362,9 @@ type Queries interface {
 	UpdateProviderOAuthState(ctx context.Context, arg dbsqlc.UpdateProviderOAuthStateParams) error
 	UpdateSchedule(ctx context.Context, arg dbsqlc.UpdateScheduleParams) (dbsqlc.Schedule, error)
 	UpdateSearchProvider(ctx context.Context, arg dbsqlc.UpdateSearchProviderParams) (dbsqlc.SearchProvider, error)
+	UpdateSessionDefaultHeadTurn(ctx context.Context, arg dbsqlc.UpdateSessionDefaultHeadTurnParams) (dbsqlc.BotSession, error)
+	UpdateSessionDefaultHeadTurnIfValid(ctx context.Context, arg dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams) (dbsqlc.BotSession, error)
 	UpdateSessionMetadata(ctx context.Context, arg dbsqlc.UpdateSessionMetadataParams) (dbsqlc.BotSession, error)
-	UpdateSessionHeadTurn(ctx context.Context, arg dbsqlc.UpdateSessionHeadTurnParams) (dbsqlc.BotSession, error)
-	UpdateSessionHeadTurnIfCurrent(ctx context.Context, arg dbsqlc.UpdateSessionHeadTurnIfCurrentParams) (dbsqlc.BotSession, error)
 	UpdateSessionTitle(ctx context.Context, arg dbsqlc.UpdateSessionTitleParams) (dbsqlc.BotSession, error)
 	UpdateSessionTypeAndMetadata(ctx context.Context, arg dbsqlc.UpdateSessionTypeAndMetadataParams) (dbsqlc.BotSession, error)
 	UpdateHistoryTurnFinalAssistantMessage(ctx context.Context, arg dbsqlc.UpdateHistoryTurnFinalAssistantMessageParams) (dbsqlc.BotHistoryTurn, error)

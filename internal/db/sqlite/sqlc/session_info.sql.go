@@ -13,7 +13,7 @@ const countMessagesBySession = `-- name: CountMessagesBySession :one
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -37,7 +37,7 @@ const getLatestAssistantUsage = `-- name: GetLatestAssistantUsage :one
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -84,7 +84,7 @@ const getSessionCacheStats = `-- name: GetSessionCacheStats :one
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -117,7 +117,7 @@ const getSessionUsedSkills = `-- name: GetSessionUsedSkills :many
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL

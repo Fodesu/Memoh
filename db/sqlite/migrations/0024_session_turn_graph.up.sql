@@ -14,7 +14,7 @@ CREATE TABLE bot_sessions (
   type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss', 'acp_agent')),
   title TEXT NOT NULL DEFAULT '',
   metadata TEXT NOT NULL DEFAULT '{}',
-  head_turn_id TEXT REFERENCES bot_history_turns(id) ON DELETE SET NULL,
+  default_head_turn_id TEXT REFERENCES bot_history_turns(id) ON DELETE SET NULL,
   forked_from_session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,
   forked_from_turn_id TEXT REFERENCES bot_history_turns(id) ON DELETE SET NULL,
   parent_session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,
@@ -31,7 +31,7 @@ INSERT INTO bot_sessions (
   type,
   title,
   metadata,
-  head_turn_id,
+  default_head_turn_id,
   forked_from_session_id,
   forked_from_turn_id,
   parent_session_id,
@@ -314,7 +314,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_id ON bot_sessions(bot_id);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_route_id ON bot_sessions(route_id);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_active ON bot_sessions(bot_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_parent ON bot_sessions(parent_session_id) WHERE parent_session_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_bot_sessions_head_turn ON bot_sessions(head_turn_id) WHERE head_turn_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bot_sessions_default_head_turn ON bot_sessions(default_head_turn_id) WHERE default_head_turn_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_forked_from_session ON bot_sessions(forked_from_session_id) WHERE forked_from_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_forked_from_turn ON bot_sessions(forked_from_turn_id) WHERE forked_from_turn_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_created_by_user_id ON bot_sessions(created_by_user_id) WHERE created_by_user_id IS NOT NULL;
@@ -326,6 +326,16 @@ CREATE INDEX IF NOT EXISTS idx_bot_history_turns_owner_session ON bot_history_tu
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_parent ON bot_history_turns(parent_turn_id) WHERE parent_turn_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_request ON bot_history_turns(request_message_id) WHERE request_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_assistant ON bot_history_turns(final_assistant_message_id) WHERE final_assistant_message_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS bot_session_turn_heads (
+  session_id TEXT NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
+  head_turn_id TEXT NOT NULL REFERENCES bot_history_turns(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (session_id, head_turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bot_session_turn_heads_head
+  ON bot_session_turn_heads(head_turn_id);
 
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_bot_created ON bot_history_messages(bot_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_compact ON bot_history_messages(compact_id);
@@ -508,19 +518,25 @@ SET turn_id = (SELECT mapped.turn_id FROM mapped WHERE mapped.message_id = bot_h
 WHERE id IN (SELECT message_id FROM mapped);
 
 UPDATE bot_sessions
-SET head_turn_id = (
+SET default_head_turn_id = (
   SELECT seed.turn_id
   FROM session_turn_seed seed
   WHERE seed.session_id = bot_sessions.id
   ORDER BY seed.turn_pos DESC
   LIMIT 1
 )
-WHERE head_turn_id IS NULL
+WHERE default_head_turn_id IS NULL
   AND EXISTS (
     SELECT 1
     FROM session_turn_seed seed
     WHERE seed.session_id = bot_sessions.id
   );
+
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
+SELECT id, default_head_turn_id
+FROM bot_sessions
+WHERE default_head_turn_id IS NOT NULL
+ON CONFLICT (session_id, head_turn_id) DO NOTHING;
 
 DROP TABLE session_turn_seed;
 COMMIT;

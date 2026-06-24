@@ -391,6 +391,9 @@
       "retry": "Try again",
       "fork": "Fork",
       "more": "More",
+      "previousVariant": "Previous response",
+      "nextVariant": "Next response",
+      "variants": "Response {current} of {total}",
       "readAloud": "Read aloud"
     },
     "process": {

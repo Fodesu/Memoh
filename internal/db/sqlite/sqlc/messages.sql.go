@@ -254,7 +254,7 @@ const getMessageByExternalIDBySession = `-- name: GetMessageByExternalIDBySessio
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?2
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -351,8 +351,10 @@ const getVisibleAssistantMessageTurnForFork = `-- name: GetVisibleAssistantMessa
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
-  WHERE s.id = ?2
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.head_turn_id = ?2
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = ?3
     AND s.deleted_at IS NULL
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
@@ -373,8 +375,9 @@ LIMIT 1
 `
 
 type GetVisibleAssistantMessageTurnForForkParams struct {
-	MessageID string `json:"message_id"`
-	SessionID string `json:"session_id"`
+	MessageID      string `json:"message_id"`
+	BaseHeadTurnID string `json:"base_head_turn_id"`
+	SessionID      string `json:"session_id"`
 }
 
 type GetVisibleAssistantMessageTurnForForkRow struct {
@@ -385,7 +388,7 @@ type GetVisibleAssistantMessageTurnForForkRow struct {
 }
 
 func (q *Queries) GetVisibleAssistantMessageTurnForFork(ctx context.Context, arg GetVisibleAssistantMessageTurnForForkParams) (GetVisibleAssistantMessageTurnForForkRow, error) {
-	row := q.db.QueryRowContext(ctx, getVisibleAssistantMessageTurnForFork, arg.MessageID, arg.SessionID)
+	row := q.db.QueryRowContext(ctx, getVisibleAssistantMessageTurnForFork, arg.MessageID, arg.BaseHeadTurnID, arg.SessionID)
 	var i GetVisibleAssistantMessageTurnForForkRow
 	err := row.Scan(
 		&i.MessageID,
@@ -396,12 +399,74 @@ func (q *Queries) GetVisibleAssistantMessageTurnForFork(ctx context.Context, arg
 	return i, err
 }
 
+const getVisibleAssistantTurnForRetry = `-- name: GetVisibleAssistantTurnForRetry :one
+WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
+  SELECT t.id, t.parent_turn_id, 0
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.head_turn_id = ?2
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = ?3
+    AND s.deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_turn_id, vt.depth + 1
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT
+  assistant.id AS assistant_message_id,
+  assistant.turn_id,
+  t.parent_turn_id,
+  request.id AS request_message_id,
+  request.content AS request_content,
+  request.display_text AS request_display_text
+FROM bot_history_messages assistant
+JOIN visible_turns vt ON vt.id = assistant.turn_id
+JOIN bot_history_turns t ON t.id = assistant.turn_id
+JOIN bot_history_messages request ON request.id = t.request_message_id
+WHERE assistant.id = ?1
+  AND assistant.role = 'assistant'
+  AND request.role = 'user'
+LIMIT 1
+`
+
+type GetVisibleAssistantTurnForRetryParams struct {
+	MessageID      string `json:"message_id"`
+	BaseHeadTurnID string `json:"base_head_turn_id"`
+	SessionID      string `json:"session_id"`
+}
+
+type GetVisibleAssistantTurnForRetryRow struct {
+	AssistantMessageID string         `json:"assistant_message_id"`
+	TurnID             sql.NullString `json:"turn_id"`
+	ParentTurnID       sql.NullString `json:"parent_turn_id"`
+	RequestMessageID   string         `json:"request_message_id"`
+	RequestContent     string         `json:"request_content"`
+	RequestDisplayText sql.NullString `json:"request_display_text"`
+}
+
+func (q *Queries) GetVisibleAssistantTurnForRetry(ctx context.Context, arg GetVisibleAssistantTurnForRetryParams) (GetVisibleAssistantTurnForRetryRow, error) {
+	row := q.db.QueryRowContext(ctx, getVisibleAssistantTurnForRetry, arg.MessageID, arg.BaseHeadTurnID, arg.SessionID)
+	var i GetVisibleAssistantTurnForRetryRow
+	err := row.Scan(
+		&i.AssistantMessageID,
+		&i.TurnID,
+		&i.ParentTurnID,
+		&i.RequestMessageID,
+		&i.RequestContent,
+		&i.RequestDisplayText,
+	)
+	return i, err
+}
+
 const getVisibleUserMessageTurnForRewrite = `-- name: GetVisibleUserMessageTurnForRewrite :one
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
-  WHERE s.id = ?2
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.head_turn_id = ?2
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = ?3
     AND s.deleted_at IS NULL
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
@@ -421,8 +486,9 @@ LIMIT 1
 `
 
 type GetVisibleUserMessageTurnForRewriteParams struct {
-	MessageID string `json:"message_id"`
-	SessionID string `json:"session_id"`
+	MessageID      string `json:"message_id"`
+	BaseHeadTurnID string `json:"base_head_turn_id"`
+	SessionID      string `json:"session_id"`
 }
 
 type GetVisibleUserMessageTurnForRewriteRow struct {
@@ -432,7 +498,7 @@ type GetVisibleUserMessageTurnForRewriteRow struct {
 }
 
 func (q *Queries) GetVisibleUserMessageTurnForRewrite(ctx context.Context, arg GetVisibleUserMessageTurnForRewriteParams) (GetVisibleUserMessageTurnForRewriteRow, error) {
-	row := q.db.QueryRowContext(ctx, getVisibleUserMessageTurnForRewrite, arg.MessageID, arg.SessionID)
+	row := q.db.QueryRowContext(ctx, getVisibleUserMessageTurnForRewrite, arg.MessageID, arg.BaseHeadTurnID, arg.SessionID)
 	var i GetVisibleUserMessageTurnForRewriteRow
 	err := row.Scan(&i.MessageID, &i.TurnID, &i.ParentTurnID)
 	return i, err
@@ -533,7 +599,7 @@ const listActiveMessagesSinceBySession = `-- name: ListActiveMessagesSinceBySess
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?2
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -895,7 +961,7 @@ const listMessagesAfterBySession = `-- name: ListMessagesAfterBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?4
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -1109,7 +1175,7 @@ const listMessagesBeforeBySession = `-- name: ListMessagesBeforeBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?4
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -1233,7 +1299,7 @@ const listMessagesBySession = `-- name: ListMessagesBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -1289,6 +1355,100 @@ func (q *Queries) ListMessagesBySession(ctx context.Context, sessionID string) (
 	var items []ListMessagesBySessionRow
 	for rows.Next() {
 		var i ListMessagesBySessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.TurnID,
+			&i.TurnMessageSeq,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
+			&i.Role,
+			&i.Content,
+			&i.Metadata,
+			&i.Usage,
+			&i.EventID,
+			&i.DisplayText,
+			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessagesBySessionTurnGraph = `-- name: ListMessagesBySessionTurnGraph :many
+WITH RECURSIVE graph_turns(id, parent_turn_id) AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions bs
+  JOIN bot_session_turn_heads h ON h.session_id = bs.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE bs.id = ?1
+    AND bs.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN graph_turns gt ON gt.parent_turn_id = p.id
+)
+SELECT
+  m.id, m.bot_id, m.session_id, m.turn_id, m.turn_message_seq, m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id, m.role, m.content, m.metadata, m.usage,
+  m.event_id, m.display_text, m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform
+FROM graph_turns gt
+JOIN bot_history_messages m ON m.turn_id = gt.id
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
+LEFT JOIN bot_sessions s ON s.id = m.session_id
+ORDER BY m.created_at ASC, COALESCE(m.turn_message_seq, 0) ASC, m.id ASC
+`
+
+type ListMessagesBySessionTurnGraphRow struct {
+	ID                      string         `json:"id"`
+	BotID                   string         `json:"bot_id"`
+	SessionID               sql.NullString `json:"session_id"`
+	TurnID                  sql.NullString `json:"turn_id"`
+	TurnMessageSeq          sql.NullInt64  `json:"turn_message_seq"`
+	SenderChannelIdentityID sql.NullString `json:"sender_channel_identity_id"`
+	SenderUserID            sql.NullString `json:"sender_user_id"`
+	ExternalMessageID       sql.NullString `json:"external_message_id"`
+	SourceReplyToMessageID  sql.NullString `json:"source_reply_to_message_id"`
+	Role                    string         `json:"role"`
+	Content                 string         `json:"content"`
+	Metadata                string         `json:"metadata"`
+	Usage                   sql.NullString `json:"usage"`
+	EventID                 sql.NullString `json:"event_id"`
+	DisplayText             sql.NullString `json:"display_text"`
+	CreatedAt               string         `json:"created_at"`
+	SenderDisplayName       sql.NullString `json:"sender_display_name"`
+	SenderAvatarUrl         sql.NullString `json:"sender_avatar_url"`
+	Platform                sql.NullString `json:"platform"`
+}
+
+func (q *Queries) ListMessagesBySessionTurnGraph(ctx context.Context, sessionID string) ([]ListMessagesBySessionTurnGraphRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMessagesBySessionTurnGraph, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMessagesBySessionTurnGraphRow
+	for rows.Next() {
+		var i ListMessagesBySessionTurnGraphRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.BotID,
@@ -1415,7 +1575,7 @@ const listMessagesLatestBySession = `-- name: ListMessagesLatestBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?2
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -1602,7 +1762,7 @@ const listMessagesSinceBySession = `-- name: ListMessagesSinceBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?2
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -1866,7 +2026,8 @@ const listOtherActiveSessionVisibleTurnIDs = `-- name: ListOtherActiveSessionVis
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   JOIN bot_sessions source ON source.id = ?1
   WHERE s.id <> source.id
     AND s.bot_id = source.bot_id
@@ -1942,11 +2103,62 @@ func (q *Queries) ListOwnedHistoryTurnsForSessionDelete(ctx context.Context, ses
 	return items, nil
 }
 
+const listSessionTurnGraphTurns = `-- name: ListSessionTurnGraphTurns :many
+WITH RECURSIVE graph_turns(id, parent_turn_id) AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = ?1
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN graph_turns gt ON gt.parent_turn_id = p.id
+)
+SELECT t.id, t.bot_id, t.owner_session_id, t.parent_turn_id, t.request_message_id, t.final_assistant_message_id, t.created_at, t.updated_at
+FROM graph_turns gt
+JOIN bot_history_turns t ON t.id = gt.id
+ORDER BY t.created_at ASC, t.id ASC
+`
+
+func (q *Queries) ListSessionTurnGraphTurns(ctx context.Context, sessionID string) ([]BotHistoryTurn, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionTurnGraphTurns, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BotHistoryTurn
+	for rows.Next() {
+		var i BotHistoryTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.OwnerSessionID,
+			&i.ParentTurnID,
+			&i.RequestMessageID,
+			&i.FinalAssistantMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUncompactedMessagesBySession = `-- name: ListUncompactedMessagesBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -2037,7 +2249,7 @@ const searchMessages = `-- name: SearchMessages :many
 WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.head_turn_id
+  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
   WHERE ?2 IS NOT NULL
     AND bs.id = ?2
     AND bs.deleted_at IS NULL

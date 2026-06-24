@@ -368,7 +368,10 @@
       "edit": "編集",
       "share": "共有",
       "retry": "もう一度試す",
-      "fork": "フォーク"
+      "fork": "フォーク",
+      "previousVariant": "前の返信",
+      "nextVariant": "次の返信",
+      "variants": "{current}/{total} 件目の返信"
     },
     "process": {
       "browse": "{count} ファイルを読み取る",
