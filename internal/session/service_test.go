@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -425,6 +426,23 @@ func TestSoftDeleteCleansOnlyUnsharedOwnedTurns(t *testing.T) {
 	}
 }
 
+func TestSoftDeletePropagatesTurnCleanupFailure(t *testing.T) {
+	sessionID := "00000000-0000-0000-0000-000000000010"
+	cleanupErr := errors.New("cleanup failed")
+	queries := &softDeleteCleanupQueries{
+		deleteHeadsErr: cleanupErr,
+	}
+	svc := NewService(nil, queries, nil)
+
+	err := svc.SoftDelete(context.Background(), sessionID)
+	if err == nil || !strings.Contains(err.Error(), "delete session turn heads") {
+		t.Fatalf("SoftDelete() error = %v, want cleanup failure", err)
+	}
+	if !queries.softDeleted {
+		t.Fatal("session was not soft deleted before cleanup")
+	}
+}
+
 type softDeleteCleanupQueries struct {
 	dbstore.Queries
 	softDeleted         bool
@@ -433,6 +451,7 @@ type softDeleteCleanupQueries struct {
 	sharedTurnIDs       []pgtype.UUID
 	deletedMessageTurns []pgtype.UUID
 	deletedTurns        []pgtype.UUID
+	deleteHeadsErr      error
 }
 
 func (q *softDeleteCleanupQueries) SoftDeleteSession(context.Context, pgtype.UUID) error {
@@ -442,7 +461,7 @@ func (q *softDeleteCleanupQueries) SoftDeleteSession(context.Context, pgtype.UUI
 
 func (q *softDeleteCleanupQueries) DeleteSessionTurnHeads(context.Context, pgtype.UUID) error {
 	q.deletedHeads = true
-	return nil
+	return q.deleteHeadsErr
 }
 
 func (q *softDeleteCleanupQueries) ListOwnedHistoryTurnsForSessionDelete(context.Context, pgtype.UUID) ([]sqlc.BotHistoryTurn, error) {

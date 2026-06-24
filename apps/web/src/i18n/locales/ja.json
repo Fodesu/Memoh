@@ -362,6 +362,10 @@
     "thinking": "考えています…",
     "thinkingInProgress": "考え…",
     "thinkingDone": "思考完了",
+    "errors": {
+      "forkFailed": "セッションのフォークに失敗しました",
+      "sessionDeleted": "このセッションは削除されています"
+    },
     "actions": {
       "copy": "コピー",
       "copied": "コピーされました",
@@ -369,6 +373,7 @@
       "share": "共有",
       "retry": "もう一度試す",
       "fork": "フォーク",
+      "more": "その他",
       "previousVariant": "前の返信",
       "nextVariant": "次の返信",
       "variants": "{current}/{total} 件目の返信"

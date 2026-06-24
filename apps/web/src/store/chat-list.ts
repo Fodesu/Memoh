@@ -184,10 +184,35 @@ function currentLocale() {
   return locale === 'zh' || locale === 'ja' ? locale : 'en'
 }
 
-function userInputConnectionLostMessage() {
+function localizedMessages() {
   const locale = currentLocale()
-  const messages = locale === 'zh' ? zhMessages : locale === 'ja' ? jaMessages : enMessages
-  return messages.chat.tools.userInputConnectionLost
+  return locale === 'zh' ? zhMessages : locale === 'ja' ? jaMessages : enMessages
+}
+
+function userInputConnectionLostMessage() {
+  return localizedMessages().chat.tools.userInputConnectionLost
+}
+
+function forkSourceSessionDeletedMessage() {
+  return localizedMessages().chat.errors.sessionDeleted
+}
+
+function forkFailedMessage() {
+  return localizedMessages().chat.errors.forkFailed
+}
+
+function isSessionNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const payload = error as {
+    status?: unknown
+    statusCode?: unknown
+    response?: { status?: unknown }
+    message?: unknown
+  }
+  if (payload.status === 404 || payload.statusCode === 404 || payload.response?.status === 404) {
+    return true
+  }
+  return typeof payload.message === 'string' && /\bsession not found\b/i.test(payload.message)
 }
 
 interface PendingAssistantStream {
@@ -308,6 +333,7 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = computed(() => isSessionStreaming(sessionId.value))
   const sessions = ref<SessionSummary[]>([])
   const loading = ref(false)
+  const messageActionLoading = ref(false)
   // `loadingChats` covers the bot-level boot path (sessions list fetch), so
   // the sidebar can show its skeleton + suppress its empty-state placeholder
   // exactly while the sessions list is in flight.
@@ -1384,6 +1410,8 @@ export const useChatStore = defineStore('chat', () => {
     replaceMessagesFromGraph(sid)
     hasLoadedOlder.value = false
     hasMoreOlder.value = false
+    const bid = (currentBotId.value ?? '').trim()
+    if (bid) startSessionMessagesStream(bid, sid, { skipInitialRefreshOnce: true })
     return true
   }
 
@@ -1632,6 +1660,7 @@ export const useChatStore = defineStore('chat', () => {
       }
       assistantTurn = createOptimisticAssistantTurn()
       const completion = trackAssistantStream(streamId, assistantTurn, bid, sid)
+      input.send(ws, streamId, modelId, reasoningEffort)
       if (input.sourceUserTurn && input.optimisticUserTurn) {
         replaceTailFromTurn(input.sourceUserTurn, [
           input.optimisticUserTurn,
@@ -1642,7 +1671,6 @@ export const useChatStore = defineStore('chat', () => {
       }
       uiStarted = true
       loading.value = true
-      input.send(ws, streamId, modelId, reasoningEffort)
       await completion
       resetSelectedHeadForSession(sid)
       await refreshCurrentSession(bid, sid)
@@ -1965,6 +1993,8 @@ export const useChatStore = defineStore('chat', () => {
     sessionListRefreshPromise = null
 
     replaceSessions([])
+    turnGraphs.clear()
+    selectedHeadTurnIds.clear()
     sessionsCursor.value = null
     hasMoreSessions.value = false
     loadingMoreSessions.value = false
@@ -1978,6 +2008,7 @@ export const useChatStore = defineStore('chat', () => {
     hasLoadedOlder.value = false
     loading.value = false
     loadingChats.value = false
+    messageActionLoading.value = false
     loadingOlder.value = false
     initializing.value = false
     overrideModelId.value = ''
@@ -2012,6 +2043,31 @@ export const useChatStore = defineStore('chat', () => {
     return activeWs
   }
 
+  function applyFetchedMessagesPayload(targetSessionId: string, payload: FetchMessagesUIResult) {
+    const sid = targetSessionId.trim()
+    if (!sid) return
+    if (hasLoadedOlder.value && !(payload.nodes?.length)) {
+      mergeMessages(payload.items, sid)
+    } else {
+      if (payload.nodes?.length) {
+        applySessionTurnGraph(sid, payload)
+      } else {
+        replaceMessages(payload.items, sid)
+      }
+      // We cannot infer end-of-history from `turns.length < PAGE_SIZE`: the
+      // server pages by raw `bot_history_messages` rows but returns merged
+      // UI turns (multi-row user/assistant groups collapsed into one). A 30-
+      // row page collapses to ~28 turns even when the session has thousands
+      // more rows behind it, so trusting that count truncates real history.
+      // Leave `hasMoreOlder` at the optimistic default and let the first
+      // scroll-to-top call `loadOlderMessages`, whose authoritative
+      // empty-server-response handling settles the flag correctly.
+      hasMoreOlder.value = true
+    }
+    const latest = messages[messages.length - 1]?.timestamp
+    touchSessionInList(sid, latest)
+  }
+
   async function refreshCurrentSession(targetBotId?: string, targetSessionId?: string) {
     const bid = (targetBotId ?? currentBotId.value ?? '').trim()
     const sid = (targetSessionId ?? sessionId.value ?? '').trim()
@@ -2026,11 +2082,11 @@ export const useChatStore = defineStore('chat', () => {
       await refreshPromise.promise
     }
 
-	    const promise = (async () => {
-	      const payload = await fetchMessagesUI(bid, sid, { limit: PAGE_SIZE })
-	      // The user may have switched away while the request was in flight. Drop
-	      // the result silently — the new session has its own load underway.
-	      if (currentBotId.value !== bid || sessionId.value !== sid) return
+    const promise = (async () => {
+      const payload = await fetchMessagesUI(bid, sid, { limit: PAGE_SIZE })
+      // The user may have switched away while the request was in flight. Drop
+      // the result silently — the new session has its own load underway.
+      if (currentBotId.value !== bid || sessionId.value !== sid) return
       // Pick replace vs merge by whether the user has scrolled back to load
       // older history. When older pages are present we MUST preserve them
       // (otherwise an SSE-triggered refresh wipes the prepended history).
@@ -2040,26 +2096,7 @@ export const useChatStore = defineStore('chat', () => {
       // comparison, because client/server clock skew on a fresh session's
       // first send could otherwise flip the decision and duplicate the user
       // turn.
-	      if (hasLoadedOlder.value && !(payload.nodes?.length)) {
-	        mergeMessages(payload.items, sid)
-	      } else {
-	        if (payload.nodes?.length) {
-	          applySessionTurnGraph(sid, payload)
-	        } else {
-	          replaceMessages(payload.items, sid)
-	        }
-	        // We cannot infer end-of-history from `turns.length < PAGE_SIZE`: the
-        // server pages by raw `bot_history_messages` rows but returns merged
-        // UI turns (multi-row user/assistant groups collapsed into one). A 30-
-        // row page collapses to ~28 turns even when the session has thousands
-        // more rows behind it, so trusting that count truncates real history.
-        // Leave `hasMoreOlder` at the optimistic default and let the first
-        // scroll-to-top call `loadOlderMessages`, whose authoritative
-        // empty-server-response handling settles the flag correctly.
-        hasMoreOlder.value = true
-      }
-      const latest = messages[messages.length - 1]?.timestamp
-      touchSessionInList(sid, latest)
+      applyFetchedMessagesPayload(sid, payload)
     })().finally(() => {
       if (refreshPromise?.promise === promise) {
         refreshPromise = null
@@ -2222,7 +2259,11 @@ export const useChatStore = defineStore('chat', () => {
   // owns the flag now.
   let loadingMessagesVersion = 0
 
-  function startSessionMessagesStream(targetBotId: string, targetSessionId: string) {
+  function startSessionMessagesStream(
+    targetBotId: string,
+    targetSessionId: string,
+    options: { skipInitialRefreshOnce?: boolean } = {},
+  ) {
     sessionMessagesStream.stop()
     const bid = targetBotId.trim()
     const sid = targetSessionId.trim()
@@ -2232,11 +2273,16 @@ export const useChatStore = defineStore('chat', () => {
     // placeholders (e.g. "system session has no records") while a fresh
     // transcript is on its way. The sidebar deliberately ignores it — only
     // `loadingChats` (sessions-list boot) makes the sidebar spin.
-    loadingMessages.value = true
+    let skipInitialRefresh = options.skipInitialRefreshOnce === true
+    loadingMessages.value = !skipInitialRefresh
     const myVersion = ++loadingMessagesVersion
     sessionMessagesStream.start(async (signal) => {
       try {
-        await refreshCurrentSession(bid, sid)
+        if (skipInitialRefresh) {
+          skipInitialRefresh = false
+        } else {
+          await refreshCurrentSession(bid, sid)
+        }
       } catch (error) {
         console.error('Failed to load session messages:', error)
       } finally {
@@ -2244,7 +2290,7 @@ export const useChatStore = defineStore('chat', () => {
       }
       await streamSessionMessageEvents(bid, sid, signal, (event) => {
         handleSessionMessageEvent(bid, sid, event)
-      })
+      }, selectedHeadForSession(sid))
     })
   }
 
@@ -2347,12 +2393,14 @@ export const useChatStore = defineStore('chat', () => {
       // never moves and we'd terminate prematurely).
       const MAX_DEDUP_HOPS = 4
       let cursor = first.timestamp
+      let cursorId = first.id
       for (let hop = 0; hop < MAX_DEDUP_HOPS; hop++) {
-	        const payload = await fetchMessagesUI(bid, sid, {
-	          limit: PAGE_SIZE,
-	          before: cursor,
-	        })
-	        const turns = payload.items
+        const payload = await fetchMessagesUI(bid, sid, {
+          limit: PAGE_SIZE,
+          before: cursor,
+          beforeId: cursorId,
+        })
+        const turns = payload.items
 
         if (turns.length === 0) {
           hasMoreOlder.value = false
@@ -2377,18 +2425,21 @@ export const useChatStore = defineStore('chat', () => {
 
         // All returned turns were already present locally. Advance the cursor
         // past the earliest one we just saw and try again on the next hop.
-        const earliest = normalized.reduce<string | null>((acc, turn) => {
+        const earliest = normalized.reduce<{ timestamp: string; id: string } | null>((acc, turn) => {
           const ts = turn.timestamp?.trim()
           if (!ts) return acc
-          if (!acc || ts < acc) return ts
+          const id = turn.id?.trim()
+          if (!id) return acc
+          if (!acc || ts < acc.timestamp || (ts === acc.timestamp && id < acc.id)) return { timestamp: ts, id }
           return acc
         }, null)
-        if (!earliest || earliest === cursor) {
+        if (!earliest || (earliest.timestamp === cursor && earliest.id === cursorId)) {
           // Pagination cursor cannot advance; bail out to avoid a request loop.
           hasMoreOlder.value = false
           return 0
         }
-        cursor = earliest
+        cursor = earliest.timestamp
+        cursorId = earliest.id
       }
       // Exhausted hop budget without finding net-new turns; treat as end of
       // history rather than spinning indefinitely.
@@ -2937,6 +2988,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function selectSession(targetSessionId: string) {
     const sid = targetSessionId.trim()
+    if (messageActionLoading.value) return
     if (!sid || sid === sessionId.value) return
     const requestId = ++selectSessionRequestId
     const bid = (currentBotId.value ?? '').trim()
@@ -2959,6 +3011,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function createNewSession() {
+    if (messageActionLoading.value) return
     const bid = await ensureBot()
     if (!bid) return
     selectSessionRequestId++
@@ -2977,6 +3030,7 @@ export const useChatStore = defineStore('chat', () => {
   // session. selectSession early-returns on an empty id, so a draft needs this.
   function selectDraft() {
     selectSessionRequestId++
+    if (messageActionLoading.value) return
     draftIntent.value = true
     if (!sessionId.value) return
     clearPendingACPSession()
@@ -3026,20 +3080,43 @@ export const useChatStore = defineStore('chat', () => {
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
     const mid = messageId.trim()
-    if (!bid || !sid || !mid || activeChatReadOnly.value || streaming.value) return false
+    if (!bid || !sid || !mid || activeChatReadOnly.value || streaming.value || messageActionLoading.value) return false
+    const previousMessages = [...messages]
+    const previousHasMoreOlder = hasMoreOlder.value
+    const previousHasLoadedOlder = hasLoadedOlder.value
+    messageActionLoading.value = true
     try {
       const forked = await requestForkSessionFromMessage(bid, sid, mid, selectedHeadForRequest(sid))
+      const payload = await fetchMessagesUI(bid, forked.id, { limit: PAGE_SIZE })
+      if ((currentBotId.value ?? '').trim() !== bid || (sessionId.value ?? '').trim() !== sid) {
+        return false
+      }
       upsertSession(forked)
-      sessionId.value = forked.id
       draftIntent.value = false
-      switchActiveSession(forked.id)
+      sessionMessagesStream.stop()
+      sessionId.value = forked.id
+      hasMoreOlder.value = false
+      hasLoadedOlder.value = false
+      applyFetchedMessagesPayload(forked.id, payload)
+      startSessionMessagesStream(bid, forked.id, { skipInitialRefreshOnce: true })
       void refreshSessionsList(bid)
       return true
     } catch (error) {
-      console.error('Failed to fork session:', error)
-      const message = error instanceof Error ? error.message : 'Failed to fork session'
-      toast.error(message)
+      if (sessionId.value !== sid) {
+        sessionId.value = sid
+        messages.splice(0, messages.length, ...previousMessages)
+        hasMoreOlder.value = previousHasMoreOlder
+        hasLoadedOlder.value = previousHasLoadedOlder
+        startSessionMessagesStream(bid, sid)
+      }
+      toast.error(isSessionNotFoundError(error)
+        ? forkSourceSessionDeletedMessage()
+        : error instanceof Error && error.message.trim()
+          ? error.message
+          : forkFailedMessage())
       return false
+    } finally {
+      messageActionLoading.value = false
     }
   }
 
@@ -3047,7 +3124,7 @@ export const useChatStore = defineStore('chat', () => {
     const mid = messageId.trim()
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
-    if (!mid || !bid || !sid || streaming.value || activeChatReadOnly.value) {
+    if (!mid || !bid || !sid || streaming.value || activeChatReadOnly.value || messageActionLoading.value) {
       return { ok: false, stage: 'startup' }
     }
     const target = messages.find((message): message is ChatAssistantTurn => message.role === 'assistant' && message.id === mid)
@@ -3078,7 +3155,7 @@ export const useChatStore = defineStore('chat', () => {
     const trimmed = text.trim()
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
-    if (!mid || !trimmed || !bid || !sid || streaming.value || activeChatReadOnly.value) {
+    if (!mid || !trimmed || !bid || !sid || streaming.value || activeChatReadOnly.value || messageActionLoading.value) {
       return { ok: false, stage: 'startup' }
     }
     const target = messages.find((message): message is ChatUserTurn => message.role === 'user' && message.id === mid)
@@ -3105,7 +3182,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function sendMessage(text: string, attachments?: ChatAttachment[]): Promise<SendMessageResult> {
     const trimmed = text.trim()
-    if ((!trimmed && !attachments?.length) || streaming.value || !currentBotId.value) return { ok: false, stage: 'startup' }
+    if ((!trimmed && !attachments?.length) || streaming.value || messageActionLoading.value || !currentBotId.value) return { ok: false, stage: 'startup' }
 
     loading.value = true
     let assistantTurn: ChatAssistantTurn | null = null
@@ -3218,6 +3295,7 @@ export const useChatStore = defineStore('chat', () => {
       type: 'tool_approval_response',
       stream_id: streamId,
       session_id: sid,
+      base_head_turn_id: selectedHeadForRequest(sid),
       approval_id: approvalId,
       short_id: approval.short_id,
       decision,
@@ -3274,6 +3352,7 @@ export const useChatStore = defineStore('chat', () => {
       type: 'user_input_response',
       stream_id: streamId,
       session_id: sid,
+      base_head_turn_id: selectedHeadForRequest(sid),
       user_input_id: userInput.user_input_id,
       short_id: userInput.short_id,
       answers: payload.answers,

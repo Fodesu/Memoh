@@ -131,6 +131,20 @@ func (q *Queries) DeleteSessionTurnHeads(ctx context.Context, sessionID pgtype.U
 	return err
 }
 
+const deleteSessionTurnHeadsByBot = `-- name: DeleteSessionTurnHeadsByBot :exec
+DELETE FROM bot_session_turn_heads
+WHERE session_id IN (
+  SELECT id
+  FROM bot_sessions
+  WHERE bot_id = $1
+)
+`
+
+func (q *Queries) DeleteSessionTurnHeadsByBot(ctx context.Context, botID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSessionTurnHeadsByBot, botID)
+	return err
+}
+
 const getActiveSessionForRoute = `-- name: GetActiveSessionForRoute :one
 SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.title, s.metadata, s.default_head_turn_id, s.forked_from_session_id, s.forked_from_turn_id, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at
 FROM bot_sessions s

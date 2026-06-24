@@ -20,6 +20,7 @@ import (
 type ToolApprovalResponseInput struct {
 	BotID                      string
 	SessionID                  string
+	SelectedHeadTurnID         string
 	ActorChannelIdentityID     string
 	ApprovalID                 string
 	ExplicitID                 string
@@ -197,6 +198,14 @@ func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Req
 
 func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
 	approval = withLocalWebReplyTarget(approval)
+	doneTurn := r.enterSessionTurn(ctx, input.BotID, approval.SessionID)
+	defer doneTurn()
+	if selectedHead := strings.TrimSpace(input.SelectedHeadTurnID); selectedHead != "" && selectedHead != strings.TrimSpace(approval.PersistTurnID) {
+		return errors.New("tool approval turn is no longer active for the selected conversation version")
+	}
+	if err := r.validateContinuationTurnHead(ctx, approval.SessionID, approval.PersistTurnID); err != nil {
+		return err
+	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	run := continuationTurnRun(approval.SessionID, approval.PersistTurnID)
 	storeReq := conversation.ChatRequest{

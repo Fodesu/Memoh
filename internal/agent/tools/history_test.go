@@ -31,7 +31,7 @@ func (f *fakeHistoryMessageReader) ListLatest(_ context.Context, _ string, _ int
 	return f.latestMessages, nil
 }
 
-func (f *fakeHistoryMessageReader) ListBefore(_ context.Context, _ string, before time.Time, _ int32) ([]messagepkg.Message, error) {
+func (f *fakeHistoryMessageReader) ListBefore(_ context.Context, _ string, before time.Time, _ string, _ int32) ([]messagepkg.Message, error) {
 	f.before = before
 	return f.beforeMessages, nil
 }
@@ -41,7 +41,7 @@ func (f *fakeHistoryMessageReader) ListLatestBySession(_ context.Context, sessio
 	return f.latestMessages, nil
 }
 
-func (f *fakeHistoryMessageReader) ListBeforeBySession(_ context.Context, sessionID string, before time.Time, _ int32) ([]messagepkg.Message, error) {
+func (f *fakeHistoryMessageReader) ListBeforeBySession(_ context.Context, sessionID string, before time.Time, _ string, _ int32) ([]messagepkg.Message, error) {
 	f.beforeSessionID = sessionID
 	f.before = before
 	return f.beforeMessages, nil

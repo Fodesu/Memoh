@@ -6,8 +6,6 @@ ALTER TABLE IF EXISTS bot_history_messages
 ALTER TABLE IF EXISTS bot_history_messages
   DROP CONSTRAINT IF EXISTS bot_history_messages_turn_id_fkey;
 ALTER TABLE IF EXISTS bot_sessions
-  DROP CONSTRAINT IF EXISTS fk_bot_sessions_head_turn;
-ALTER TABLE IF EXISTS bot_sessions
   DROP CONSTRAINT IF EXISTS fk_bot_sessions_default_head_turn;
 ALTER TABLE IF EXISTS bot_sessions
   DROP CONSTRAINT IF EXISTS fk_bot_sessions_forked_from_turn;

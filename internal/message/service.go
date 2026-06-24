@@ -202,12 +202,13 @@ func (s *DBService) ListLatest(ctx context.Context, botID string, limit int32) (
 	return msgs, nil
 }
 
-// ListBefore returns up to limit messages older than before (created_at < before), ordered oldest-first.
-func (s *DBService) ListBefore(ctx context.Context, botID string, before time.Time, limit int32) ([]Message, error) {
+// ListBefore returns up to limit messages older than before, ordered oldest-first.
+func (s *DBService) ListBefore(ctx context.Context, botID string, before time.Time, beforeID string, limit int32) ([]Message, error) {
 	pgBotID, err := dbpkg.ParseUUID(botID)
 	if err != nil {
 		return nil, err
 	}
+	_ = beforeID
 	rows, err := s.queries.ListMessagesBefore(ctx, sqlc.ListMessagesBeforeParams{
 		BotID:     pgBotID,
 		CreatedAt: pgtype.Timestamptz{Time: before, Valid: true},
@@ -311,14 +312,19 @@ func (s *DBService) ListLatestBySession(ctx context.Context, sessionID string, l
 }
 
 // ListBeforeBySession returns up to limit session messages older than before.
-func (s *DBService) ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error) {
+func (s *DBService) ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, beforeID string, limit int32) ([]Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	pgBeforeID, err := parseOptionalUUID(beforeID)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.queries.ListMessagesBeforeBySession(ctx, sqlc.ListMessagesBeforeBySessionParams{
 		SessionID: pgSessionID,
 		CreatedAt: pgtype.Timestamptz{Time: before, Valid: true},
+		BeforeID:  pgBeforeID,
 		MaxCount:  limit,
 	})
 	if err != nil {
@@ -485,7 +491,25 @@ func (s *DBService) DeleteByBot(ctx context.Context, botID string) error {
 	if err != nil {
 		return err
 	}
-	return s.queries.DeleteMessagesByBot(ctx, pgBotID)
+	deleteFn := func(q dbstore.Queries) error {
+		if err := q.ClearSessionTurnPointersByBot(ctx, pgBotID); err != nil {
+			return err
+		}
+		if err := q.DeleteSessionTurnHeadsByBot(ctx, pgBotID); err != nil {
+			return err
+		}
+		if err := q.ClearHistoryTurnMessagePointersByBot(ctx, pgBotID); err != nil {
+			return err
+		}
+		if err := q.DeleteMessagesByBot(ctx, pgBotID); err != nil {
+			return err
+		}
+		return q.DeleteHistoryTurnsByBot(ctx, pgBotID)
+	}
+	if runner, ok := s.queries.(txRunner); ok && runner != nil {
+		return runner.RunInTx(ctx, deleteFn)
+	}
+	return deleteFn(s.queries)
 }
 
 // DeleteBySession deletes all messages for a session.

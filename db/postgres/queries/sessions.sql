@@ -179,6 +179,14 @@ RETURNING *;
 DELETE FROM bot_session_turn_heads
 WHERE session_id = sqlc.arg(session_id);
 
+-- name: DeleteSessionTurnHeadsByBot :exec
+DELETE FROM bot_session_turn_heads
+WHERE session_id IN (
+  SELECT id
+  FROM bot_sessions
+  WHERE bot_id = sqlc.arg(bot_id)
+);
+
 -- name: UpdateSessionDefaultHeadTurn :one
 UPDATE bot_sessions
 SET default_head_turn_id = sqlc.narg(default_head_turn_id)::uuid,

@@ -21,7 +21,6 @@ DROP INDEX IF EXISTS idx_bot_history_turns_bot_created;
 DROP INDEX IF EXISTS idx_bot_session_turn_heads_head;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_session;
-DROP INDEX IF EXISTS idx_bot_sessions_head_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_default_head_turn;
 
 CREATE TABLE bot_sessions_0024_down (

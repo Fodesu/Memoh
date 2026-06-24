@@ -15,14 +15,10 @@
          edge (`justify-end`, no negative margin), so the cluster lines up with
          the bubble it belongs to. -->
   <div
-    class="chat-message-meta flex h-8 items-center gap-0.5 transition-opacity duration-150 motion-reduce:transition-none"
+    class="chat-message-meta flex h-8 items-center gap-0.5"
     :class="[
       align === 'end' ? 'justify-end' : 'justify-start -ml-1.5',
-      streaming
-        ? 'opacity-0 pointer-events-none'
-        : persistent
-          ? 'opacity-100'
-          : 'opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto',
+      streaming ? 'pointer-events-none' : '',
     ]"
   >
     <!-- The tooltip is owned entirely by its trigger (the icon button): moving
@@ -42,7 +38,7 @@
             type="button"
             variant="ghost"
             size="icon-sm"
-            :class="actionIconClass"
+            :class="[actionIconClass, hoverActionClass]"
             :aria-label="copyLabel"
             @click="handleCopy"
           >
@@ -72,11 +68,11 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="actionIconClass"
+              :class="[actionIconClass, hoverActionClass]"
               :aria-label="t('chat.actions.edit')"
               @click="emit('edit')"
             >
-              <PencilLine class="size-[18px]" />
+              <PencilLine />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -92,11 +88,11 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="actionIconClass"
+              :class="[actionIconClass, hoverActionClass]"
               :aria-label="t('chat.actions.retry')"
               @click="emit('retry')"
             >
-              <RotateCcw class="size-[18px]" />
+              <RotateCcw />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -110,11 +106,11 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="actionIconClass"
+              :class="[actionIconClass, hoverActionClass]"
               :aria-label="t('chat.actions.fork')"
               @click="emit('fork')"
             >
-              <Split class="size-[18px] rotate-90" />
+              <Split class="rotate-90" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -128,7 +124,7 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="actionIconClass"
+              :class="[actionIconClass, hoverActionClass]"
               :aria-label="t('chat.actions.more')"
             >
               <DotsIcon class="size-[18px]" />
@@ -167,7 +163,7 @@
               :aria-label="t('chat.actions.previousVariant')"
               @click="switchVariant(variantState.previousHeadTurnId)"
             >
-              <ChevronLeft class="size-[18px]" />
+              <ChevronLeft />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -188,7 +184,7 @@
               :aria-label="t('chat.actions.nextVariant')"
               @click="switchVariant(variantState.nextHeadTurnId)"
             >
-              <ChevronRight class="size-[18px]" />
+              <ChevronRight />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -226,7 +222,6 @@ const props = defineProps<{
   role: 'user' | 'assistant'
   menuTime?: string
   fullTime?: string
-  persistent?: boolean
   streaming?: boolean
   align?: 'start' | 'end'
   canEdit?: boolean
@@ -245,11 +240,8 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const { copyText: writeClipboard } = useClipboard()
 
-// Rest tint sits just shy of the muted text — nudged ~15% toward the body
-// foreground so the icons read a touch more present than plain muted-foreground,
-// without going to full foreground. color-mix keeps it correct in both themes.
-const actionIconClass
-  = 'text-[color-mix(in_oklab,var(--muted-foreground),var(--foreground)_15%)] hover:text-foreground'
+const actionIconClass = 'text-muted-foreground hover:text-foreground'
+const hoverActionClass = 'opacity-0 pointer-events-none transition-opacity duration-150 motion-reduce:transition-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:pointer-events-auto'
 
 const copied = ref(false)
 let resetTimer: ReturnType<typeof setTimeout> | null = null

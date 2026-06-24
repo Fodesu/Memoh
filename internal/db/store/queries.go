@@ -89,6 +89,7 @@ type Queries interface {
 	CreateUserInputRequest(ctx context.Context, arg dbsqlc.CreateUserInputRequestParams) (dbsqlc.UserInputRequest, error)
 	CreateUserInputRequestForTurn(ctx context.Context, arg dbsqlc.CreateUserInputRequestForTurnParams) (dbsqlc.UserInputRequest, error)
 	CreateUser(ctx context.Context, arg dbsqlc.CreateUserParams) (dbsqlc.User, error)
+	ClearSessionTurnPointersByBot(ctx context.Context, botID pgtype.UUID) error
 	DeleteBotACLRuleByID(ctx context.Context, id pgtype.UUID) error
 	DeleteBotByID(ctx context.Context, id pgtype.UUID) error
 	DeleteBotChannelConfig(ctx context.Context, arg dbsqlc.DeleteBotChannelConfigParams) error
@@ -109,6 +110,7 @@ type Queries interface {
 	DeleteMCPOAuthToken(ctx context.Context, connectionID pgtype.UUID) error
 	DeleteMemoryProvider(ctx context.Context, id pgtype.UUID) error
 	DeleteMessageAssets(ctx context.Context, messageID pgtype.UUID) error
+	ClearHistoryTurnMessagePointersByBot(ctx context.Context, botID pgtype.UUID) error
 	DeleteHistoryTurnByID(ctx context.Context, id pgtype.UUID) error
 	DeleteHistoryTurnsByBot(ctx context.Context, botID pgtype.UUID) error
 	DeleteMessagesByBot(ctx context.Context, botID pgtype.UUID) error
@@ -125,6 +127,7 @@ type Queries interface {
 	DeleteSearchProvider(ctx context.Context, id pgtype.UUID) error
 	DeleteSettingsByBotID(ctx context.Context, id pgtype.UUID) error
 	DeleteSessionTurnHeads(ctx context.Context, sessionID pgtype.UUID) error
+	DeleteSessionTurnHeadsByBot(ctx context.Context, botID pgtype.UUID) error
 	DeleteUserProviderOAuthToken(ctx context.Context, arg dbsqlc.DeleteUserProviderOAuthTokenParams) error
 	EvaluateBotACLRule(ctx context.Context, arg dbsqlc.EvaluateBotACLRuleParams) (string, error)
 	FailUserInputRequest(ctx context.Context, arg dbsqlc.FailUserInputRequestParams) (dbsqlc.UserInputRequest, error)
@@ -297,7 +300,9 @@ type Queries interface {
 	ListThreadsByParent(ctx context.Context, id pgtype.UUID) ([]dbsqlc.ListThreadsByParentRow, error)
 	ListTokenUsageRecords(ctx context.Context, arg dbsqlc.ListTokenUsageRecordsParams) ([]dbsqlc.ListTokenUsageRecordsRow, error)
 	ListToolApprovalsBySession(ctx context.Context, arg dbsqlc.ListToolApprovalsBySessionParams) ([]dbsqlc.ToolApprovalRequest, error)
+	ListToolApprovalsBySessionTurnGraph(ctx context.Context, arg dbsqlc.ListToolApprovalsBySessionTurnGraphParams) ([]dbsqlc.ToolApprovalRequest, error)
 	ListUserInputsBySession(ctx context.Context, arg dbsqlc.ListUserInputsBySessionParams) ([]dbsqlc.UserInputRequest, error)
+	ListUserInputsBySessionTurnGraph(ctx context.Context, arg dbsqlc.ListUserInputsBySessionTurnGraphParams) ([]dbsqlc.UserInputRequest, error)
 	ListTranscriptionModels(ctx context.Context) ([]dbsqlc.ListTranscriptionModelsRow, error)
 	ListTranscriptionModelsByProviderID(ctx context.Context, providerID pgtype.UUID) ([]dbsqlc.Model, error)
 	ListTranscriptionProviders(ctx context.Context) ([]dbsqlc.Provider, error)

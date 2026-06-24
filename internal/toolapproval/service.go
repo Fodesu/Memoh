@@ -462,6 +462,29 @@ func (s *Service) ListBySession(ctx context.Context, botID, sessionID string) ([
 	return s.listBySession(ctx, botID, sessionID, false)
 }
 
+func (s *Service) ListBySessionTurnGraph(ctx context.Context, botID, sessionID string) ([]Request, error) {
+	pgBotID, err := db.ParseUUID(botID)
+	if err != nil {
+		return nil, err
+	}
+	pgSessionID, err := db.ParseUUID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListToolApprovalsBySessionTurnGraph(ctx, sqlc.ListToolApprovalsBySessionTurnGraphParams{
+		BotID:     pgBotID,
+		SessionID: pgSessionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Request, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, requestFromRow(row))
+	}
+	return result, nil
+}
+
 func (s *Service) listBySession(ctx context.Context, botID, sessionID string, pendingOnly bool) ([]Request, error) {
 	pgBotID, err := db.ParseUUID(botID)
 	if err != nil {

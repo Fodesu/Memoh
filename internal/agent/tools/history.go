@@ -29,9 +29,9 @@ type SessionLister interface {
 // HistoryMessageReader is the minimal interface for reading persisted messages.
 type HistoryMessageReader interface {
 	ListLatest(ctx context.Context, botID string, limit int32) ([]messagepkg.Message, error)
-	ListBefore(ctx context.Context, botID string, before time.Time, limit int32) ([]messagepkg.Message, error)
+	ListBefore(ctx context.Context, botID string, before time.Time, beforeID string, limit int32) ([]messagepkg.Message, error)
 	ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]messagepkg.Message, error)
-	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]messagepkg.Message, error)
+	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, beforeID string, limit int32) ([]messagepkg.Message, error)
 }
 
 // HistoryProvider exposes list_sessions, get_messages, and search_messages tools.
@@ -300,9 +300,9 @@ func (p *HistoryProvider) execGetMessages(ctx context.Context, sess SessionConte
 			return nil, err
 		}
 		if sessionID != "" {
-			messages, err = p.messages.ListBeforeBySession(ctx, sessionID, before, limit)
+			messages, err = p.messages.ListBeforeBySession(ctx, sessionID, before, "", limit)
 		} else {
-			messages, err = p.messages.ListBefore(ctx, botID, before, limit)
+			messages, err = p.messages.ListBefore(ctx, botID, before, "", limit)
 		}
 	} else if sessionID != "" {
 		messages, err = p.messages.ListLatestBySession(ctx, sessionID, limit)

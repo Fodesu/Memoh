@@ -45,6 +45,7 @@ func (q *Queries) RunInTx(ctx context.Context, fn func(dbstore.Queries) error) e
 		store: &Store{
 			db:      q.store.db,
 			queries: q.store.queries.WithTx(tx),
+			inTx:    true,
 		},
 	}
 	if err := fn(txQueries); err != nil {
@@ -1621,6 +1622,18 @@ func (q *Queries) DeleteHistoryTurnByID(ctx context.Context, id pgtype.UUID) err
 	return mapQueryErr(err)
 }
 
+func (q *Queries) ClearHistoryTurnMessagePointersByBot(ctx context.Context, botID pgtype.UUID) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteBotID string
+	if err := convertValue(botID, &sqliteBotID); err != nil {
+		return err
+	}
+	err := q.store.queries.ClearHistoryTurnMessagePointersByBot(ctx, sqliteBotID)
+	return mapQueryErr(err)
+}
+
 func (q *Queries) DeleteMessagesByTurnID(ctx context.Context, turnID pgtype.UUID) error {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return errSQLiteQueriesNotConfigured
@@ -1813,6 +1826,18 @@ func (q *Queries) DeleteSettingsByBotID(ctx context.Context, id pgtype.UUID) err
 	return mapQueryErr(err)
 }
 
+func (q *Queries) ClearSessionTurnPointersByBot(ctx context.Context, botID pgtype.UUID) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteBotID string
+	if err := convertValue(botID, &sqliteBotID); err != nil {
+		return err
+	}
+	err := q.store.queries.ClearSessionTurnPointersByBot(ctx, sqliteBotID)
+	return mapQueryErr(err)
+}
+
 func (q *Queries) DeleteSessionTurnHeads(ctx context.Context, sessionID pgtype.UUID) error {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return errSQLiteQueriesNotConfigured
@@ -1822,6 +1847,18 @@ func (q *Queries) DeleteSessionTurnHeads(ctx context.Context, sessionID pgtype.U
 		return err
 	}
 	err := q.store.queries.DeleteSessionTurnHeads(ctx, sqliteSessionID)
+	return mapQueryErr(err)
+}
+
+func (q *Queries) DeleteSessionTurnHeadsByBot(ctx context.Context, botID pgtype.UUID) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteBotID string
+	if err := convertValue(botID, &sqliteBotID); err != nil {
+		return err
+	}
+	err := q.store.queries.DeleteSessionTurnHeadsByBot(ctx, sqliteBotID)
 	return mapQueryErr(err)
 }
 
@@ -4814,6 +4851,25 @@ func (q *Queries) ListToolApprovalsBySession(ctx context.Context, arg pgsqlc.Lis
 	return result, nil
 }
 
+func (q *Queries) ListToolApprovalsBySessionTurnGraph(ctx context.Context, arg pgsqlc.ListToolApprovalsBySessionTurnGraphParams) ([]pgsqlc.ToolApprovalRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.ListToolApprovalsBySessionTurnGraphParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ListToolApprovalsBySessionTurnGraph(ctx, sqliteArg)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.ToolApprovalRequest
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (q *Queries) ListTranscriptionModels(ctx context.Context) ([]pgsqlc.ListTranscriptionModelsRow, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return nil, errSQLiteQueriesNotConfigured
@@ -5747,17 +5803,38 @@ func (q *Queries) ReplaceSessionTurnHead(ctx context.Context, arg pgsqlc.Replace
 	if err := convertValue(arg, &sqliteArg); err != nil {
 		return pgsqlc.BotSessionTurnHead{}, err
 	}
-	out, err := q.store.queries.ReplaceSessionTurnHead(ctx, sqliteArg)
+	run := func(qry *sqlitesqlc.Queries) (sqlitesqlc.BotSessionTurnHead, error) {
+		out, err := qry.ReplaceSessionTurnHead(ctx, sqliteArg)
+		if err != nil {
+			return sqlitesqlc.BotSessionTurnHead{}, mapQueryErr(err)
+		}
+		deleteArg := sqlitesqlc.DeleteReplacedSessionTurnHeadParams{
+			TargetSessionID: sqliteArg.TargetSessionID,
+			OldHeadTurnID:   sqliteArg.OldHeadTurnID,
+			NewHeadTurnID:   sqliteArg.NewHeadTurnID,
+		}
+		if err := qry.DeleteReplacedSessionTurnHead(ctx, deleteArg); err != nil {
+			return sqlitesqlc.BotSessionTurnHead{}, mapQueryErr(err)
+		}
+		return out, nil
+	}
+	var out sqlitesqlc.BotSessionTurnHead
+	var err error
+	if q.store.inTx {
+		out, err = run(q.store.queries)
+	} else {
+		err = q.RunInTx(ctx, func(tx dbstore.Queries) error {
+			txq, ok := tx.(*Queries)
+			if !ok || txq.store == nil || txq.store.queries == nil {
+				return errSQLiteQueriesNotConfigured
+			}
+			var runErr error
+			out, runErr = run(txq.store.queries)
+			return runErr
+		})
+	}
 	if err != nil {
-		return pgsqlc.BotSessionTurnHead{}, mapQueryErr(err)
-	}
-	deleteArg := sqlitesqlc.DeleteReplacedSessionTurnHeadParams{
-		TargetSessionID: sqliteArg.TargetSessionID,
-		OldHeadTurnID:   sqliteArg.OldHeadTurnID,
-		NewHeadTurnID:   sqliteArg.NewHeadTurnID,
-	}
-	if err := q.store.queries.DeleteReplacedSessionTurnHead(ctx, deleteArg); err != nil {
-		return pgsqlc.BotSessionTurnHead{}, mapQueryErr(err)
+		return pgsqlc.BotSessionTurnHead{}, err
 	}
 	var result pgsqlc.BotSessionTurnHead
 	if err := convertValue(out, &result); err != nil {
@@ -6464,6 +6541,25 @@ func (q *Queries) ListUserInputsBySession(ctx context.Context, arg pgsqlc.ListUs
 		return nil, err
 	}
 	out, err := q.store.queries.ListUserInputsBySession(ctx, sqliteArg)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.UserInputRequest
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (q *Queries) ListUserInputsBySessionTurnGraph(ctx context.Context, arg pgsqlc.ListUserInputsBySessionTurnGraphParams) ([]pgsqlc.UserInputRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.ListUserInputsBySessionTurnGraphParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ListUserInputsBySessionTurnGraph(ctx, sqliteArg)
 	if err != nil {
 		return nil, mapQueryErr(err)
 	}

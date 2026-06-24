@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearHistoryTurnMessagePointersByBot = `-- name: ClearHistoryTurnMessagePointersByBot :exec
+UPDATE bot_history_turns
+SET request_message_id = NULL,
+    final_assistant_message_id = NULL,
+    updated_at = now()
+WHERE bot_id = $1
+`
+
+func (q *Queries) ClearHistoryTurnMessagePointersByBot(ctx context.Context, botID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearHistoryTurnMessagePointersByBot, botID)
+	return err
+}
+
 const countMessagesByBot = `-- name: CountMessagesByBot :one
 SELECT COUNT(*) FROM bot_history_messages
 WHERE bot_id = $1

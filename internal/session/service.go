@@ -750,8 +750,7 @@ func (s *Service) SoftDelete(ctx context.Context, sessionID string) error {
 		if err := queries.SoftDeleteSession(ctx, pgID); err != nil {
 			return err
 		}
-		s.cleanupDeletedSessionTurns(ctx, queries, pgID)
-		return nil
+		return s.cleanupDeletedSessionTurns(ctx, queries, pgID)
 	}
 	if runner, ok := s.queries.(sessionTxRunner); ok && runner != nil {
 		return runner.RunInTx(ctx, deleteSession)
@@ -767,33 +766,24 @@ type sessionTurnCleanupQueries interface {
 	DeleteHistoryTurnByID(context.Context, pgtype.UUID) error
 }
 
-func (s *Service) cleanupDeletedSessionTurns(ctx context.Context, rawQueries dbstore.Queries, sessionID pgtype.UUID) {
+func (*Service) cleanupDeletedSessionTurns(ctx context.Context, rawQueries dbstore.Queries, sessionID pgtype.UUID) error {
 	queries, ok := rawQueries.(sessionTurnCleanupQueries)
 	if !ok {
-		return
+		return nil
 	}
 	if err := queries.DeleteSessionTurnHeads(ctx, sessionID); err != nil {
-		s.logger.Warn("delete session turn heads failed",
-			slog.String("session_id", sessionID.String()),
-			slog.Any("error", err))
-		return
+		return fmt.Errorf("delete session turn heads: %w", err)
 	}
 	owned, err := queries.ListOwnedHistoryTurnsForSessionDelete(ctx, sessionID)
 	if err != nil {
-		s.logger.Warn("list owned history turns for deleted session failed",
-			slog.String("session_id", sessionID.String()),
-			slog.Any("error", err))
-		return
+		return fmt.Errorf("list owned history turns for deleted session: %w", err)
 	}
 	if len(owned) == 0 {
-		return
+		return nil
 	}
 	sharedRows, err := queries.ListOtherActiveSessionVisibleTurnIDs(ctx, sessionID)
 	if err != nil {
-		s.logger.Warn("list shared history turns for deleted session failed",
-			slog.String("session_id", sessionID.String()),
-			slog.Any("error", err))
-		return
+		return fmt.Errorf("list shared history turns for deleted session: %w", err)
 	}
 	shared := make(map[pgtype.UUID]struct{}, len(sharedRows))
 	for _, id := range sharedRows {
@@ -809,19 +799,13 @@ func (s *Service) cleanupDeletedSessionTurns(ctx context.Context, rawQueries dbs
 			continue
 		}
 		if err := queries.DeleteMessagesByTurnID(ctx, turn.ID); err != nil {
-			s.logger.Warn("delete messages for session history turn failed",
-				slog.String("session_id", sessionID.String()),
-				slog.String("turn_id", turn.ID.String()),
-				slog.Any("error", err))
-			continue
+			return fmt.Errorf("delete messages for session history turn %s: %w", turn.ID.String(), err)
 		}
 		if err := queries.DeleteHistoryTurnByID(ctx, turn.ID); err != nil {
-			s.logger.Warn("delete session history turn failed",
-				slog.String("session_id", sessionID.String()),
-				slog.String("turn_id", turn.ID.String()),
-				slog.Any("error", err))
+			return fmt.Errorf("delete session history turn %s: %w", turn.ID.String(), err)
 		}
 	}
+	return nil
 }
 
 func (s *Service) MessageCount(ctx context.Context, sessionID string) (int64, error) {

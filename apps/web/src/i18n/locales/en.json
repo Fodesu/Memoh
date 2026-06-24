@@ -383,6 +383,10 @@
     "thinkingDone": "Thinking complete",
     "showMore": "Show more",
     "showLess": "Show less",
+    "errors": {
+      "forkFailed": "Failed to fork session",
+      "sessionDeleted": "This session has been deleted"
+    },
     "actions": {
       "copy": "Copy",
       "copied": "Copied",

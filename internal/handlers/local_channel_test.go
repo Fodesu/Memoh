@@ -242,6 +242,29 @@ func TestWSStreamRegistry_HasSessionTracksActiveStreams(t *testing.T) {
 	}
 }
 
+func TestCanOpenLocalWebSocketAllowsWorkspaceOrManage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		perms []string
+		want  bool
+	}{
+		{name: "workspace exec", perms: []string{bots.PermissionWorkspaceExec}, want: true},
+		{name: "manage", perms: []string{bots.PermissionManage}, want: true},
+		{name: "chat only", perms: []string{bots.PermissionChat}, want: false},
+		{name: "none", perms: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := canOpenLocalWebSocket(tt.perms); got != tt.want {
+				t.Fatalf("canOpenLocalWebSocket(%v) = %v, want %v", tt.perms, got, tt.want)
+			}
+		})
+	}
+}
+
 type localChannelSessionAuthQueries struct {
 	dbstore.Queries
 	bot     sqlc.GetBotByIDRow

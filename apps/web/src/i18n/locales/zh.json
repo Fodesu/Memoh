@@ -383,6 +383,10 @@
     "thinkingDone": "思考完成",
     "showMore": "展开",
     "showLess": "收起",
+    "errors": {
+      "forkFailed": "分叉会话失败",
+      "sessionDeleted": "这个会话已被删除"
+    },
     "actions": {
       "copy": "复制",
       "copied": "已复制",

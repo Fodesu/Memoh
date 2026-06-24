@@ -334,10 +334,11 @@ const getLatestPendingToolApprovalBySession = `-- name: GetLatestPendingToolAppr
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -392,10 +393,11 @@ const getPendingToolApprovalByReplyMessage = `-- name: GetPendingToolApprovalByR
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -452,10 +454,11 @@ const getPendingToolApprovalBySessionShortID = `-- name: GetPendingToolApprovalB
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -547,10 +550,11 @@ const listPendingToolApprovalsBySession = `-- name: ListPendingToolApprovalsBySe
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -620,10 +624,11 @@ const listToolApprovalsBySession = `-- name: ListToolApprovalsBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -643,6 +648,79 @@ type ListToolApprovalsBySessionParams struct {
 
 func (q *Queries) ListToolApprovalsBySession(ctx context.Context, arg ListToolApprovalsBySessionParams) ([]ToolApprovalRequest, error) {
 	rows, err := q.db.QueryContext(ctx, listToolApprovalsBySession, arg.BotID, arg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ToolApprovalRequest
+	for rows.Next() {
+		var i ToolApprovalRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.RouteID,
+			&i.ChannelIdentityID,
+			&i.ToolCallID,
+			&i.ToolName,
+			&i.Operation,
+			&i.ToolInput,
+			&i.ShortID,
+			&i.Status,
+			&i.DecisionReason,
+			&i.RequestedByChannelIdentityID,
+			&i.DecidedByChannelIdentityID,
+			&i.RequestedMessageID,
+			&i.PromptMessageID,
+			&i.PersistTurnID,
+			&i.PromptExternalMessageID,
+			&i.SourcePlatform,
+			&i.ReplyTarget,
+			&i.ConversationType,
+			&i.CreatedAt,
+			&i.DecidedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listToolApprovalsBySessionTurnGraph = `-- name: ListToolApprovalsBySessionTurnGraph :many
+WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = ?2
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
+FROM tool_approval_requests tar
+WHERE tar.bot_id = ?1
+  AND tar.session_id = ?2
+  AND (tar.persist_turn_id IS NULL OR tar.persist_turn_id IN (SELECT DISTINCT visible_turns.id FROM visible_turns))
+ORDER BY tar.created_at ASC, tar.short_id ASC
+`
+
+type ListToolApprovalsBySessionTurnGraphParams struct {
+	BotID     string `json:"bot_id"`
+	SessionID string `json:"session_id"`
+}
+
+func (q *Queries) ListToolApprovalsBySessionTurnGraph(ctx context.Context, arg ListToolApprovalsBySessionTurnGraphParams) ([]ToolApprovalRequest, error) {
+	rows, err := q.db.QueryContext(ctx, listToolApprovalsBySessionTurnGraph, arg.BotID, arg.SessionID)
 	if err != nil {
 		return nil, err
 	}

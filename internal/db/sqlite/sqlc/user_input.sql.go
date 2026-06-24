@@ -448,10 +448,11 @@ const getLatestPendingUserInputBySession = `-- name: GetLatestPendingUserInputBy
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -512,10 +513,11 @@ const getPendingUserInputByReplyMessage = `-- name: GetPendingUserInputByReplyMe
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -578,10 +580,11 @@ const getPendingUserInputBySessionShortID = `-- name: GetPendingUserInputBySessi
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -783,10 +786,11 @@ const listPendingUserInputsBySession = `-- name: ListPendingUserInputsBySession 
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -862,10 +866,11 @@ const listUserInputsBySession = `-- name: ListUserInputsBySession :many
 WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
-  JOIN bot_history_turns t ON t.id = s.default_head_turn_id
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
-  UNION ALL
+  UNION
   SELECT p.id, p.parent_turn_id
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
@@ -885,6 +890,84 @@ type ListUserInputsBySessionParams struct {
 
 func (q *Queries) ListUserInputsBySession(ctx context.Context, arg ListUserInputsBySessionParams) ([]UserInputRequest, error) {
 	rows, err := q.db.QueryContext(ctx, listUserInputsBySession, arg.BotID, arg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UserInputRequest
+	for rows.Next() {
+		var i UserInputRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.RouteID,
+			&i.ChannelIdentityID,
+			&i.ToolCallID,
+			&i.ToolName,
+			&i.ShortID,
+			&i.Status,
+			&i.InputJson,
+			&i.UiPayloadJson,
+			&i.ResultJson,
+			&i.ProviderMetadata,
+			&i.RequestedByChannelIdentityID,
+			&i.RespondedByChannelIdentityID,
+			&i.AssistantMessageID,
+			&i.ToolResultMessageID,
+			&i.PromptMessageID,
+			&i.PersistTurnID,
+			&i.PromptExternalMessageID,
+			&i.SourcePlatform,
+			&i.ReplyTarget,
+			&i.ConversationType,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.RespondedAt,
+			&i.CanceledAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserInputsBySessionTurnGraph = `-- name: ListUserInputsBySessionTurnGraph :many
+WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = ?2
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+WHERE uir.bot_id = ?1
+  AND uir.session_id = ?2
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT DISTINCT visible_turns.id FROM visible_turns))
+ORDER BY uir.created_at ASC, uir.short_id ASC
+`
+
+type ListUserInputsBySessionTurnGraphParams struct {
+	BotID     string `json:"bot_id"`
+	SessionID string `json:"session_id"`
+}
+
+func (q *Queries) ListUserInputsBySessionTurnGraph(ctx context.Context, arg ListUserInputsBySessionTurnGraphParams) ([]UserInputRequest, error) {
+	rows, err := q.db.QueryContext(ctx, listUserInputsBySessionTurnGraph, arg.BotID, arg.SessionID)
 	if err != nil {
 		return nil, err
 	}

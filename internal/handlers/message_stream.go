@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,6 +34,73 @@ const sessionMessageStreamBuffer = 128
 // 30s proxy idle cut.
 const sseHeartbeatInterval = 20 * time.Second
 
+func visibleTurnIDSetForHead(graph messagepkg.SessionTurnGraph, requestedHeadTurnID string) map[string]struct{} {
+	nodes := make(map[string]messagepkg.SessionTurnGraphNode, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		turnID := strings.TrimSpace(node.TurnID)
+		if turnID == "" {
+			continue
+		}
+		nodes[turnID] = node
+	}
+	head := strings.TrimSpace(requestedHeadTurnID)
+	if head == "" || nodes[head].TurnID == "" {
+		head = strings.TrimSpace(graph.DefaultHeadTurnID)
+	}
+	if head == "" || nodes[head].TurnID == "" {
+		for _, candidate := range graph.HeadTurnIDs {
+			candidate = strings.TrimSpace(candidate)
+			if candidate != "" && nodes[candidate].TurnID != "" {
+				head = candidate
+				break
+			}
+		}
+	}
+	visible := make(map[string]struct{})
+	seen := make(map[string]struct{})
+	for head != "" {
+		if _, ok := seen[head]; ok {
+			break
+		}
+		node, ok := nodes[head]
+		if !ok {
+			break
+		}
+		seen[head] = struct{}{}
+		visible[head] = struct{}{}
+		head = strings.TrimSpace(node.ParentTurnID)
+	}
+	return visible
+}
+
+func latestMessagesFromGraph(graph messagepkg.SessionTurnGraph, visibleTurnIDs map[string]struct{}, limit int) []messagepkg.Message {
+	if limit <= 0 {
+		return nil
+	}
+	if len(graph.Nodes) > 0 && len(visibleTurnIDs) == 0 {
+		return nil
+	}
+	messages := make([]messagepkg.Message, 0, limit)
+	for _, node := range graph.Nodes {
+		if _, ok := visibleTurnIDs[strings.TrimSpace(node.TurnID)]; !ok {
+			continue
+		}
+		messages = append(messages, node.Messages...)
+	}
+	sort.SliceStable(messages, func(i, j int) bool {
+		left := messages[i]
+		right := messages[j]
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		return left.ID < right.ID
+	})
+	if len(messages) > limit {
+		messages = messages[len(messages)-limit:]
+	}
+	return messages
+}
+
 // StreamSessionMessageEvents godoc
 // @Summary Stream message events for one session
 // @Description SSE stream that pushes a server-fixed backlog of the last 50
@@ -42,6 +110,7 @@ const sseHeartbeatInterval = 20 * time.Second
 // @Produce text/event-stream
 // @Param bot_id path string true "Bot ID"
 // @Param session_id path string true "Session ID"
+// @Param head_turn_id query string false "Selected session head turn ID"
 // @Success 200 {string} string "SSE stream"
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
@@ -73,6 +142,12 @@ func (h *MessageHandler) StreamSessionMessageEvents(c echo.Context) error {
 		return err
 	}
 	botID = bot.ID
+	headTurnID := strings.TrimSpace(c.QueryParam("head_turn_id"))
+	graph, err := h.messageService.GetSessionTurnGraph(c.Request().Context(), sessionID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	visibleTurnIDs := visibleTurnIDSetForHead(graph, headTurnID)
 
 	// Subscribe BEFORE the backlog read so any message persisted during the
 	// DB call lands in the live channel. We then dedup against the backlog
@@ -84,17 +159,13 @@ func (h *MessageHandler) StreamSessionMessageEvents(c echo.Context) error {
 	sub, cancel := h.messageEvents.Subscribe(botID, sessionMessageStreamBuffer)
 	defer cancel()
 
-	backlog, err := h.messageService.ListLatestBySession(c.Request().Context(), sessionID, sessionMessageBacklogSize)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-	}
+	backlog := latestMessagesFromGraph(graph, visibleTurnIDs, sessionMessageBacklogSize)
 
 	writer, flusher, err := beginSSEResponse(c)
 	if err != nil {
 		return err
 	}
 
-	reverseMessages(backlog)
 	h.fillAssetMimeFromStorage(c.Request().Context(), botID, backlog)
 	backlogIDs := make(map[string]struct{}, len(backlog))
 	for _, message := range backlog {

@@ -109,7 +109,7 @@ func (h *LocalChannelHandler) Register(e *echo.Echo) {
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/local/stream [get].
+// @Router /bots/{bot_id}/web/stream [get].
 func (h *LocalChannelHandler) StreamMessages(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
 	if err != nil {
@@ -187,7 +187,7 @@ type LocalChannelMessageRequest struct {
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/local/messages [post].
+// @Router /bots/{bot_id}/web/messages [post].
 func (h *LocalChannelHandler) PostMessage(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
 	if err != nil {
@@ -570,7 +570,7 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, ac
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/local/ws [get].
+// @Router /bots/{bot_id}/web/ws [get].
 func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
 	if err != nil {
@@ -580,11 +580,14 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 	if botID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
 	}
-	if _, err := h.authorizeBotAccess(c.Request().Context(), channelIdentityID, botID); err != nil {
+	_, perms, err := h.authorizeBotSessionAccess(c.Request().Context(), channelIdentityID, botID)
+	if err != nil {
 		return err
 	}
-	if err := h.ensureBotParticipant(c.Request().Context(), botID, channelIdentityID); err != nil {
-		return err
+	if !canOpenLocalWebSocket(perms) {
+		if err := h.ensureBotParticipant(c.Request().Context(), botID, channelIdentityID); err != nil {
+			return err
+		}
 	}
 	if h.resolver == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "resolver not configured")
@@ -666,6 +669,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						ActorChannelIdentityID:     channelIdentityID,
 						ApprovalID:                 strings.TrimSpace(msg.ApprovalID),
 						ExplicitID:                 explicitID,
+						SelectedHeadTurnID:         strings.TrimSpace(msg.BaseHeadTurnID),
 						Decision:                   strings.TrimSpace(msg.Decision),
 						Reason:                     strings.TrimSpace(msg.Reason),
 						ChatToken:                  bearerToken,
@@ -703,6 +707,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						ActorChannelIdentityID:     channelIdentityID,
 						UserInputID:                strings.TrimSpace(msg.UserInputID),
 						ExplicitID:                 explicitID,
+						SelectedHeadTurnID:         strings.TrimSpace(msg.BaseHeadTurnID),
 						Answers:                    msg.Answers,
 						Canceled:                   msg.Canceled,
 						Reason:                     strings.TrimSpace(msg.Reason),
@@ -883,6 +888,10 @@ func (h *LocalChannelHandler) ensureBotParticipant(ctx context.Context, botID, c
 		return echo.NewHTTPError(http.StatusForbidden, "bot access denied")
 	}
 	return nil
+}
+
+func canOpenLocalWebSocket(perms []string) bool {
+	return bots.HasPermission(perms, bots.PermissionWorkspaceExec) || bots.HasPermission(perms, bots.PermissionManage)
 }
 
 func (*LocalChannelHandler) requireChannelIdentityID(c echo.Context) (string, error) {

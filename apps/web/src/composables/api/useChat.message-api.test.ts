@@ -9,9 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@memohai/sdk', () => ({
   getBotsByBotIdSessionsBySessionIdMessagesEvents: vi.fn(),
   getBotsByBotIdSessionsEvents: vi.fn(),
-  getBotsByBotIdMessages: vi.fn(),
   getBotsByBotIdMessagesLocate: vi.fn(),
-  postBotsByBotIdLocalMessages: vi.fn(),
+  postBotsByBotIdWebMessages: vi.fn(),
 }))
 
 vi.mock('@memohai/sdk/client', () => ({
@@ -19,11 +18,13 @@ vi.mock('@memohai/sdk/client', () => ({
 }))
 
 import {
+  postBotsByBotIdWebMessages,
   getBotsByBotIdSessionsBySessionIdMessagesEvents,
   getBotsByBotIdSessionsEvents,
 } from '@memohai/sdk'
 
 import {
+  sendLocalChannelMessage,
   streamBotSessionsActivityEvents,
   streamSessionMessageEvents,
 } from './useChat.message-api'
@@ -49,6 +50,25 @@ describe('streamSessionMessageEvents', () => {
 
     expect(onEvent).toHaveBeenCalledTimes(1)
     expect(onEvent).toHaveBeenCalledWith(event)
+  })
+
+  it('passes the selected session head to the per-session stream', async () => {
+    vi.mocked(getBotsByBotIdSessionsBySessionIdMessagesEvents).mockResolvedValue({
+      stream: singleEventStream({ type: 'ping' }),
+    } as never)
+
+    await streamSessionMessageEvents(
+      'bot-1',
+      'session-1',
+      new AbortController().signal,
+      vi.fn(),
+      'turn-selected',
+    )
+
+    expect(getBotsByBotIdSessionsBySessionIdMessagesEvents).toHaveBeenCalledWith(expect.objectContaining({
+      path: { bot_id: 'bot-1', session_id: 'session-1' },
+      query: { head_turn_id: 'turn-selected' },
+    }))
   })
 
   it('waits for the SDK promise to resolve before iterating, even when resolution is deferred', async () => {
@@ -89,5 +109,32 @@ describe('streamBotSessionsActivityEvents', () => {
 
     expect(onEvent).toHaveBeenCalledTimes(1)
     expect(onEvent).toHaveBeenCalledWith(event)
+  })
+})
+
+describe('sendLocalChannelMessage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('posts to the web local-channel endpoint with the selected turn head', async () => {
+    vi.mocked(postBotsByBotIdWebMessages).mockResolvedValue({} as never)
+
+    await sendLocalChannelMessage('bot-1', ' hello ', undefined, {
+      modelId: 'model-1',
+      reasoningEffort: 'high',
+      selectedHeadTurnId: 'turn-1',
+    })
+
+    expect(postBotsByBotIdWebMessages).toHaveBeenCalledWith({
+      path: { bot_id: 'bot-1' },
+      body: {
+        message: { text: 'hello' },
+        model_id: 'model-1',
+        reasoning_effort: 'high',
+        base_head_turn_id: 'turn-1',
+      },
+      throwOnError: true,
+    })
   })
 })

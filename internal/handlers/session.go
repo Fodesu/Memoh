@@ -254,10 +254,16 @@ func (h *SessionHandler) ListSessions(c echo.Context) error {
 		return err
 	}
 	filter := session.ListFilter{ParentSessionID: parentSessionID}
+	if !bots.HasPermission(perms, bots.PermissionManage) {
+		types = filterSessionTypesForPermissions(types, perms)
+	}
 
 	// Initialize to an empty slice so an empty page serializes as `"items": []`
 	// rather than `"items": null`, sparing clients a null check.
 	sessions := []session.Session{}
+	if len(types) == 0 {
+		return c.JSON(http.StatusOK, listSessionsResponse{Items: sessions})
+	}
 	var (
 		nextCursor   session.SessionCursor
 		hasMorePages bool
@@ -668,6 +674,16 @@ func canAccessSession(sess session.Session, userID string, perms []string) bool 
 		return false
 	}
 	return bots.HasPermission(perms, requiredReadPermissionForSessionType(sess.Type))
+}
+
+func filterSessionTypesForPermissions(types []string, perms []string) []string {
+	out := make([]string, 0, len(types))
+	for _, typ := range types {
+		if bots.HasPermission(perms, requiredPermissionForSessionType(typ)) {
+			out = append(out, typ)
+		}
+	}
+	return out
 }
 
 func filterSessionsForPermissions(items []session.Session, userID string, perms []string) []session.Session {

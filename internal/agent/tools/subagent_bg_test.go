@@ -169,7 +169,7 @@ func (*fakeAgentMessageService) ListLatest(context.Context, string, int32) ([]me
 	return nil, nil
 }
 
-func (*fakeAgentMessageService) ListBefore(context.Context, string, time.Time, int32) ([]messagepkg.Message, error) {
+func (*fakeAgentMessageService) ListBefore(context.Context, string, time.Time, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 
@@ -189,7 +189,7 @@ func (*fakeAgentMessageService) ListLatestBySession(context.Context, string, int
 	return nil, nil
 }
 
-func (*fakeAgentMessageService) ListBeforeBySession(context.Context, string, time.Time, int32) ([]messagepkg.Message, error) {
+func (*fakeAgentMessageService) ListBeforeBySession(context.Context, string, time.Time, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 

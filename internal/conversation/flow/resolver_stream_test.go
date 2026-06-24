@@ -46,7 +46,7 @@ func (*recordingMessageService) ListLatest(context.Context, string, int32) ([]me
 	return nil, nil
 }
 
-func (*recordingMessageService) ListBefore(context.Context, string, time.Time, int32) ([]messagepkg.Message, error) {
+func (*recordingMessageService) ListBefore(context.Context, string, time.Time, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 
@@ -72,7 +72,7 @@ func (*recordingMessageService) ListLatestBySession(context.Context, string, int
 	return nil, nil
 }
 
-func (*recordingMessageService) ListBeforeBySession(context.Context, string, time.Time, int32) ([]messagepkg.Message, error) {
+func (*recordingMessageService) ListBeforeBySession(context.Context, string, time.Time, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 
@@ -388,7 +388,7 @@ func TestApplyVariantTransitionCreateVariantCreatesSiblingHead(t *testing.T) {
 	}
 }
 
-func TestApplyVariantTransitionResumePendingTurnCreatesHeadAndUpdatesDefault(t *testing.T) {
+func TestContinuationTurnRunDoesNotMoveSessionHead(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeTurnStore{}
@@ -396,30 +396,28 @@ func TestApplyVariantTransitionResumePendingTurnCreatesHeadAndUpdatesDefault(t *
 	sessionID := testUUID(1).String()
 	turnID := testUUID(2)
 
-	run := TurnRun{
-		Mode:          TurnRunModeContinuation,
-		PersistTurnID: turnID.String(),
-		Variant: VariantTransition{
-			Action:             VariantTransitionResumePending,
-			SessionID:          sessionID,
-			SelectedHeadTurnID: turnID.String(),
-		},
-	}
+	run := continuationTurnRun(sessionID, turnID.String())
 	err := resolver.applyVariantTransition(context.Background(), &run, "")
 	if err != nil {
 		t.Fatalf("applyVariantTransition() error = %v", err)
 	}
-	if store.txCount != 1 {
-		t.Fatalf("txCount = %d, want 1", store.txCount)
+	if store.txCount != 0 {
+		t.Fatalf("txCount = %d, want 0", store.txCount)
 	}
-	if len(store.createdHeads) != 1 || store.createdHeads[0].HeadTurnID != turnID {
-		t.Fatalf("createdHeads = %#v, want same turn head", store.createdHeads)
+	if run.PersistTurnID != turnID.String() {
+		t.Fatalf("PersistTurnID = %q, want %q", run.PersistTurnID, turnID.String())
+	}
+	if run.Context.Kind != ContextScopeTurnHead || run.Context.TurnID != turnID.String() {
+		t.Fatalf("Context = %#v, want same turn context", run.Context)
+	}
+	if len(store.createdHeads) != 0 {
+		t.Fatalf("createdHeads = %d, want 0", len(store.createdHeads))
 	}
 	if len(store.replacedHeads) != 0 {
 		t.Fatalf("replacedHeads = %d, want 0", len(store.replacedHeads))
 	}
-	if len(store.updatedDefault) != 1 || store.updatedDefault[0].DefaultHeadTurnID != turnID {
-		t.Fatalf("updatedDefault = %#v, want same turn default", store.updatedDefault)
+	if len(store.updatedDefault) != 0 {
+		t.Fatalf("updatedDefault = %d, want 0", len(store.updatedDefault))
 	}
 }
 

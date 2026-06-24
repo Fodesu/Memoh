@@ -114,6 +114,7 @@ export type BotSessionActivityEvent =
 export interface FetchMessagesOptions {
   limit?: number
   before?: string
+  beforeId?: string
   session_id?: string
 }
 

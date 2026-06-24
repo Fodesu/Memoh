@@ -16,7 +16,6 @@ DROP INDEX IF EXISTS idx_bot_history_turns_bot_created;
 DROP INDEX IF EXISTS idx_bot_session_turn_heads_head;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_session;
-DROP INDEX IF EXISTS idx_bot_sessions_head_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_default_head_turn;
 
 ALTER TABLE user_input_requests DROP CONSTRAINT IF EXISTS fk_user_input_persist_turn;
@@ -70,7 +69,6 @@ BEGIN
   END IF;
 END $$;
 
-ALTER TABLE bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_head_turn;
 ALTER TABLE bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_default_head_turn;
 ALTER TABLE bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_forked_from_turn;
 ALTER TABLE bot_history_turns DROP CONSTRAINT IF EXISTS fk_bot_history_turns_request_message;

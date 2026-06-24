@@ -137,6 +137,86 @@ func TestSubscribeBeforeBacklogDedupsLiveMessage(t *testing.T) {
 	}
 }
 
+func TestLatestMessagesFromGraphUsesSelectedHeadPath(t *testing.T) {
+	t.Parallel()
+
+	at := time.Unix(1700000000, 0).UTC()
+	graph := messagepkg.SessionTurnGraph{
+		DefaultHeadTurnID: "turn-c",
+		HeadTurnIDs:       []string{"turn-b", "turn-c"},
+		Nodes: []messagepkg.SessionTurnGraphNode{
+			{
+				TurnID: "turn-a",
+				Messages: []messagepkg.Message{{
+					ID:        "m-a",
+					SessionID: "session-1",
+					TurnID:    "turn-a",
+					CreatedAt: at,
+				}},
+			},
+			{
+				TurnID:       "turn-b",
+				ParentTurnID: "turn-a",
+				Messages: []messagepkg.Message{{
+					ID:        "m-b",
+					SessionID: "session-1",
+					TurnID:    "turn-b",
+					CreatedAt: at.Add(time.Second),
+				}},
+			},
+			{
+				TurnID:       "turn-c",
+				ParentTurnID: "turn-a",
+				Messages: []messagepkg.Message{{
+					ID:        "m-c",
+					SessionID: "session-1",
+					TurnID:    "turn-c",
+					CreatedAt: at.Add(2 * time.Second),
+				}},
+			},
+		},
+	}
+
+	visible := visibleTurnIDSetForHead(graph, "turn-b")
+	messages := latestMessagesFromGraph(graph, visible, 50)
+	got := make([]string, 0, len(messages))
+	for _, message := range messages {
+		got = append(got, message.ID)
+	}
+	want := []string{"m-a", "m-b"}
+	if len(got) != len(want) {
+		t.Fatalf("messages = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("messages = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestVisibleTurnIDSetForHeadFallsBackFromInvalidHead(t *testing.T) {
+	t.Parallel()
+
+	graph := messagepkg.SessionTurnGraph{
+		DefaultHeadTurnID: "turn-b",
+		HeadTurnIDs:       []string{"turn-b"},
+		Nodes: []messagepkg.SessionTurnGraphNode{
+			{TurnID: "turn-a"},
+			{TurnID: "turn-b", ParentTurnID: "turn-a"},
+		},
+	}
+	visible := visibleTurnIDSetForHead(graph, "missing")
+	if _, ok := visible["turn-a"]; !ok {
+		t.Fatalf("visible did not include parent turn: %#v", visible)
+	}
+	if _, ok := visible["turn-b"]; !ok {
+		t.Fatalf("visible did not include default head turn: %#v", visible)
+	}
+	if _, ok := visible["missing"]; ok {
+		t.Fatalf("visible included invalid requested head: %#v", visible)
+	}
+}
+
 // TestStreamSessionMessageEventsRequiresSessionPath confirms the per-session
 // stream rejects requests missing the session_id path parameter — ie, a
 // client that builds the URL incorrectly gets a 400 instead of an opaque

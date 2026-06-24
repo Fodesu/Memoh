@@ -49,6 +49,11 @@ CREATE TABLE bot_history_turns (
   id TEXT PRIMARY KEY,
   parent_turn_id TEXT
 );
+CREATE TABLE bot_session_turn_heads (
+  session_id TEXT NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
+  head_turn_id TEXT NOT NULL REFERENCES bot_history_turns(id) ON DELETE CASCADE,
+  PRIMARY KEY (session_id, head_turn_id)
+);
 CREATE TABLE bot_history_messages (
   id TEXT PRIMARY KEY
 );

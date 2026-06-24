@@ -81,6 +81,13 @@ type sessionTurnGraphUINode struct {
 	Items        []conversation.UITurn `json:"items"`
 }
 
+type messageUIListResponse struct {
+	Items             []conversation.UITurn    `json:"items"`
+	DefaultHeadTurnID string                   `json:"default_head_turn_id,omitempty"`
+	HeadTurnIDs       []string                 `json:"head_turn_ids,omitempty"`
+	Nodes             []sessionTurnGraphUINode `json:"nodes,omitempty"`
+}
+
 // Register registers all conversation routes.
 func (h *MessageHandler) Register(e *echo.Echo) {
 	botGroup := e.Group("/bots/:bot_id")
@@ -131,7 +138,8 @@ func writeSSEJSON(writer io.Writer, flusher http.Flusher, payload any) error {
 // @Param session_id query string true "Session ID"
 // @Param limit query int false "Limit"
 // @Param before query string false "Before"
-// @Success 200 {object} map[string][]messagepkg.Message
+// @Param before_id query string false "Message ID at the pagination boundary"
+// @Success 200 {object} messageUIListResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
@@ -162,7 +170,7 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 	}
 
 	before, hasBefore := parseBeforeParam(c.QueryParam("before"))
-	format := strings.ToLower(strings.TrimSpace(c.QueryParam("format")))
+	beforeID := strings.TrimSpace(c.QueryParam("before_id"))
 
 	bot, _, _, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
 	if err != nil {
@@ -172,7 +180,7 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 
 	var messages []messagepkg.Message
 	if hasBefore {
-		messages, err = h.messageService.ListBeforeBySession(c.Request().Context(), sessionID, before, limit)
+		messages, err = h.messageService.ListBeforeBySession(c.Request().Context(), sessionID, before, beforeID, limit)
 		// ListBeforeBySession returns DESC (newest-first), but the UI turn
 		// converter and the frontend both need oldest-first. The latest-page
 		// branch reverses below; the before-page must match — otherwise older
@@ -197,21 +205,16 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 		messages = h.extendToUITurnHead(c.Request().Context(), sessionID, messages)
 	}
 	h.fillAssetMimeFromStorage(c.Request().Context(), botID, messages)
-	if format == "ui" {
-		if !hasBefore {
-			graph, err := h.messageService.GetSessionTurnGraph(c.Request().Context(), sessionID)
-			if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-			return c.JSON(http.StatusOK, h.sessionTurnGraphUIResponse(c.Request().Context(), botID, sessionID, graph))
+	if !hasBefore {
+		graph, err := h.messageService.GetSessionTurnGraph(c.Request().Context(), sessionID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
-		items := conversation.ConvertMessagesToUITurns(messages)
-		h.decorateUITurns(c.Request().Context(), botID, sessionID, items)
-		return c.JSON(http.StatusOK, map[string]any{
-			"items": items,
-		})
+		return c.JSON(http.StatusOK, h.sessionTurnGraphUIResponse(c.Request().Context(), botID, sessionID, graph))
 	}
-	return c.JSON(http.StatusOK, map[string]any{"items": messages})
+	items := conversation.ConvertMessagesToUITurns(messages)
+	h.decorateUITurns(c.Request().Context(), botID, sessionID, items)
+	return c.JSON(http.StatusOK, messageUIListResponse{Items: items})
 }
 
 // LocateMessage godoc
@@ -337,14 +340,15 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-func (h *MessageHandler) sessionTurnGraphUIResponse(ctx context.Context, botID, sessionID string, graph messagepkg.SessionTurnGraph) map[string]any {
+func (h *MessageHandler) sessionTurnGraphUIResponse(ctx context.Context, botID, sessionID string, graph messagepkg.SessionTurnGraph) messageUIListResponse {
 	nodes := make([]sessionTurnGraphUINode, 0, len(graph.Nodes))
 	itemsByTurn := make(map[string][]conversation.UITurn, len(graph.Nodes))
 	parentByTurn := make(map[string]string, len(graph.Nodes))
+	decorator := h.graphUIDecorator(ctx, botID, sessionID)
 
 	for _, node := range graph.Nodes {
 		items := conversation.ConvertMessagesToUITurns(node.Messages)
-		h.decorateUITurns(ctx, botID, sessionID, items)
+		decorator(items)
 		nodes = append(nodes, sessionTurnGraphUINode{
 			TurnID:       node.TurnID,
 			ParentTurnID: node.ParentTurnID,
@@ -368,11 +372,35 @@ func (h *MessageHandler) sessionTurnGraphUIResponse(ctx context.Context, botID, 
 		defaultItems = append(defaultItems, itemsByTurn[path[i]]...)
 	}
 
-	return map[string]any{
-		"items":                defaultItems,
-		"default_head_turn_id": graph.DefaultHeadTurnID,
-		"head_turn_ids":        graph.HeadTurnIDs,
-		"nodes":                nodes,
+	return messageUIListResponse{
+		Items:             defaultItems,
+		DefaultHeadTurnID: graph.DefaultHeadTurnID,
+		HeadTurnIDs:       graph.HeadTurnIDs,
+		Nodes:             nodes,
+	}
+}
+
+func (h *MessageHandler) graphUIDecorator(ctx context.Context, botID, sessionID string) func([]conversation.UITurn) {
+	var approvals []toolapproval.Request
+	if h.toolApproval != nil {
+		approvals, _ = h.toolApproval.ListBySessionTurnGraph(ctx, botID, sessionID)
+	}
+	var requests []userinput.Request
+	if h.userInput != nil {
+		requests, _ = h.userInput.ListBySessionTurnGraph(ctx, botID, sessionID)
+	}
+	tasks := h.backgroundTaskSnapshots(botID, sessionID)
+	canApprove := h.toolApprovalCanApproveFn(ctx, sessionID)
+	return func(items []conversation.UITurn) {
+		if len(tasks) > 0 {
+			conversation.ApplyBackgroundTaskSnapshots(items, tasks)
+		}
+		if len(approvals) > 0 {
+			mergeToolApprovals(items, approvals, canApprove)
+		}
+		if len(requests) > 0 && h.userInput != nil {
+			mergeUserInputs(items, requests, h.userInput.CanRespond)
+		}
 	}
 }
 

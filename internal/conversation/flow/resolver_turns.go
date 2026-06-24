@@ -45,7 +45,6 @@ const (
 	VariantTransitionNone             VariantTransitionAction = "none"
 	VariantTransitionContinueSelected VariantTransitionAction = "continue_selected"
 	VariantTransitionCreateSibling    VariantTransitionAction = "create_sibling"
-	VariantTransitionResumePending    VariantTransitionAction = "resume_pending"
 )
 
 type VariantTransition struct {
@@ -154,12 +153,40 @@ func continuationTurnRun(sessionID, persistTurnID string) TurnRun {
 			Kind:   ContextScopeTurnHead,
 			TurnID: persistTurnID,
 		},
-		Variant: VariantTransition{
-			Action:             variantTransitionActionForTurnRun(TurnRunModeContinuation, sessionID),
-			SessionID:          sessionID,
-			SelectedHeadTurnID: persistTurnID,
-		},
 	}
+}
+
+func (r *Resolver) validateContinuationTurnHead(ctx context.Context, sessionID, persistTurnID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	persistTurnID = strings.TrimSpace(persistTurnID)
+	if sessionID == "" || persistTurnID == "" {
+		return nil
+	}
+	if r == nil || r.queries == nil {
+		return nil
+	}
+	store, ok := r.queries.(sessionHeadStore)
+	if !ok {
+		return nil
+	}
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return fmt.Errorf("validate continuation turn: invalid session id: %w", err)
+	}
+	pgTurnID, err := dbpkg.ParseUUID(persistTurnID)
+	if err != nil {
+		return fmt.Errorf("validate continuation turn: invalid persist turn id: %w", err)
+	}
+	if _, err := store.GetSessionTurnHead(ctx, dbsqlc.GetSessionTurnHeadParams{
+		SessionID:  pgSessionID,
+		HeadTurnID: pgTurnID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("validate continuation turn: pending turn is no longer active for this session")
+		}
+		return fmt.Errorf("validate continuation turn: get session turn head: %w", err)
+	}
+	return nil
 }
 
 func contextScopeFromParentTurn(parentTurnID pgtype.UUID) TurnContextScope {
@@ -350,8 +377,6 @@ func variantTransitionActionForTurnRun(mode TurnRunMode, sessionID string) Varia
 		return VariantTransitionContinueSelected
 	case TurnRunModeRewrite:
 		return VariantTransitionCreateSibling
-	case TurnRunModeContinuation:
-		return VariantTransitionResumePending
 	default:
 		return VariantTransitionNone
 	}
@@ -467,7 +492,7 @@ func (r *Resolver) applyVariantTransition(ctx context.Context, run *TurnRun, tur
 					return fmt.Errorf("apply variant transition: continue selected head %q: %w", selectedHeadText, err)
 				}
 			}
-		case VariantTransitionCreateSibling, VariantTransitionResumePending:
+		case VariantTransitionCreateSibling:
 			if _, err := store.CreateSessionTurnHead(ctx, dbsqlc.CreateSessionTurnHeadParams{
 				SessionID:  pgSessionID,
 				HeadTurnID: pgTurnID,

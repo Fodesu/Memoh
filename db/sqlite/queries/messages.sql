@@ -635,6 +635,13 @@ WHERE bot_id = sqlc.arg(bot_id);
 DELETE FROM bot_history_messages
 WHERE bot_id = sqlc.arg(bot_id);
 
+-- name: ClearHistoryTurnMessagePointersByBot :exec
+UPDATE bot_history_turns
+SET request_message_id = NULL,
+    final_assistant_message_id = NULL,
+    updated_at = CURRENT_TIMESTAMP
+WHERE bot_id = sqlc.arg(bot_id);
+
 -- name: DeleteHistoryTurnsByBot :exec
 DELETE FROM bot_history_turns
 WHERE bot_id = sqlc.arg(bot_id);

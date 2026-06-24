@@ -1,10 +1,9 @@
 import { client } from '@memohai/sdk/client'
 import {
-  getBotsByBotIdMessages,
   getBotsByBotIdMessagesLocate,
   getBotsByBotIdSessionsBySessionIdMessagesEvents,
   getBotsByBotIdSessionsEvents,
-  postBotsByBotIdLocalMessages,
+  postBotsByBotIdWebMessages,
 } from '@memohai/sdk'
 import type { ChannelAttachment, ChannelMessage } from '@memohai/sdk'
 import type {
@@ -12,30 +11,9 @@ import type {
   ChatAttachment,
   FetchMessagesOptions,
   FetchMessagesUIResult,
-  Message,
   SessionMessageStreamEvent,
   UITurn,
 } from './useChat.types'
-
-export async function fetchMessages(
-  botId: string,
-  sessionId: string,
-  options?: FetchMessagesOptions,
-): Promise<Message[]> {
-  const sid = sessionId.trim()
-  if (!sid) throw new Error('session id is required')
-  const { data } = await getBotsByBotIdMessages({
-    path: { bot_id: botId },
-    query: {
-      session_id: sid,
-      limit: options?.limit ?? 30,
-      ...(options?.before?.trim() ? { before: options.before.trim() } : {}),
-    },
-    throwOnError: true,
-  })
-
-  return (data as unknown as { items?: Message[] })?.items ?? []
-}
 
 export async function fetchMessagesUI(
   botId: string,
@@ -50,8 +28,8 @@ export async function fetchMessagesUI(
     query: {
       session_id: sid,
       limit: options?.limit ?? 30,
-      format: 'ui',
       ...(options?.before?.trim() ? { before: options.before.trim() } : {}),
+      ...(options?.beforeId?.trim() ? { before_id: options.beforeId.trim() } : {}),
     },
     throwOnError: true,
   })
@@ -126,7 +104,7 @@ export async function sendLocalChannelMessage(
   if (overrides?.modelId) body.model_id = overrides.modelId
   if (overrides?.reasoningEffort) body.reasoning_effort = overrides.reasoningEffort
   if (overrides?.selectedHeadTurnId) body.base_head_turn_id = overrides.selectedHeadTurnId
-  await postBotsByBotIdLocalMessages({
+  await postBotsByBotIdWebMessages({
     path: { bot_id: botId },
     body: body as { message: ChannelMessage; model_id?: string; reasoning_effort?: string; base_head_turn_id?: string },
     throwOnError: true,
@@ -157,6 +135,7 @@ export async function streamSessionMessageEvents(
   sessionId: string,
   signal: AbortSignal,
   onEvent: (event: SessionMessageStreamEvent) => void,
+  headTurnId?: string,
 ): Promise<void> {
   const bid = botId.trim()
   const sid = sessionId.trim()
@@ -165,6 +144,9 @@ export async function streamSessionMessageEvents(
 
   const { stream } = await getBotsByBotIdSessionsBySessionIdMessagesEvents({
     path: { bot_id: bid, session_id: sid },
+    query: {
+      ...(headTurnId?.trim() ? { head_turn_id: headTurnId.trim() } : {}),
+    },
     signal,
     // The SDK's built-in reconnect would race the store's per-session
     // lifecycle; we drive retries from the caller via useRetryingStream.

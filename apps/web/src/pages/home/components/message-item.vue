@@ -154,13 +154,14 @@
         />
         <div
           v-if="isEditingUserMessage"
-          class="w-[min(100%,42rem)] rounded-[20px] bg-surface-composer p-2.5"
+          class="w-[min(100%,42rem)] bg-chat-user-bubble px-4 py-3 text-chat-user-bubble-fg"
+          :class="userBubbleRadiusClass"
         >
           <Textarea
             ref="editTextarea"
             v-model="editDraft"
             size="lg"
-            class="max-h-52 min-h-28 bg-transparent"
+            class="max-h-52 min-h-20 resize-none rounded-none border-0 bg-transparent p-0 text-chat-user-bubble-fg shadow-none placeholder:text-chat-user-bubble-fg/60 focus-visible:ring-0"
             :aria-label="t('chat.actions.edit')"
             @keydown.enter.meta.prevent="submitEdit"
             @keydown.enter.ctrl.prevent="submitEdit"
@@ -170,8 +171,8 @@
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              class="px-2.5"
+              size="text"
+              class="px-1"
               :disabled="editSubmitting"
               @click="cancelEdit"
             >
@@ -180,8 +181,8 @@
             <Button
               type="button"
               variant="primary"
-              size="sm"
-              class="px-2.5"
+              size="text"
+              class="px-1"
               :loading="editSubmitting"
               :disabled="!canSubmitEdit"
               @click="submitEdit"
@@ -824,14 +825,13 @@ const assistantPlainText = computed(() => {
     .join('\n\n')
 })
 
-const canActOnAssistantReply = computed(() =>
+const canActOnAssistantTurn = computed(() =>
   props.message.role === 'assistant'
   && !props.message.streaming
   && props.message.__optimistic !== true
-  && assistantPlainText.value.trim().length > 0,
 )
 
-const canForkAssistantMessage = computed(() => canActOnAssistantReply.value)
-const canRetryAssistantMessage = computed(() => canActOnAssistantReply.value)
+const canForkAssistantMessage = computed(() => canActOnAssistantTurn.value)
+const canRetryAssistantMessage = computed(() => canActOnAssistantTurn.value)
 
 </script>

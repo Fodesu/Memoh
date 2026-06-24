@@ -27,6 +27,7 @@ type userInputService interface {
 type UserInputResponseInput struct {
 	BotID                      string
 	SessionID                  string
+	SelectedHeadTurnID         string
 	ActorChannelIdentityID     string
 	UserInputID                string
 	ExplicitID                 string
@@ -123,6 +124,14 @@ func (r *Resolver) RespondUserInput(ctx context.Context, input UserInputResponse
 
 func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
 	req = withLocalWebUserInputReplyTarget(req)
+	doneTurn := r.enterSessionTurn(ctx, input.BotID, req.SessionID)
+	defer doneTurn()
+	if selectedHead := strings.TrimSpace(input.SelectedHeadTurnID); selectedHead != "" && selectedHead != strings.TrimSpace(req.PersistTurnID) {
+		return errors.New("user input turn is no longer active for the selected conversation version")
+	}
+	if err := r.validateContinuationTurnHead(ctx, req.SessionID, req.PersistTurnID); err != nil {
+		return err
+	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	run := continuationTurnRun(req.SessionID, req.PersistTurnID)
 	storeReq := conversation.ChatRequest{

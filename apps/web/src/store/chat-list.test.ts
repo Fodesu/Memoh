@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   fetchSessions: vi.fn(),
   fetchBots: vi.fn(),
   fetchMessagesUI: vi.fn(),
+  forkSessionFromMessage: vi.fn(),
   sendLocalChannelMessage: vi.fn(),
   updateSessionAgent: vi.fn(),
   ensureACPRuntime: vi.fn(),
@@ -134,6 +135,12 @@ describe('chat-list store', () => {
       id: 'session-unknown',
       bot_id: 'bot-1',
       title: 'Unknown session',
+      type: 'chat',
+    })
+    api.forkSessionFromMessage.mockResolvedValue({
+      id: 'session-fork',
+      bot_id: 'bot-1',
+      title: 'Chat fork',
       type: 'chat',
     })
     api.createSession.mockResolvedValue({
@@ -1143,6 +1150,55 @@ describe('chat-list store', () => {
     }
   })
 
+  it('sends the selected head when responding to pending actions', async () => {
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        {
+          turn_id: 'turn-b',
+          items: [
+            { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'old request', timestamp: '2026-06-19T00:01:00.000Z' },
+          ],
+        },
+        {
+          turn_id: 'turn-c',
+          items: [
+            { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'selected request', timestamp: '2026-06-19T00:02:00.000Z' },
+          ],
+        },
+      ],
+    }))
+    sendEvents = [{ type: 'end' } as UIStreamEvent]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+    expect(store.selectTurnVariant('turn-c')).toBe(true)
+
+    await store.respondToolApproval({
+      approval_id: 'approval-1',
+      short_id: 4,
+      status: 'pending',
+      can_approve: true,
+    }, 'approve')
+    await flushPromises()
+
+    const userInput = singleSelectUserInput()
+    await store.respondUserInput(userInput, { answers: [{ question_id: 'q1', option_ids: ['q1.o1'] }] })
+    await flushPromises()
+
+    expect(sentWSMessages.find(message => message.type === 'tool_approval_response')).toMatchObject({
+      base_head_turn_id: 'turn-c',
+    })
+    expect(sentWSMessages.find(message => message.type === 'user_input_response')).toMatchObject({
+      base_head_turn_id: 'turn-c',
+    })
+  })
+
   it('does not optimistically submit user input while websocket is disconnected', async () => {
     api.connectWebSocket.mockImplementationOnce((_botId: string, _onStreamEvent: UIStreamEventHandler) => ({
       get connected() {
@@ -1947,6 +2003,109 @@ describe('chat-list store', () => {
       previousHeadTurnId: 'turn-b',
     })
     expect(store.responseVariantStateForMessage('assistant-c')).toBeNull()
+  })
+
+  it('does not trim the visible tail when rewrite websocket send fails before UI starts', async () => {
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', role: 'user', text: 'old request', attachments: [], timestamp: '2026-06-19T00:00:00.000Z' },
+      {
+        id: 'assistant-a',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'old reply' }],
+        timestamp: '2026-06-19T00:00:01.000Z',
+      },
+      { id: 'user-b', role: 'user', text: 'tail request', attachments: [], timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'tail reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ]))
+    api.connectWebSocket.mockImplementation(() => ({
+      get connected() {
+        return true
+      },
+      send: vi.fn(() => {
+        throw new Error('send failed')
+      }),
+      abort: vi.fn(),
+      close: vi.fn(),
+      onOpen: null,
+      onClose: null,
+    }))
+
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await flushPromises()
+    const before = store.messages.map(message => ({ id: message.id, role: message.role }))
+
+    const result = await store.editMessage('user-a', 'edited request')
+
+    expect(result).toMatchObject({ ok: false, stage: 'startup', error: 'send failed' })
+    expect(store.messages.map(message => ({ id: message.id, role: message.role }))).toEqual(before)
+  })
+
+  it('keeps the current session visible when fork source session is gone', async () => {
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', role: 'user', text: 'request', attachments: [], timestamp: '2026-06-19T00:00:00.000Z' },
+      {
+        id: 'assistant-a',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'reply' }],
+        timestamp: '2026-06-19T00:00:01.000Z',
+      },
+    ]))
+    api.forkSessionFromMessage.mockRejectedValueOnce(new Error('session not found'))
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await flushPromises()
+    const result = await store.forkMessage('assistant-a')
+
+    expect(result).toBe(false)
+    expect(store.sessionId).toBe('session-1')
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'assistant-a'])
+    expect(toast.error).toHaveBeenCalledWith('This session has been deleted')
+  })
+
+  it('keeps the current session visible when forked session messages fail to load', async () => {
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI
+      .mockResolvedValueOnce(messagesPayload([
+        { id: 'user-a', role: 'user', text: 'request', attachments: [], timestamp: '2026-06-19T00:00:00.000Z' },
+        {
+          id: 'assistant-a',
+          role: 'assistant',
+          messages: [{ id: 1, type: 'text', content: 'reply' }],
+          timestamp: '2026-06-19T00:00:01.000Z',
+        },
+      ]))
+      .mockRejectedValueOnce(new Error('load failed'))
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await flushPromises()
+    const result = await store.forkMessage('assistant-a')
+
+    expect(result).toBe(false)
+    expect(store.sessionId).toBe('session-1')
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'assistant-a'])
+    expect(toast.error).toHaveBeenCalledWith('load failed')
   })
 
   it('routes interleaved websocket events by stream id', async () => {

@@ -1,5 +1,4 @@
 ALTER TABLE IF EXISTS bot_channel_routes DROP CONSTRAINT IF EXISTS fk_bot_channel_routes_active_session;
-ALTER TABLE IF EXISTS bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_head_turn;
 ALTER TABLE IF EXISTS bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_default_head_turn;
 ALTER TABLE IF EXISTS bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_forked_from_turn;
 ALTER TABLE IF EXISTS bot_history_turns DROP CONSTRAINT IF EXISTS fk_bot_history_turns_request_message;
@@ -29,6 +28,7 @@ DROP TABLE IF EXISTS containers CASCADE;
 DROP TABLE IF EXISTS user_input_requests CASCADE;
 DROP TABLE IF EXISTS tool_approval_requests CASCADE;
 DROP TABLE IF EXISTS bot_history_messages CASCADE;
+DROP TABLE IF EXISTS bot_session_turn_heads CASCADE;
 DROP TABLE IF EXISTS bot_history_turns CASCADE;
 DROP TABLE IF EXISTS bot_session_events CASCADE;
 DROP TABLE IF EXISTS bot_sessions CASCADE;
