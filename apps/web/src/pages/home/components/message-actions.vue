@@ -18,7 +18,7 @@
     class="chat-message-meta flex h-8 items-center gap-0.5"
     :class="[
       align === 'end' ? 'justify-end' : 'justify-start -ml-1.5',
-      streaming ? 'pointer-events-none' : '',
+      streaming ? 'pointer-events-none opacity-0' : actionRowRevealClass,
     ]"
   >
     <!-- The tooltip is owned entirely by its trigger (the icon button): moving
@@ -38,7 +38,7 @@
             type="button"
             variant="ghost"
             size="icon-sm"
-            :class="[actionIconClass, hoverActionClass]"
+            :class="actionIconClass"
             :aria-label="copyLabel"
             @click="handleCopy"
           >
@@ -68,7 +68,7 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="[actionIconClass, hoverActionClass]"
+              :class="actionIconClass"
               :aria-label="t('chat.actions.edit')"
               @click="emit('edit')"
             >
@@ -88,7 +88,7 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="[actionIconClass, hoverActionClass]"
+              :class="actionIconClass"
               :aria-label="t('chat.actions.retry')"
               @click="emit('retry')"
             >
@@ -106,11 +106,11 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="[actionIconClass, hoverActionClass]"
+              :class="actionIconClass"
               :aria-label="t('chat.actions.fork')"
               @click="emit('fork')"
             >
-              <Split class="rotate-90" />
+              <ForkSplitIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -124,7 +124,7 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="[actionIconClass, hoverActionClass]"
+              :class="actionIconClass"
               :aria-label="t('chat.actions.more')"
             >
               <DotsIcon class="size-[18px]" />
@@ -149,7 +149,7 @@
 
       <div
         v-if="variantState"
-        class="flex items-center justify-center text-muted-foreground"
+        :class="variantGroupClass"
         :aria-label="t('chat.actions.variants', { current: variantState.index + 1, total: variantState.total })"
       >
         <Tooltip>
@@ -158,7 +158,7 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="actionIconClass"
+              :class="variantArrowClass"
               :disabled="!variantState.previousHeadTurnId"
               :aria-label="t('chat.actions.previousVariant')"
               @click="switchVariant(variantState.previousHeadTurnId)"
@@ -179,7 +179,7 @@
               type="button"
               variant="ghost"
               size="icon-sm"
-              :class="actionIconClass"
+              :class="variantArrowClass"
               :disabled="!variantState.nextHeadTurnId"
               :aria-label="t('chat.actions.nextVariant')"
               @click="switchVariant(variantState.nextHeadTurnId)"
@@ -199,10 +199,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronLeft, ChevronRight, PencilLine, RotateCcw, Split } from 'lucide-vue-next'
+import { ChevronLeft, ChevronRight, PencilLine, RotateCcw } from 'lucide-vue-next'
 import CopyConnectedIcon from './copy-connected-icon.vue'
 import CheckDrawIcon from './check-draw-icon.vue'
 import DotsIcon from './dots-icon.vue'
+import ForkSplitIcon from './fork-split-icon.vue'
 import type { TurnVariantState } from '@/store/chat-list'
 import {
   Button,
@@ -240,8 +241,10 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const { copyText: writeClipboard } = useClipboard()
 
+const actionRowRevealClass = 'opacity-0 pointer-events-none transition-opacity duration-150 motion-reduce:transition-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto group-focus-within/msg:opacity-100 group-focus-within/msg:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto'
 const actionIconClass = 'text-muted-foreground hover:text-foreground'
-const hoverActionClass = 'opacity-0 pointer-events-none transition-opacity duration-150 motion-reduce:transition-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:pointer-events-auto'
+const variantArrowClass = 'h-[1.875rem] w-6 rounded-md text-muted-foreground hover:text-foreground [&_svg:not([class*=size-])]:size-5'
+const variantGroupClass = 'flex items-center justify-center text-muted-foreground'
 
 const copied = ref(false)
 let resetTimer: ReturnType<typeof setTimeout> | null = null
