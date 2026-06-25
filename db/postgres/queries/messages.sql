@@ -35,11 +35,11 @@ SELECT *
 FROM bot_history_turns
 WHERE id = sqlc.arg(id);
 
--- name: ListOwnedHistoryTurnsForSessionDelete :many
-SELECT *
-FROM bot_history_turns
-WHERE owner_session_id = sqlc.arg(session_id)
-ORDER BY created_at DESC, id DESC;
+-- name: ListSessionOwnedTurnsForCleanup :many
+SELECT t.*
+FROM bot_history_turns t
+WHERE t.owner_session_id = sqlc.arg(session_id)
+ORDER BY t.created_at DESC, t.id DESC;
 
 -- name: ListHistoryTurnPathFromHead :many
 WITH RECURSIVE visible_turns AS (

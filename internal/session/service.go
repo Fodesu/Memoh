@@ -760,7 +760,7 @@ func (s *Service) SoftDelete(ctx context.Context, sessionID string) error {
 
 type sessionTurnCleanupQueries interface {
 	DeleteSessionTurnHeads(context.Context, pgtype.UUID) error
-	ListOwnedHistoryTurnsForSessionDelete(context.Context, pgtype.UUID) ([]sqlc.BotHistoryTurn, error)
+	ListSessionOwnedTurnsForCleanup(context.Context, pgtype.UUID) ([]sqlc.BotHistoryTurn, error)
 	ListOtherActiveSessionVisibleTurnIDs(context.Context, pgtype.UUID) ([]pgtype.UUID, error)
 	DeleteMessagesByTurnID(context.Context, pgtype.UUID) error
 	DeleteHistoryTurnByID(context.Context, pgtype.UUID) error
@@ -771,14 +771,14 @@ func (*Service) cleanupDeletedSessionTurns(ctx context.Context, rawQueries dbsto
 	if !ok {
 		return nil
 	}
-	if err := queries.DeleteSessionTurnHeads(ctx, sessionID); err != nil {
-		return fmt.Errorf("delete session turn heads: %w", err)
-	}
-	owned, err := queries.ListOwnedHistoryTurnsForSessionDelete(ctx, sessionID)
+	candidates, err := queries.ListSessionOwnedTurnsForCleanup(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("list owned history turns for deleted session: %w", err)
 	}
-	if len(owned) == 0 {
+	if err := queries.DeleteSessionTurnHeads(ctx, sessionID); err != nil {
+		return fmt.Errorf("delete session turn heads: %w", err)
+	}
+	if len(candidates) == 0 {
 		return nil
 	}
 	sharedRows, err := queries.ListOtherActiveSessionVisibleTurnIDs(ctx, sessionID)
@@ -791,7 +791,7 @@ func (*Service) cleanupDeletedSessionTurns(ctx context.Context, rawQueries dbsto
 			shared[id] = struct{}{}
 		}
 	}
-	for _, turn := range owned {
+	for _, turn := range candidates {
 		if !turn.ID.Valid {
 			continue
 		}

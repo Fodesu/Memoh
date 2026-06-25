@@ -395,9 +395,16 @@
       "retry": "Try again",
       "fork": "Fork",
       "more": "More",
-      "previousVariant": "Previous response",
-      "nextVariant": "Next response",
-      "variants": "Response {current} of {total}",
+      "requestVariant": {
+        "previous": "Previous request",
+        "next": "Next request",
+        "label": "Request {current} of {total}"
+      },
+      "responseVariant": {
+        "previous": "Previous response",
+        "next": "Next response",
+        "label": "Response {current} of {total}"
+      },
       "readAloud": "Read aloud"
     },
     "process": {

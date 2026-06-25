@@ -189,6 +189,18 @@ func (r *Resolver) validateContinuationTurnHead(ctx context.Context, sessionID, 
 	return nil
 }
 
+func (r *Resolver) validateSelectedContinuationTurnHead(ctx context.Context, sessionID, persistTurnID, selectedHeadTurnID, label string) error {
+	persistTurnID = strings.TrimSpace(persistTurnID)
+	selectedHeadTurnID = strings.TrimSpace(selectedHeadTurnID)
+	if selectedHeadTurnID != "" && selectedHeadTurnID != persistTurnID {
+		if strings.TrimSpace(label) == "" {
+			label = "continuation"
+		}
+		return fmt.Errorf("%s turn is no longer active for the selected conversation version", label)
+	}
+	return r.validateContinuationTurnHead(ctx, sessionID, persistTurnID)
+}
+
 func contextScopeFromParentTurn(parentTurnID pgtype.UUID) TurnContextScope {
 	if !parentTurnID.Valid {
 		return TurnContextScope{Kind: ContextScopeEmpty}

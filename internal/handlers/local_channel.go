@@ -169,7 +169,7 @@ func formatLocalStreamEvent(event channel.StreamEvent) ([]byte, error) {
 
 // LocalChannelMessageRequest is the request body for posting a local channel message.
 type LocalChannelMessageRequest struct {
-	Message         channel.Message `json:"message"`
+	Message         channel.Message `json:"message" validate:"required"`
 	ModelID         string          `json:"model_id,omitempty"`
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 	BaseHeadTurnID  string          `json:"base_head_turn_id,omitempty"`

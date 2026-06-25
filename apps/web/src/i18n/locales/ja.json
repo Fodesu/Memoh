@@ -374,9 +374,17 @@
       "retry": "もう一度試す",
       "fork": "フォーク",
       "more": "その他",
-      "previousVariant": "前の返信",
-      "nextVariant": "次の返信",
-      "variants": "{current}/{total} 件目の返信"
+      "requestVariant": {
+        "previous": "前のリクエスト",
+        "next": "次のリクエスト",
+        "label": "{current}/{total} 件目のリクエスト"
+      },
+      "responseVariant": {
+        "previous": "前の返信",
+        "next": "次の返信",
+        "label": "{current}/{total} 件目の返信"
+      },
+      "readAloud": "読み上げ"
     },
     "process": {
       "browse": "{count} ファイルを読み取る",

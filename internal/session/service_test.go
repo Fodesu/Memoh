@@ -396,14 +396,16 @@ func mustSessionJSON(value map[string]any) []byte {
 	return data
 }
 
-func TestSoftDeleteCleansOnlyUnsharedOwnedTurns(t *testing.T) {
+func TestSoftDeleteCleansOnlyUnsharedVisibleTurns(t *testing.T) {
 	sessionID := "00000000-0000-0000-0000-000000000010"
 	sharedTurnID := mustPGUUID("00000000-0000-0000-0000-000000000011")
 	privateTurnID := mustPGUUID("00000000-0000-0000-0000-000000000012")
+	ancestorTurnID := mustPGUUID("00000000-0000-0000-0000-000000000013")
 	queries := &softDeleteCleanupQueries{
 		ownedTurns: []sqlc.BotHistoryTurn{
 			{ID: privateTurnID},
 			{ID: sharedTurnID},
+			{ID: ancestorTurnID},
 		},
 		sharedTurnIDs: []pgtype.UUID{sharedTurnID},
 	}
@@ -418,11 +420,12 @@ func TestSoftDeleteCleansOnlyUnsharedOwnedTurns(t *testing.T) {
 	if !queries.deletedHeads {
 		t.Fatal("session turn heads were not deleted")
 	}
-	if len(queries.deletedMessageTurns) != 1 || queries.deletedMessageTurns[0] != privateTurnID {
-		t.Fatalf("deleted message turns = %v, want private turn only", queries.deletedMessageTurns)
+	wantDeleted := []pgtype.UUID{privateTurnID, ancestorTurnID}
+	if !sameUUIDSlice(queries.deletedMessageTurns, wantDeleted) {
+		t.Fatalf("deleted message turns = %v, want %v", queries.deletedMessageTurns, wantDeleted)
 	}
-	if len(queries.deletedTurns) != 1 || queries.deletedTurns[0] != privateTurnID {
-		t.Fatalf("deleted turns = %v, want private turn only", queries.deletedTurns)
+	if !sameUUIDSlice(queries.deletedTurns, wantDeleted) {
+		t.Fatalf("deleted turns = %v, want %v", queries.deletedTurns, wantDeleted)
 	}
 }
 
@@ -464,7 +467,7 @@ func (q *softDeleteCleanupQueries) DeleteSessionTurnHeads(context.Context, pgtyp
 	return q.deleteHeadsErr
 }
 
-func (q *softDeleteCleanupQueries) ListOwnedHistoryTurnsForSessionDelete(context.Context, pgtype.UUID) ([]sqlc.BotHistoryTurn, error) {
+func (q *softDeleteCleanupQueries) ListSessionOwnedTurnsForCleanup(context.Context, pgtype.UUID) ([]sqlc.BotHistoryTurn, error) {
 	return q.ownedTurns, nil
 }
 
@@ -480,6 +483,18 @@ func (q *softDeleteCleanupQueries) DeleteMessagesByTurnID(_ context.Context, id 
 func (q *softDeleteCleanupQueries) DeleteHistoryTurnByID(_ context.Context, id pgtype.UUID) error {
 	q.deletedTurns = append(q.deletedTurns, id)
 	return nil
+}
+
+func sameUUIDSlice(got, want []pgtype.UUID) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // pagedQueriesStub captures the params handed to the paged session queries so

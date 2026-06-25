@@ -1598,7 +1598,7 @@ export type HandlersListSnapshotsResponse = {
 
 export type HandlersLocalChannelMessageRequest = {
     base_head_turn_id?: string;
-    message?: ChannelMessage;
+    message: ChannelMessage;
     model_id?: string;
     reasoning_effort?: string;
 };
@@ -1793,7 +1793,9 @@ export type HandlersTokenUsageResponse = {
 };
 
 export type HandlersToolApprovalDecisionRequest = {
+    base_head_turn_id?: string;
     reason?: string;
+    session_id?: string;
 };
 
 export type HandlersTriggerCompactResponse = {
@@ -1896,7 +1898,7 @@ export type HandlersEmailOAuthStatusResponse = {
 
 export type HandlersForkSessionRequest = {
     base_head_turn_id?: string;
-    message_id?: string;
+    message_id: string;
 };
 
 export type HandlersFsOpResponse = {

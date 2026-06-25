@@ -53,7 +53,8 @@ export interface Message {
 // Per-session SSE: `/bots/{bot_id}/sessions/{session_id}/messages/events`.
 // Server pushes a small backlog of `message_created` events followed by live
 // `message_created` / `session_title_updated` events scoped to this session
-// only. `ping` is a server heartbeat.
+// only. `ping` is a server heartbeat; `stale` / `dropped` ask the client to
+// refresh without carrying message bodies.
 export interface SessionMessageCreatedEvent {
   type: 'message_created'
   bot_id?: string
@@ -67,19 +68,31 @@ export interface SessionTitleUpdatedEvent {
   title: string
 }
 
-export interface SessionPingEvent {
-  type: 'ping'
-}
-
 export interface SessionBackgroundTaskEvent extends UIBackgroundTask {
   type: 'background_task'
   task?: UIBackgroundTask
+}
+
+export interface SessionStaleEvent {
+  type: 'stale'
+  session_id?: string
+}
+
+export interface SessionDroppedEvent {
+  type: 'dropped'
+  count?: number
+}
+
+export interface SessionPingEvent {
+  type: 'ping'
 }
 
 export type SessionMessageStreamEvent =
   | SessionMessageCreatedEvent
   | SessionTitleUpdatedEvent
   | SessionBackgroundTaskEvent
+  | SessionStaleEvent
+  | SessionDroppedEvent
   | SessionPingEvent
 
 // Bot-wide activity SSE: `/bots/{bot_id}/sessions/events`. Carries identifier

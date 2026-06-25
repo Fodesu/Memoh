@@ -171,6 +171,7 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 
 	before, hasBefore := parseBeforeParam(c.QueryParam("before"))
 	beforeID := strings.TrimSpace(c.QueryParam("before_id"))
+	format := strings.TrimSpace(c.QueryParam("format"))
 
 	bot, _, _, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
 	if err != nil {
@@ -581,7 +582,7 @@ func (h *MessageHandler) extendToUITurnHead(ctx context.Context, sessionID strin
 	// before prepending, so the combined slice stays monotonic and the turn
 	// converter (which scans in order) keeps one reply in a single turn.
 	for len(messages) > 0 && len(messages) < maxRows && !conversation.IsUITurnBoundary(messages[0]) {
-		older, err := h.messageService.ListBeforeBySession(ctx, sessionID, messages[0].CreatedAt, batch)
+		older, err := h.messageService.ListBeforeBySession(ctx, sessionID, messages[0].CreatedAt, "", batch)
 		if err != nil || len(older) == 0 {
 			break
 		}

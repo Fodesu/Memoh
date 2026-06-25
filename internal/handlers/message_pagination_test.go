@@ -49,7 +49,7 @@ func (s *stubMessageService) ListLatestBySession(_ context.Context, sid string, 
 	return s.latest(sid, int(limit)), nil
 }
 
-func (s *stubMessageService) ListBeforeBySession(_ context.Context, sid string, before time.Time, limit int32) ([]messagepkg.Message, error) {
+func (s *stubMessageService) ListBeforeBySession(_ context.Context, sid string, before time.Time, _ string, limit int32) ([]messagepkg.Message, error) {
 	return s.before(sid, before, int(limit)), nil
 }
 

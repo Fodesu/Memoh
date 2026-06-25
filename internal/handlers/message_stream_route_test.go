@@ -194,6 +194,67 @@ func TestLatestMessagesFromGraphUsesSelectedHeadPath(t *testing.T) {
 	}
 }
 
+func TestLiveMessageVisibilityUsesSelectedHeadPath(t *testing.T) {
+	t.Parallel()
+
+	visible := map[string]struct{}{
+		"turn-a": {},
+		"turn-b": {},
+	}
+	if !messageVisibleInTurnSet(messagepkg.Message{TurnID: "turn-b"}, visible) {
+		t.Fatal("message on selected head path was filtered")
+	}
+	if messageVisibleInTurnSet(messagepkg.Message{TurnID: "turn-c"}, visible) {
+		t.Fatal("message on sibling head path was not filtered")
+	}
+	if messageVisibleInTurnSet(messagepkg.Message{}, visible) {
+		t.Fatal("message without turn id was not filtered when a selected path exists")
+	}
+	if !messageVisibleInTurnSet(messagepkg.Message{}, nil) {
+		t.Fatal("legacy message without selected path should remain visible")
+	}
+}
+
+func TestLiveMessageVisibilityAllowsDescendantsOfSelectedHead(t *testing.T) {
+	t.Parallel()
+
+	visible := map[string]struct{}{
+		"turn-a": {},
+		"turn-b": {},
+	}
+	liveHeads := map[string]struct{}{"turn-b": {}}
+	graph := messagepkg.SessionTurnGraph{
+		DefaultHeadTurnID: "turn-e",
+		HeadTurnIDs:       []string{"turn-c", "turn-e"},
+		Nodes: []messagepkg.SessionTurnGraphNode{
+			{TurnID: "turn-a"},
+			{TurnID: "turn-b", ParentTurnID: "turn-a"},
+			{TurnID: "turn-c", ParentTurnID: "turn-a"},
+			{TurnID: "turn-d", ParentTurnID: "turn-b"},
+			{TurnID: "turn-e", ParentTurnID: "turn-d"},
+		},
+	}
+
+	if got := addVisibleDescendantPathFromGraph(visible, liveHeads, graph, "turn-d"); got != liveTurnVisible {
+		t.Fatal("descendant of selected head was filtered")
+	}
+	if _, ok := visible["turn-d"]; !ok {
+		t.Fatalf("descendant was not added to visible set: %#v", visible)
+	}
+	if got := addVisibleDescendantPathFromGraph(visible, liveHeads, graph, "turn-e"); got != liveTurnVisible {
+		t.Fatal("descendant of previously accepted live head was filtered")
+	}
+	if _, ok := visible["turn-e"]; !ok {
+		t.Fatalf("second descendant was not added to visible set: %#v", visible)
+	}
+	if got := addVisibleDescendantPathFromGraph(visible, liveHeads, graph, "turn-c"); got != liveTurnHidden {
+		t.Fatal("sibling branch was treated as selected-path descendant")
+	}
+	if got := addVisibleDescendantPathFromGraph(visible, liveHeads, graph, "turn-pending"); got != liveTurnStale {
+		t.Fatalf("pending live turn missing from graph = %v, want stale", got)
+	}
+}
+
 func TestVisibleTurnIDSetForHeadFallsBackFromInvalidHead(t *testing.T) {
 	t.Parallel()
 

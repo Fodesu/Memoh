@@ -44,6 +44,9 @@ func (r *Resolver) RespondToolApproval(ctx context.Context, input ToolApprovalRe
 	if err != nil {
 		return err
 	}
+	if err := r.validateSelectedContinuationTurnHead(ctx, target.SessionID, target.PersistTurnID, input.SelectedHeadTurnID, "tool approval"); err != nil {
+		return err
+	}
 	if isACP, err := r.isACPToolApprovalSession(ctx, target.SessionID); err != nil {
 		return err
 	} else if isACP {
@@ -200,10 +203,7 @@ func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval tool
 	approval = withLocalWebReplyTarget(approval)
 	doneTurn := r.enterSessionTurn(ctx, input.BotID, approval.SessionID)
 	defer doneTurn()
-	if selectedHead := strings.TrimSpace(input.SelectedHeadTurnID); selectedHead != "" && selectedHead != strings.TrimSpace(approval.PersistTurnID) {
-		return errors.New("tool approval turn is no longer active for the selected conversation version")
-	}
-	if err := r.validateContinuationTurnHead(ctx, approval.SessionID, approval.PersistTurnID); err != nil {
+	if err := r.validateSelectedContinuationTurnHead(ctx, approval.SessionID, approval.PersistTurnID, input.SelectedHeadTurnID, "tool approval"); err != nil {
 		return err
 	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})

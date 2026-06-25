@@ -73,7 +73,7 @@ type updateSessionRequest struct {
 }
 
 type forkSessionRequest struct {
-	MessageID      string `json:"message_id"`
+	MessageID      string `json:"message_id" validate:"required"`
 	BaseHeadTurnID string `json:"base_head_turn_id,omitempty"`
 }
 
@@ -679,7 +679,7 @@ func canAccessSession(sess session.Session, userID string, perms []string) bool 
 func filterSessionTypesForPermissions(types []string, perms []string) []string {
 	out := make([]string, 0, len(types))
 	for _, typ := range types {
-		if bots.HasPermission(perms, requiredPermissionForSessionType(typ)) {
+		if bots.HasPermission(perms, requiredReadPermissionForSessionType(typ)) {
 			out = append(out, typ)
 		}
 	}

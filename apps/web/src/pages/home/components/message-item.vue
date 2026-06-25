@@ -254,7 +254,8 @@
           :copy-text="userCopyText"
           :align="bubbleSelf ? 'end' : 'start'"
           :can-edit="canEditUserMessage"
-          :variant-state="requestVariantState"
+          :variant-state="canSelectVariant ? requestVariantState : null"
+          variant-kind="request"
           @edit="startEdit"
           @select-variant="emit('selectVariant', $event)"
         />
@@ -355,7 +356,8 @@
           align="start"
           :can-fork="canForkAssistantMessage"
           :can-retry="canRetryAssistantMessage"
-          :variant-state="responseVariantState"
+          :variant-state="canSelectVariant ? responseVariantState : null"
+          variant-kind="response"
           :streaming="message.streaming"
           @fork="emit('forkMessage', message.id)"
           @retry="emit('retryMessage', message.id)"
@@ -453,7 +455,8 @@ const props = defineProps<{
   onReplyClick?: (messageId: string) => void
   isScrolling: boolean
   isLastMessage?: boolean
-  canEditMessage?: boolean
+  canRunMessageAction?: boolean
+  canSelectVariant?: boolean
   requestVariantState?: TurnVariantState | null
   responseVariantState?: TurnVariantState | null
 }>()
@@ -558,7 +561,7 @@ const canEditUserMessage = computed(() =>
   props.message.role === 'user'
   && !props.message.streaming
   && props.message.__optimistic !== true
-  && props.canEditMessage === true
+  && props.canRunMessageAction === true
   && !isSpecialUserMessage.value
   && cleanCurrentUserText.value.length > 0
   && bubbleSelf.value,
@@ -829,6 +832,7 @@ const canActOnAssistantTurn = computed(() =>
   props.message.role === 'assistant'
   && !props.message.streaming
   && props.message.__optimistic !== true
+  && props.canRunMessageAction === true
 )
 
 const canForkAssistantMessage = computed(() => canActOnAssistantTurn.value)

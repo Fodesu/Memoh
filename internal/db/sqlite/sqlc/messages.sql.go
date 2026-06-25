@@ -2077,15 +2077,15 @@ func (q *Queries) ListOtherActiveSessionVisibleTurnIDs(ctx context.Context, sess
 	return items, nil
 }
 
-const listOwnedHistoryTurnsForSessionDelete = `-- name: ListOwnedHistoryTurnsForSessionDelete :many
-SELECT id, bot_id, owner_session_id, parent_turn_id, request_message_id, final_assistant_message_id, created_at, updated_at
-FROM bot_history_turns
-WHERE owner_session_id = ?1
-ORDER BY created_at DESC, id DESC
+const listSessionOwnedTurnsForCleanup = `-- name: ListSessionOwnedTurnsForCleanup :many
+SELECT t.id, t.bot_id, t.owner_session_id, t.parent_turn_id, t.request_message_id, t.final_assistant_message_id, t.created_at, t.updated_at
+FROM bot_history_turns t
+WHERE t.owner_session_id = ?1
+ORDER BY t.created_at DESC, t.id DESC
 `
 
-func (q *Queries) ListOwnedHistoryTurnsForSessionDelete(ctx context.Context, sessionID sql.NullString) ([]BotHistoryTurn, error) {
-	rows, err := q.db.QueryContext(ctx, listOwnedHistoryTurnsForSessionDelete, sessionID)
+func (q *Queries) ListSessionOwnedTurnsForCleanup(ctx context.Context, sessionID sql.NullString) ([]BotHistoryTurn, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionOwnedTurnsForCleanup, sessionID)
 	if err != nil {
 		return nil, err
 	}

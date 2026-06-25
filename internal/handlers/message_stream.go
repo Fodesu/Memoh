@@ -34,7 +34,7 @@ const sessionMessageStreamBuffer = 128
 // 30s proxy idle cut.
 const sseHeartbeatInterval = 20 * time.Second
 
-func visibleTurnIDSetForHead(graph messagepkg.SessionTurnGraph, requestedHeadTurnID string) map[string]struct{} {
+func resolvedHeadTurnIDForGraph(graph messagepkg.SessionTurnGraph, requestedHeadTurnID string) string {
 	nodes := make(map[string]messagepkg.SessionTurnGraphNode, len(graph.Nodes))
 	for _, node := range graph.Nodes {
 		turnID := strings.TrimSpace(node.TurnID)
@@ -56,6 +56,19 @@ func visibleTurnIDSetForHead(graph messagepkg.SessionTurnGraph, requestedHeadTur
 			}
 		}
 	}
+	return head
+}
+
+func visibleTurnIDSetForHead(graph messagepkg.SessionTurnGraph, requestedHeadTurnID string) map[string]struct{} {
+	nodes := make(map[string]messagepkg.SessionTurnGraphNode, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		turnID := strings.TrimSpace(node.TurnID)
+		if turnID == "" {
+			continue
+		}
+		nodes[turnID] = node
+	}
+	head := resolvedHeadTurnIDForGraph(graph, requestedHeadTurnID)
 	visible := make(map[string]struct{})
 	seen := make(map[string]struct{})
 	for head != "" {
@@ -71,6 +84,74 @@ func visibleTurnIDSetForHead(graph messagepkg.SessionTurnGraph, requestedHeadTur
 		head = strings.TrimSpace(node.ParentTurnID)
 	}
 	return visible
+}
+
+func messageVisibleInTurnSet(message messagepkg.Message, visibleTurnIDs map[string]struct{}) bool {
+	if len(visibleTurnIDs) == 0 {
+		return true
+	}
+	turnID := strings.TrimSpace(message.TurnID)
+	if turnID == "" {
+		return false
+	}
+	_, ok := visibleTurnIDs[turnID]
+	return ok
+}
+
+type liveTurnVisibility int
+
+const (
+	liveTurnHidden liveTurnVisibility = iota
+	liveTurnVisible
+	liveTurnStale
+)
+
+func addVisibleDescendantPathFromGraph(visibleTurnIDs map[string]struct{}, liveHeadTurnIDs map[string]struct{}, graph messagepkg.SessionTurnGraph, turnID string) liveTurnVisibility {
+	if len(visibleTurnIDs) == 0 {
+		return liveTurnVisible
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return liveTurnHidden
+	}
+	if _, ok := visibleTurnIDs[turnID]; ok {
+		return liveTurnVisible
+	}
+
+	nodes := make(map[string]messagepkg.SessionTurnGraphNode, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		id := strings.TrimSpace(node.TurnID)
+		if id != "" {
+			nodes[id] = node
+		}
+	}
+	var path []string
+	seen := make(map[string]struct{})
+	for current := turnID; current != ""; {
+		if _, ok := liveHeadTurnIDs[current]; ok {
+			for _, id := range path {
+				visibleTurnIDs[id] = struct{}{}
+			}
+			liveHeadTurnIDs[turnID] = struct{}{}
+			return liveTurnVisible
+		}
+		if _, ok := seen[current]; ok {
+			return liveTurnHidden
+		}
+		seen[current] = struct{}{}
+		node, ok := nodes[current]
+		if !ok {
+			// Message persistence publishes before the session head transition
+			// is applied in the conversation flow. During that short window the
+			// refreshed graph may still be stale. Do not emit the raw message:
+			// ancestry is not proven yet, so sending it can leak another selected
+			// head's sibling content. Ask the client to refresh instead.
+			return liveTurnStale
+		}
+		path = append(path, current)
+		current = strings.TrimSpace(node.ParentTurnID)
+	}
+	return liveTurnHidden
 }
 
 func latestMessagesFromGraph(graph messagepkg.SessionTurnGraph, visibleTurnIDs map[string]struct{}, limit int) []messagepkg.Message {
@@ -147,7 +228,12 @@ func (h *MessageHandler) StreamSessionMessageEvents(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
+	selectedHeadTurnID := resolvedHeadTurnIDForGraph(graph, headTurnID)
 	visibleTurnIDs := visibleTurnIDSetForHead(graph, headTurnID)
+	liveHeadTurnIDs := make(map[string]struct{}, 1)
+	if selectedHeadTurnID != "" {
+		liveHeadTurnIDs[selectedHeadTurnID] = struct{}{}
+	}
 
 	// Subscribe BEFORE the backlog read so any message persisted during the
 	// DB call lands in the live channel. We then dedup against the backlog
@@ -217,6 +303,30 @@ func (h *MessageHandler) StreamSessionMessageEvents(c echo.Context) error {
 				}
 				if message.SessionID != sessionID {
 					continue
+				}
+				if !messageVisibleInTurnSet(message, visibleTurnIDs) {
+					nextGraph, err := h.messageService.GetSessionTurnGraph(c.Request().Context(), sessionID)
+					if err != nil {
+						h.logger.Warn("refresh session turn graph for live message failed",
+							slog.String("session_id", sessionID),
+							slog.String("turn_id", message.TurnID),
+							slog.Any("error", err),
+						)
+						continue
+					}
+					switch addVisibleDescendantPathFromGraph(visibleTurnIDs, liveHeadTurnIDs, nextGraph, message.TurnID) {
+					case liveTurnVisible:
+					case liveTurnStale:
+						if err := writeSSEJSON(writer, flusher, map[string]any{
+							"type":       "stale",
+							"session_id": sessionID,
+						}); err != nil {
+							return nil
+						}
+						continue
+					default:
+						continue
+					}
 				}
 				// Skip messages already delivered as part of the backlog —
 				// the Subscribe-before-backlog ordering keeps the seam

@@ -217,6 +217,7 @@ function isSessionNotFoundError(error: unknown): boolean {
 
 interface PendingAssistantStream {
   streamId: string
+  contextTurns: ChatMessage[]
   assistantTurn: ChatAssistantTurn
   botId: string
   sessionId: string
@@ -333,7 +334,8 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = computed(() => isSessionStreaming(sessionId.value))
   const sessions = ref<SessionSummary[]>([])
   const loading = ref(false)
-  const messageActionLoading = ref(false)
+  const messageActionSessionIds = reactive(new Set<string>())
+  const messageActionLoading = computed(() => isMessageActionLoading(sessionId.value))
   // `loadingChats` covers the bot-level boot path (sessions list fetch), so
   // the sidebar can show its skeleton + suppress its empty-state placeholder
   // exactly while the sessions list is in flight.
@@ -364,6 +366,21 @@ export const useChatStore = defineStore('chat', () => {
   // longer an ephemeral "preview" tab. seq forces the watch to fire on repeats.
   const userSentInSession = ref<{ id: string, wasDraft: boolean, seq: number } | null>(null)
   let userSendSeq = 0
+
+  function isMessageActionLoading(targetSessionId?: string | null): boolean {
+    const sid = (targetSessionId ?? sessionId.value ?? '').trim()
+    return Boolean(sid && messageActionSessionIds.has(sid))
+  }
+
+  function setMessageActionLoading(targetSessionId: string, loading: boolean) {
+    const sid = targetSessionId.trim()
+    if (!sid) return
+    if (loading) {
+      messageActionSessionIds.add(sid)
+    } else {
+      messageActionSessionIds.delete(sid)
+    }
+  }
 
   // Bumps every time a fs-mutating tool call (write/edit/apply_patch/exec) finishes for the
   // current bot. File-manager components watch this to refresh their listings
@@ -1218,7 +1235,10 @@ export const useChatStore = defineStore('chat', () => {
     const headTurnIds = (payload.head_turn_ids ?? [])
       .map(id => id.trim())
       .filter(id => id && nodes.has(id))
-    const defaultHead = payload.default_head_turn_id?.trim() || headTurnIds[0] || ''
+    const rawDefaultHead = payload.default_head_turn_id?.trim() || ''
+    const defaultHead = rawDefaultHead && headTurnIds.includes(rawDefaultHead)
+      ? rawDefaultHead
+      : headTurnIds[0] || ''
     const graph: SessionTurnGraphState = {
       defaultHeadTurnId: defaultHead,
       headTurnIds,
@@ -1403,6 +1423,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function selectTurnVariant(headTurnId: string): boolean {
     const sid = (sessionId.value ?? '').trim()
+    if (streaming.value || isMessageActionLoading(sid)) return false
     const head = headTurnId.trim()
     const graph = turnGraphs.get(sid)
     if (!sid || !head || !graph || !graph.headTurnIds.includes(head)) return false
@@ -1514,7 +1535,13 @@ export const useChatStore = defineStore('chat', () => {
     return activeIds.length === 1 ? activeIds[0]! : fallbackStreamId(sid)
   }
 
-  function trackAssistantStream(streamId: string, assistantTurn: ChatAssistantTurn, botId: string, targetSessionId: string): Promise<void> {
+  function trackAssistantStream(
+    streamId: string,
+    assistantTurn: ChatAssistantTurn,
+    botId: string,
+    targetSessionId: string,
+    contextTurns: ChatMessage[] = [],
+  ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const id = streamId.trim()
       if (!id) {
@@ -1527,6 +1554,7 @@ export const useChatStore = defineStore('chat', () => {
       }
       pendingAssistantStreams.set(id, {
         streamId: id,
+        contextTurns,
         assistantTurn,
         botId,
         sessionId: targetSessionId.trim(),
@@ -1563,10 +1591,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // Append/remove operate only on the active session's `messages` array.
-  // Optimistic turns belonging to a now-stale session (the user switched away
-  // before the assistant stream finished) are silently dropped from the view;
-  // the server keeps recording the conversation and the next REST refresh on
-  // that session will surface the response.
+  // Optimistic turns belonging to a background session keep receiving stream
+  // deltas off-screen; when that session becomes active again, the REST refresh
+  // rebuilds `messages`, so the pending turn must be reattached to the new array.
 
   function appendTurnToSession(botId: string, targetSessionId: string, turn: ChatMessage) {
     const bid = botId.trim()
@@ -1574,6 +1601,35 @@ export const useChatStore = defineStore('chat', () => {
     if (!bid || !sid) return
     if (currentBotId.value === bid && sessionId.value === sid) {
       messages.push(turn)
+    }
+  }
+
+  function hasVisibleTurn(turn: ChatMessage): boolean {
+    return messages.some(message =>
+      message === turn
+      || message.id === turn.id
+      || isSameLogicalTurn(message, turn),
+    )
+  }
+
+  function hasVisibleStreamAssistantTurn(turn: ChatAssistantTurn): boolean {
+    return messages.some(message =>
+      message === turn
+      || (message.__optimistic === true && message.id === turn.id),
+    )
+  }
+
+  function reattachPendingAssistantStreams(targetSessionId: string) {
+    const sid = targetSessionId.trim()
+    const bid = (currentBotId.value ?? '').trim()
+    if (!bid || !sid || sid !== (sessionId.value ?? '').trim()) return
+    for (const stream of pendingStreams()) {
+      if (stream.botId !== bid || stream.sessionId !== sid) continue
+      for (const turn of stream.contextTurns) {
+        if (!hasVisibleTurn(turn)) messages.push(turn)
+      }
+      if (hasVisibleStreamAssistantTurn(stream.assistantTurn)) continue
+      messages.push(stream.assistantTurn)
     }
   }
 
@@ -1647,6 +1703,7 @@ export const useChatStore = defineStore('chat', () => {
     const sid = input.sessionId.trim()
     if (!bid || !sid) return { ok: false, stage: 'startup' }
 
+    setMessageActionLoading(sid, true)
     const streamId = createStreamId()
     const modelId = overrideModelId.value || undefined
     const effort = overrideReasoningEffort.value
@@ -1659,7 +1716,8 @@ export const useChatStore = defineStore('chat', () => {
         throw new StreamFailureError('WebSocket is not connected', 'startup')
       }
       assistantTurn = createOptimisticAssistantTurn()
-      const completion = trackAssistantStream(streamId, assistantTurn, bid, sid)
+      const contextTurns = input.optimisticUserTurn ? [input.optimisticUserTurn] : []
+      const completion = trackAssistantStream(streamId, assistantTurn, bid, sid, contextTurns)
       input.send(ws, streamId, modelId, reasoningEffort)
       if (input.sourceUserTurn && input.optimisticUserTurn) {
         replaceTailFromTurn(input.sourceUserTurn, [
@@ -1670,6 +1728,7 @@ export const useChatStore = defineStore('chat', () => {
         appendTurnToSession(bid, sid, assistantTurn)
       }
       uiStarted = true
+      setMessageActionLoading(sid, false)
       loading.value = true
       await completion
       resetSelectedHeadForSession(sid)
@@ -1694,6 +1753,8 @@ export const useChatStore = defineStore('chat', () => {
       if (isAbort) return { ok: false, stage: 'stream', error: err.message }
       if (stage === 'startup') toast.error(err.message)
       return { ok: false, stage, error: err.message }
+    } finally {
+      setMessageActionLoading(sid, false)
     }
   }
 
@@ -2008,7 +2069,7 @@ export const useChatStore = defineStore('chat', () => {
     hasLoadedOlder.value = false
     loading.value = false
     loadingChats.value = false
-    messageActionLoading.value = false
+    messageActionSessionIds.clear()
     loadingOlder.value = false
     initializing.value = false
     overrideModelId.value = ''
@@ -2064,6 +2125,7 @@ export const useChatStore = defineStore('chat', () => {
       // empty-server-response handling settles the flag correctly.
       hasMoreOlder.value = true
     }
+    reattachPendingAssistantStreams(sid)
     const latest = messages[messages.length - 1]?.timestamp
     touchSessionInList(sid, latest)
   }
@@ -2107,15 +2169,24 @@ export const useChatStore = defineStore('chat', () => {
     await promise
   }
 
-  function refreshSessionsList(targetBotId: string): Promise<void> {
+  function refreshSessionsList(targetBotId: string, options: { keep?: SessionSummary[] } = {}): Promise<void> {
     const bid = targetBotId.trim()
     if (!bid) return Promise.resolve()
-    if (sessionListRefreshPromise?.botId === bid) return sessionListRefreshPromise.promise
+    if (sessionListRefreshPromise?.botId === bid) {
+      return sessionListRefreshPromise.promise.finally(() => {
+        if ((currentBotId.value ?? '').trim() !== bid) return
+        for (const keep of options.keep ?? []) upsertSession(keep)
+      })
+    }
 
     const promise = fetchSessions(bid)
       .then((response) => {
         if ((currentBotId.value ?? '').trim() !== bid) return
-        replaceSessions(response.items)
+        const items = [...response.items]
+        for (const keep of options.keep ?? []) {
+          if (!items.some(item => item.id === keep.id)) items.unshift(keep)
+        }
+        replaceSessions(items)
         sessionsCursor.value = response.nextCursor
         hasMoreSessions.value = response.nextCursor !== null
       })
@@ -2176,6 +2247,13 @@ export const useChatStore = defineStore('chat', () => {
       if (!task) return
       mergeBackgroundTaskIntoMatchingTools(rememberBackgroundTask(task))
       if (eventSessionId) touchSessionInList(eventSessionId)
+      return
+    }
+
+    if (event.type === 'stale' || event.type === 'dropped') {
+      const eventSessionId = event.type === 'stale' ? event.session_id?.trim() : ''
+      if (eventSessionId && eventSessionId !== targetSessionId) return
+      scheduleRefreshCurrentSession(targetSessionId)
       return
     }
 
@@ -2285,6 +2363,10 @@ export const useChatStore = defineStore('chat', () => {
         }
       } catch (error) {
         console.error('Failed to load session messages:', error)
+        if ((currentBotId.value ?? '').trim() === bid && (sessionId.value ?? '').trim() === sid) {
+          reattachPendingAssistantStreams(sid)
+          loading.value = isSessionStreaming(sid)
+        }
       } finally {
         if (myVersion === loadingMessagesVersion) loadingMessages.value = false
       }
@@ -2988,7 +3070,6 @@ export const useChatStore = defineStore('chat', () => {
 
   async function selectSession(targetSessionId: string) {
     const sid = targetSessionId.trim()
-    if (messageActionLoading.value) return
     if (!sid || sid === sessionId.value) return
     const requestId = ++selectSessionRequestId
     const bid = (currentBotId.value ?? '').trim()
@@ -3011,7 +3092,6 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function createNewSession() {
-    if (messageActionLoading.value) return
     const bid = await ensureBot()
     if (!bid) return
     selectSessionRequestId++
@@ -3080,29 +3160,31 @@ export const useChatStore = defineStore('chat', () => {
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
     const mid = messageId.trim()
-    if (!bid || !sid || !mid || activeChatReadOnly.value || streaming.value || messageActionLoading.value) return false
+    if (!bid || !sid || !mid || activeChatReadOnly.value || streaming.value || isMessageActionLoading(sid)) return false
     const previousMessages = [...messages]
     const previousHasMoreOlder = hasMoreOlder.value
     const previousHasLoadedOlder = hasLoadedOlder.value
-    messageActionLoading.value = true
+    let switchedToForkedSessionId = ''
+    setMessageActionLoading(sid, true)
     try {
       const forked = await requestForkSessionFromMessage(bid, sid, mid, selectedHeadForRequest(sid))
+      upsertSession(forked)
+      void refreshSessionsList(bid, { keep: [forked] })
       const payload = await fetchMessagesUI(bid, forked.id, { limit: PAGE_SIZE })
       if ((currentBotId.value ?? '').trim() !== bid || (sessionId.value ?? '').trim() !== sid) {
         return false
       }
-      upsertSession(forked)
       draftIntent.value = false
       sessionMessagesStream.stop()
       sessionId.value = forked.id
+      switchedToForkedSessionId = forked.id
       hasMoreOlder.value = false
       hasLoadedOlder.value = false
       applyFetchedMessagesPayload(forked.id, payload)
       startSessionMessagesStream(bid, forked.id, { skipInitialRefreshOnce: true })
-      void refreshSessionsList(bid)
       return true
     } catch (error) {
-      if (sessionId.value !== sid) {
+      if (switchedToForkedSessionId && sessionId.value === switchedToForkedSessionId) {
         sessionId.value = sid
         messages.splice(0, messages.length, ...previousMessages)
         hasMoreOlder.value = previousHasMoreOlder
@@ -3116,7 +3198,7 @@ export const useChatStore = defineStore('chat', () => {
           : forkFailedMessage())
       return false
     } finally {
-      messageActionLoading.value = false
+      setMessageActionLoading(sid, false)
     }
   }
 
@@ -3124,7 +3206,7 @@ export const useChatStore = defineStore('chat', () => {
     const mid = messageId.trim()
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
-    if (!mid || !bid || !sid || streaming.value || activeChatReadOnly.value || messageActionLoading.value) {
+    if (!mid || !bid || !sid || streaming.value || activeChatReadOnly.value || isMessageActionLoading(sid)) {
       return { ok: false, stage: 'startup' }
     }
     const target = messages.find((message): message is ChatAssistantTurn => message.role === 'assistant' && message.id === mid)
@@ -3155,7 +3237,7 @@ export const useChatStore = defineStore('chat', () => {
     const trimmed = text.trim()
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
-    if (!mid || !trimmed || !bid || !sid || streaming.value || activeChatReadOnly.value || messageActionLoading.value) {
+    if (!mid || !trimmed || !bid || !sid || streaming.value || activeChatReadOnly.value || isMessageActionLoading(sid)) {
       return { ok: false, stage: 'startup' }
     }
     const target = messages.find((message): message is ChatUserTurn => message.role === 'user' && message.id === mid)
@@ -3182,7 +3264,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function sendMessage(text: string, attachments?: ChatAttachment[]): Promise<SendMessageResult> {
     const trimmed = text.trim()
-    if ((!trimmed && !attachments?.length) || streaming.value || messageActionLoading.value || !currentBotId.value) return { ok: false, stage: 'startup' }
+    if ((!trimmed && !attachments?.length) || streaming.value || isMessageActionLoading(sessionId.value) || !currentBotId.value) return { ok: false, stage: 'startup' }
 
     loading.value = true
     let assistantTurn: ChatAssistantTurn | null = null
@@ -3217,7 +3299,7 @@ export const useChatStore = defineStore('chat', () => {
         if (!ws.connected) {
           throw new StreamFailureError('WebSocket is not connected', 'startup')
         }
-        const completion = trackAssistantStream(sendStreamId, assistantTurn, bid, sid)
+        const completion = trackAssistantStream(sendStreamId, assistantTurn, bid, sid, userTurn ? [userTurn] : [])
         ws.send({
           type: 'message',
           stream_id: sendStreamId,
@@ -3277,6 +3359,10 @@ export const useChatStore = defineStore('chat', () => {
     if (approval.status !== 'pending' || approval.can_approve === false) return false
     if (hasPendingApprovalResponse(approvalId)) return false
     const ws = ensureWebSocket(bid)
+    if (!ws?.connected) {
+      toast.error(userInputConnectionLostMessage())
+      return false
+    }
     const streamId = createStreamId()
     const silent = isSessionStreaming(sid)
     approvalResponseStreams.set(streamId, { approvalId, silent, at: Date.now() })
@@ -3291,15 +3377,27 @@ export const useChatStore = defineStore('chat', () => {
     // Optimistically update the approved/rejected tool block before the
     // server snapshot arrives so the buttons disappear immediately.
     markToolApprovalDecision(approvalId, decision === 'approve' ? 'approved' : 'rejected')
-    ws?.send({
-      type: 'tool_approval_response',
-      stream_id: streamId,
-      session_id: sid,
-      base_head_turn_id: selectedHeadForRequest(sid),
-      approval_id: approvalId,
-      short_id: approval.short_id,
-      decision,
-    })
+    try {
+      ws.send({
+        type: 'tool_approval_response',
+        stream_id: streamId,
+        session_id: sid,
+        base_head_turn_id: selectedHeadForRequest(sid),
+        approval_id: approvalId,
+        short_id: approval.short_id,
+        decision,
+      })
+    } catch (error) {
+      approvalResponseStreams.delete(streamId)
+      markToolApprovalDecision(approvalId, 'pending')
+      pruneEmptyAssistantTurnIfPending(streamId)
+      resolveAssistantStream(streamId)
+      loading.value = isSessionStreaming(sessionId.value)
+      toast.error(error instanceof Error && error.message.trim()
+        ? error.message
+        : userInputConnectionLostMessage())
+      return false
+    }
     return true
   }
 
@@ -3348,17 +3446,27 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
-    ws?.send({
-      type: 'user_input_response',
-      stream_id: streamId,
-      session_id: sid,
-      base_head_turn_id: selectedHeadForRequest(sid),
-      user_input_id: userInput.user_input_id,
-      short_id: userInput.short_id,
-      answers: payload.answers,
-      canceled: payload.canceled === true,
-      reason: payload.reason,
-    })
+    try {
+      ws.send({
+        type: 'user_input_response',
+        stream_id: streamId,
+        session_id: sid,
+        base_head_turn_id: selectedHeadForRequest(sid),
+        user_input_id: userInput.user_input_id,
+        short_id: userInput.short_id,
+        answers: payload.answers,
+        canceled: payload.canceled === true,
+        reason: payload.reason,
+      })
+    } catch (error) {
+      restoreUserInputStates(previousUserInputStates)
+      pruneEmptyAssistantTurnIfPending(streamId)
+      resolveAssistantStream(streamId)
+      loading.value = isSessionStreaming(sessionId.value)
+      toast.error(error instanceof Error && error.message.trim()
+        ? error.message
+        : userInputConnectionLostMessage())
+    }
   }
 
   function clearMessages() {
@@ -3376,6 +3484,7 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     streaming,
     streamingSessionId,
+    messageActionLoading,
     sessions,
     sessionsCursor,
     hasMoreSessions,

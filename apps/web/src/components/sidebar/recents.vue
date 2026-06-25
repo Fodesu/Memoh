@@ -222,6 +222,7 @@ const {
   loadingChats,
   hasMoreSessions,
   loadingMoreSessions,
+  messageActionLoading,
 } = storeToRefs(chatStore)
 
 // The list pivots between human conversations (Recent) and system run streams
@@ -317,11 +318,13 @@ const sessionPendingRename = ref<SessionSummary | null>(null)
 const renameSessionTitle = ref('')
 
 function confirmDeleteSession(session: SessionSummary) {
+  if (messageActionLoading.value) return
   sessionPendingDelete.value = session
   deleteSessionDialogOpen.value = true
 }
 
 function openRenameSessionDialog(session: SessionSummary) {
+  if (messageActionLoading.value) return
   sessionPendingRename.value = session
   renameSessionTitle.value = session.title?.trim() || ''
   renameSessionDialogOpen.value = true

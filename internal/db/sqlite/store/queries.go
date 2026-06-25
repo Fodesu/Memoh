@@ -3466,7 +3466,7 @@ func (q *Queries) ListActiveMessagesSinceByTurn(ctx context.Context, arg pgsqlc.
 	return result, nil
 }
 
-func (q *Queries) ListOwnedHistoryTurnsForSessionDelete(ctx context.Context, sessionID pgtype.UUID) ([]pgsqlc.BotHistoryTurn, error) {
+func (q *Queries) ListSessionOwnedTurnsForCleanup(ctx context.Context, sessionID pgtype.UUID) ([]pgsqlc.BotHistoryTurn, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return nil, errSQLiteQueriesNotConfigured
 	}
@@ -3474,7 +3474,7 @@ func (q *Queries) ListOwnedHistoryTurnsForSessionDelete(ctx context.Context, ses
 	if err := convertValue(sessionID, &sqliteSessionID); err != nil {
 		return nil, err
 	}
-	out, err := q.store.queries.ListOwnedHistoryTurnsForSessionDelete(ctx, sqliteSessionID)
+	out, err := q.store.queries.ListSessionOwnedTurnsForCleanup(ctx, sqliteSessionID)
 	if err != nil {
 		return nil, mapQueryErr(err)
 	}
@@ -5206,6 +5206,18 @@ func (q *Queries) SetRouteActiveSession(ctx context.Context, arg pgsqlc.SetRoute
 	return mapQueryErr(err)
 }
 
+func (q *Queries) ClearRouteActiveSessionsByBot(ctx context.Context, botID pgtype.UUID) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteBotID string
+	if err := convertValue(botID, &sqliteBotID); err != nil {
+		return err
+	}
+	err := q.store.queries.ClearRouteActiveSessionsByBot(ctx, sqliteBotID)
+	return mapQueryErr(err)
+}
+
 func (q *Queries) SoftDeleteSession(ctx context.Context, id pgtype.UUID) error {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return errSQLiteQueriesNotConfigured
@@ -5871,6 +5883,25 @@ func (q *Queries) UpdateSessionDefaultHeadTurnIfValid(ctx context.Context, arg p
 		return pgsqlc.BotSession{}, err
 	}
 	out, err := q.store.queries.UpdateSessionDefaultHeadTurnIfValid(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.BotSession{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotSession
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) UpdateSessionRestoredLinks(ctx context.Context, arg pgsqlc.UpdateSessionRestoredLinksParams) (pgsqlc.BotSession, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotSession{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.UpdateSessionRestoredLinksParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	out, err := q.store.queries.UpdateSessionRestoredLinks(ctx, sqliteArg)
 	if err != nil {
 		return pgsqlc.BotSession{}, mapQueryErr(err)
 	}

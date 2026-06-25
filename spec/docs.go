@@ -16501,6 +16501,9 @@ const docTemplate = `{
         },
         "handlers.LocalChannelMessageRequest": {
             "type": "object",
+            "required": [
+                "message"
+            ],
             "properties": {
                 "base_head_turn_id": {
                     "type": "string"
@@ -17026,7 +17029,13 @@ const docTemplate = `{
         "handlers.ToolApprovalDecisionRequest": {
             "type": "object",
             "properties": {
+                "base_head_turn_id": {
+                    "type": "string"
+                },
                 "reason": {
+                    "type": "string"
+                },
+                "session_id": {
                     "type": "string"
                 }
             }
@@ -17255,6 +17264,9 @@ const docTemplate = `{
         },
         "handlers.forkSessionRequest": {
             "type": "object",
+            "required": [
+                "message_id"
+            ],
             "properties": {
                 "base_head_turn_id": {
                     "type": "string"

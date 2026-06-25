@@ -89,6 +89,7 @@ type Queries interface {
 	CreateUserInputRequest(ctx context.Context, arg dbsqlc.CreateUserInputRequestParams) (dbsqlc.UserInputRequest, error)
 	CreateUserInputRequestForTurn(ctx context.Context, arg dbsqlc.CreateUserInputRequestForTurnParams) (dbsqlc.UserInputRequest, error)
 	CreateUser(ctx context.Context, arg dbsqlc.CreateUserParams) (dbsqlc.User, error)
+	ClearRouteActiveSessionsByBot(ctx context.Context, botID pgtype.UUID) error
 	ClearSessionTurnPointersByBot(ctx context.Context, botID pgtype.UUID) error
 	DeleteBotACLRuleByID(ctx context.Context, id pgtype.UUID) error
 	DeleteBotByID(ctx context.Context, id pgtype.UUID) error
@@ -370,6 +371,7 @@ type Queries interface {
 	UpdateSessionDefaultHeadTurn(ctx context.Context, arg dbsqlc.UpdateSessionDefaultHeadTurnParams) (dbsqlc.BotSession, error)
 	UpdateSessionDefaultHeadTurnIfValid(ctx context.Context, arg dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams) (dbsqlc.BotSession, error)
 	UpdateSessionMetadata(ctx context.Context, arg dbsqlc.UpdateSessionMetadataParams) (dbsqlc.BotSession, error)
+	UpdateSessionRestoredLinks(ctx context.Context, arg dbsqlc.UpdateSessionRestoredLinksParams) (dbsqlc.BotSession, error)
 	UpdateSessionTitle(ctx context.Context, arg dbsqlc.UpdateSessionTitleParams) (dbsqlc.BotSession, error)
 	UpdateSessionTypeAndMetadata(ctx context.Context, arg dbsqlc.UpdateSessionTypeAndMetadataParams) (dbsqlc.BotSession, error)
 	UpdateHistoryTurnFinalAssistantMessage(ctx context.Context, arg dbsqlc.UpdateHistoryTurnFinalAssistantMessageParams) (dbsqlc.BotHistoryTurn, error)

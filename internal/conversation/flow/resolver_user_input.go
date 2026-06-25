@@ -52,6 +52,9 @@ func (r *Resolver) RespondUserInput(ctx context.Context, input UserInputResponse
 	if err != nil {
 		return err
 	}
+	if err := r.validateSelectedContinuationTurnHead(ctx, target.SessionID, target.PersistTurnID, input.SelectedHeadTurnID, "user input"); err != nil {
+		return err
+	}
 
 	isACPMCP := userinput.IsACPMCPRequest(target)
 	if isACPMCP && !r.userInput.CanRespond(target) {
@@ -126,10 +129,7 @@ func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req user
 	req = withLocalWebUserInputReplyTarget(req)
 	doneTurn := r.enterSessionTurn(ctx, input.BotID, req.SessionID)
 	defer doneTurn()
-	if selectedHead := strings.TrimSpace(input.SelectedHeadTurnID); selectedHead != "" && selectedHead != strings.TrimSpace(req.PersistTurnID) {
-		return errors.New("user input turn is no longer active for the selected conversation version")
-	}
-	if err := r.validateContinuationTurnHead(ctx, req.SessionID, req.PersistTurnID); err != nil {
+	if err := r.validateSelectedContinuationTurnHead(ctx, req.SessionID, req.PersistTurnID, input.SelectedHeadTurnID, "user input"); err != nil {
 		return err
 	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})

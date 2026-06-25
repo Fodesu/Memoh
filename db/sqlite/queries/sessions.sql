@@ -95,6 +95,16 @@ SET type = sqlc.arg(type), metadata = sqlc.arg(metadata), updated_at = CURRENT_T
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL
 RETURNING *;
 
+-- name: UpdateSessionRestoredLinks :one
+UPDATE bot_sessions
+SET parent_session_id = sqlc.narg(parent_session_id),
+    forked_from_session_id = sqlc.narg(forked_from_session_id),
+    forked_from_turn_id = sqlc.narg(forked_from_turn_id),
+    default_head_turn_id = sqlc.narg(default_head_turn_id),
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+RETURNING *;
+
 -- name: SoftDeleteSession :exec
 UPDATE bot_sessions
 SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP

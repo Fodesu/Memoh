@@ -150,7 +150,7 @@
       <div
         v-if="variantState"
         :class="variantGroupClass"
-        :aria-label="t('chat.actions.variants', { current: variantState.index + 1, total: variantState.total })"
+        :aria-label="variantLabel"
       >
         <Tooltip>
           <TooltipTrigger as-child>
@@ -160,14 +160,14 @@
               size="icon-sm"
               :class="variantArrowClass"
               :disabled="!variantState.previousHeadTurnId"
-              :aria-label="t('chat.actions.previousVariant')"
+              :aria-label="previousVariantLabel"
               @click="switchVariant(variantState.previousHeadTurnId)"
             >
               <ChevronLeft />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {{ t('chat.actions.previousVariant') }}
+            {{ previousVariantLabel }}
           </TooltipContent>
         </Tooltip>
         <span class="px-0.5 text-label font-medium tabular-nums text-muted-foreground">
@@ -181,14 +181,14 @@
               size="icon-sm"
               :class="variantArrowClass"
               :disabled="!variantState.nextHeadTurnId"
-              :aria-label="t('chat.actions.nextVariant')"
+              :aria-label="nextVariantLabel"
               @click="switchVariant(variantState.nextHeadTurnId)"
             >
               <ChevronRight />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {{ t('chat.actions.nextVariant') }}
+            {{ nextVariantLabel }}
           </TooltipContent>
         </Tooltip>
       </div>
@@ -229,6 +229,7 @@ const props = defineProps<{
   canFork?: boolean
   canRetry?: boolean
   variantState?: TurnVariantState | null
+  variantKind?: 'request' | 'response'
 }>()
 
 const emit = defineEmits<{
@@ -245,6 +246,13 @@ const actionRowRevealClass = 'opacity-0 pointer-events-none transition-opacity d
 const actionIconClass = 'text-muted-foreground hover:text-foreground'
 const variantArrowClass = 'h-[1.875rem] w-6 rounded-md text-muted-foreground hover:text-foreground [&_svg:not([class*=size-])]:size-5'
 const variantGroupClass = 'flex items-center justify-center text-muted-foreground'
+
+const variantNamespace = computed(() => props.variantKind === 'request' ? 'requestVariant' : 'responseVariant')
+const previousVariantLabel = computed(() => t(`chat.actions.${variantNamespace.value}.previous`))
+const nextVariantLabel = computed(() => t(`chat.actions.${variantNamespace.value}.next`))
+const variantLabel = computed(() => props.variantState
+  ? t(`chat.actions.${variantNamespace.value}.label`, { current: props.variantState.index + 1, total: props.variantState.total })
+  : '')
 
 const copied = ref(false)
 let resetTimer: ReturnType<typeof setTimeout> | null = null

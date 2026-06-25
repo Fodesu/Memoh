@@ -753,6 +753,54 @@ func (q *Queries) UpdateSessionMetadata(ctx context.Context, arg UpdateSessionMe
 	return i, err
 }
 
+const updateSessionRestoredLinks = `-- name: UpdateSessionRestoredLinks :one
+UPDATE bot_sessions
+SET parent_session_id = ?1,
+    forked_from_session_id = ?2,
+    forked_from_turn_id = ?3,
+    default_head_turn_id = ?4,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = ?5 AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, title, metadata, default_head_turn_id, forked_from_session_id, forked_from_turn_id, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+`
+
+type UpdateSessionRestoredLinksParams struct {
+	ParentSessionID     sql.NullString `json:"parent_session_id"`
+	ForkedFromSessionID sql.NullString `json:"forked_from_session_id"`
+	ForkedFromTurnID    sql.NullString `json:"forked_from_turn_id"`
+	DefaultHeadTurnID   sql.NullString `json:"default_head_turn_id"`
+	ID                  string         `json:"id"`
+}
+
+func (q *Queries) UpdateSessionRestoredLinks(ctx context.Context, arg UpdateSessionRestoredLinksParams) (BotSession, error) {
+	row := q.db.QueryRowContext(ctx, updateSessionRestoredLinks,
+		arg.ParentSessionID,
+		arg.ForkedFromSessionID,
+		arg.ForkedFromTurnID,
+		arg.DefaultHeadTurnID,
+		arg.ID,
+	)
+	var i BotSession
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.RouteID,
+		&i.ChannelType,
+		&i.Type,
+		&i.Title,
+		&i.Metadata,
+		&i.DefaultHeadTurnID,
+		&i.ForkedFromSessionID,
+		&i.ForkedFromTurnID,
+		&i.ParentSessionID,
+		&i.CreatedByUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const updateSessionTitle = `-- name: UpdateSessionTitle :one
 UPDATE bot_sessions
 SET title = ?1, updated_at = CURRENT_TIMESTAMP
