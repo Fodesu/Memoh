@@ -440,13 +440,9 @@ func (r *Resolver) persistTerminalSnapshot(ctx context.Context, req conversation
 		roundMessages = interleaveInjectedMessages(roundMessages, *rc.injectedRecords)
 	}
 
-	stored, err := r.storeRoundWithContext(ctx, storeReq, run, roundMessages, rc.model.ID, storeRoundOptions{
+	if _, err := r.storeRoundAndApplyVariantTransition(ctx, storeReq, run, roundMessages, rc.model.ID, storeRoundOptions{
 		AllowPendingToolCalls: snap.deferredToolID != "",
-	})
-	if err != nil {
-		return err
-	}
-	if err := r.applyVariantTransition(ctx, run, stored.TurnID); err != nil {
+	}); err != nil {
 		return err
 	}
 

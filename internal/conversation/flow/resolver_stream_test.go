@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -96,17 +97,39 @@ func (*recordingMessageService) LinkAssets(context.Context, string, []messagepkg
 	return nil
 }
 
+type recordingTxMessageService struct {
+	recordingMessageService
+	txPersisted []messagepkg.PersistInput
+	published   []messagepkg.Message
+}
+
+func (s *recordingTxMessageService) PersistWithQueries(_ context.Context, _ dbstore.Queries, input messagepkg.PersistInput) (messagepkg.Message, error) {
+	s.txPersisted = append(s.txPersisted, input)
+	return messagepkg.Message{
+		ID:        "message-id-" + input.Role,
+		BotID:     input.BotID,
+		SessionID: input.SessionID,
+		TurnID:    input.TurnID,
+		Role:      input.Role,
+	}, nil
+}
+
+func (s *recordingTxMessageService) PublishMessageCreated(message messagepkg.Message) {
+	s.published = append(s.published, message)
+}
+
 type fakeTurnStore struct {
 	dbstore.Queries
-	session        dbsqlc.BotSession
-	rewrite        dbsqlc.GetVisibleUserMessageTurnForRewriteRow
-	sessionHeadErr error
-	createdTurns   []dbsqlc.CreateHistoryTurnParams
-	createdHeads   []dbsqlc.CreateSessionTurnHeadParams
-	replacedHeads  []dbsqlc.ReplaceSessionTurnHeadParams
-	updatedDefault []dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams
-	nextTurnByte   byte
-	txCount        int
+	session          dbsqlc.BotSession
+	rewrite          dbsqlc.GetVisibleUserMessageTurnForRewriteRow
+	sessionHeadErr   error
+	updateDefaultErr error
+	createdTurns     []dbsqlc.CreateHistoryTurnParams
+	createdHeads     []dbsqlc.CreateSessionTurnHeadParams
+	replacedHeads    []dbsqlc.ReplaceSessionTurnHeadParams
+	updatedDefault   []dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams
+	nextTurnByte     byte
+	txCount          int
 }
 
 func (s *fakeTurnStore) RunInTx(_ context.Context, fn func(dbstore.Queries) error) error {
@@ -146,6 +169,9 @@ func (s *fakeTurnStore) ReplaceSessionTurnHead(_ context.Context, arg dbsqlc.Rep
 }
 
 func (s *fakeTurnStore) UpdateSessionDefaultHeadTurnIfValid(_ context.Context, arg dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams) (dbsqlc.BotSession, error) {
+	if s.updateDefaultErr != nil {
+		return dbsqlc.BotSession{}, s.updateDefaultErr
+	}
 	s.updatedDefault = append(s.updatedDefault, arg)
 	return dbsqlc.BotSession{ID: arg.ID, DefaultHeadTurnID: arg.DefaultHeadTurnID}, nil
 }
@@ -712,6 +738,111 @@ func TestStoreRoundMaterializesPlannedTurnForEveryMessage(t *testing.T) {
 		if persisted.TurnID != run.PersistTurnID {
 			t.Fatalf("persisted[%d].TurnID = %q, want %q", i, persisted.TurnID, run.PersistTurnID)
 		}
+	}
+}
+
+func TestStoreRoundAndVariantTransitionShareTransaction(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingTxMessageService{}
+	oldHead := testUUID(7)
+	store := &fakeTurnStore{
+		session: dbsqlc.BotSession{DefaultHeadTurnID: oldHead},
+	}
+	resolver := &Resolver{
+		queries:        store,
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+
+	req := conversation.ChatRequest{
+		BotID:              testUUID(1).String(),
+		SessionID:          testUUID(2).String(),
+		SelectedHeadTurnID: oldHead.String(),
+		Query:              "hello",
+	}
+	run, err := resolver.prepareTurnRun(context.Background(), req)
+	if err != nil {
+		t.Fatalf("prepareTurnRun() error = %v", err)
+	}
+
+	stored, err := resolver.storeRoundAndApplyVariantTransition(context.Background(), req, &run, []conversation.ModelMessage{
+		{Role: "user", Content: conversation.NewTextContent("hello")},
+		{Role: "assistant", Content: conversation.NewTextContent("done")},
+	}, "", storeRoundOptions{})
+	if err != nil {
+		t.Fatalf("storeRoundAndApplyVariantTransition() error = %v", err)
+	}
+	if store.txCount != 1 {
+		t.Fatalf("txCount = %d, want 1", store.txCount)
+	}
+	if len(store.createdTurns) != 1 {
+		t.Fatalf("createdTurns = %d, want 1", len(store.createdTurns))
+	}
+	if stored.TurnID == "" || run.PersistTurnID != stored.TurnID {
+		t.Fatalf("stored turn=%q run turn=%q, want same non-empty", stored.TurnID, run.PersistTurnID)
+	}
+	if len(messages.txPersisted) != 2 {
+		t.Fatalf("txPersisted = %d, want 2", len(messages.txPersisted))
+	}
+	for i, persisted := range messages.txPersisted {
+		if persisted.TurnID != stored.TurnID {
+			t.Fatalf("txPersisted[%d].TurnID = %q, want %q", i, persisted.TurnID, stored.TurnID)
+		}
+	}
+	if len(store.replacedHeads) != 1 || store.replacedHeads[0].OldHeadTurnID != oldHead {
+		t.Fatalf("replacedHeads = %#v, want old head replacement", store.replacedHeads)
+	}
+	if len(store.updatedDefault) != 1 || store.updatedDefault[0].DefaultHeadTurnID.String() != stored.TurnID {
+		t.Fatalf("updatedDefault = %#v, want stored turn", store.updatedDefault)
+	}
+	if len(messages.published) != 2 {
+		t.Fatalf("published = %d, want 2", len(messages.published))
+	}
+}
+
+func TestStoreRoundAndVariantTransitionFailureDoesNotPublishOrKeepRolledBackTurn(t *testing.T) {
+	t.Parallel()
+
+	pointerErr := errors.New("head update failed")
+	messages := &recordingTxMessageService{}
+	oldHead := testUUID(7)
+	store := &fakeTurnStore{
+		session:          dbsqlc.BotSession{DefaultHeadTurnID: oldHead},
+		updateDefaultErr: pointerErr,
+	}
+	resolver := &Resolver{
+		queries:        store,
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+
+	req := conversation.ChatRequest{
+		BotID:              testUUID(1).String(),
+		SessionID:          testUUID(2).String(),
+		SelectedHeadTurnID: oldHead.String(),
+		Query:              "hello",
+	}
+	run, err := resolver.prepareTurnRun(context.Background(), req)
+	if err != nil {
+		t.Fatalf("prepareTurnRun() error = %v", err)
+	}
+
+	_, err = resolver.storeRoundAndApplyVariantTransition(context.Background(), req, &run, []conversation.ModelMessage{
+		{Role: "user", Content: conversation.NewTextContent("hello")},
+		{Role: "assistant", Content: conversation.NewTextContent("done")},
+	}, "", storeRoundOptions{})
+	if err == nil {
+		t.Fatalf("storeRoundAndApplyVariantTransition() error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "update default head") {
+		t.Fatalf("error = %v, want update default head context", err)
+	}
+	if run.PersistTurnID != "" {
+		t.Fatalf("run.PersistTurnID = %q, want cleared after rollback", run.PersistTurnID)
+	}
+	if len(messages.published) != 0 {
+		t.Fatalf("published = %d, want 0", len(messages.published))
 	}
 }
 

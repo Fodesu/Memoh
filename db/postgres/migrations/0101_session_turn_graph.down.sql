@@ -1,4 +1,4 @@
--- 0099_session_turn_graph (down)
+-- 0101_session_turn_graph (down)
 
 DROP INDEX IF EXISTS idx_user_input_persist_turn;
 DROP INDEX IF EXISTS idx_tool_approval_persist_turn;

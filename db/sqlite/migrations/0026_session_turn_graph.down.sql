@@ -1,4 +1,4 @@
--- 0024_session_turn_graph (down)
+-- 0026_session_turn_graph (down)
 -- Remove immutable turn chains and session-level fork pointers.
 
 PRAGMA foreign_keys = OFF;

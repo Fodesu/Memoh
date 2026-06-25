@@ -48,46 +48,80 @@ func NewService(log *slog.Logger, queries dbstore.Queries, publishers ...event.P
 
 // Persist writes a single message to bot_history_messages.
 func (s *DBService) Persist(ctx context.Context, input PersistInput) (Message, error) {
+	prepared, err := prepareCreateMessageInput(input)
+	if err != nil {
+		return Message{}, err
+	}
+
+	result, err := s.persistMessageAtomic(ctx, prepared, input.Assets)
+	if err != nil {
+		return Message{}, err
+	}
+	attachPersistedAssetRefs(&result, input.Assets)
+
+	s.PublishMessageCreated(result)
+	return result, nil
+}
+
+// PersistWithQueries writes a single message using a caller-provided query
+// handle. The caller owns the surrounding transaction and event publication.
+func (*DBService) PersistWithQueries(ctx context.Context, queries dbstore.Queries, input PersistInput) (Message, error) {
+	if queries == nil {
+		return Message{}, errors.New("persist with queries: queries is required")
+	}
+	prepared, err := prepareCreateMessageInput(input)
+	if err != nil {
+		return Message{}, err
+	}
+	result, err := persistMessageWithQueries(ctx, queries, prepared, input.Assets)
+	if err != nil {
+		return Message{}, err
+	}
+	attachPersistedAssetRefs(&result, input.Assets)
+	return result, nil
+}
+
+func prepareCreateMessageInput(input PersistInput) (createMessageWithSeqInput, error) {
 	pgBotID, err := dbpkg.ParseUUID(input.BotID)
 	if err != nil {
-		return Message{}, fmt.Errorf("invalid bot id: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("invalid bot id: %w", err)
 	}
 
 	pgSessionID, err := parseOptionalUUID(input.SessionID)
 	if err != nil {
-		return Message{}, fmt.Errorf("invalid session id: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("invalid session id: %w", err)
 	}
 	pgTurnID, err := parseOptionalUUID(input.TurnID)
 	if err != nil {
-		return Message{}, fmt.Errorf("invalid turn id: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("invalid turn id: %w", err)
 	}
 	pgSenderChannelIdentityID, err := parseOptionalUUID(input.SenderChannelIdentityID)
 	if err != nil {
-		return Message{}, fmt.Errorf("invalid sender channel identity id: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("invalid sender channel identity id: %w", err)
 	}
 	pgSenderUserID, err := parseOptionalUUID(input.SenderUserID)
 	if err != nil {
-		return Message{}, fmt.Errorf("invalid sender user id: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("invalid sender user id: %w", err)
 	}
 	pgModelID, err := parseOptionalUUID(input.ModelID)
 	if err != nil {
-		return Message{}, fmt.Errorf("invalid model id: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("invalid model id: %w", err)
 	}
 	pgEventID, err := parseOptionalUUID(input.EventID)
 	if err != nil {
-		return Message{}, fmt.Errorf("invalid event id: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("invalid event id: %w", err)
 	}
 
 	metaBytes, err := json.Marshal(nonNilMap(input.Metadata))
 	if err != nil {
-		return Message{}, fmt.Errorf("marshal message metadata: %w", err)
+		return createMessageWithSeqInput{}, fmt.Errorf("marshal message metadata: %w", err)
 	}
 
 	content := input.Content
 	if len(content) == 0 {
 		content = []byte("{}")
 	}
-	result, err := s.persistMessageAtomic(ctx, createMessageWithSeqInput{
+	return createMessageWithSeqInput{
 		BotID:                   pgBotID,
 		SessionID:               pgSessionID,
 		TurnID:                  pgTurnID,
@@ -103,34 +137,35 @@ func (s *DBService) Persist(ctx context.Context, input PersistInput) (Message, e
 		ModelID:                 pgModelID,
 		EventID:                 pgEventID,
 		DisplayText:             input.DisplayText,
-	}, input.Assets)
-	if err != nil {
-		return Message{}, err
-	}
+	}, nil
+}
 
-	if len(input.Assets) > 0 {
-		assets := make([]MessageAsset, 0, len(input.Assets))
-		for _, ref := range input.Assets {
-			ch := strings.TrimSpace(ref.ContentHash)
-			if ch == "" {
-				continue
-			}
-			assets = append(assets, MessageAsset{
-				ContentHash: ch,
-				Role:        coalesce(ref.Role, "attachment"),
-				Ordinal:     ref.Ordinal,
-				Mime:        ref.Mime,
-				SizeBytes:   ref.SizeBytes,
-				StorageKey:  ref.StorageKey,
-				Name:        ref.Name,
-				Metadata:    ref.Metadata,
-			})
+func attachPersistedAssetRefs(message *Message, refs []AssetRef) {
+	if message == nil || len(refs) == 0 {
+		return
+	}
+	assets := make([]MessageAsset, 0, len(refs))
+	for _, ref := range refs {
+		ch := strings.TrimSpace(ref.ContentHash)
+		if ch == "" {
+			continue
 		}
-		result.Assets = assets
+		assets = append(assets, MessageAsset{
+			ContentHash: ch,
+			Role:        coalesce(ref.Role, "attachment"),
+			Ordinal:     ref.Ordinal,
+			Mime:        ref.Mime,
+			SizeBytes:   ref.SizeBytes,
+			StorageKey:  ref.StorageKey,
+			Name:        ref.Name,
+			Metadata:    ref.Metadata,
+		})
 	}
+	message.Assets = assets
+}
 
-	s.publishMessageCreated(result)
-	return result, nil
+func (s *DBService) PublishMessageCreated(message Message) {
+	s.publishMessageCreated(message)
 }
 
 // List returns all messages for a bot.
@@ -640,27 +675,11 @@ func (s *DBService) persistMessageAtomic(ctx context.Context, input createMessag
 	for attempt := 0; ; attempt++ {
 		var result Message
 		err := s.runInTx(ctx, func(q dbstore.Queries) error {
-			txInput := input
-			if !txInput.TurnID.Valid && txInput.SessionID.Valid {
-				turnID, err := createFallbackTurn(ctx, q, txInput.BotID, txInput.SessionID, txInput.Role)
-				if err != nil {
-					return err
-				}
-				txInput.TurnID = turnID
-			}
-			row, err := createMessageWithTurnSeq(ctx, q, txInput)
+			stored, err := persistMessageWithQueries(ctx, q, input, assets)
 			if err != nil {
 				return err
 			}
-			result = toMessageFromCreate(row)
-			if txInput.TurnID.Valid {
-				if err := updateTurnPointers(ctx, q, txInput.TurnID, result); err != nil {
-					return err
-				}
-			}
-			if err := createMessageAssetLinks(ctx, q, row.ID, result.ID, assets); err != nil {
-				return err
-			}
+			result = stored
 			return nil
 		})
 		if err == nil {
@@ -670,6 +689,31 @@ func (s *DBService) persistMessageAtomic(ctx context.Context, input createMessag
 			return Message{}, err
 		}
 	}
+}
+
+func persistMessageWithQueries(ctx context.Context, q dbstore.Queries, input createMessageWithSeqInput, assets []AssetRef) (Message, error) {
+	txInput := input
+	if !txInput.TurnID.Valid && txInput.SessionID.Valid {
+		turnID, err := createFallbackTurn(ctx, q, txInput.BotID, txInput.SessionID, txInput.Role)
+		if err != nil {
+			return Message{}, err
+		}
+		txInput.TurnID = turnID
+	}
+	row, err := createMessageWithTurnSeq(ctx, q, txInput)
+	if err != nil {
+		return Message{}, err
+	}
+	result := toMessageFromCreate(row)
+	if txInput.TurnID.Valid {
+		if err := updateTurnPointers(ctx, q, txInput.TurnID, result); err != nil {
+			return Message{}, err
+		}
+	}
+	if err := createMessageAssetLinks(ctx, q, row.ID, result.ID, assets); err != nil {
+		return Message{}, err
+	}
+	return result, nil
 }
 
 func (s *DBService) runInTx(ctx context.Context, fn func(dbstore.Queries) error) error {

@@ -514,11 +514,7 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 		storeReq.UserMessagePersisted = true
 	}
 	roundMessages := prependUserMessage(storeReq.Query, outputMessages)
-	stored, err := r.storeRoundWithContext(ctx, storeReq, &run, roundMessages, rc.model.ID, storeRoundOptions{})
-	if err != nil {
-		return conversation.ChatResponse{}, err
-	}
-	if err := r.applyVariantTransition(ctx, &run, stored.TurnID); err != nil {
+	if _, err := r.storeRoundAndApplyVariantTransition(ctx, storeReq, &run, roundMessages, rc.model.ID, storeRoundOptions{}); err != nil {
 		return conversation.ChatResponse{}, err
 	}
 

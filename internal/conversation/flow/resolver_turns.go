@@ -402,11 +402,18 @@ func normalizeVariantTransitionAction(action VariantTransitionAction) VariantTra
 }
 
 func (r *Resolver) ensurePersistTurn(ctx context.Context, run *TurnRun) (string, error) {
+	return r.ensurePersistTurnWithQueries(ctx, nil, run)
+}
+
+func (r *Resolver) ensurePersistTurnWithQueries(ctx context.Context, queries dbstore.Queries, run *TurnRun) (string, error) {
 	if run == nil {
 		return "", nil
 	}
 	if turnID := strings.TrimSpace(run.PersistTurnID); turnID != "" {
 		return turnID, nil
+	}
+	if r == nil {
+		return "", nil
 	}
 	r.persistTurnMu.Lock()
 	defer r.persistTurnMu.Unlock()
@@ -417,10 +424,14 @@ func (r *Resolver) ensurePersistTurn(ctx context.Context, run *TurnRun) (string,
 	if strings.TrimSpace(plan.BotID) == "" || strings.TrimSpace(plan.OwnerSessionID) == "" {
 		return "", nil
 	}
-	if r == nil || r.queries == nil {
+	if r.queries == nil && queries == nil {
 		return "", nil
 	}
-	store, ok := r.queries.(turnStore)
+	rawQueries := queries
+	if rawQueries == nil {
+		rawQueries = r.queries
+	}
+	store, ok := rawQueries.(turnStore)
 	if !ok {
 		return "", nil
 	}
@@ -452,6 +463,18 @@ func (r *Resolver) applyVariantTransition(ctx context.Context, run *TurnRun, tur
 	if r == nil || r.queries == nil {
 		return nil
 	}
+	if run == nil || normalizeVariantTransitionAction(run.Variant.Action) == VariantTransitionNone {
+		return nil
+	}
+	if runner, ok := r.queries.(turnTxRunner); ok && runner != nil {
+		return runner.RunInTx(ctx, func(q dbstore.Queries) error {
+			return r.applyVariantTransitionWithQueries(ctx, q, run, turnID)
+		})
+	}
+	return r.applyVariantTransitionWithQueries(ctx, r.queries, run, turnID)
+}
+
+func (*Resolver) applyVariantTransitionWithQueries(ctx context.Context, queries dbstore.Queries, run *TurnRun, turnID string) error {
 	if run == nil {
 		return nil
 	}
@@ -468,9 +491,9 @@ func (r *Resolver) applyVariantTransition(ctx context.Context, run *TurnRun, tur
 	if sessionID == "" || turnID == "" {
 		return nil
 	}
-	store, ok := r.queries.(turnStore)
+	store, ok := queries.(turnStore)
 	if !ok {
-		return nil
+		return errors.New("apply variant transition: queries do not support turn updates")
 	}
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
@@ -481,55 +504,43 @@ func (r *Resolver) applyVariantTransition(ctx context.Context, run *TurnRun, tur
 		return fmt.Errorf("apply variant transition: invalid turn id: %w", err)
 	}
 	selectedHeadText := strings.TrimSpace(transition.SelectedHeadTurnID)
-	update := func(store turnStore) error {
-		switch transition.Action {
-		case VariantTransitionContinueSelected:
-			if selectedHeadText == "" {
-				if _, err := store.CreateSessionTurnHead(ctx, dbsqlc.CreateSessionTurnHeadParams{
-					SessionID:  pgSessionID,
-					HeadTurnID: pgTurnID,
-				}); err != nil {
-					return fmt.Errorf("apply variant transition: create initial turn head: %w", err)
-				}
-			} else {
-				pgSelectedHeadTurnID, err := dbpkg.ParseUUID(selectedHeadText)
-				if err != nil {
-					return fmt.Errorf("apply variant transition: invalid selected head turn id: %w", err)
-				}
-				if _, err := store.ReplaceSessionTurnHead(ctx, dbsqlc.ReplaceSessionTurnHeadParams{
-					TargetSessionID: pgSessionID,
-					OldHeadTurnID:   pgSelectedHeadTurnID,
-					NewHeadTurnID:   pgTurnID,
-				}); err != nil {
-					return fmt.Errorf("apply variant transition: continue selected head %q: %w", selectedHeadText, err)
-				}
-			}
-		case VariantTransitionCreateSibling:
+	switch transition.Action {
+	case VariantTransitionContinueSelected:
+		if selectedHeadText == "" {
 			if _, err := store.CreateSessionTurnHead(ctx, dbsqlc.CreateSessionTurnHeadParams{
 				SessionID:  pgSessionID,
 				HeadTurnID: pgTurnID,
 			}); err != nil {
-				return fmt.Errorf("apply variant transition: create turn head: %w", err)
+				return fmt.Errorf("apply variant transition: create initial turn head: %w", err)
 			}
-		default:
-			return fmt.Errorf("apply variant transition: unknown action %q", transition.Action)
+		} else {
+			pgSelectedHeadTurnID, err := dbpkg.ParseUUID(selectedHeadText)
+			if err != nil {
+				return fmt.Errorf("apply variant transition: invalid selected head turn id: %w", err)
+			}
+			if _, err := store.ReplaceSessionTurnHead(ctx, dbsqlc.ReplaceSessionTurnHeadParams{
+				TargetSessionID: pgSessionID,
+				OldHeadTurnID:   pgSelectedHeadTurnID,
+				NewHeadTurnID:   pgTurnID,
+			}); err != nil {
+				return fmt.Errorf("apply variant transition: continue selected head %q: %w", selectedHeadText, err)
+			}
 		}
-		if _, err := store.UpdateSessionDefaultHeadTurnIfValid(ctx, dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams{
-			ID:                pgSessionID,
-			DefaultHeadTurnID: pgTurnID,
+	case VariantTransitionCreateSibling:
+		if _, err := store.CreateSessionTurnHead(ctx, dbsqlc.CreateSessionTurnHeadParams{
+			SessionID:  pgSessionID,
+			HeadTurnID: pgTurnID,
 		}); err != nil {
-			return fmt.Errorf("apply variant transition: update default head: %w", err)
+			return fmt.Errorf("apply variant transition: create turn head: %w", err)
 		}
-		return nil
+	default:
+		return fmt.Errorf("apply variant transition: unknown action %q", transition.Action)
 	}
-	if runner, ok := r.queries.(turnTxRunner); ok && runner != nil {
-		return runner.RunInTx(ctx, func(q dbstore.Queries) error {
-			txStore, ok := q.(turnStore)
-			if !ok {
-				return errors.New("apply variant transition: transaction queries do not support turn updates")
-			}
-			return update(txStore)
-		})
+	if _, err := store.UpdateSessionDefaultHeadTurnIfValid(ctx, dbsqlc.UpdateSessionDefaultHeadTurnIfValidParams{
+		ID:                pgSessionID,
+		DefaultHeadTurnID: pgTurnID,
+	}); err != nil {
+		return fmt.Errorf("apply variant transition: update default head: %w", err)
 	}
-	return update(store)
+	return nil
 }
