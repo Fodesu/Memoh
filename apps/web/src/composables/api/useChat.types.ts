@@ -35,6 +35,7 @@ export interface Message {
   id: string
   bot_id: string
   session_id?: string
+  turn_id?: string
   sender_channel_identity_id?: string
   sender_user_id?: string
   sender_display_name?: string

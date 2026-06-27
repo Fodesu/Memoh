@@ -224,6 +224,7 @@ interface PendingAssistantStream {
   assistantTurn: ChatAssistantTurn
   botId: string
   sessionId: string
+  refreshOnEnd: boolean
   done: boolean
   resolve: () => void
   reject: (err: Error) => void
@@ -1559,6 +1560,7 @@ export const useChatStore = defineStore('chat', () => {
     botId: string,
     targetSessionId: string,
     contextTurns: ChatMessage[] = [],
+    options: { refreshOnEnd?: boolean } = {},
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const id = streamId.trim()
@@ -1576,6 +1578,7 @@ export const useChatStore = defineStore('chat', () => {
         assistantTurn,
         botId,
         sessionId: targetSessionId.trim(),
+        refreshOnEnd: options.refreshOnEnd !== false,
         done: false,
         resolve,
         reject,
@@ -1735,7 +1738,7 @@ export const useChatStore = defineStore('chat', () => {
       }
       assistantTurn = createOptimisticAssistantTurn()
       const contextTurns = input.optimisticUserTurn ? [input.optimisticUserTurn] : []
-      const completion = trackAssistantStream(streamId, assistantTurn, bid, sid, contextTurns)
+      const completion = trackAssistantStream(streamId, assistantTurn, bid, sid, contextTurns, { refreshOnEnd: false })
       input.send(ws, streamId, modelId, reasoningEffort)
       if (input.sourceUserTurn && input.optimisticUserTurn) {
         replaceTailFromTurn(input.sourceUserTurn, [
@@ -2028,6 +2031,7 @@ export const useChatStore = defineStore('chat', () => {
         if (
           endedSessionId
           && !isSessionStreaming(endedSessionId)
+          && endedSession?.refreshOnEnd !== false
           && endedSessionId === (sessionId.value ?? '').trim()
           && endedBotId === (currentBotId.value ?? '').trim()
         ) {
@@ -3367,7 +3371,7 @@ export const useChatStore = defineStore('chat', () => {
         if (!ws.connected) {
           throw new StreamFailureError('WebSocket is not connected', 'startup')
         }
-        const completion = trackAssistantStream(sendStreamId, assistantTurn, bid, sid, userTurn ? [userTurn] : [])
+        const completion = trackAssistantStream(sendStreamId, assistantTurn, bid, sid, userTurn ? [userTurn] : [], { refreshOnEnd: false })
         ws.send({
           type: 'message',
           stream_id: sendStreamId,

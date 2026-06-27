@@ -23,7 +23,7 @@
           />
           <ScrollArea
             ref="scrollContainer"
-            :class="`${transitionScroll?'opacity-100':'opacity-0'} h-full`"
+            class="h-full"
           >
             <!-- Same horizontal rhythm as the composer below (px-4 sm:px-6
                  lg:px-10) so the input box and the message column share one
@@ -2161,10 +2161,8 @@ watch(isScrolling, (scrolling) => {
 })
 
 let isInit = false
-const transitionScroll=ref(false)
 onActivated(() => {
   if (!isActive.value) return
-  transitionScroll.value=false
   let done = false
   const unwatch = watch(loadingMessages, async (newValue) => {
     if (done) return
@@ -2191,11 +2189,8 @@ onActivated(() => {
               scrollEl.value?.scrollBy({
                 top: -cachePos
               })
-              transitionScroll.value=true
             })
           })
-        } else {
-          transitionScroll.value=true
         }
         setTimeout(() => {
           lockScroll.value = false
@@ -2208,7 +2203,6 @@ onActivated(() => {
         if (!newValue) {
           setTimeout(async () => {
             lockScroll.value = false
-            transitionScroll.value=true
             done = true
             unwatch()
           })

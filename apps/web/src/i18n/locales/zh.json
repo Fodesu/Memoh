@@ -395,6 +395,7 @@
       "share": "分享",
       "retry": "重试",
       "fork": "分叉",
+      "createBranch": "创建新的分支",
       "more": "更多",
       "requestVariant": {
         "previous": "上一请求",

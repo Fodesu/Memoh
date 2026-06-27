@@ -1,10 +1,9 @@
 <template>
   <!-- One reserved row under every turn. The height is always present so the
-       layout never jumps; only visibility toggles. While the turn is still
-       streaming the row stays fully hidden (no hover reveal) — actions on an
-       in-flight answer are meaningless. Finished turns reveal it on
-       pointer/focus within the turn's hover scope (group/msg, set on the
-       message content wrapper).
+       layout never jumps. While the turn is still streaming the row stays fully
+       hidden — actions on an in-flight answer are meaningless. User request
+       actions stay hover/focus revealed. Assistant reply actions stay visible so
+       switching variants does not remount into a hidden first frame.
 
        Alignment differs by role on purpose:
        - assistant (`start`): the hover hit-area overflows the text's left edge
@@ -100,24 +99,6 @@
           </TooltipContent>
         </Tooltip>
 
-        <Tooltip v-if="canFork">
-          <TooltipTrigger as-child>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              :class="actionIconClass"
-              :aria-label="t('chat.actions.fork')"
-              @click="emit('fork')"
-            >
-              <ForkSplitIcon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {{ t('chat.actions.fork') }}
-          </TooltipContent>
-        </Tooltip>
-
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
             <Button
@@ -143,6 +124,13 @@
             >
               {{ menuTime }}
             </DropdownMenuLabel>
+            <DropdownMenuItem
+              v-if="canFork"
+              @select="emit('fork')"
+            >
+              <ForkSplitIcon />
+              <span>{{ t('chat.actions.createBranch') }}</span>
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </template>
@@ -215,6 +203,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuLabel,
+  DropdownMenuItem,
 } from '@memohai/ui'
 import { useClipboard } from '@/composables/useClipboard'
 
@@ -242,7 +231,9 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const { copyText: writeClipboard } = useClipboard()
 
-const actionRowRevealClass = 'opacity-0 pointer-events-none transition-opacity duration-150 motion-reduce:transition-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto group-focus-within/msg:opacity-100 group-focus-within/msg:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto'
+const hoverRevealClass = 'opacity-0 pointer-events-none transition-opacity duration-150 motion-reduce:transition-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto group-focus-within/msg:opacity-100 group-focus-within/msg:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto'
+const alwaysVisibleClass = 'opacity-100 pointer-events-auto'
+const actionRowRevealClass = computed(() => props.role === 'user' ? hoverRevealClass : alwaysVisibleClass)
 const actionIconClass = 'text-muted-foreground hover:text-foreground'
 const variantArrowClass = 'h-[1.875rem] w-6 rounded-md text-muted-foreground hover:text-foreground [&_svg:not([class*=size-])]:size-5'
 const variantGroupClass = 'flex items-center justify-center text-muted-foreground'

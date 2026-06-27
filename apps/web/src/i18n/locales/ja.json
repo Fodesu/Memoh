@@ -374,6 +374,7 @@
       "share": "共有",
       "retry": "もう一度試す",
       "fork": "フォーク",
+      "createBranch": "新しいブランチを作成",
       "more": "その他",
       "requestVariant": {
         "previous": "前のリクエスト",

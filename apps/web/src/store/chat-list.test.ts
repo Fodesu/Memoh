@@ -2434,6 +2434,126 @@ describe('chat-list store', () => {
     })
   })
 
+  it('keeps retry results as switchable response variants after stream completion', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: { id: 1, type: 'text', content: 'second reply' },
+      } as UIStreamEvent,
+      { type: 'end' } as UIStreamEvent,
+    ]
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      {
+        id: 'assistant-a',
+        turn_id: 'turn-a',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'A reply' }],
+        timestamp: '2026-06-19T00:00:01.000Z',
+      },
+      { id: 'user-b1', turn_id: 'turn-b1', role: 'user', text: 'same request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b1',
+        turn_id: 'turn-b1',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'first reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b1',
+      headTurnIds: ['turn-b1'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'a' }),
+        graphNode('turn-b1', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'same-request' }),
+      ],
+    }))
+
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await flushPromises()
+
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      {
+        id: 'assistant-a',
+        turn_id: 'turn-a',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'A reply' }],
+        timestamp: '2026-06-19T00:00:01.000Z',
+      },
+      { id: 'user-b2', turn_id: 'turn-b2', role: 'user', text: 'same request', timestamp: '2026-06-19T00:02:00.000Z' },
+      {
+        id: 'assistant-b2',
+        turn_id: 'turn-b2',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'second reply' }],
+        timestamp: '2026-06-19T00:02:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b2',
+      headTurnIds: ['turn-b1', 'turn-b2'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'a' }),
+        graphNode('turn-b1', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'same-request' }),
+        graphNode('turn-b2', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'same-request' }),
+      ],
+    }))
+
+    const result = await store.retryMessage('assistant-b1')
+    await flushPromises()
+
+    expect(result).toMatchObject({ ok: true })
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'retry_message',
+      session_id: 'session-1',
+      retry_message_id: 'assistant-b1',
+      base_head_turn_id: 'turn-b1',
+    })
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'assistant-a', 'user-b2', 'assistant-b2'])
+    expect(store.responseVariantStateForMessage('assistant-b2')).toMatchObject({
+      turnId: 'turn-b2',
+      index: 1,
+      total: 2,
+      previousHeadTurnId: 'turn-b1',
+    })
+    expect(store.requestVariantStateForMessage('user-b2')).toBeNull()
+
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      {
+        id: 'assistant-a',
+        turn_id: 'turn-a',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'A reply' }],
+        timestamp: '2026-06-19T00:00:01.000Z',
+      },
+      { id: 'user-b1', turn_id: 'turn-b1', role: 'user', text: 'same request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b1',
+        turn_id: 'turn-b1',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'first reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ]))
+    await expect(store.selectTurnVariant('turn-b1')).resolves.toBe(true)
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'assistant-a', 'user-b1', 'assistant-b1'])
+
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload())
+    await store.sendMessage('continue from first reply')
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'message',
+      text: 'continue from first reply',
+      base_head_turn_id: 'turn-b1',
+    })
+  })
+
   it('shows edit variants on the user request only', async () => {
     api.fetchSessions.mockResolvedValueOnce({
       items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],

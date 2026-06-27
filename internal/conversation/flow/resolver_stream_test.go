@@ -851,6 +851,71 @@ func TestStoreRoundAndVariantTransitionShareTransaction(t *testing.T) {
 	}
 }
 
+func TestStoreRoundAndVariantTransitionRewriteCreatesSiblingTurn(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingTxMessageService{}
+	baseHead := testUUID(7)
+	targetParent := testUUID(4)
+	store := &fakeTurnStore{
+		session: dbsqlc.BotSession{DefaultHeadTurnID: baseHead},
+	}
+	resolver := &Resolver{
+		queries:        store,
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+
+	req := conversation.ChatRequest{
+		BotID:          testUUID(1).String(),
+		SessionID:      testUUID(2).String(),
+		BaseHeadTurnID: baseHead.String(),
+		Query:          "same request",
+	}
+	run, err := resolver.prepareTurnRunWithRewriteAnchor(context.Background(), req, &conversation.TurnAnchor{
+		Role:           conversation.TurnAnchorRoleUser,
+		MessageID:      testUUID(3).String(),
+		TurnID:         baseHead.String(),
+		ParentTurnID:   targetParent.String(),
+		BaseHeadTurnID: baseHead.String(),
+	})
+	if err != nil {
+		t.Fatalf("prepareTurnRunWithRewriteAnchor() error = %v", err)
+	}
+	if run.Mode != TurnRunModeRewrite {
+		t.Fatalf("mode = %q, want rewrite", run.Mode)
+	}
+	if run.Turn.ParentTurnID != targetParent.String() {
+		t.Fatalf("parent turn = %q, want target parent %q", run.Turn.ParentTurnID, targetParent.String())
+	}
+	if run.Variant.Action != VariantTransitionCreateSibling {
+		t.Fatalf("transition action = %q, want create sibling", run.Variant.Action)
+	}
+
+	stored, err := resolver.storeRoundAndApplyVariantTransition(context.Background(), req, &run, []conversation.ModelMessage{
+		{Role: "user", Content: conversation.NewTextContent("same request")},
+		{Role: "assistant", Content: conversation.NewTextContent("second reply")},
+	}, "", storeRoundOptions{})
+	if err != nil {
+		t.Fatalf("storeRoundAndApplyVariantTransition() error = %v", err)
+	}
+	if len(store.createdTurns) != 1 {
+		t.Fatalf("createdTurns = %d, want 1", len(store.createdTurns))
+	}
+	if store.createdTurns[0].ParentTurnID != targetParent {
+		t.Fatalf("created turn parent = %v, want %v", store.createdTurns[0].ParentTurnID, targetParent)
+	}
+	if len(store.createdHeads) != 1 || store.createdHeads[0].HeadTurnID.String() != stored.TurnID {
+		t.Fatalf("createdHeads = %#v, want stored turn head %q", store.createdHeads, stored.TurnID)
+	}
+	if len(store.replacedHeads) != 0 {
+		t.Fatalf("replacedHeads = %#v, want none for rewrite sibling", store.replacedHeads)
+	}
+	if len(store.updatedDefault) != 1 || store.updatedDefault[0].DefaultHeadTurnID.String() != stored.TurnID {
+		t.Fatalf("updatedDefault = %#v, want stored turn", store.updatedDefault)
+	}
+}
+
 func TestStoreRoundAndVariantTransitionFailureDoesNotPublishOrKeepRolledBackTurn(t *testing.T) {
 	t.Parallel()
 
