@@ -154,14 +154,14 @@
         />
         <div
           v-if="isEditingUserMessage"
-          class="w-[min(100%,42rem)] bg-chat-user-bubble px-4 py-3 text-chat-user-bubble-fg"
+          class="w-[min(100%,42rem)] bg-muted px-4 py-3 text-foreground"
           :class="userBubbleRadiusClass"
         >
           <Textarea
             ref="editTextarea"
             v-model="editDraft"
             size="lg"
-            class="max-h-52 min-h-20 resize-none rounded-none border-0 bg-transparent p-0 text-chat-user-bubble-fg shadow-none placeholder:text-chat-user-bubble-fg/60 focus-visible:ring-0"
+            class="max-h-52 min-h-20 resize-none rounded-none border-0 bg-transparent p-0 text-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
             :aria-label="t('chat.actions.edit')"
             @keydown.enter.meta.prevent="submitEdit"
             @keydown.enter.ctrl.prevent="submitEdit"
