@@ -2853,6 +2853,255 @@ describe('chat-list store', () => {
     })
   })
 
+  it('retries an error-only assistant reply without creating a response variant', async () => {
+    sendEvents = [
+      { type: 'start' } as UIStreamEvent,
+      {
+        type: 'message',
+        data: { id: 1, type: 'text', content: 'recovered reply' },
+      } as UIStreamEvent,
+      { type: 'end' } as UIStreamEvent,
+    ]
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-b1', turn_id: 'turn-b1', role: 'user', text: 'same request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-error',
+        turn_id: 'turn-b1',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'error', content: 'openai: stream failed' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b1',
+      headTurnIds: ['turn-b1'],
+      nodes: [
+        graphNode('turn-b1', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'same-request' }),
+      ],
+    }))
+
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await flushPromises()
+
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-b1', turn_id: 'turn-b1', role: 'user', text: 'same request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b1',
+        turn_id: 'turn-b1',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'recovered reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b1',
+      headTurnIds: ['turn-b1'],
+      nodes: [
+        graphNode('turn-b1', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'same-request' }),
+      ],
+    }))
+
+    const result = await store.retryMessage('assistant-error')
+    await flushPromises()
+
+    expect(result).toMatchObject({ ok: true })
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'message',
+      session_id: 'session-1',
+      text: 'same request',
+      base_head_turn_id: 'turn-b1',
+    })
+    expect(sentWSMessages.at(-1)).not.toHaveProperty('retry_message_id')
+    expect(store.messages.map(message => message.id)).toEqual(['user-b1', 'assistant-b1'])
+    expect(store.responseVariantStateForMessage('assistant-b1')).toBeNull()
+  })
+
+  it('keeps the original response variant when retry fails before output starts', async () => {
+    sendEvents = []
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      {
+        id: 'assistant-a',
+        turn_id: 'turn-a',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'A reply' }],
+        timestamp: '2026-06-19T00:00:01.000Z',
+      },
+      { id: 'user-b1', turn_id: 'turn-b1', role: 'user', text: 'same request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b1',
+        turn_id: 'turn-b1',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'first reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b1',
+      headTurnIds: ['turn-b1'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'a' }),
+        graphNode('turn-b1', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'same-request' }),
+      ],
+    }))
+
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await flushPromises()
+    const before = store.messages.map(message => message.id)
+
+    const pending = store.retryMessage('assistant-b1')
+    await flushPromises()
+
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'retry_message',
+      session_id: 'session-1',
+      retry_message_id: 'assistant-b1',
+      base_head_turn_id: 'turn-b1',
+    })
+    expect(store.messages).toHaveLength(before.length)
+    expect(store.messages.map(message => message.id).slice(0, -1)).toEqual(before.slice(0, -1))
+    expect(store.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      streaming: true,
+      messages: [],
+      __optimistic: true,
+    })
+
+    streamHandler?.({
+      type: 'start',
+      stream_id: lastStreamId,
+      session_id: lastSessionId,
+    } as UIStreamEvent)
+    await flushPromises()
+    expect(store.messages).toHaveLength(before.length)
+    expect(store.messages.map(message => message.id).slice(0, -1)).toEqual(before.slice(0, -1))
+    expect(store.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      streaming: true,
+      messages: [],
+      __optimistic: true,
+    })
+
+    streamHandler?.({
+      type: 'error',
+      stream_id: lastStreamId,
+      session_id: lastSessionId,
+      message: 'lookup api.deepseek.com: no such host',
+    } as UIStreamEvent)
+    const result = await pending
+    await flushPromises()
+
+    expect(result).toMatchObject({
+      ok: false,
+      stage: 'startup',
+      error: 'lookup api.deepseek.com: no such host',
+    })
+    expect(store.messages.map(message => message.id)).toEqual(before)
+    expect(store.messages.at(-1)).toMatchObject({
+      id: 'assistant-b1',
+      role: 'assistant',
+      messages: [{ type: 'text', content: 'first reply' }],
+    })
+  })
+
+  it('commits a retry variant only after visible output arrives', async () => {
+    sendEvents = []
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      {
+        id: 'assistant-a',
+        turn_id: 'turn-a',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'A reply' }],
+        timestamp: '2026-06-19T00:00:01.000Z',
+      },
+      { id: 'user-b1', turn_id: 'turn-b1', role: 'user', text: 'same request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b1',
+        turn_id: 'turn-b1',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'first reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b1',
+      headTurnIds: ['turn-b1'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'a' }),
+        graphNode('turn-b1', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'same-request' }),
+      ],
+    }))
+
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await flushPromises()
+    const before = store.messages.map(message => message.id)
+
+    const pending = store.retryMessage('assistant-b1')
+    await flushPromises()
+
+    expect(store.messages).toHaveLength(before.length)
+    expect(store.messages.map(message => message.id).slice(0, -1)).toEqual(before.slice(0, -1))
+    expect(store.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      streaming: true,
+      messages: [],
+      __optimistic: true,
+    })
+
+    streamHandler?.({
+      type: 'message',
+      stream_id: lastStreamId,
+      session_id: lastSessionId,
+      data: { id: 1, type: 'text', content: 'partial retry reply' },
+    } as UIStreamEvent)
+    await flushPromises()
+
+    expect(store.messages).toHaveLength(4)
+    expect(store.messages[2]).toMatchObject({
+      role: 'user',
+      text: 'same request',
+      __optimistic: true,
+    })
+    expect(store.messages[3]).toMatchObject({
+      role: 'assistant',
+      __optimistic: true,
+      messages: [{ type: 'text', content: 'partial retry reply' }],
+    })
+
+    streamHandler?.({
+      type: 'error',
+      stream_id: lastStreamId,
+      session_id: lastSessionId,
+      message: 'provider connection dropped',
+    } as UIStreamEvent)
+    const result = await pending
+    await flushPromises()
+
+    expect(result).toMatchObject({ ok: false, stage: 'stream', error: 'provider connection dropped' })
+    expect(store.messages[3]).toMatchObject({
+      role: 'assistant',
+      messages: [
+        { type: 'text', content: 'partial retry reply' },
+        { type: 'error', content: 'provider connection dropped' },
+      ],
+    })
+  })
+
   it('shows edit variants on the user request only', async () => {
     api.fetchSessions.mockResolvedValueOnce({
       items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],

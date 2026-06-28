@@ -81,15 +81,16 @@
       </template>
 
       <template v-if="role === 'assistant'">
-        <Tooltip v-if="canRetry">
+        <Tooltip v-if="showRetry">
           <TooltipTrigger as-child>
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
               :class="actionIconClass"
+              :aria-disabled="!canRetry"
               :aria-label="t('chat.actions.retry')"
-              @click="emit('retry')"
+              @click="handleRetry"
             >
               <RotateCcw />
             </Button>
@@ -125,8 +126,9 @@
               {{ menuTime }}
             </DropdownMenuLabel>
             <DropdownMenuItem
-              v-if="canFork"
-              @select="emit('fork')"
+              v-if="showFork"
+              :disabled="!canFork"
+              @select="handleFork"
             >
               <ForkSplitIcon />
               <span>{{ t('chat.actions.createBranch') }}</span>
@@ -148,6 +150,7 @@
               size="icon-sm"
               :class="variantArrowClass"
               :disabled="!variantState.previousHeadTurnId"
+              :aria-disabled="!canSelectVariant"
               :aria-label="previousVariantLabel"
               @click="switchVariant(variantState.previousHeadTurnId)"
             >
@@ -169,6 +172,7 @@
               size="icon-sm"
               :class="variantArrowClass"
               :disabled="!variantState.nextHeadTurnId"
+              :aria-disabled="!canSelectVariant"
               :aria-label="nextVariantLabel"
               @click="switchVariant(variantState.nextHeadTurnId)"
             >
@@ -215,8 +219,11 @@ const props = defineProps<{
   streaming?: boolean
   align?: 'start' | 'end'
   canEdit?: boolean
+  showFork?: boolean
+  showRetry?: boolean
   canFork?: boolean
   canRetry?: boolean
+  canSelectVariant?: boolean
   variantState?: TurnVariantState | null
   variantKind?: 'request' | 'response'
 }>()
@@ -258,7 +265,18 @@ async function handleCopy() {
   resetTimer = setTimeout(() => { copied.value = false }, 1500)
 }
 
+function handleRetry() {
+  if (!props.canRetry) return
+  emit('retry')
+}
+
+function handleFork() {
+  if (!props.canFork) return
+  emit('fork')
+}
+
 function switchVariant(headTurnId?: string) {
+  if (!props.canSelectVariant) return
   const head = headTurnId?.trim()
   if (!head) return
   emit('selectVariant', head)

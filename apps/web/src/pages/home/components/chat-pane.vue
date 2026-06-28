@@ -86,6 +86,7 @@
                   :on-reply-click="handleReplyJump"
                   :is-scrolling="isScrolling"
                   :is-last-message="index === messages.length - 1"
+                  :show-message-actions="showMessageActions"
                   :can-run-message-action="canRunMessageAction"
                   :can-select-variant="canSelectVariant"
                   :request-variant-state="chatStore.requestVariantStateForMessage(msg.id)"
@@ -1119,6 +1120,11 @@ const canSelectVariant = computed(() =>
   && !streaming.value
   && !loadingMessages.value
   && !messageActionLoading.value,
+)
+const showMessageActions = computed(() =>
+  activeSessionSupportsTurnVariants.value
+  && !streaming.value
+  && !activeChatReadOnly.value,
 )
 
 // A fresh, writable chat opens with the composer centred and a greeting above

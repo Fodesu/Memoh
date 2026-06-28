@@ -254,7 +254,8 @@
           :copy-text="userCopyText"
           :align="bubbleSelf ? 'end' : 'start'"
           :can-edit="canEditUserMessage"
-          :variant-state="canSelectVariant ? requestVariantState : null"
+          :can-select-variant="canSelectVariant"
+          :variant-state="showMessageActions ? requestVariantState : null"
           variant-kind="request"
           @edit="startEdit"
           @select-variant="emit('selectVariant', $event)"
@@ -354,9 +355,12 @@
           :menu-time="calendarTimestamp"
           :full-time="fullTimestamp"
           align="start"
+          :can-select-variant="canSelectVariant"
+          :show-fork="canShowAssistantMessageAction"
+          :show-retry="canShowAssistantMessageAction"
           :can-fork="canForkAssistantMessage"
           :can-retry="canRetryAssistantMessage"
-          :variant-state="canSelectVariant ? responseVariantState : null"
+          :variant-state="showMessageActions ? responseVariantState : null"
           variant-kind="response"
           :streaming="message.streaming"
           @fork="emit('forkMessage', message.id)"
@@ -455,6 +459,7 @@ const props = defineProps<{
   onReplyClick?: (messageId: string) => void
   isScrolling: boolean
   isLastMessage?: boolean
+  showMessageActions?: boolean
   canRunMessageAction?: boolean
   canSelectVariant?: boolean
   requestVariantState?: TurnVariantState | null
@@ -832,10 +837,17 @@ const canActOnAssistantTurn = computed(() =>
   props.message.role === 'assistant'
   && !props.message.streaming
   && props.message.__optimistic !== true
-  && props.canRunMessageAction === true
+  && props.showMessageActions === true
 )
 
-const canForkAssistantMessage = computed(() => canActOnAssistantTurn.value)
-const canRetryAssistantMessage = computed(() => canActOnAssistantTurn.value)
+const canShowAssistantMessageAction = computed(() => canActOnAssistantTurn.value)
+const canForkAssistantMessage = computed(() =>
+  canActOnAssistantTurn.value
+  && props.canRunMessageAction === true
+)
+const canRetryAssistantMessage = computed(() =>
+  canActOnAssistantTurn.value
+  && props.canRunMessageAction === true
+)
 
 </script>

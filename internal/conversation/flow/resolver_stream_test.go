@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/conversation"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -811,6 +812,93 @@ func TestPersistTerminalSnapshotSkipsEmptyAssistantSnapshot(t *testing.T) {
 
 	if len(messages.persisted) != 0 {
 		t.Fatalf("expected empty assistant terminal snapshot not to persist, got %#v", messages.persisted)
+	}
+}
+
+func TestPersistTerminalSnapshotSkipsAbortedSnapshotBeforeVisibleOutput(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+	run := legacyTurnRun(conversation.ChatRequest{BotID: "bot-1", SessionID: "session-1"})
+
+	if err := resolver.persistTerminalSnapshot(
+		context.Background(),
+		conversation.ChatRequest{
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			Query:     "hello",
+		},
+		&run,
+		resolvedContext{},
+		terminalSnapshot{
+			sdkMessages: []sdk.Message{sdk.AssistantMessage("openai: stream failed: lookup api.deepseek.com: no such host")},
+			aborted:     true,
+		},
+	); err != nil {
+		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
+	}
+
+	if len(messages.persisted) != 0 {
+		t.Fatalf("expected aborted startup snapshot not to persist, got %#v", messages.persisted)
+	}
+}
+
+func TestHasVisibleAgentStreamOutputIgnoresLifecycleOnlyEvents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		event agentpkg.StreamEvent
+		want  bool
+	}{
+		{
+			name:  "text start is lifecycle only",
+			event: agentpkg.StreamEvent{Type: agentpkg.EventTextStart},
+			want:  false,
+		},
+		{
+			name:  "text end is lifecycle only",
+			event: agentpkg.StreamEvent{Type: agentpkg.EventTextEnd},
+			want:  false,
+		},
+		{
+			name:  "blank text delta is lifecycle only",
+			event: agentpkg.StreamEvent{Type: agentpkg.EventTextDelta, Delta: "  "},
+			want:  false,
+		},
+		{
+			name:  "text delta is visible",
+			event: agentpkg.StreamEvent{Type: agentpkg.EventTextDelta, Delta: "hello"},
+			want:  true,
+		},
+		{
+			name:  "tool call is visible",
+			event: agentpkg.StreamEvent{Type: agentpkg.EventToolCallStart, ToolCallID: "call-1"},
+			want:  true,
+		},
+		{
+			name:  "empty attachment event is lifecycle only",
+			event: agentpkg.StreamEvent{Type: agentpkg.EventAttachment},
+			want:  false,
+		},
+		{
+			name:  "attachment is visible",
+			event: agentpkg.StreamEvent{Type: agentpkg.EventAttachment, Attachments: []agentpkg.FileAttachment{{Name: "a.txt"}}},
+			want:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := hasVisibleAgentStreamOutput(tt.event); got != tt.want {
+				t.Fatalf("hasVisibleAgentStreamOutput() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

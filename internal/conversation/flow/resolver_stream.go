@@ -24,26 +24,26 @@ type terminalSnapshot struct {
 	sdkMessages    []sdk.Message
 	usage          json.RawMessage
 	deferredToolID string
+	aborted        bool
+	visibleOutput  bool
 }
 
-func isVisibleAgentStreamEvent(event agentpkg.StreamEvent) bool {
+func hasVisibleAgentStreamOutput(event agentpkg.StreamEvent) bool {
 	switch event.Type {
-	case agentpkg.EventTextStart,
-		agentpkg.EventTextDelta,
-		agentpkg.EventTextEnd,
-		agentpkg.EventReasoningStart,
-		agentpkg.EventReasoningDelta,
-		agentpkg.EventReasoningEnd,
-		agentpkg.EventToolCallInputStart,
+	case agentpkg.EventTextDelta,
+		agentpkg.EventReasoningDelta:
+		return strings.TrimSpace(event.Delta) != ""
+	case agentpkg.EventToolCallInputStart,
 		agentpkg.EventToolCallStart,
 		agentpkg.EventToolCallProgress,
 		agentpkg.EventToolCallEnd,
 		agentpkg.EventToolApprovalRequest,
 		agentpkg.EventUserInputRequest,
-		agentpkg.EventAttachment,
 		agentpkg.EventReaction,
 		agentpkg.EventSpeech:
 		return true
+	case agentpkg.EventAttachment:
+		return len(event.Attachments) > 0
 	default:
 		return false
 	}
@@ -73,6 +73,7 @@ func extractTerminalSnapshot(data []byte) (terminalSnapshot, bool) {
 		sdkMessages:    sdkMsgs,
 		usage:          envelope.Usage,
 		deferredToolID: strings.TrimSpace(envelope.ApprovalID),
+		aborted:        envelope.Type == string(agentpkg.EventAgentAbort),
 	}, true
 }
 
@@ -158,7 +159,7 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 					slog.String("error", event.Error),
 				)
 			}
-			if isVisibleAgentStreamEvent(event) {
+			if hasVisibleAgentStreamOutput(event) {
 				hasVisibleOutput = true
 			}
 
@@ -168,6 +169,7 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 			}
 			if event.IsTerminal() && len(event.Messages) > 0 {
 				if snap, ok := extractTerminalSnapshot(data); ok {
+					snap.visibleOutput = hasVisibleOutput
 					lastSnapshot = snap
 					hasSnapshot = true
 					if !stored {
@@ -346,7 +348,7 @@ func (r *Resolver) streamChatWSWithRewriteAnchor(
 				slog.String("error", event.Error),
 			)
 		}
-		if isVisibleAgentStreamEvent(event) {
+		if hasVisibleAgentStreamOutput(event) {
 			hasVisibleOutput = true
 		}
 
@@ -357,6 +359,7 @@ func (r *Resolver) streamChatWSWithRewriteAnchor(
 
 		if event.IsTerminal() && len(event.Messages) > 0 {
 			if snap, ok := extractTerminalSnapshot(data); ok {
+				snap.visibleOutput = hasVisibleOutput
 				lastSnapshot = snap
 				hasSnapshot = true
 				if !stored {
@@ -421,6 +424,14 @@ func (r *Resolver) streamChatWSWithRewriteAnchor(
 // indicates the context is large.
 func (r *Resolver) persistTerminalSnapshot(ctx context.Context, req conversation.ChatRequest, run *TurnRun, rc resolvedContext, snap terminalSnapshot) error {
 	outputMessages := sdkMessagesToModelMessages(snap.sdkMessages)
+	if snap.aborted && !snap.visibleOutput {
+		r.logger.Info("skip persisting aborted terminal snapshot before visible output",
+			slog.String("bot_id", req.BotID),
+			slog.String("chat_id", req.ChatID),
+			slog.Int("messages", len(outputMessages)),
+		)
+		return nil
+	}
 	if !hasPersistableAssistantOutput(outputMessages) {
 		r.logger.Info("skip persisting terminal snapshot without assistant output",
 			slog.String("bot_id", req.BotID),
@@ -489,7 +500,9 @@ func (r *Resolver) persistPartialResult(
 		// a real result, preserving the assistant ↔ tool pairing required by
 		// downstream provider serializers (especially Anthropic).
 		err := r.persistTerminalSnapshot(persistCtx, req, run, rc, terminalSnapshot{
-			sdkMessages: partialMessages,
+			sdkMessages:   partialMessages,
+			aborted:       !hasVisibleOutput,
+			visibleOutput: hasVisibleOutput,
 		})
 		if err == nil {
 			r.logger.Info("persisted partial agent result",

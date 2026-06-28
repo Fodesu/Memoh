@@ -245,6 +245,12 @@ interface PendingAssistantStream {
   botId: string
   sessionId: string
   refreshOnEnd: boolean
+  commitOnFirstVisibleOutput?: () => void
+  committed: boolean
+  visiblyAttached: boolean
+  pendingUserTurn?: ChatUserTurn | null
+  pendingReplaceFromTurn?: ChatMessage | null
+  pendingReplacedTurns?: ChatMessage[]
   done: boolean
   resolve: () => void
   reject: (err: Error) => void
@@ -1627,7 +1633,7 @@ export const useChatStore = defineStore('chat', () => {
     botId: string,
     targetSessionId: string,
     contextTurns: ChatMessage[] = [],
-    options: { refreshOnEnd?: boolean } = {},
+    options: { refreshOnEnd?: boolean, commitOnFirstVisibleOutput?: () => void } = {},
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const id = streamId.trim()
@@ -1646,6 +1652,9 @@ export const useChatStore = defineStore('chat', () => {
         botId,
         sessionId: targetSessionId.trim(),
         refreshOnEnd: options.refreshOnEnd !== false,
+        commitOnFirstVisibleOutput: options.commitOnFirstVisibleOutput,
+        committed: !options.commitOnFirstVisibleOutput,
+        visiblyAttached: !options.commitOnFirstVisibleOutput,
         done: false,
         resolve,
         reject,
@@ -1713,6 +1722,22 @@ export const useChatStore = defineStore('chat', () => {
     if (!bid || !sid || sid !== (sessionId.value ?? '').trim()) return
     for (const stream of pendingStreams()) {
       if (stream.botId !== bid || stream.sessionId !== sid) continue
+      if (!stream.visiblyAttached) continue
+      if (stream.commitOnFirstVisibleOutput) {
+        if (stream.committed) {
+          stream.commitOnFirstVisibleOutput()
+        } else {
+          const replacedTurns = attachPendingRewriteToSession(
+            stream.botId,
+            stream.sessionId,
+            stream.pendingUserTurn ?? null,
+            stream.assistantTurn,
+            stream.pendingReplaceFromTurn ?? null,
+          )
+          if (replacedTurns !== undefined) stream.pendingReplacedTurns = replacedTurns
+        }
+        continue
+      }
       for (const turn of stream.contextTurns) {
         if (!hasVisibleTurn(turn)) messages.push(turn)
       }
@@ -1726,13 +1751,68 @@ export const useChatStore = defineStore('chat', () => {
     if (idx >= 0) messages.splice(idx, 1)
   }
 
+  function findMessageIndexForReplacement(turn: ChatMessage): number {
+    const referenceIndex = messages.indexOf(turn)
+    if (referenceIndex >= 0) return referenceIndex
+    const id = turn.id.trim()
+    if (id) {
+      const idIndex = messages.findIndex(message => message.id === id)
+      if (idIndex >= 0) return idIndex
+    }
+    const turnId = turn.turnId?.trim()
+    if (!turnId) return -1
+    return messages.findIndex(message => message.role === turn.role && message.turnId === turnId)
+  }
+
   function replaceTailFromTurn(turn: ChatMessage, replacements: ChatMessage[]) {
-    const idx = messages.indexOf(turn)
+    const idx = findMessageIndexForReplacement(turn)
     if (idx < 0) {
       messages.push(...replacements)
       return
     }
     messages.splice(idx, messages.length - idx, ...replacements)
+  }
+
+  function attachPendingRewriteToSession(
+    botId: string,
+    targetSessionId: string,
+    userTurn: ChatUserTurn | null,
+    assistantTurn: ChatAssistantTurn,
+    replaceFromTurn?: ChatMessage | null,
+  ): ChatMessage[] | undefined {
+    const pendingTurns = userTurn ? [userTurn, assistantTurn] : [assistantTurn]
+    if (pendingTurns.some(hasVisibleTurn)) return undefined
+    if (replaceFromTurn && currentBotId.value === botId.trim() && sessionId.value === targetSessionId.trim()) {
+      const idx = findMessageIndexForReplacement(replaceFromTurn)
+      if (idx >= 0) {
+        const replaced = messages.slice(idx)
+        messages.splice(idx, messages.length - idx, ...pendingTurns)
+        return replaced
+      }
+    }
+    for (const turn of pendingTurns) appendTurnToSession(botId, targetSessionId, turn)
+    return []
+  }
+
+  function removePendingRewriteFromSession(userTurn: ChatUserTurn | null, assistantTurn: ChatAssistantTurn) {
+    removeTurnFromSession('', '', assistantTurn)
+    if (userTurn) removeTurnFromSession('', '', userTurn)
+  }
+
+  function restorePendingRewriteInSession(
+    userTurn: ChatUserTurn | null,
+    assistantTurn: ChatAssistantTurn,
+    replacedTurns: ChatMessage[] = [],
+  ) {
+    const anchor = userTurn ?? assistantTurn
+    const idx = findMessageIndexForReplacement(anchor)
+    if (idx >= 0) {
+      const deleteCount = userTurn ? 2 : 1
+      messages.splice(idx, deleteCount, ...replacedTurns)
+      return
+    }
+    removePendingRewriteFromSession(userTurn, assistantTurn)
+    if (replacedTurns.length > 0) messages.push(...replacedTurns)
   }
 
   function createOptimisticAssistantTurn(): ChatAssistantTurn {
@@ -1778,11 +1858,35 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function chatAttachmentsFromTurn(turn: ChatUserTurn): ChatAttachment[] | undefined {
+    if (!turn.attachments.length) return undefined
+    return turn.attachments.map(attachment => ({
+      type: attachment.type,
+      base64: attachment.base64,
+      name: attachment.name ?? '',
+      mime: attachment.mime ?? '',
+    }))
+  }
+
+  function isErrorOnlyAssistantTurn(turn: ChatAssistantTurn): boolean {
+    return turn.messages.length > 0 && !hasVisibleAssistantBlocks(turn)
+  }
+
+  function hasVisibleAssistantBlock(block: ContentBlock): boolean {
+    if (block.type === 'error') return false
+    if (block.type === 'text' || block.type === 'reasoning') return block.content.trim().length > 0
+    if (block.type === 'attachments') return block.attachments.length > 0
+    return true
+  }
+
   interface RewriteMessageInput {
     botId: string
     sessionId: string
     sourceUserTurn: ChatUserTurn | null
     optimisticUserTurn: ChatUserTurn | null
+    pendingUserTurn?: ChatUserTurn | null
+    replaceFromTurn?: ChatMessage | null
+    pendingReplaceFromTurn?: ChatMessage | null
     send: (ws: ChatWebSocket, streamId: string, modelId?: string, reasoningEffort?: string) => void
   }
 
@@ -1798,24 +1902,58 @@ export const useChatStore = defineStore('chat', () => {
     const reasoningEffort = effort || undefined
     const ws = ensureWebSocket(bid)
     let assistantTurn: ChatAssistantTurn | null = null
-    let uiStarted = false
+    let streamStarted = false
+    let pendingReplacedTurns: ChatMessage[] = []
     try {
       if (!ws?.connected) {
         throw new StreamFailureError('WebSocket is not connected', 'startup')
       }
       assistantTurn = createOptimisticAssistantTurn()
-      const contextTurns = input.optimisticUserTurn ? [input.optimisticUserTurn] : []
-      const completion = trackAssistantStream(streamId, assistantTurn, bid, sid, contextTurns, { refreshOnEnd: false })
-      input.send(ws, streamId, modelId, reasoningEffort)
-      if (input.sourceUserTurn && input.optimisticUserTurn) {
-        replaceTailFromTurn(input.sourceUserTurn, [
-          input.optimisticUserTurn,
-          assistantTurn,
-        ])
-      } else {
-        appendTurnToSession(bid, sid, assistantTurn)
+      const pendingUserTurn = input.pendingUserTurn === undefined
+        ? input.optimisticUserTurn
+        : input.pendingUserTurn
+      const contextTurns = pendingUserTurn
+        ? [pendingUserTurn]
+        : (input.sourceUserTurn?.__optimistic ? [input.sourceUserTurn] : [])
+      const replaceFromTurn = input.replaceFromTurn ?? (input.sourceUserTurn && input.optimisticUserTurn ? input.sourceUserTurn : null)
+      const pendingReplaceFromTurn = input.pendingReplaceFromTurn ?? replaceFromTurn
+      const pendingUsesCommitPlacement = Boolean(
+        pendingReplaceFromTurn
+        && replaceFromTurn
+        && pendingReplaceFromTurn === replaceFromTurn
+        && (pendingUserTurn === input.optimisticUserTurn || !input.optimisticUserTurn),
+      )
+      const commitRewrite = () => {
+        if ((currentBotId.value ?? '').trim() !== bid || (sessionId.value ?? '').trim() !== sid) return
+        if (assistantTurn && pendingUsesCommitPlacement && hasVisibleStreamAssistantTurn(assistantTurn)) {
+          return
+        }
+        if (pendingUserTurn) removeTurnFromSession(bid, sid, pendingUserTurn)
+        if (assistantTurn) removeTurnFromSession(bid, sid, assistantTurn)
+        if (assistantTurn && hasVisibleStreamAssistantTurn(assistantTurn)) return
+        if (replaceFromTurn) {
+          replaceTailFromTurn(replaceFromTurn, input.optimisticUserTurn ? [
+            input.optimisticUserTurn,
+            assistantTurn!,
+          ] : [assistantTurn!])
+        } else {
+          appendTurnToSession(bid, sid, assistantTurn!)
+        }
       }
-      uiStarted = true
+      const completion = trackAssistantStream(streamId, assistantTurn, bid, sid, contextTurns, {
+        refreshOnEnd: false,
+        commitOnFirstVisibleOutput: commitRewrite,
+      })
+      input.send(ws, streamId, modelId, reasoningEffort)
+      const stream = getAssistantStream(streamId)
+      pendingReplacedTurns = attachPendingRewriteToSession(bid, sid, pendingUserTurn, assistantTurn, pendingReplaceFromTurn) ?? pendingReplacedTurns
+      if (stream) {
+        stream.visiblyAttached = true
+        stream.pendingUserTurn = pendingUserTurn
+        stream.pendingReplaceFromTurn = pendingReplaceFromTurn
+        stream.pendingReplacedTurns = pendingReplacedTurns
+      }
+      streamStarted = true
       setMessageActionLoading(sid, false)
       loading.value = true
       await completion
@@ -1829,11 +1967,20 @@ export const useChatStore = defineStore('chat', () => {
       const isAbort = err.name === 'AbortError'
       const stage: SendMessageStage = err instanceof StreamFailureError
         ? err.stage
-        : (uiStarted ? 'stream' : 'startup')
-      if (assistantTurn && uiStarted) {
+        : (streamStarted && assistantTurn && hasVisibleAssistantBlocks(assistantTurn) ? 'stream' : 'startup')
+      if (assistantTurn && hasVisibleStreamAssistantTurn(assistantTurn)) {
         assistantTurn.streaming = false
         if (!isAbort && !assistantTurn.messages.some(block => block.type === 'error')) {
-          appendAssistantError(assistantTurn, bid, sid, err.message)
+          if (stage === 'startup') {
+            const stream = getAssistantStream(streamId)
+            restorePendingRewriteInSession(
+              input.pendingUserTurn === undefined ? input.optimisticUserTurn : input.pendingUserTurn,
+              assistantTurn,
+              stream?.pendingReplacedTurns ?? pendingReplacedTurns,
+            )
+          } else {
+            appendAssistantError(assistantTurn, bid, sid, err.message)
+          }
         }
       }
       forgetAssistantStream(streamId)
@@ -1920,12 +2067,18 @@ export const useChatStore = defineStore('chat', () => {
     bumpFsChangedAtIfFsMutation(message)
   }
 
+  function commitAssistantStreamOnVisibleOutput(stream: PendingAssistantStream, block: ContentBlock) {
+    if (stream.committed || !hasVisibleAssistantBlock(block)) return
+    stream.commitOnFirstVisibleOutput?.()
+    stream.committed = true
+  }
+
   function nextAssistantMessageId(turn: ChatAssistantTurn): number {
     return turn.messages.reduce((maxId, message) => Math.max(maxId, message.id), -1) + 1
   }
 
   function hasVisibleAssistantBlocks(turn: ChatAssistantTurn): boolean {
-    return turn.messages.some(block => block.type !== 'error')
+    return turn.messages.some(hasVisibleAssistantBlock)
   }
 
   function cloneUserInputState(userInput: UIUserInput): UIUserInput {
@@ -2081,9 +2234,13 @@ export const useChatStore = defineStore('chat', () => {
       case 'start':
         ensureDiscussStream(streamId, sid)
         break
-      case 'message':
-        upsertAssistantUIMessage(ensureDiscussStream(streamId, sid).assistantTurn, event.data)
+      case 'message': {
+        const session = ensureDiscussStream(streamId, sid)
+        const block = normalizeUIMessage(event.data)
+        commitAssistantStreamOnVisibleOutput(session, block)
+        upsertAssistantUIMessage(session.assistantTurn, event.data)
         break
+      }
       case 'end':
         const endedSession = getAssistantStream(streamId)
         const endedBotId = endedSession?.botId ?? currentBotId.value ?? ''
@@ -2113,7 +2270,7 @@ export const useChatStore = defineStore('chat', () => {
       case 'error': {
         const session = getAssistantStream(streamId) ?? ensureDiscussStream(streamId, sid)
         const message = event.message || 'stream error'
-        const stage: SendMessageStage = hasVisibleAssistantBlocks(session.assistantTurn) ? 'stream' : 'startup'
+        const stage: SendMessageStage = session.committed && hasVisibleAssistantBlocks(session.assistantTurn) ? 'stream' : 'startup'
         rollbackApprovalResponse(streamId)
         approvalResponseStreams.delete(streamId)
         rejectAssistantStream(streamId, new StreamFailureError(message, stage))
@@ -3370,6 +3527,30 @@ export const useChatStore = defineStore('chat', () => {
     }
     const target = messages.find((message): message is ChatAssistantTurn => message.role === 'assistant' && message.id === mid)
     if (!target) return { ok: false, stage: 'startup' }
+    if (isErrorOnlyAssistantTurn(target)) {
+      const sourceUserTurn = findUserTurnBeforeAssistant(target)
+      if (!sourceUserTurn) return { ok: false, stage: 'startup' }
+      return runRewriteMessage({
+        botId: bid,
+        sessionId: sid,
+        sourceUserTurn,
+        optimisticUserTurn: null,
+        replaceFromTurn: target,
+        pendingReplaceFromTurn: target,
+        send(ws, streamId, modelId, reasoningEffort) {
+          ws.send({
+            type: 'message',
+            stream_id: streamId,
+            text: sourceUserTurn.text,
+            session_id: sid,
+            ...baseHeadPayload(sid),
+            attachments: chatAttachmentsFromTurn(sourceUserTurn),
+            model_id: modelId,
+            reasoning_effort: reasoningEffort,
+          })
+        },
+      })
+    }
     const sourceUserTurn = findUserTurnBeforeAssistant(target)
     if (!sourceUserTurn) return { ok: false, stage: 'startup' }
     return runRewriteMessage({
@@ -3377,6 +3558,8 @@ export const useChatStore = defineStore('chat', () => {
       sessionId: sid,
       sourceUserTurn,
       optimisticUserTurn: cloneUserTurnForRetry(sourceUserTurn),
+      pendingUserTurn: null,
+      pendingReplaceFromTurn: target,
       send(ws, streamId, modelId, reasoningEffort) {
         ws.send({
           type: 'retry_message',
