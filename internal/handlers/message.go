@@ -91,6 +91,8 @@ type messageUIListResponse struct {
 	Nodes             []sessionTurnGraphUINode `json:"nodes,omitempty"`
 }
 
+const staleSessionHeadMessage = "stale session head"
+
 // Register registers all conversation routes.
 func (h *MessageHandler) Register(e *echo.Echo) {
 	botGroup := e.Group("/bots/:bot_id")
@@ -180,11 +182,16 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 	headTurnID := strings.TrimSpace(c.QueryParam("head_turn_id"))
 	includeGraph := parseBoolQuery(c.QueryParam("include_graph"))
 
-	bot, _, _, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
+	bot, _, sess, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
 	if err != nil {
 		return err
 	}
 	botID = bot.ID
+	headTurnID = sessionHeadTurnIDForVariantCapableSession(sess, headTurnID)
+	graph, err := h.validatedSessionTurnGraph(c.Request().Context(), sessionID, headTurnID, format == "ui" && includeGraph && !hasBefore)
+	if err != nil {
+		return err
+	}
 
 	var messages []messagepkg.Message
 	if hasBefore {
@@ -217,16 +224,47 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 	h.decorateUITurns(c.Request().Context(), botID, sessionID, items)
 	resp := messageUIListResponse{Items: items}
 	if format == "ui" && includeGraph && !hasBefore {
-		graph, err := h.messageService.GetSessionTurnGraph(c.Request().Context(), sessionID)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
 		graphResp := h.sessionTurnGraphUIResponse(graph)
 		resp.DefaultHeadTurnID = graphResp.DefaultHeadTurnID
 		resp.HeadTurnIDs = graphResp.HeadTurnIDs
 		resp.Nodes = graphResp.Nodes
 	}
 	return c.JSON(http.StatusOK, resp)
+}
+
+func (h *MessageHandler) validatedSessionTurnGraph(ctx context.Context, sessionID, headTurnID string, needGraph bool) (messagepkg.SessionTurnGraph, error) {
+	head := strings.TrimSpace(headTurnID)
+	if head == "" && !needGraph {
+		return messagepkg.SessionTurnGraph{}, nil
+	}
+	graph, err := h.messageService.GetSessionTurnGraph(ctx, sessionID)
+	if err != nil {
+		return messagepkg.SessionTurnGraph{}, echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	if head != "" && !sessionTurnGraphHasHead(graph, head) {
+		return messagepkg.SessionTurnGraph{}, echo.NewHTTPError(http.StatusConflict, staleSessionHeadMessage)
+	}
+	return graph, nil
+}
+
+func sessionHeadTurnIDForVariantCapableSession(sess session.Session, headTurnID string) string {
+	if !session.SupportsTurnVariants(sess.Type) {
+		return ""
+	}
+	return strings.TrimSpace(headTurnID)
+}
+
+func sessionTurnGraphHasHead(graph messagepkg.SessionTurnGraph, headTurnID string) bool {
+	head := strings.TrimSpace(headTurnID)
+	if head == "" {
+		return false
+	}
+	for _, candidate := range graph.HeadTurnIDs {
+		if strings.TrimSpace(candidate) == head {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *MessageHandler) listLatestBySessionHead(ctx context.Context, sessionID, headTurnID string, limit int32) ([]messagepkg.Message, error) {
@@ -262,6 +300,7 @@ func parseBoolQuery(raw string) bool {
 // @Param external_message_id query string true "External message ID"
 // @Param before query int false "Messages before target"
 // @Param after query int false "Messages after target"
+// @Param head_turn_id query string false "Selected session head turn ID"
 // @Success 200 {object} map[string]any
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
@@ -285,11 +324,15 @@ func (h *MessageHandler) LocateMessage(c echo.Context) error {
 	if sessionID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "session_id is required")
 	}
-	bot, _, _, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
+	bot, _, sess, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
 	if err != nil {
 		return err
 	}
 	botID = bot.ID
+	headTurnID := sessionHeadTurnIDForVariantCapableSession(sess, strings.TrimSpace(c.QueryParam("head_turn_id")))
+	if _, err := h.validatedSessionTurnGraph(c.Request().Context(), sessionID, headTurnID, false); err != nil {
+		return err
+	}
 	externalMessageID := strings.TrimSpace(c.QueryParam("external_message_id"))
 	if externalMessageID == "" {
 		externalMessageID = strings.TrimSpace(c.QueryParam("message_id"))
@@ -300,7 +343,7 @@ func (h *MessageHandler) LocateMessage(c echo.Context) error {
 
 	before := parseBoundedInt32(c.QueryParam("before"), 30, 0, 100)
 	after := parseBoundedInt32(c.QueryParam("after"), 30, 0, 100)
-	located, err := h.messageService.LocateByExternalIDBySession(c.Request().Context(), sessionID, externalMessageID, before, after)
+	located, err := h.locateByExternalIDBySessionHead(c.Request().Context(), sessionID, headTurnID, externalMessageID, before, after)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "message not found")
@@ -316,6 +359,13 @@ func (h *MessageHandler) LocateMessage(c echo.Context) error {
 		"target_id":                  located.TargetID,
 		"target_external_message_id": externalMessageID,
 	})
+}
+
+func (h *MessageHandler) locateByExternalIDBySessionHead(ctx context.Context, sessionID, headTurnID, externalMessageID string, before, after int32) (messagepkg.LocateResult, error) {
+	if locator, ok := h.messageService.(messagepkg.SessionHeadLocator); ok {
+		return locator.LocateByExternalIDBySessionHead(ctx, sessionID, headTurnID, externalMessageID, before, after)
+	}
+	return h.messageService.LocateByExternalIDBySession(ctx, sessionID, externalMessageID, before, after)
 }
 
 func parseBoundedInt32(raw string, fallback int32, minValue int32, maxValue int32) int32 {
@@ -462,6 +512,7 @@ func mergeToolApprovals(turns []conversation.UITurn, approvals []toolapproval.Re
 				Status:         approval.Status,
 				DecisionReason: approval.DecisionReason,
 				CanApprove:     canApproveFn(approval),
+				PersistTurnID:  approval.PersistTurnID,
 			}
 		}
 	}
@@ -497,11 +548,12 @@ func mergeUserInputs(turns []conversation.UITurn, requests []userinput.Request, 
 				canRespond = canRespondFn(req)
 			}
 			msg.UserInput = &conversation.UIUserInput{
-				UserInputID: req.ID,
-				ShortID:     req.ShortID,
-				Status:      req.Status,
-				Questions:   req.UIPayload.Questions,
-				CanRespond:  canRespond,
+				UserInputID:   req.ID,
+				ShortID:       req.ShortID,
+				Status:        req.Status,
+				Questions:     req.UIPayload.Questions,
+				CanRespond:    canRespond,
+				PersistTurnID: req.PersistTurnID,
 			}
 		}
 	}

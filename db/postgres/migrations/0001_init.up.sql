@@ -470,6 +470,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_sessions_forked_from_turn ON bot_sessions(for
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_created_by_user_id ON bot_sessions(created_by_user_id) WHERE created_by_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_created_by ON bot_sessions(bot_id, created_by_user_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_active_updated ON bot_sessions(bot_id, updated_at DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_sessions_id_bot_unique ON bot_sessions(id, bot_id);
 
 -- Add FK from routes to sessions (deferred to avoid circular dependency during CREATE).
 ALTER TABLE bot_channel_routes
@@ -519,18 +520,24 @@ CREATE INDEX IF NOT EXISTS idx_bot_history_turns_request
   ON bot_history_turns(request_message_id) WHERE request_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_assistant
   ON bot_history_turns(final_assistant_message_id) WHERE final_assistant_message_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_history_turns_id_bot_unique ON bot_history_turns(id, bot_id);
 
 -- bot_session_turn_heads: switchable leaf heads for a session turn graph.
 CREATE TABLE IF NOT EXISTS bot_session_turn_heads (
-  session_id UUID NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
-  head_turn_id UUID NOT NULL REFERENCES bot_history_turns(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL,
+  head_turn_id UUID NOT NULL,
+  bot_id UUID NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (session_id, head_turn_id)
+  PRIMARY KEY (session_id, head_turn_id),
+  FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE,
+  FOREIGN KEY (head_turn_id, bot_id) REFERENCES bot_history_turns(id, bot_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_bot_session_turn_heads_head
   ON bot_session_turn_heads(head_turn_id);
+CREATE INDEX IF NOT EXISTS idx_bot_session_turn_heads_bot
+  ON bot_session_turn_heads(bot_id);
 
 -- bot_history_messages: unified message history under bot scope.
 CREATE TABLE IF NOT EXISTS bot_history_messages (
@@ -571,10 +578,12 @@ CREATE INDEX IF NOT EXISTS idx_bot_history_messages_session_reply
 
 ALTER TABLE bot_sessions
   ADD CONSTRAINT fk_bot_sessions_default_head_turn
-  FOREIGN KEY (default_head_turn_id) REFERENCES bot_history_turns(id) ON DELETE SET NULL;
+  FOREIGN KEY (default_head_turn_id, bot_id) REFERENCES bot_history_turns(id, bot_id)
+  ON DELETE SET NULL (default_head_turn_id);
 ALTER TABLE bot_sessions
   ADD CONSTRAINT fk_bot_sessions_forked_from_turn
-  FOREIGN KEY (forked_from_turn_id) REFERENCES bot_history_turns(id) ON DELETE SET NULL;
+  FOREIGN KEY (forked_from_turn_id, bot_id) REFERENCES bot_history_turns(id, bot_id)
+  ON DELETE SET NULL (forked_from_turn_id);
 ALTER TABLE bot_history_turns
   ADD CONSTRAINT fk_bot_history_turns_request_message
   FOREIGN KEY (request_message_id) REFERENCES bot_history_messages(id) ON DELETE SET NULL;

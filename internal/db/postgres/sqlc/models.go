@@ -253,6 +253,7 @@ type BotSessionEvent struct {
 type BotSessionTurnHead struct {
 	SessionID  pgtype.UUID        `json:"session_id"`
 	HeadTurnID pgtype.UUID        `json:"head_turn_id"`
+	BotID      pgtype.UUID        `json:"bot_id"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }

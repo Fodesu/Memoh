@@ -130,3 +130,9 @@ type SessionHeadPager interface {
 	ListLatestBySessionHead(ctx context.Context, sessionID string, headTurnID string, limit int32) ([]Message, error)
 	ListBeforeBySessionHead(ctx context.Context, sessionID string, headTurnID string, before time.Time, beforeID string, limit int32) ([]Message, error)
 }
+
+// SessionHeadLocator locates a message inside an explicitly selected session
+// leaf head. Empty headTurnID keeps the server default-head view.
+type SessionHeadLocator interface {
+	LocateByExternalIDBySessionHead(ctx context.Context, sessionID string, headTurnID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error)
+}

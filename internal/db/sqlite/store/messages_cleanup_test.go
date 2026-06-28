@@ -46,8 +46,8 @@ func TestSQLiteListSessionOwnedTurnsForCleanupReturnsAbandonedOwnedTurns(t *test
 		t.Fatalf("insert abandoned fork turn: %v", err)
 	}
 	if _, err := conn.ExecContext(ctx,
-		`INSERT INTO bot_session_turn_heads (session_id, head_turn_id) VALUES (?, ?)`,
-		forkSessionID, forkTurnID,
+		`INSERT INTO bot_session_turn_heads (session_id, head_turn_id, bot_id) VALUES (?, ?, ?)`,
+		forkSessionID, forkTurnID, "00000000-0000-0000-0000-000000000001",
 	); err != nil {
 		t.Fatalf("insert fork head: %v", err)
 	}
@@ -93,6 +93,7 @@ CREATE TABLE bot_history_turns (
 CREATE TABLE bot_session_turn_heads (
   session_id TEXT NOT NULL,
   head_turn_id TEXT NOT NULL,
+  bot_id TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (session_id, head_turn_id)

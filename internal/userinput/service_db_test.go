@@ -36,6 +36,7 @@ CREATE TABLE bots (
 );
 CREATE TABLE bot_sessions (
   id TEXT PRIMARY KEY,
+  bot_id TEXT,
   default_head_turn_id TEXT,
   deleted_at TEXT
 );
@@ -47,11 +48,13 @@ CREATE TABLE channel_identities (
 );
 CREATE TABLE bot_history_turns (
   id TEXT PRIMARY KEY,
+  bot_id TEXT,
   parent_turn_id TEXT
 );
 CREATE TABLE bot_session_turn_heads (
-  session_id TEXT NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
-  head_turn_id TEXT NOT NULL REFERENCES bot_history_turns(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  head_turn_id TEXT NOT NULL,
+  bot_id TEXT NOT NULL,
   PRIMARY KEY (session_id, head_turn_id)
 );
 CREATE TABLE bot_history_messages (
@@ -100,7 +103,7 @@ CREATE UNIQUE INDEX user_input_tool_call_turn_unique
 	if _, err := conn.ExecContext(ctx, `INSERT INTO bots (id) VALUES (?)`, testBotID); err != nil {
 		t.Fatalf("insert bot: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id) VALUES (?)`, testSessionID); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, bot_id) VALUES (?, ?)`, testSessionID, testBotID); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 

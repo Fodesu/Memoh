@@ -608,7 +608,17 @@ func stripSessionTurnMessageEnvelope(text string) string {
 }
 
 func (s *DBService) LocateByExternalIDBySession(ctx context.Context, sessionID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error) {
+	return s.LocateByExternalIDBySessionHead(ctx, sessionID, "", externalMessageID, beforeLimit, afterLimit)
+}
+
+// LocateByExternalIDBySessionHead locates a message inside the selected
+// session head path. Empty headTurnID keeps the server default-head view.
+func (s *DBService) LocateByExternalIDBySessionHead(ctx context.Context, sessionID string, headTurnID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return LocateResult{}, err
+	}
+	pgHeadTurnID, err := parseOptionalUUID(headTurnID)
 	if err != nil {
 		return LocateResult{}, err
 	}
@@ -625,6 +635,7 @@ func (s *DBService) LocateByExternalIDBySession(ctx context.Context, sessionID s
 
 	targetRow, err := s.queries.GetMessageByExternalIDBySession(ctx, sqlc.GetMessageByExternalIDBySessionParams{
 		SessionID:         pgSessionID,
+		HeadTurnID:        pgHeadTurnID,
 		ExternalMessageID: toPgText(externalMessageID),
 	})
 	if err != nil {
@@ -633,22 +644,26 @@ func (s *DBService) LocateByExternalIDBySession(ctx context.Context, sessionID s
 	target := toMessageFromExternalIDBySessionRow(targetRow)
 
 	beforeRows, err := s.queries.ListMessagesBeforeBySession(ctx, sqlc.ListMessagesBeforeBySessionParams{
-		SessionID: pgSessionID,
+		SessionID:  pgSessionID,
+		HeadTurnID: pgHeadTurnID,
 		CreatedAt: pgtype.Timestamptz{
 			Time:  target.CreatedAt,
 			Valid: true,
 		},
+		BeforeID: pgtype.UUID{Bytes: targetRow.ID.Bytes, Valid: true},
 		MaxCount: beforeLimit,
 	})
 	if err != nil {
 		return LocateResult{}, err
 	}
 	afterRows, err := s.queries.ListMessagesAfterBySession(ctx, sqlc.ListMessagesAfterBySessionParams{
-		SessionID: pgSessionID,
+		SessionID:  pgSessionID,
+		HeadTurnID: pgHeadTurnID,
 		CreatedAt: pgtype.Timestamptz{
 			Time:  target.CreatedAt,
 			Valid: true,
 		},
+		AfterID:  pgtype.UUID{Bytes: targetRow.ID.Bytes, Valid: true},
 		MaxCount: afterLimit,
 	})
 	if err != nil {

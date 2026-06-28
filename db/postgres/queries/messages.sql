@@ -1,28 +1,69 @@
 -- name: CreateHistoryTurn :one
+WITH input AS (
+  SELECT
+    sqlc.arg(bot_id)::uuid AS bot_id,
+    sqlc.narg(owner_session_id)::uuid AS owner_session_id,
+    sqlc.narg(parent_turn_id)::uuid AS parent_turn_id
+)
 INSERT INTO bot_history_turns (
   bot_id,
   owner_session_id,
   parent_turn_id
 )
-VALUES (
-  sqlc.arg(bot_id),
-  sqlc.narg(owner_session_id)::uuid,
-  sqlc.narg(parent_turn_id)::uuid
-)
+SELECT bot_id, owner_session_id, parent_turn_id
+FROM input
+WHERE (
+    owner_session_id IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = input.owner_session_id
+        AND s.bot_id = input.bot_id
+    )
+  )
+  AND (
+    parent_turn_id IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns parent
+      WHERE parent.id = input.parent_turn_id
+        AND parent.bot_id = input.bot_id
+    )
+  )
 RETURNING *;
 
 -- name: UpdateHistoryTurnRequestMessage :one
 UPDATE bot_history_turns
 SET request_message_id = COALESCE(request_message_id, sqlc.narg(request_message_id)::uuid),
     updated_at = now()
-WHERE id = sqlc.arg(id)
+WHERE bot_history_turns.id = sqlc.arg(id)
+  AND (
+    sqlc.narg(request_message_id)::uuid IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_messages m
+      WHERE m.id = sqlc.narg(request_message_id)::uuid
+        AND m.bot_id = bot_history_turns.bot_id
+        AND m.role = 'user'
+    )
+  )
 RETURNING *;
 
 -- name: UpdateHistoryTurnFinalAssistantMessage :one
 UPDATE bot_history_turns
 SET final_assistant_message_id = sqlc.narg(final_assistant_message_id)::uuid,
     updated_at = now()
-WHERE id = sqlc.arg(id)
+WHERE bot_history_turns.id = sqlc.arg(id)
+  AND (
+    sqlc.narg(final_assistant_message_id)::uuid IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_messages m
+      WHERE m.id = sqlc.narg(final_assistant_message_id)::uuid
+        AND m.bot_id = bot_history_turns.bot_id
+        AND m.role = 'assistant'
+    )
+  )
 RETURNING *;
 
 -- name: GetNextTurnMessageSeq :one
@@ -62,6 +103,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   JOIN bot_sessions source ON source.id = sqlc.arg(session_id)
   WHERE s.id <> source.id
@@ -80,6 +122,7 @@ WITH RECURSIVE graph_turns AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = sqlc.arg(session_id)
     AND s.deleted_at IS NULL
@@ -106,6 +149,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
     AND h.head_turn_id = sqlc.arg(base_head_turn_id)
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = sqlc.arg(session_id)
@@ -132,6 +176,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
     AND h.head_turn_id = sqlc.arg(base_head_turn_id)
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = sqlc.arg(session_id)
@@ -162,6 +207,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
     AND h.head_turn_id = sqlc.arg(base_head_turn_id)
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = sqlc.arg(session_id)
@@ -183,6 +229,24 @@ WHERE m.id = sqlc.arg(message_id)
 LIMIT 1;
 
 -- name: CreateMessage :one
+WITH input AS (
+  SELECT
+    sqlc.arg(bot_id)::uuid AS bot_id,
+    sqlc.narg(session_id)::uuid AS session_id,
+    sqlc.narg(turn_id)::uuid AS turn_id,
+    sqlc.narg(turn_message_seq)::bigint AS turn_message_seq,
+    sqlc.narg(sender_channel_identity_id)::uuid AS sender_channel_identity_id,
+    sqlc.narg(sender_user_id)::uuid AS sender_user_id,
+    sqlc.narg(external_message_id)::text AS external_message_id,
+    sqlc.narg(source_reply_to_message_id)::text AS source_reply_to_message_id,
+    sqlc.arg(role)::text AS role,
+    sqlc.arg(content)::jsonb AS content,
+    sqlc.arg(metadata)::jsonb AS metadata,
+    sqlc.arg(usage)::jsonb AS usage,
+    sqlc.narg(model_id)::uuid AS model_id,
+    sqlc.narg(event_id)::uuid AS event_id,
+    sqlc.narg(display_text)::text AS display_text
+)
 INSERT INTO bot_history_messages (
   bot_id,
   session_id,
@@ -200,23 +264,41 @@ INSERT INTO bot_history_messages (
   event_id,
   display_text
 )
-VALUES (
-  sqlc.arg(bot_id),
-  sqlc.narg(session_id)::uuid,
-  sqlc.narg(turn_id)::uuid,
-  sqlc.narg(turn_message_seq)::bigint,
-  sqlc.narg(sender_channel_identity_id)::uuid,
-  sqlc.narg(sender_user_id)::uuid,
-  sqlc.narg(external_message_id)::text,
-  sqlc.narg(source_reply_to_message_id)::text,
-  sqlc.arg(role),
-  sqlc.arg(content),
-  sqlc.arg(metadata),
-  sqlc.arg(usage),
-  sqlc.narg(model_id)::uuid,
-  sqlc.narg(event_id)::uuid,
-  sqlc.narg(display_text)::text
-)
+SELECT
+  bot_id,
+  session_id,
+  turn_id,
+  turn_message_seq,
+  sender_channel_identity_id,
+  sender_user_id,
+  external_message_id,
+  source_reply_to_message_id,
+  role,
+  content,
+  metadata,
+  usage,
+  model_id,
+  event_id,
+  display_text
+FROM input
+WHERE (
+    session_id IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = input.session_id
+        AND s.bot_id = input.bot_id
+    )
+  )
+  AND (
+    turn_id IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns t
+      WHERE t.id = input.turn_id
+        AND t.bot_id = input.bot_id
+    )
+  )
 RETURNING
   id,
   bot_id,
@@ -268,6 +350,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -307,6 +390,7 @@ WITH RECURSIVE graph_turns AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
   JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
@@ -386,6 +470,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -455,6 +540,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -569,6 +655,7 @@ WITH RECURSIVE selected_head AS (
     END AS head_turn_id
   FROM bot_sessions bs
   LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
     AND h.head_turn_id = sqlc.narg(head_turn_id)::uuid
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
@@ -576,6 +663,8 @@ WITH RECURSIVE selected_head AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM selected_head sh
   JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -662,6 +751,7 @@ WITH RECURSIVE selected_head AS (
     END AS head_turn_id
   FROM bot_sessions bs
   LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
     AND h.head_turn_id = sqlc.narg(head_turn_id)::uuid
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
@@ -669,6 +759,8 @@ WITH RECURSIVE selected_head AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM selected_head sh
   JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -702,12 +794,25 @@ ORDER BY vt.depth ASC, COALESCE(m.turn_message_seq, 9223372036854775807) DESC, m
 LIMIT sqlc.arg(max_count);
 
 -- name: GetMessageByExternalIDBySession :one
-WITH RECURSIVE visible_turns AS (
-  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+WITH RECURSIVE selected_head AS (
+  SELECT
+    bs.id AS session_id,
+    CASE
+      WHEN sqlc.narg(head_turn_id)::uuid IS NULL THEN bs.default_head_turn_id
+      ELSE h.head_turn_id
+    END AS head_turn_id
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+  LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
+    AND h.head_turn_id = sqlc.narg(head_turn_id)::uuid
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
+), visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM selected_head sh
+  JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -742,12 +847,25 @@ ORDER BY vt.depth ASC, COALESCE(m.turn_message_seq, 9223372036854775807) DESC, m
 LIMIT 1;
 
 -- name: ListMessagesAfterBySession :many
-WITH RECURSIVE visible_turns AS (
-  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+WITH RECURSIVE selected_head AS (
+  SELECT
+    bs.id AS session_id,
+    CASE
+      WHEN sqlc.narg(head_turn_id)::uuid IS NULL THEN bs.default_head_turn_id
+      ELSE h.head_turn_id
+    END AS head_turn_id
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+  LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
+    AND h.head_turn_id = sqlc.narg(head_turn_id)::uuid
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
+), visible_turns AS (
+  SELECT t.id, t.parent_turn_id, 0::bigint AS depth
+  FROM selected_head sh
+  JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -910,6 +1028,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE sqlc.narg(session_id)::uuid IS NOT NULL
     AND bs.id = sqlc.narg(session_id)::uuid
     AND bs.deleted_at IS NULL
@@ -963,6 +1082,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL

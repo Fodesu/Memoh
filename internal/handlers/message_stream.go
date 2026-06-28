@@ -36,7 +36,19 @@ const sseHeartbeatInterval = 20 * time.Second
 
 const invalidRequestedHeadTurnID = "\x00invalid-requested-head"
 
+func sessionTurnGraphHeadSet(graph messagepkg.SessionTurnGraph) map[string]struct{} {
+	heads := make(map[string]struct{}, len(graph.HeadTurnIDs))
+	for _, candidate := range graph.HeadTurnIDs {
+		head := strings.TrimSpace(candidate)
+		if head != "" {
+			heads[head] = struct{}{}
+		}
+	}
+	return heads
+}
+
 func resolvedHeadTurnIDForGraph(graph messagepkg.SessionTurnGraph, requestedHeadTurnID string) string {
+	heads := sessionTurnGraphHeadSet(graph)
 	nodes := make(map[string]messagepkg.SessionTurnGraphNode, len(graph.Nodes))
 	for _, node := range graph.Nodes {
 		turnID := strings.TrimSpace(node.TurnID)
@@ -47,7 +59,7 @@ func resolvedHeadTurnIDForGraph(graph messagepkg.SessionTurnGraph, requestedHead
 	}
 	head := strings.TrimSpace(requestedHeadTurnID)
 	if head != "" {
-		if nodes[head].TurnID != "" {
+		if _, ok := heads[head]; ok && nodes[head].TurnID != "" {
 			return head
 		}
 		return ""
@@ -77,9 +89,15 @@ func visibleTurnIDSetForHead(graph messagepkg.SessionTurnGraph, requestedHeadTur
 		nodes[turnID] = node
 	}
 	visible := make(map[string]struct{})
-	if requested := strings.TrimSpace(requestedHeadTurnID); requested != "" && nodes[requested].TurnID == "" {
-		visible[invalidRequestedHeadTurnID] = struct{}{}
-		return visible
+	if requested := strings.TrimSpace(requestedHeadTurnID); requested != "" {
+		if _, ok := sessionTurnGraphHeadSet(graph)[requested]; !ok {
+			visible[invalidRequestedHeadTurnID] = struct{}{}
+			return visible
+		}
+		if nodes[requested].TurnID == "" {
+			visible[invalidRequestedHeadTurnID] = struct{}{}
+			return visible
+		}
 	}
 	head := resolvedHeadTurnIDForGraph(graph, requestedHeadTurnID)
 	seen := make(map[string]struct{})
@@ -202,12 +220,13 @@ func (h *MessageHandler) StreamSessionMessageEvents(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "message events not configured")
 	}
 
-	bot, _, _, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
+	bot, _, sess, err := h.authorizeMessageSession(c, channelIdentityID, botID, sessionID)
 	if err != nil {
 		return err
 	}
 	botID = bot.ID
 	headTurnID := strings.TrimSpace(c.QueryParam("head_turn_id"))
+	headTurnID = sessionHeadTurnIDForVariantCapableSession(sess, headTurnID)
 	graph, err := h.messageService.GetSessionTurnGraph(c.Request().Context(), sessionID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

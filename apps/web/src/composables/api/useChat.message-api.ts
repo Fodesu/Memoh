@@ -59,6 +59,7 @@ export async function locateMessageUI(
   externalMessageId: string,
   before = 30,
   after = 30,
+  options?: { headTurnId?: string },
 ): Promise<LocateMessageResult> {
   const response = await getBotsByBotIdMessagesLocate({
     path: { bot_id: botId },
@@ -67,6 +68,7 @@ export async function locateMessageUI(
       external_message_id: externalMessageId,
       before,
       after,
+      ...(options?.headTurnId?.trim() ? { head_turn_id: options.headTurnId.trim() } : {}),
     },
     throwOnError: true,
   })

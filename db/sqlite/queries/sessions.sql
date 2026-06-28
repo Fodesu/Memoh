@@ -4,7 +4,7 @@ INSERT INTO bot_sessions (
   default_head_turn_id, forked_from_session_id, forked_from_turn_id,
   parent_session_id, created_by_user_id
 )
-VALUES (
+SELECT
   lower(hex(randomblob(4))) || '-' ||
   lower(hex(randomblob(2))) || '-' ||
   '4' || substr(lower(hex(randomblob(2))), 2) || '-' ||
@@ -21,7 +21,42 @@ VALUES (
   sqlc.narg(forked_from_turn_id),
   sqlc.narg(parent_session_id),
   sqlc.narg(created_by_user_id)
-)
+WHERE (
+    sqlc.narg(default_head_turn_id) IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns t
+      WHERE t.id = sqlc.narg(default_head_turn_id)
+        AND t.bot_id = sqlc.arg(bot_id)
+    )
+  )
+  AND (
+    sqlc.narg(forked_from_turn_id) IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns t
+      WHERE t.id = sqlc.narg(forked_from_turn_id)
+        AND t.bot_id = sqlc.arg(bot_id)
+    )
+  )
+  AND (
+    sqlc.narg(forked_from_session_id) IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = sqlc.narg(forked_from_session_id)
+        AND s.bot_id = sqlc.arg(bot_id)
+    )
+  )
+  AND (
+    sqlc.narg(parent_session_id) IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = sqlc.narg(parent_session_id)
+        AND s.bot_id = sqlc.arg(bot_id)
+    )
+  )
 RETURNING *;
 
 -- name: GetSessionByID :one
@@ -116,8 +151,14 @@ SET updated_at = CURRENT_TIMESTAMP
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
 -- name: CreateSessionTurnHead :one
-INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
-VALUES (sqlc.arg(session_id), sqlc.arg(head_turn_id))
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id, bot_id)
+SELECT s.id, t.id, s.bot_id
+FROM bot_sessions s
+JOIN bot_history_turns t
+  ON t.id = sqlc.arg(head_turn_id)
+ AND t.bot_id = s.bot_id
+WHERE s.id = sqlc.arg(session_id)
+  AND s.deleted_at IS NULL
 ON CONFLICT (session_id, head_turn_id) DO UPDATE
 SET updated_at = CURRENT_TIMESTAMP
 RETURNING *;
@@ -135,13 +176,20 @@ WHERE session_id = sqlc.arg(session_id)
 ORDER BY created_at ASC, head_turn_id ASC;
 
 -- name: ReplaceSessionTurnHead :one
-INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
-SELECT sqlc.arg(target_session_id), sqlc.arg(new_head_turn_id)
-WHERE EXISTS (
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id, bot_id)
+SELECT existing.session_id, t.id, existing.bot_id
+FROM bot_session_turn_heads existing
+JOIN bot_history_turns t
+  ON t.id = sqlc.arg(new_head_turn_id)
+ AND t.bot_id = existing.bot_id
+WHERE existing.session_id = sqlc.arg(target_session_id)
+  AND existing.head_turn_id = sqlc.arg(old_head_turn_id)
+  AND EXISTS (
   SELECT 1
-  FROM bot_session_turn_heads existing
-  WHERE existing.session_id = sqlc.arg(target_session_id)
-    AND existing.head_turn_id = sqlc.arg(old_head_turn_id)
+  FROM bot_sessions s
+  WHERE s.id = existing.session_id
+    AND s.bot_id = existing.bot_id
+    AND s.deleted_at IS NULL
 )
 ON CONFLICT (session_id, head_turn_id) DO UPDATE
 SET updated_at = CURRENT_TIMESTAMP
@@ -160,9 +208,9 @@ WHERE session_id = sqlc.arg(session_id);
 -- name: DeleteSessionTurnHeadsByBot :exec
 DELETE FROM bot_session_turn_heads
 WHERE session_id IN (
-  SELECT id
-  FROM bot_sessions
-  WHERE bot_id = sqlc.arg(bot_id)
+  SELECT s.id
+  FROM bot_sessions s
+  WHERE s.bot_id = sqlc.arg(bot_id)
 );
 
 -- name: UpdateSessionDefaultHeadTurn :one
@@ -170,6 +218,16 @@ UPDATE bot_sessions
 SET default_head_turn_id = sqlc.narg(default_head_turn_id),
     updated_at = CURRENT_TIMESTAMP
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+  AND (
+    sqlc.narg(default_head_turn_id) IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_session_turn_heads h
+      WHERE h.session_id = bot_sessions.id
+        AND h.bot_id = bot_sessions.bot_id
+        AND h.head_turn_id = sqlc.narg(default_head_turn_id)
+    )
+  )
 RETURNING *;
 
 -- name: UpdateSessionDefaultHeadTurnIfValid :one
@@ -182,6 +240,7 @@ WHERE id = sqlc.arg(id)
     SELECT 1
     FROM bot_session_turn_heads h
     WHERE h.session_id = bot_sessions.id
+      AND h.bot_id = bot_sessions.bot_id
       AND h.head_turn_id = sqlc.arg(default_head_turn_id)
   )
 RETURNING *;

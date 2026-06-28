@@ -254,6 +254,7 @@ type BotSessionEvent struct {
 type BotSessionTurnHead struct {
 	SessionID  string `json:"session_id"`
 	HeadTurnID string `json:"head_turn_id"`
+	BotID      string `json:"bot_id"`
 	CreatedAt  string `json:"created_at"`
 	UpdatedAt  string `json:"updated_at"`
 }

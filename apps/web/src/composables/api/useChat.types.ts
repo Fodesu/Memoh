@@ -222,6 +222,7 @@ export interface UIToolApproval {
   status: string
   decision_reason?: string
   can_approve?: boolean
+  persist_turn_id?: string
 }
 
 export interface UIUserInput {
@@ -230,6 +231,7 @@ export interface UIUserInput {
   status: string
   questions?: UIUserInputQuestion[]
   can_respond?: boolean
+  persist_turn_id?: string
 }
 
 export interface UIUserInputQuestion {

@@ -43,7 +43,7 @@ INSERT INTO bot_history_turns (
   owner_session_id,
   parent_turn_id
 )
-VALUES (
+SELECT
   lower(hex(randomblob(4))) || '-' ||
   lower(hex(randomblob(2))) || '-' ||
   '4' || substr(lower(hex(randomblob(2))), 2) || '-' ||
@@ -52,7 +52,24 @@ VALUES (
   ?1,
   ?2,
   ?3
-)
+WHERE (
+    ?2 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = ?2
+        AND s.bot_id = ?1
+    )
+  )
+  AND (
+    ?3 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns parent
+      WHERE parent.id = ?3
+        AND parent.bot_id = ?1
+    )
+  )
 RETURNING id, bot_id, owner_session_id, parent_turn_id, request_message_id, final_assistant_message_id, created_at, updated_at
 `
 
@@ -84,7 +101,7 @@ INSERT INTO bot_history_messages (
   source_message_id, source_reply_to_message_id, role, content, metadata,
   usage, model_id, event_id, display_text
 )
-VALUES (
+SELECT
   lower(hex(randomblob(4))) || '-' ||
   lower(hex(randomblob(2))) || '-' ||
   '4' || substr(lower(hex(randomblob(2))), 2) || '-' ||
@@ -105,7 +122,24 @@ VALUES (
   ?13,
   ?14,
   ?15
-)
+WHERE (
+    ?2 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = ?2
+        AND s.bot_id = ?1
+    )
+  )
+  AND (
+    ?3 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns t
+      WHERE t.id = ?3
+        AND t.bot_id = ?1
+    )
+  )
 RETURNING
   id, bot_id, session_id, turn_id, turn_message_seq, sender_channel_identity_id,
   sender_account_user_id AS sender_user_id,
@@ -264,12 +298,25 @@ func (q *Queries) GetHistoryTurnByID(ctx context.Context, id string) (BotHistory
 }
 
 const getMessageByExternalIDBySession = `-- name: GetMessageByExternalIDBySession :one
-WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
-  SELECT t.id, t.parent_turn_id, 0
+WITH RECURSIVE selected_head(session_id, head_turn_id) AS (
+  SELECT
+    bs.id,
+    CASE
+      WHEN ?2 IS NULL THEN bs.default_head_turn_id
+      ELSE h.head_turn_id
+    END
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
-  WHERE bs.id = ?2
+  LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
+    AND h.head_turn_id = ?2
+  WHERE bs.id = ?3
     AND bs.deleted_at IS NULL
+), visible_turns(id, parent_turn_id, depth) AS (
+  SELECT t.id, t.parent_turn_id, 0
+  FROM selected_head sh
+  JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -295,6 +342,7 @@ LIMIT 1
 
 type GetMessageByExternalIDBySessionParams struct {
 	ExternalMessageID sql.NullString `json:"external_message_id"`
+	HeadTurnID        interface{}    `json:"head_turn_id"`
 	SessionID         string         `json:"session_id"`
 }
 
@@ -321,7 +369,7 @@ type GetMessageByExternalIDBySessionRow struct {
 }
 
 func (q *Queries) GetMessageByExternalIDBySession(ctx context.Context, arg GetMessageByExternalIDBySessionParams) (GetMessageByExternalIDBySessionRow, error) {
-	row := q.db.QueryRowContext(ctx, getMessageByExternalIDBySession, arg.ExternalMessageID, arg.SessionID)
+	row := q.db.QueryRowContext(ctx, getMessageByExternalIDBySession, arg.ExternalMessageID, arg.HeadTurnID, arg.SessionID)
 	var i GetMessageByExternalIDBySessionRow
 	err := row.Scan(
 		&i.ID,
@@ -365,6 +413,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
     AND h.head_turn_id = ?2
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?3
@@ -417,6 +466,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
     AND h.head_turn_id = ?2
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?3
@@ -477,6 +527,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
     AND h.head_turn_id = ?2
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?3
@@ -613,6 +664,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = ?2
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -971,12 +1023,25 @@ func (q *Queries) ListMessages(ctx context.Context, botID string) ([]ListMessage
 }
 
 const listMessagesAfterBySession = `-- name: ListMessagesAfterBySession :many
-WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
-  SELECT t.id, t.parent_turn_id, 0
+WITH RECURSIVE selected_head(session_id, head_turn_id) AS (
+  SELECT
+    bs.id,
+    CASE
+      WHEN ?4 IS NULL THEN bs.default_head_turn_id
+      ELSE h.head_turn_id
+    END
   FROM bot_sessions bs
-  JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
-  WHERE bs.id = ?4
+  LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
+    AND h.head_turn_id = ?4
+  WHERE bs.id = ?5
     AND bs.deleted_at IS NULL
+), visible_turns(id, parent_turn_id, depth) AS (
+  SELECT t.id, t.parent_turn_id, 0
+  FROM selected_head sh
+  JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -1018,10 +1083,11 @@ LIMIT ?3
 `
 
 type ListMessagesAfterBySessionParams struct {
-	AfterID   sql.NullString `json:"after_id"`
-	CreatedAt interface{}    `json:"created_at"`
-	MaxCount  int64          `json:"max_count"`
-	SessionID string         `json:"session_id"`
+	AfterID    sql.NullString `json:"after_id"`
+	CreatedAt  interface{}    `json:"created_at"`
+	MaxCount   int64          `json:"max_count"`
+	HeadTurnID interface{}    `json:"head_turn_id"`
+	SessionID  string         `json:"session_id"`
 }
 
 type ListMessagesAfterBySessionRow struct {
@@ -1051,6 +1117,7 @@ func (q *Queries) ListMessagesAfterBySession(ctx context.Context, arg ListMessag
 		arg.AfterID,
 		arg.CreatedAt,
 		arg.MaxCount,
+		arg.HeadTurnID,
 		arg.SessionID,
 	)
 	if err != nil {
@@ -1194,6 +1261,7 @@ WITH RECURSIVE selected_head(session_id, head_turn_id) AS (
     END
   FROM bot_sessions bs
   LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
     AND h.head_turn_id = ?4
   WHERE bs.id = ?5
     AND bs.deleted_at IS NULL
@@ -1201,6 +1269,8 @@ WITH RECURSIVE selected_head(session_id, head_turn_id) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM selected_head sh
   JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -1325,6 +1395,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -1512,6 +1583,7 @@ WITH RECURSIVE selected_head(session_id, head_turn_id) AS (
     END
   FROM bot_sessions bs
   LEFT JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
     AND h.head_turn_id = ?2
   WHERE bs.id = ?3
     AND bs.deleted_at IS NULL
@@ -1519,6 +1591,8 @@ WITH RECURSIVE selected_head(session_id, head_turn_id) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM selected_head sh
   JOIN bot_history_turns t ON t.id = sh.head_turn_id
+  JOIN bot_sessions bs ON bs.id = sh.session_id
+    AND bs.bot_id = t.bot_id
   UNION ALL
   SELECT p.id, p.parent_turn_id, vt.depth + 1
   FROM bot_history_turns p
@@ -1705,6 +1779,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = ?2
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -1969,6 +2044,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   JOIN bot_sessions source ON source.id = ?1
   WHERE s.id <> source.id
@@ -2050,6 +2126,7 @@ WITH RECURSIVE graph_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
   JOIN bot_session_turn_heads h ON h.session_id = bs.id
+    AND h.bot_id = bs.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
@@ -2143,6 +2220,7 @@ WITH RECURSIVE graph_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?1
     AND s.deleted_at IS NULL
@@ -2194,6 +2272,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = ?1
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -2287,6 +2366,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   SELECT t.id, t.parent_turn_id, 0
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE ?2 IS NOT NULL
     AND bs.id = ?2
     AND bs.deleted_at IS NULL
@@ -2397,7 +2477,17 @@ const updateHistoryTurnFinalAssistantMessage = `-- name: UpdateHistoryTurnFinalA
 UPDATE bot_history_turns
 SET final_assistant_message_id = ?1,
     updated_at = CURRENT_TIMESTAMP
-WHERE id = ?2
+WHERE bot_history_turns.id = ?2
+  AND (
+    ?1 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_messages m
+      WHERE m.id = ?1
+        AND m.bot_id = bot_history_turns.bot_id
+        AND m.role = 'assistant'
+    )
+  )
 RETURNING id, bot_id, owner_session_id, parent_turn_id, request_message_id, final_assistant_message_id, created_at, updated_at
 `
 
@@ -2426,7 +2516,17 @@ const updateHistoryTurnRequestMessage = `-- name: UpdateHistoryTurnRequestMessag
 UPDATE bot_history_turns
 SET request_message_id = COALESCE(request_message_id, ?1),
     updated_at = CURRENT_TIMESTAMP
-WHERE id = ?2
+WHERE bot_history_turns.id = ?2
+  AND (
+    ?1 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_messages m
+      WHERE m.id = ?1
+        AND m.bot_id = bot_history_turns.bot_id
+        AND m.role = 'user'
+    )
+  )
 RETURNING id, bot_id, owner_session_id, parent_turn_id, request_message_id, final_assistant_message_id, created_at, updated_at
 `
 

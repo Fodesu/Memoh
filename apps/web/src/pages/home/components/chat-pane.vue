@@ -447,7 +447,7 @@
                   v-model="inputText"
                   rows="1"
                   :placeholder="activeChatReadOnly ? $t('chat.readonlyHint') : $t('chat.inputPlaceholder')"
-                  :disabled="!currentBotId || activeChatReadOnly || messageActionLoading"
+                  :disabled="!currentBotId || activeChatReadOnly || loadingMessages || messageActionLoading"
                   class="field-sizing-content resize-none break-words bg-transparent text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
                   :class="isMultiline
                     ? 'order-none w-full basis-full pl-2 pr-1 pt-2 pb-1.5 max-h-52'
@@ -521,7 +521,7 @@
                     <template v-if="!activeIsACP">
                       <DropdownMenuSeparator v-if="canChangeAgent && enabledACPProfiles.length" />
                       <DropdownMenuItem
-                        :disabled="!currentBotId || activeChatReadOnly || streaming || messageActionLoading"
+                        :disabled="!currentBotId || activeChatReadOnly || streaming || loadingMessages || messageActionLoading"
                         @select="fileInput?.click()"
                       >
                         <Paperclip />
@@ -758,7 +758,7 @@
                     <Button
                       type="button"
                       variant="brand"
-                      :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || messageActionLoading)"
+                      :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || messageActionLoading)"
                       :aria-label="streaming ? 'Stop generating response' : 'Send message'"
                       class="absolute inset-0 size-9 rounded-full transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] motion-reduce:transition-none"
                       :class="(sendButtonVisible || streaming) ? 'scale-100 opacity-100' : 'pointer-events-none scale-0 opacity-0'"
@@ -1090,6 +1090,7 @@ const {
   currentBotId,
   bots,
   activeSession,
+  activeSessionSupportsTurnVariants,
   activeChatReadOnly,
   messageActionLoading,
   loadingOlder,
@@ -1106,8 +1107,19 @@ const {
 } = storeToRefs(chatStore)
 
 const isActive = computed(() => props.active !== false)
-const canRunMessageAction = computed(() => !streaming.value && !activeChatReadOnly.value && !messageActionLoading.value)
-const canSelectVariant = computed(() => !streaming.value && !messageActionLoading.value)
+const canRunMessageAction = computed(() =>
+  activeSessionSupportsTurnVariants.value
+  && !streaming.value
+  && !loadingMessages.value
+  && !activeChatReadOnly.value
+  && !messageActionLoading.value,
+)
+const canSelectVariant = computed(() =>
+  activeSessionSupportsTurnVariants.value
+  && !streaming.value
+  && !loadingMessages.value
+  && !messageActionLoading.value,
+)
 
 // A fresh, writable chat opens with the composer centred and a greeting above
 // it. Read-only sessions (subagent / system / synced channel threads) hide the
@@ -2531,7 +2543,7 @@ async function handleSend() {
   // isAutoScroll.value = true
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
-  if ((!text && !files.length) || streaming.value || activeChatReadOnly.value || messageActionLoading.value) return
+  if ((!text && !files.length) || streaming.value || loadingMessages.value || activeChatReadOnly.value || messageActionLoading.value) return
   if (activeIsACP.value && files.length) {
     composerError.value = t('chat.acpAttachmentsUnsupported')
     return

@@ -1406,6 +1406,52 @@ describe('chat-list store', () => {
     })
   })
 
+  it('uses the pending persist turn when responding to pending actions', async () => {
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-b', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'old-request', hasAssistant: false }),
+        graphNode('turn-c', { timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'selected-request', hasAssistant: false }),
+      ],
+    }))
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'selected request', timestamp: '2026-06-19T00:02:00.000Z' },
+    ]))
+    sendEvents = [{ type: 'end' } as UIStreamEvent]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await expect(store.selectTurnVariant('turn-c')).resolves.toBe(true)
+
+    await store.respondToolApproval({
+      approval_id: 'approval-1',
+      short_id: 4,
+      status: 'pending',
+      can_approve: true,
+      persist_turn_id: 'turn-pending',
+    }, 'approve')
+    await flushPromises()
+
+    const userInput = {
+      ...singleSelectUserInput(),
+      persist_turn_id: 'turn-pending',
+    }
+    await store.respondUserInput(userInput, { answers: [{ question_id: 'q1', option_ids: ['q1.o1'] }] })
+    await flushPromises()
+
+    expect(sentWSMessages.find(message => message.type === 'tool_approval_response')).toMatchObject({
+      base_head_turn_id: 'turn-pending',
+    })
+    expect(sentWSMessages.find(message => message.type === 'user_input_response')).toMatchObject({
+      base_head_turn_id: 'turn-pending',
+    })
+  })
+
   it('keeps the previous selected head when variant transcript loading fails', async () => {
     api.fetchSessions.mockResolvedValueOnce({ items: [
       { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
@@ -1448,6 +1494,24 @@ describe('chat-list store', () => {
       expect(store._hasLoadedOlder).toBe(true)
       expect(store.hasMoreOlder).toBe(true)
 
+      api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+        { id: 'user-b-refresh', turn_id: 'turn-b', role: 'user', text: 'refreshed request', timestamp: '2026-06-19T00:01:02.000Z' },
+      ], {
+        defaultHeadTurnId: 'turn-b',
+        headTurnIds: ['turn-b', 'turn-c'],
+        nodes: [
+          graphNode('turn-b', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'current-request' }),
+          graphNode('turn-c', { timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'other-request' }),
+        ],
+      }))
+      _sessionMessageHandler?.({ type: 'stale', session_id: 'session-1' })
+      await new Promise(resolve => setTimeout(resolve, 150))
+      await flushPromises()
+      expect(api.fetchMessagesUI).toHaveBeenLastCalledWith('bot-1', 'session-1', {
+        limit: 30,
+        includeGraph: true,
+      })
+
       const result = await store.sendMessage('continue from current')
       expect(result).toMatchObject({ ok: true })
       expect(sentWSMessages.at(-1)).toMatchObject({
@@ -1459,6 +1523,241 @@ describe('chat-list store', () => {
     } finally {
       consoleError.mockRestore()
     }
+  })
+
+  it('does not expose turn variants or rewrite actions for non-chat sessions', async () => {
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Discuss', type: 'discuss' },
+    ], nextCursor: null })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'current request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b',
+        turn_id: 'turn-b',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'current reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-b', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'same-request' }),
+        graphNode('turn-c', { timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'same-request' }),
+      ],
+    }))
+    sendEvents = [{ type: 'end' } as UIStreamEvent]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    expect(store.activeSessionSupportsTurnVariants).toBe(false)
+    expect(store.requestVariantStateForMessage('user-b')).toBeNull()
+    expect(store.responseVariantStateForMessage('assistant-b')).toBeNull()
+    await expect(store.selectTurnVariant('turn-c')).resolves.toBe(false)
+    expect(api.fetchMessagesUI).toHaveBeenCalledTimes(1)
+
+    await expect(store.forkMessage('assistant-b')).resolves.toBe(false)
+    await expect(store.retryMessage('assistant-b')).resolves.toMatchObject({ ok: false, stage: 'startup' })
+    await expect(store.editMessage('user-b', 'edited request')).resolves.toMatchObject({ ok: false, stage: 'startup' })
+    expect(api.forkSessionFromMessage).not.toHaveBeenCalled()
+    expect(sentWSMessages).toEqual([])
+
+    await expect(store.sendMessage('linear follow up')).resolves.toMatchObject({ ok: true })
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'message',
+      session_id: 'session-1',
+      text: 'linear follow up',
+    })
+    expect(sentWSMessages.at(-1)).not.toHaveProperty('base_head_turn_id')
+  })
+
+  it('keeps the old base head until the selected variant transcript is applied', async () => {
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'current request', timestamp: '2026-06-19T00:01:00.000Z' },
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-b', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'current-request', hasAssistant: false }),
+        graphNode('turn-c', { timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'other-request', hasAssistant: false }),
+      ],
+    }))
+    sendEvents = [{ type: 'end' } as UIStreamEvent]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    let resolveVariant: (value: FetchMessagesUIResult) => void = () => {}
+    api.fetchMessagesUI.mockImplementationOnce(() => new Promise(resolve => {
+      resolveVariant = resolve as (value: FetchMessagesUIResult) => void
+    }))
+    const selectPromise = store.selectTurnVariant('turn-c')
+    await flushPromises()
+
+    expect(store.loadingMessages).toBe(true)
+    expect(store.messages.map(message => message.id)).toEqual(['user-b'])
+    await expect(store.sendMessage('should wait')).resolves.toMatchObject({ ok: false, stage: 'startup' })
+    expect(sentWSMessages).toEqual([])
+
+    resolveVariant(messagesPayload([
+      { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'selected request', timestamp: '2026-06-19T00:02:00.000Z' },
+    ]))
+    await expect(selectPromise).resolves.toBe(true)
+    expect(store.loadingMessages).toBe(false)
+    expect(store.messages.map(message => message.id)).toEqual(['user-c'])
+
+    await store.sendMessage('continue selected')
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'message',
+      text: 'continue selected',
+      base_head_turn_id: 'turn-c',
+    })
+  })
+
+  it('blocks message actions while a selected variant transcript is loading', async () => {
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'current request', timestamp: '2026-06-19T00:01:00.000Z' },
+      {
+        id: 'assistant-b',
+        turn_id: 'turn-b',
+        role: 'assistant',
+        messages: [{ id: 1, type: 'text', content: 'current reply' }],
+        timestamp: '2026-06-19T00:01:01.000Z',
+      },
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-b', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'current-request' }),
+        graphNode('turn-c', { timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'other-request' }),
+      ],
+    }))
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    let resolveVariant: (value: FetchMessagesUIResult) => void = () => {}
+    api.fetchMessagesUI.mockImplementationOnce(() => new Promise(resolve => {
+      resolveVariant = resolve as (value: FetchMessagesUIResult) => void
+    }))
+    const selectPromise = store.selectTurnVariant('turn-c')
+    await flushPromises()
+
+    expect(store.loadingMessages).toBe(true)
+    await expect(store.forkMessage('assistant-b')).resolves.toBe(false)
+    await expect(store.retryMessage('assistant-b')).resolves.toMatchObject({ ok: false, stage: 'startup' })
+    await expect(store.editMessage('user-b', 'edited request')).resolves.toMatchObject({ ok: false, stage: 'startup' })
+    expect(api.forkSessionFromMessage).not.toHaveBeenCalled()
+    expect(sentWSMessages).toEqual([])
+
+    resolveVariant(messagesPayload([
+      { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'selected request', timestamp: '2026-06-19T00:02:00.000Z' },
+    ]))
+    await expect(selectPromise).resolves.toBe(true)
+  })
+
+  it('blocks pending action responses while a selected variant transcript is loading', async () => {
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'current request', timestamp: '2026-06-19T00:01:00.000Z' },
+      approvalTurn({
+        approval_id: 'approval-b',
+        short_id: 8,
+        status: 'pending',
+        can_approve: true,
+      }),
+      askUserTurn(singleSelectUserInput('input-b')),
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-b', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'current-request' }),
+        graphNode('turn-c', { timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'other-request' }),
+      ],
+    }))
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    let resolveVariant: (value: FetchMessagesUIResult) => void = () => {}
+    api.fetchMessagesUI.mockImplementationOnce(() => new Promise(resolve => {
+      resolveVariant = resolve as (value: FetchMessagesUIResult) => void
+    }))
+    const selectPromise = store.selectTurnVariant('turn-c')
+    await flushPromises()
+
+    expect(store.loadingMessages).toBe(true)
+    const beforeIds = store.messages.map(message => message.id)
+    await expect(store.respondToolApproval({
+      approval_id: 'approval-b',
+      short_id: 8,
+      status: 'pending',
+      can_approve: true,
+    }, 'approve')).resolves.toBe(false)
+    await expect(store.respondUserInput(singleSelectUserInput('input-b'), {
+      answers: [{ question_id: 'q1', option_ids: ['q1.o1'] }],
+    })).resolves.toBe(false)
+    expect(sentWSMessages).toEqual([])
+    expect(store.messages.map(message => message.id)).toEqual(beforeIds)
+
+    resolveVariant(messagesPayload([
+      { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'selected request', timestamp: '2026-06-19T00:02:00.000Z' },
+    ]))
+    await expect(selectPromise).resolves.toBe(true)
+  })
+
+  it('cancels a pending variant transcript load when switching to a draft session', async () => {
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'current request', timestamp: '2026-06-19T00:01:00.000Z' },
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-b', { timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'current-request', hasAssistant: false }),
+        graphNode('turn-c', { timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'other-request', hasAssistant: false }),
+      ],
+    }))
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    let resolveVariant: (value: FetchMessagesUIResult) => void = () => {}
+    api.fetchMessagesUI.mockImplementationOnce(() => new Promise(resolve => {
+      resolveVariant = resolve as (value: FetchMessagesUIResult) => void
+    }))
+    const selectPromise = store.selectTurnVariant('turn-c')
+    await flushPromises()
+    expect(store.loadingMessages).toBe(true)
+
+    await store.createNewSession()
+    await flushPromises()
+    expect(store.sessionId).toBeNull()
+    expect(store.loadingMessages).toBe(false)
+    expect(store.messages).toEqual([])
+
+    resolveVariant(messagesPayload([
+      { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'selected request', timestamp: '2026-06-19T00:02:00.000Z' },
+    ]))
+    await expect(selectPromise).resolves.toBe(false)
+    expect(store.loadingMessages).toBe(false)
+    expect(store.messages).toEqual([])
   })
 
   it('does not switch turn variants while the current session is streaming', async () => {
@@ -2771,10 +3070,12 @@ describe('chat-list store', () => {
     const store = useChatStore()
 
     await store.selectBot('bot-1')
+    await flushPromises()
     const first = store.sendMessage('first')
     await flushPromises()
 
     await store.selectSession('session-b')
+    await flushPromises()
     const second = store.sendMessage('second')
     await flushPromises()
 
@@ -3184,6 +3485,136 @@ describe('chat-list store', () => {
     resolveB(messagesPayload())
     await flushPromises()
     expect(store.loadingMessages).toBe(false)
+  })
+
+  it('drops stale selected-view refreshes after the selected head changes', async () => {
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'B request', timestamp: '2026-06-19T00:01:00.000Z' },
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'root', hasAssistant: false }),
+        graphNode('turn-b', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'b', hasAssistant: false }),
+        graphNode('turn-c', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'c', hasAssistant: false }),
+      ],
+    }))
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    let resolveDefaultRefresh: (value: FetchMessagesUIResult) => void = () => {}
+    api.fetchMessagesUI.mockImplementationOnce(() => new Promise(resolve => {
+      resolveDefaultRefresh = resolve as (value: FetchMessagesUIResult) => void
+    }))
+    _sessionMessageHandler?.({ type: 'stale', session_id: 'session-1' })
+    await new Promise(resolve => setTimeout(resolve, 150))
+    await flushPromises()
+    expect(api.fetchMessagesUI).toHaveBeenLastCalledWith('bot-1', 'session-1', {
+      limit: 30,
+      includeGraph: true,
+    })
+
+    let resolveC: (value: FetchMessagesUIResult) => void = () => {}
+    api.fetchMessagesUI.mockImplementationOnce(() => new Promise(resolve => {
+      resolveC = resolve as (value: FetchMessagesUIResult) => void
+    }))
+    const selectPromise = store.selectTurnVariant('turn-c')
+    await flushPromises()
+
+    resolveC(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'C request', timestamp: '2026-06-19T00:02:00.000Z' },
+    ]))
+    await expect(selectPromise).resolves.toBe(true)
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'user-c'])
+
+    resolveDefaultRefresh(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'late B request', timestamp: '2026-06-19T00:01:00.000Z' },
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'root', hasAssistant: false }),
+        graphNode('turn-b', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'b', hasAssistant: false }),
+        graphNode('turn-c', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'c', hasAssistant: false }),
+      ],
+    }))
+    await flushPromises()
+
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'user-c'])
+  })
+
+  it('clears a stale selected head and reloads the server default view', async () => {
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      { id: 'user-b', turn_id: 'turn-b', role: 'user', text: 'B request', timestamp: '2026-06-19T00:01:00.000Z' },
+    ], {
+      defaultHeadTurnId: 'turn-b',
+      headTurnIds: ['turn-b', 'turn-c'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'root', hasAssistant: false }),
+        graphNode('turn-b', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:01:00.000Z', requestKey: 'b', hasAssistant: false }),
+        graphNode('turn-c', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:02:00.000Z', requestKey: 'c', hasAssistant: false }),
+      ],
+    }))
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      { id: 'user-c', turn_id: 'turn-c', role: 'user', text: 'C request', timestamp: '2026-06-19T00:02:00.000Z' },
+    ]))
+    sendEvents = [{ type: 'end' } as UIStreamEvent]
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await flushPromises()
+    await expect(store.selectTurnVariant('turn-c')).resolves.toBe(true)
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'user-c'])
+
+    const staleHeadError = { message: 'stale session head' }
+    api.fetchMessagesUI.mockRejectedValueOnce(staleHeadError)
+    api.fetchMessagesUI.mockResolvedValueOnce(messagesPayload([
+      { id: 'user-a', turn_id: 'turn-a', role: 'user', text: 'A request', timestamp: '2026-06-19T00:00:00.000Z' },
+      { id: 'user-d', turn_id: 'turn-d', role: 'user', text: 'D request', timestamp: '2026-06-19T00:03:00.000Z' },
+    ], {
+      defaultHeadTurnId: 'turn-d',
+      headTurnIds: ['turn-d'],
+      nodes: [
+        graphNode('turn-a', { timestamp: '2026-06-19T00:00:00.000Z', requestKey: 'root', hasAssistant: false }),
+        graphNode('turn-d', { parentTurnId: 'turn-a', timestamp: '2026-06-19T00:03:00.000Z', requestKey: 'd', hasAssistant: false }),
+      ],
+    }))
+
+    _sessionMessageHandler?.({ type: 'stale', session_id: 'session-1' })
+    await new Promise(resolve => setTimeout(resolve, 150))
+    await flushPromises()
+
+    expect(api.fetchMessagesUI).toHaveBeenNthCalledWith(3, 'bot-1', 'session-1', {
+      limit: 30,
+      includeGraph: true,
+      headTurnId: 'turn-c',
+    })
+    expect(api.fetchMessagesUI).toHaveBeenNthCalledWith(4, 'bot-1', 'session-1', {
+      limit: 30,
+      includeGraph: true,
+    })
+    expect(store.messages.map(message => message.id)).toEqual(['user-a', 'user-d'])
+
+    await store.sendMessage('continue default')
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'message',
+      text: 'continue default',
+      base_head_turn_id: 'turn-d',
+    })
   })
 
   it('preserves scrolled-back history when an SSE refresh fires', async () => {

@@ -17,6 +17,7 @@ DROP INDEX IF EXISTS idx_bot_history_turns_parent;
 DROP INDEX IF EXISTS idx_bot_history_turns_owner_session;
 DROP INDEX IF EXISTS idx_bot_history_turns_bot_created;
 DROP INDEX IF EXISTS idx_bot_session_turn_heads_head;
+DROP INDEX IF EXISTS idx_bot_session_turn_heads_bot;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_session;
 DROP INDEX IF EXISTS idx_bot_sessions_default_head_turn;
@@ -74,6 +75,8 @@ END $$;
 
 ALTER TABLE bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_default_head_turn;
 ALTER TABLE bot_sessions DROP CONSTRAINT IF EXISTS fk_bot_sessions_forked_from_turn;
+ALTER TABLE bot_session_turn_heads DROP CONSTRAINT IF EXISTS fk_bot_session_turn_heads_session_bot;
+ALTER TABLE bot_session_turn_heads DROP CONSTRAINT IF EXISTS fk_bot_session_turn_heads_turn_bot;
 ALTER TABLE bot_history_turns DROP CONSTRAINT IF EXISTS fk_bot_history_turns_request_message;
 ALTER TABLE bot_history_turns DROP CONSTRAINT IF EXISTS fk_bot_history_turns_final_assistant_message;
 
@@ -86,3 +89,4 @@ ALTER TABLE bot_sessions DROP COLUMN IF EXISTS default_head_turn_id;
 
 DROP TABLE IF EXISTS bot_session_turn_heads;
 DROP TABLE IF EXISTS bot_history_turns;
+DROP INDEX IF EXISTS idx_bot_sessions_id_bot_unique;

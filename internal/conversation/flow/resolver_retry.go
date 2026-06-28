@@ -14,6 +14,7 @@ import (
 	"github.com/memohai/memoh/internal/conversation"
 	dbpkg "github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
+	sessionpkg "github.com/memohai/memoh/internal/session"
 )
 
 type retryStore interface {
@@ -71,6 +72,9 @@ func (r *Resolver) StreamRetryWS(
 	pgReplyID, err := dbpkg.ParseUUID(replyMessageID)
 	if err != nil {
 		return fmt.Errorf("invalid retry message id: %w", err)
+	}
+	if err := ensureSessionSupportsTurnVariants(ctx, store, pgSessionID); err != nil {
+		return err
 	}
 	baseHead, err := resolveBaseSessionHead(ctx, store, pgSessionID, req.BaseHeadTurnID)
 	if err != nil {
@@ -144,6 +148,9 @@ func (r *Resolver) StreamRewriteWS(
 	if err != nil {
 		return fmt.Errorf("invalid session id: %w", err)
 	}
+	if err := ensureSessionSupportsTurnVariants(ctx, store, pgSessionID); err != nil {
+		return err
+	}
 	baseHead, err := resolveBaseSessionHead(ctx, store, pgSessionID, req.BaseHeadTurnID)
 	if err != nil {
 		return err
@@ -190,6 +197,17 @@ func (r *Resolver) streamRewritePlanWS(
 	rewriteReq.RawQuery = plan.Query
 	rewriteReq.RewriteTargetMessageID = ""
 	return r.streamChatWSWithRewriteAnchor(ctx, rewriteReq, &plan.Anchor, eventCh, abortCh)
+}
+
+func ensureSessionSupportsTurnVariants(ctx context.Context, store sessionHeadStore, sessionID pgtype.UUID) error {
+	sess, err := store.GetSessionByID(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
+	if !sessionpkg.SupportsTurnVariants(sess.Type) {
+		return errors.New("turn variants are only supported for chat sessions")
+	}
+	return nil
 }
 
 func rewriteRequestAttachments(ctx context.Context, store rewriteAssetStore, requestMessageID pgtype.UUID) ([]conversation.ChatAttachment, error) {

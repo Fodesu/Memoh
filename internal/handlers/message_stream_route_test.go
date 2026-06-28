@@ -13,6 +13,7 @@ import (
 
 	messagepkg "github.com/memohai/memoh/internal/message"
 	messageevent "github.com/memohai/memoh/internal/message/event"
+	"github.com/memohai/memoh/internal/session"
 )
 
 // TestMessagesEventsRouteIsRemoved guards the route contract: the bot-wide
@@ -62,6 +63,22 @@ func TestListMessagesRequiresSessionID(t *testing.T) {
 	}
 	if httpErr.Code != http.StatusBadRequest {
 		t.Fatalf("HTTPError.Code = %d, want 400", httpErr.Code)
+	}
+}
+
+func TestSessionHeadTurnIDForVariantCapableSession(t *testing.T) {
+	t.Parallel()
+
+	if got := sessionHeadTurnIDForVariantCapableSession(session.Session{Type: session.TypeChat}, " turn-c "); got != "turn-c" {
+		t.Fatalf("chat head = %q, want turn-c", got)
+	}
+	for _, typ := range []string{session.TypeDiscuss, session.TypeACPAgent, session.TypeHeartbeat, session.TypeSchedule, session.TypeSubagent} {
+		t.Run(typ, func(t *testing.T) {
+			t.Parallel()
+			if got := sessionHeadTurnIDForVariantCapableSession(session.Session{Type: typ}, "turn-c"); got != "" {
+				t.Fatalf("non-chat head = %q, want empty", got)
+			}
+		})
 	}
 }
 
@@ -274,7 +291,33 @@ func TestVisibleTurnIDSetForHeadRejectsInvalidRequestedHead(t *testing.T) {
 	}
 }
 
-func TestVisibleTurnIDSetForHeadFallsBackToDefaultWhenUnspecified(t *testing.T) {
+func TestVisibleTurnIDSetForHeadRejectsNonLeafRequestedHead(t *testing.T) {
+	t.Parallel()
+
+	graph := messagepkg.SessionTurnGraph{
+		DefaultHeadTurnID: "turn-c",
+		HeadTurnIDs:       []string{"turn-c"},
+		Nodes: []messagepkg.SessionTurnGraphNode{
+			{TurnID: "turn-a"},
+			{TurnID: "turn-b", ParentTurnID: "turn-a"},
+			{TurnID: "turn-c", ParentTurnID: "turn-b"},
+		},
+	}
+	if got := resolvedHeadTurnIDForGraph(graph, "turn-b"); got != "" {
+		t.Fatalf("resolved stale requested head = %q, want empty", got)
+	}
+	visible := visibleTurnIDSetForHead(graph, "turn-b")
+	if len(visible) == 0 {
+		t.Fatalf("stale requested head must not fall through to legacy all-visible mode")
+	}
+	for _, turnID := range []string{"turn-a", "turn-b", "turn-c"} {
+		if _, ok := visible[turnID]; ok {
+			t.Fatalf("visible included %s after stale requested head: %#v", turnID, visible)
+		}
+	}
+}
+
+func TestVisibleTurnIDSetForHeadUsesDefaultWhenUnspecified(t *testing.T) {
 	t.Parallel()
 
 	graph := messagepkg.SessionTurnGraph{
@@ -292,6 +335,42 @@ func TestVisibleTurnIDSetForHeadFallsBackToDefaultWhenUnspecified(t *testing.T) 
 	if _, ok := visible["turn-b"]; !ok {
 		t.Fatalf("visible did not include default head turn: %#v", visible)
 	}
+}
+
+func TestValidatedSessionTurnGraphRejectsStaleExplicitHead(t *testing.T) {
+	t.Parallel()
+
+	h := &MessageHandler{messageService: &graphOnlyMessageService{
+		graph: messagepkg.SessionTurnGraph{
+			DefaultHeadTurnID: "turn-c",
+			HeadTurnIDs:       []string{"turn-c"},
+			Nodes: []messagepkg.SessionTurnGraphNode{
+				{TurnID: "turn-a"},
+				{TurnID: "turn-b", ParentTurnID: "turn-a"},
+				{TurnID: "turn-c", ParentTurnID: "turn-b"},
+			},
+		},
+	}}
+	_, err := h.validatedSessionTurnGraph(context.Background(), "session-1", "turn-b", false)
+	if err == nil {
+		t.Fatal("validatedSessionTurnGraph() err = nil, want stale HTTP error")
+	}
+	var httpErr *echo.HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error type = %T, want *echo.HTTPError", err)
+	}
+	if httpErr.Code != http.StatusConflict {
+		t.Fatalf("HTTPError.Code = %d, want 409", httpErr.Code)
+	}
+}
+
+type graphOnlyMessageService struct {
+	messagepkg.Service
+	graph messagepkg.SessionTurnGraph
+}
+
+func (s *graphOnlyMessageService) GetSessionTurnGraph(context.Context, string) (messagepkg.SessionTurnGraph, error) {
+	return s.graph, nil
 }
 
 // TestStreamSessionMessageEventsRequiresSessionPath confirms the per-session

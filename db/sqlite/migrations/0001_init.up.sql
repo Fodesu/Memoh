@@ -472,6 +472,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_sessions_forked_from_turn ON bot_sessions(for
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_created_by_user_id ON bot_sessions(created_by_user_id) WHERE created_by_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_created_by ON bot_sessions(bot_id, created_by_user_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_active_updated ON bot_sessions(bot_id, updated_at DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_sessions_id_bot_unique ON bot_sessions(id, bot_id);
 
 -- bot_session_events: DCP pipeline event store for cold-start replay.
 CREATE TABLE IF NOT EXISTS bot_session_events (
@@ -516,18 +517,80 @@ CREATE INDEX IF NOT EXISTS idx_bot_history_turns_request
   ON bot_history_turns(request_message_id) WHERE request_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_assistant
   ON bot_history_turns(final_assistant_message_id) WHERE final_assistant_message_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_history_turns_id_bot_unique ON bot_history_turns(id, bot_id);
+
+CREATE TRIGGER IF NOT EXISTS bot_sessions_default_head_same_bot_insert
+BEFORE INSERT ON bot_sessions
+FOR EACH ROW
+WHEN NEW.default_head_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.default_head_turn_id
+      AND t.bot_id = NEW.bot_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'bot_sessions.default_head_turn_id must reference a turn from the same bot');
+END;
+
+CREATE TRIGGER IF NOT EXISTS bot_sessions_default_head_same_bot_update
+BEFORE UPDATE OF default_head_turn_id, bot_id ON bot_sessions
+FOR EACH ROW
+WHEN NEW.default_head_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.default_head_turn_id
+      AND t.bot_id = NEW.bot_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'bot_sessions.default_head_turn_id must reference a turn from the same bot');
+END;
+
+CREATE TRIGGER IF NOT EXISTS bot_sessions_forked_from_turn_same_bot_insert
+BEFORE INSERT ON bot_sessions
+FOR EACH ROW
+WHEN NEW.forked_from_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.forked_from_turn_id
+      AND t.bot_id = NEW.bot_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'bot_sessions.forked_from_turn_id must reference a turn from the same bot');
+END;
+
+CREATE TRIGGER IF NOT EXISTS bot_sessions_forked_from_turn_same_bot_update
+BEFORE UPDATE OF forked_from_turn_id, bot_id ON bot_sessions
+FOR EACH ROW
+WHEN NEW.forked_from_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.forked_from_turn_id
+      AND t.bot_id = NEW.bot_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'bot_sessions.forked_from_turn_id must reference a turn from the same bot');
+END;
 
 -- bot_session_turn_heads: switchable leaf heads for a session turn graph.
 CREATE TABLE IF NOT EXISTS bot_session_turn_heads (
-  session_id TEXT NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
-  head_turn_id TEXT NOT NULL REFERENCES bot_history_turns(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  head_turn_id TEXT NOT NULL,
+  bot_id TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (session_id, head_turn_id)
+  PRIMARY KEY (session_id, head_turn_id),
+  FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE,
+  FOREIGN KEY (head_turn_id, bot_id) REFERENCES bot_history_turns(id, bot_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_bot_session_turn_heads_head
   ON bot_session_turn_heads(head_turn_id);
+CREATE INDEX IF NOT EXISTS idx_bot_session_turn_heads_bot
+  ON bot_session_turn_heads(bot_id);
 
 -- bot_history_messages: unified message history under bot scope.
 CREATE TABLE IF NOT EXISTS bot_history_messages (

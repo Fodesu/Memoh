@@ -30,7 +30,7 @@ INSERT INTO bot_sessions (
   default_head_turn_id, forked_from_session_id, forked_from_turn_id,
   parent_session_id, created_by_user_id
 )
-VALUES (
+SELECT
   lower(hex(randomblob(4))) || '-' ||
   lower(hex(randomblob(2))) || '-' ||
   '4' || substr(lower(hex(randomblob(2))), 2) || '-' ||
@@ -47,7 +47,42 @@ VALUES (
   ?9,
   ?10,
   ?11
-)
+WHERE (
+    ?7 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns t
+      WHERE t.id = ?7
+        AND t.bot_id = ?1
+    )
+  )
+  AND (
+    ?9 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_history_turns t
+      WHERE t.id = ?9
+        AND t.bot_id = ?1
+    )
+  )
+  AND (
+    ?8 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = ?8
+        AND s.bot_id = ?1
+    )
+  )
+  AND (
+    ?10 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_sessions s
+      WHERE s.id = ?10
+        AND s.bot_id = ?1
+    )
+  )
 RETURNING id, bot_id, route_id, channel_type, type, title, metadata, default_head_turn_id, forked_from_session_id, forked_from_turn_id, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
 `
 
@@ -101,24 +136,31 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (B
 }
 
 const createSessionTurnHead = `-- name: CreateSessionTurnHead :one
-INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
-VALUES (?1, ?2)
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id, bot_id)
+SELECT s.id, t.id, s.bot_id
+FROM bot_sessions s
+JOIN bot_history_turns t
+  ON t.id = ?1
+ AND t.bot_id = s.bot_id
+WHERE s.id = ?2
+  AND s.deleted_at IS NULL
 ON CONFLICT (session_id, head_turn_id) DO UPDATE
 SET updated_at = CURRENT_TIMESTAMP
-RETURNING session_id, head_turn_id, created_at, updated_at
+RETURNING session_id, head_turn_id, bot_id, created_at, updated_at
 `
 
 type CreateSessionTurnHeadParams struct {
-	SessionID  string `json:"session_id"`
 	HeadTurnID string `json:"head_turn_id"`
+	SessionID  string `json:"session_id"`
 }
 
 func (q *Queries) CreateSessionTurnHead(ctx context.Context, arg CreateSessionTurnHeadParams) (BotSessionTurnHead, error) {
-	row := q.db.QueryRowContext(ctx, createSessionTurnHead, arg.SessionID, arg.HeadTurnID)
+	row := q.db.QueryRowContext(ctx, createSessionTurnHead, arg.HeadTurnID, arg.SessionID)
 	var i BotSessionTurnHead
 	err := row.Scan(
 		&i.SessionID,
 		&i.HeadTurnID,
+		&i.BotID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -156,9 +198,9 @@ func (q *Queries) DeleteSessionTurnHeads(ctx context.Context, sessionID string) 
 const deleteSessionTurnHeadsByBot = `-- name: DeleteSessionTurnHeadsByBot :exec
 DELETE FROM bot_session_turn_heads
 WHERE session_id IN (
-  SELECT id
-  FROM bot_sessions
-  WHERE bot_id = ?1
+  SELECT s.id
+  FROM bot_sessions s
+  WHERE s.bot_id = ?1
 )
 `
 
@@ -258,7 +300,7 @@ func (q *Queries) GetSessionByIDIncludingDeleted(ctx context.Context, id string)
 }
 
 const getSessionTurnHead = `-- name: GetSessionTurnHead :one
-SELECT session_id, head_turn_id, created_at, updated_at
+SELECT session_id, head_turn_id, bot_id, created_at, updated_at
 FROM bot_session_turn_heads
 WHERE session_id = ?1
   AND head_turn_id = ?2
@@ -275,6 +317,7 @@ func (q *Queries) GetSessionTurnHead(ctx context.Context, arg GetSessionTurnHead
 	err := row.Scan(
 		&i.SessionID,
 		&i.HeadTurnID,
+		&i.BotID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -282,7 +325,7 @@ func (q *Queries) GetSessionTurnHead(ctx context.Context, arg GetSessionTurnHead
 }
 
 const listSessionTurnHeads = `-- name: ListSessionTurnHeads :many
-SELECT session_id, head_turn_id, created_at, updated_at
+SELECT session_id, head_turn_id, bot_id, created_at, updated_at
 FROM bot_session_turn_heads
 WHERE session_id = ?1
 ORDER BY created_at ASC, head_turn_id ASC
@@ -300,6 +343,7 @@ func (q *Queries) ListSessionTurnHeads(ctx context.Context, sessionID string) ([
 		if err := rows.Scan(
 			&i.SessionID,
 			&i.HeadTurnID,
+			&i.BotID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -575,31 +619,39 @@ func (q *Queries) ListSubagentSessionsByParent(ctx context.Context, parentSessio
 }
 
 const replaceSessionTurnHead = `-- name: ReplaceSessionTurnHead :one
-INSERT INTO bot_session_turn_heads (session_id, head_turn_id)
-SELECT ?1, ?2
-WHERE EXISTS (
+INSERT INTO bot_session_turn_heads (session_id, head_turn_id, bot_id)
+SELECT existing.session_id, t.id, existing.bot_id
+FROM bot_session_turn_heads existing
+JOIN bot_history_turns t
+  ON t.id = ?1
+ AND t.bot_id = existing.bot_id
+WHERE existing.session_id = ?2
+  AND existing.head_turn_id = ?3
+  AND EXISTS (
   SELECT 1
-  FROM bot_session_turn_heads existing
-  WHERE existing.session_id = ?1
-    AND existing.head_turn_id = ?3
+  FROM bot_sessions s
+  WHERE s.id = existing.session_id
+    AND s.bot_id = existing.bot_id
+    AND s.deleted_at IS NULL
 )
 ON CONFLICT (session_id, head_turn_id) DO UPDATE
 SET updated_at = CURRENT_TIMESTAMP
-RETURNING session_id, head_turn_id, created_at, updated_at
+RETURNING session_id, head_turn_id, bot_id, created_at, updated_at
 `
 
 type ReplaceSessionTurnHeadParams struct {
-	TargetSessionID string `json:"target_session_id"`
 	NewHeadTurnID   string `json:"new_head_turn_id"`
+	TargetSessionID string `json:"target_session_id"`
 	OldHeadTurnID   string `json:"old_head_turn_id"`
 }
 
 func (q *Queries) ReplaceSessionTurnHead(ctx context.Context, arg ReplaceSessionTurnHeadParams) (BotSessionTurnHead, error) {
-	row := q.db.QueryRowContext(ctx, replaceSessionTurnHead, arg.TargetSessionID, arg.NewHeadTurnID, arg.OldHeadTurnID)
+	row := q.db.QueryRowContext(ctx, replaceSessionTurnHead, arg.NewHeadTurnID, arg.TargetSessionID, arg.OldHeadTurnID)
 	var i BotSessionTurnHead
 	err := row.Scan(
 		&i.SessionID,
 		&i.HeadTurnID,
+		&i.BotID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -644,6 +696,16 @@ UPDATE bot_sessions
 SET default_head_turn_id = ?1,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = ?2 AND deleted_at IS NULL
+  AND (
+    ?1 IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM bot_session_turn_heads h
+      WHERE h.session_id = bot_sessions.id
+        AND h.bot_id = bot_sessions.bot_id
+        AND h.head_turn_id = ?1
+    )
+  )
 RETURNING id, bot_id, route_id, channel_type, type, title, metadata, default_head_turn_id, forked_from_session_id, forked_from_turn_id, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
 `
 
@@ -685,6 +747,7 @@ WHERE id = ?2
     SELECT 1
     FROM bot_session_turn_heads h
     WHERE h.session_id = bot_sessions.id
+      AND h.bot_id = bot_sessions.bot_id
       AND h.head_turn_id = ?1
   )
 RETURNING id, bot_id, route_id, channel_type, type, title, metadata, default_head_turn_id, forked_from_session_id, forked_from_turn_id, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at

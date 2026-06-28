@@ -449,6 +449,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
@@ -514,6 +515,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
@@ -581,6 +583,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
@@ -787,6 +790,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
@@ -867,6 +871,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL
@@ -945,6 +950,7 @@ WITH RECURSIVE visible_turns(id, parent_turn_id) AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions s
   JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
   JOIN bot_history_turns t ON t.id = h.head_turn_id
   WHERE s.id = ?2
     AND s.deleted_at IS NULL

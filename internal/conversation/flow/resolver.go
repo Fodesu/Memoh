@@ -987,11 +987,12 @@ func ensurePersistTurnIDForPending(ctx context.Context, p baseRunConfigParams) (
 
 func approvalResultMetadata(req toolapproval.Request) map[string]any {
 	return map[string]any{
-		"short_id":     req.ShortID,
-		"status":       req.Status,
-		"tool_name":    req.ToolName,
-		"operation":    req.Operation,
-		"tool_call_id": req.ToolCallID,
+		"short_id":        req.ShortID,
+		"status":          req.Status,
+		"tool_name":       req.ToolName,
+		"operation":       req.Operation,
+		"tool_call_id":    req.ToolCallID,
+		"persist_turn_id": req.PersistTurnID,
 	}
 }
 

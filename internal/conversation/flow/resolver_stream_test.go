@@ -16,6 +16,7 @@ import (
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	messagepkg "github.com/memohai/memoh/internal/message"
+	sessionpkg "github.com/memohai/memoh/internal/session"
 )
 
 type recordingMessageService struct {
@@ -123,6 +124,8 @@ type fakeTurnStore struct {
 	session          dbsqlc.BotSession
 	rewrite          dbsqlc.GetVisibleUserMessageTurnForRewriteRow
 	sessionHeadErr   error
+	historyTurn      dbsqlc.BotHistoryTurn
+	historyTurnErr   error
 	updateDefaultErr error
 	createdTurns     []dbsqlc.CreateHistoryTurnParams
 	createdHeads     []dbsqlc.CreateSessionTurnHeadParams
@@ -145,6 +148,16 @@ func (s *fakeTurnStore) CreateHistoryTurn(_ context.Context, arg dbsqlc.CreateHi
 
 func (s *fakeTurnStore) GetSessionByID(context.Context, pgtype.UUID) (dbsqlc.BotSession, error) {
 	return s.session, nil
+}
+
+func (s *fakeTurnStore) GetHistoryTurnByID(_ context.Context, id pgtype.UUID) (dbsqlc.BotHistoryTurn, error) {
+	if s.historyTurnErr != nil {
+		return dbsqlc.BotHistoryTurn{}, s.historyTurnErr
+	}
+	if s.historyTurn.ID.Valid {
+		return s.historyTurn, nil
+	}
+	return dbsqlc.BotHistoryTurn{ID: id, BotID: s.session.BotID, OwnerSessionID: s.session.ID}, nil
 }
 
 func (s *fakeTurnStore) CreateSessionTurnHead(_ context.Context, arg dbsqlc.CreateSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error) {
@@ -173,7 +186,7 @@ func (s *fakeTurnStore) UpdateSessionDefaultHeadTurnIfValid(_ context.Context, a
 		return dbsqlc.BotSession{}, s.updateDefaultErr
 	}
 	s.updatedDefault = append(s.updatedDefault, arg)
-	return dbsqlc.BotSession{ID: arg.ID, DefaultHeadTurnID: arg.DefaultHeadTurnID}, nil
+	return dbsqlc.BotSession{ID: arg.ID, Type: "chat", DefaultHeadTurnID: arg.DefaultHeadTurnID}, nil
 }
 
 func testUUID(lastByte byte) pgtype.UUID {
@@ -205,7 +218,7 @@ func TestResolveTurnRunParentNormalLaterTurnUsesSessionHead(t *testing.T) {
 	t.Parallel()
 
 	head := testUUID(9)
-	store := &fakeTurnStore{session: dbsqlc.BotSession{DefaultHeadTurnID: head}}
+	store := &fakeTurnStore{session: dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: head}}
 	mode, parent, baseHead, err := (*Resolver)(nil).resolveTurnRunParent(context.Background(), store, testUUID(1), conversation.ChatRequest{}, nil)
 	if err != nil {
 		t.Fatalf("resolveTurnRunParent() error = %v", err)
@@ -222,11 +235,34 @@ func TestResolveTurnRunParentNormalLaterTurnUsesSessionHead(t *testing.T) {
 	}
 }
 
+func TestResolveTurnRunParentNonChatIgnoresRequestedVariantHead(t *testing.T) {
+	t.Parallel()
+
+	defaultHead := testUUID(9)
+	requestedHead := testUUID(10)
+	store := &fakeTurnStore{session: dbsqlc.BotSession{Type: sessionpkg.TypeDiscuss, DefaultHeadTurnID: defaultHead}}
+	mode, parent, baseHead, err := (*Resolver)(nil).resolveTurnRunParent(context.Background(), store, testUUID(1), conversation.ChatRequest{
+		BaseHeadTurnID: requestedHead.String(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("resolveTurnRunParent() error = %v", err)
+	}
+	if mode != TurnRunModeNormal {
+		t.Fatalf("mode = %q, want %q", mode, TurnRunModeNormal)
+	}
+	if parent != defaultHead || baseHead.HeadTurnID != defaultHead {
+		t.Fatalf("parent=%v baseHead=%v, want default head=%v", parent, baseHead, defaultHead)
+	}
+	if len(store.replacedHeads) != 0 || len(store.createdHeads) != 0 {
+		t.Fatalf("turn head mutations during resolve: replaced=%#v created=%#v", store.replacedHeads, store.createdHeads)
+	}
+}
+
 func TestResolveTurnRunParentRewriteFirstTurnUsesEmptyContext(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeTurnStore{
-		session: dbsqlc.BotSession{DefaultHeadTurnID: testUUID(7)},
+		session: dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: testUUID(7)},
 		rewrite: dbsqlc.GetVisibleUserMessageTurnForRewriteRow{
 			ParentTurnID: pgtype.UUID{},
 		},
@@ -251,13 +287,34 @@ func TestResolveTurnRunParentRewriteFirstTurnUsesEmptyContext(t *testing.T) {
 	}
 }
 
+func TestResolveTurnRunParentNonChatRejectsRewrite(t *testing.T) {
+	t.Parallel()
+
+	currentHead := testUUID(8)
+	store := &fakeTurnStore{
+		session: dbsqlc.BotSession{Type: sessionpkg.TypeDiscuss, DefaultHeadTurnID: currentHead},
+		rewrite: dbsqlc.GetVisibleUserMessageTurnForRewriteRow{
+			ParentTurnID: testUUID(4),
+		},
+	}
+	_, _, _, err := (*Resolver)(nil).resolveTurnRunParent(context.Background(), store, testUUID(1), conversation.ChatRequest{
+		RewriteTargetMessageID: "00000000-0000-0000-0000-000000000123",
+	}, nil)
+	if err == nil {
+		t.Fatalf("resolveTurnRunParent() error = nil, want non-chat variant error")
+	}
+	if !strings.Contains(err.Error(), "turn variants are only supported for chat sessions") {
+		t.Fatalf("resolveTurnRunParent() error = %v, want non-chat variant error", err)
+	}
+}
+
 func TestResolveTurnRunParentRewriteMiddleTurnUsesTargetParent(t *testing.T) {
 	t.Parallel()
 
 	currentHead := testUUID(8)
 	targetParent := testUUID(4)
 	store := &fakeTurnStore{
-		session: dbsqlc.BotSession{DefaultHeadTurnID: currentHead},
+		session: dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: currentHead},
 		rewrite: dbsqlc.GetVisibleUserMessageTurnForRewriteRow{
 			ParentTurnID: targetParent,
 		},
@@ -289,7 +346,7 @@ func TestResolveTurnRunParentRewriteUsesResolvedTurnAnchor(t *testing.T) {
 	currentHead := testUUID(8)
 	targetParent := testUUID(4)
 	store := &fakeTurnStore{
-		session: dbsqlc.BotSession{DefaultHeadTurnID: currentHead},
+		session: dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: currentHead},
 		rewrite: dbsqlc.GetVisibleUserMessageTurnForRewriteRow{
 			ParentTurnID: testUUID(99),
 		},
@@ -321,7 +378,7 @@ func TestResolveTurnRunParentRewriteAnchorRejectsInvalidBaseHead(t *testing.T) {
 	currentHead := testUUID(8)
 	targetParent := testUUID(4)
 	store := &fakeTurnStore{
-		session:        dbsqlc.BotSession{DefaultHeadTurnID: currentHead},
+		session:        dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: currentHead},
 		sessionHeadErr: pgx.ErrNoRows,
 	}
 	_, _, _, err := (*Resolver)(nil).resolveTurnRunParent(context.Background(), store, testUUID(1), conversation.ChatRequest{}, &conversation.TurnAnchor{
@@ -444,6 +501,56 @@ func TestContinuationTurnRunDoesNotMoveSessionHead(t *testing.T) {
 	}
 	if len(store.updatedDefault) != 0 {
 		t.Fatalf("updatedDefault = %d, want 0", len(store.updatedDefault))
+	}
+}
+
+func TestValidateContinuationTurnAcceptsPendingOwnedTurn(t *testing.T) {
+	t.Parallel()
+
+	sessionID := testUUID(1)
+	botID := testUUID(2)
+	persistTurnID := testUUID(3)
+	store := &fakeTurnStore{
+		session: dbsqlc.BotSession{ID: sessionID, BotID: botID, Type: "chat"},
+		historyTurn: dbsqlc.BotHistoryTurn{
+			ID:             persistTurnID,
+			BotID:          botID,
+			OwnerSessionID: sessionID,
+		},
+	}
+	resolver := &Resolver{queries: store}
+
+	if err := resolver.validateBaseContinuationTurnHead(context.Background(), sessionID.String(), persistTurnID.String(), persistTurnID.String(), "tool approval"); err != nil {
+		t.Fatalf("validateBaseContinuationTurnHead() error = %v", err)
+	}
+	if len(store.createdHeads) != 0 || len(store.replacedHeads) != 0 {
+		t.Fatalf("validation mutated heads: created=%#v replaced=%#v", store.createdHeads, store.replacedHeads)
+	}
+}
+
+func TestValidateContinuationTurnRejectsForeignPendingTurn(t *testing.T) {
+	t.Parallel()
+
+	sessionID := testUUID(1)
+	botID := testUUID(2)
+	foreignSessionID := testUUID(4)
+	persistTurnID := testUUID(3)
+	store := &fakeTurnStore{
+		session: dbsqlc.BotSession{ID: sessionID, BotID: botID, Type: "chat"},
+		historyTurn: dbsqlc.BotHistoryTurn{
+			ID:             persistTurnID,
+			BotID:          botID,
+			OwnerSessionID: foreignSessionID,
+		},
+	}
+	resolver := &Resolver{queries: store}
+
+	err := resolver.validateBaseContinuationTurnHead(context.Background(), sessionID.String(), persistTurnID.String(), persistTurnID.String(), "user input")
+	if err == nil {
+		t.Fatalf("validateBaseContinuationTurnHead() error = nil, want foreign turn rejection")
+	}
+	if !strings.Contains(err.Error(), "pending turn is no longer active for this session") {
+		t.Fatalf("validateBaseContinuationTurnHead() error = %v, want ownership rejection", err)
 	}
 }
 
@@ -797,7 +904,7 @@ func TestStoreRoundAndVariantTransitionShareTransaction(t *testing.T) {
 	messages := &recordingTxMessageService{}
 	oldHead := testUUID(7)
 	store := &fakeTurnStore{
-		session: dbsqlc.BotSession{DefaultHeadTurnID: oldHead},
+		session: dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: oldHead},
 	}
 	resolver := &Resolver{
 		queries:        store,
@@ -858,7 +965,7 @@ func TestStoreRoundAndVariantTransitionRewriteCreatesSiblingTurn(t *testing.T) {
 	baseHead := testUUID(7)
 	targetParent := testUUID(4)
 	store := &fakeTurnStore{
-		session: dbsqlc.BotSession{DefaultHeadTurnID: baseHead},
+		session: dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: baseHead},
 	}
 	resolver := &Resolver{
 		queries:        store,
@@ -923,7 +1030,7 @@ func TestStoreRoundAndVariantTransitionFailureDoesNotPublishOrKeepRolledBackTurn
 	messages := &recordingTxMessageService{}
 	oldHead := testUUID(7)
 	store := &fakeTurnStore{
-		session:          dbsqlc.BotSession{DefaultHeadTurnID: oldHead},
+		session:          dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: oldHead},
 		updateDefaultErr: pointerErr,
 	}
 	resolver := &Resolver{
@@ -967,7 +1074,7 @@ func TestStoreRoundAndVariantTransitionRequiresTransaction(t *testing.T) {
 	messages := &recordingMessageService{}
 	oldHead := testUUID(7)
 	store := &fakeTurnStore{
-		session: dbsqlc.BotSession{DefaultHeadTurnID: oldHead},
+		session: dbsqlc.BotSession{Type: "chat", DefaultHeadTurnID: oldHead},
 	}
 	resolver := &Resolver{
 		queries:        store,

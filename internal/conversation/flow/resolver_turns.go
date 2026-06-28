@@ -14,6 +14,7 @@ import (
 	dbpkg "github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
+	sessionpkg "github.com/memohai/memoh/internal/session"
 )
 
 type TurnRunMode string
@@ -127,6 +128,11 @@ type sessionHeadStore interface {
 	GetSessionTurnHead(context.Context, dbsqlc.GetSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
 }
 
+type continuationTurnStore interface {
+	GetSessionByID(context.Context, pgtype.UUID) (dbsqlc.BotSession, error)
+	GetHistoryTurnByID(context.Context, pgtype.UUID) (dbsqlc.BotHistoryTurn, error)
+}
+
 type turnTxRunner interface {
 	RunInTx(ctx context.Context, fn func(dbstore.Queries) error) error
 }
@@ -178,7 +184,7 @@ func (r *Resolver) validateContinuationTurnHead(ctx context.Context, sessionID, 
 	if r == nil || r.queries == nil {
 		return nil
 	}
-	store, ok := r.queries.(sessionHeadStore)
+	store, ok := r.queries.(continuationTurnStore)
 	if !ok {
 		return nil
 	}
@@ -190,14 +196,19 @@ func (r *Resolver) validateContinuationTurnHead(ctx context.Context, sessionID, 
 	if err != nil {
 		return fmt.Errorf("validate continuation turn: invalid persist turn id: %w", err)
 	}
-	if _, err := store.GetSessionTurnHead(ctx, dbsqlc.GetSessionTurnHeadParams{
-		SessionID:  pgSessionID,
-		HeadTurnID: pgTurnID,
-	}); err != nil {
+	sess, err := store.GetSessionByID(ctx, pgSessionID)
+	if err != nil {
+		return fmt.Errorf("validate continuation turn: get session: %w", err)
+	}
+	turn, err := store.GetHistoryTurnByID(ctx, pgTurnID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errors.New("validate continuation turn: pending turn is no longer active for this session")
 		}
-		return fmt.Errorf("validate continuation turn: get session turn head: %w", err)
+		return fmt.Errorf("validate continuation turn: get history turn: %w", err)
+	}
+	if !turn.OwnerSessionID.Valid || turn.OwnerSessionID != pgSessionID || turn.BotID != sess.BotID {
+		return errors.New("validate continuation turn: pending turn is no longer active for this session")
 	}
 	return nil
 }
@@ -205,6 +216,9 @@ func (r *Resolver) validateContinuationTurnHead(ctx context.Context, sessionID, 
 func (r *Resolver) validateBaseContinuationTurnHead(ctx context.Context, sessionID, persistTurnID, baseHeadTurnID, label string) error {
 	persistTurnID = strings.TrimSpace(persistTurnID)
 	baseHeadTurnID = strings.TrimSpace(baseHeadTurnID)
+	if persistTurnID == "" {
+		return nil
+	}
 	if baseHeadTurnID != "" && baseHeadTurnID != persistTurnID {
 		if strings.TrimSpace(label) == "" {
 			label = "continuation"
@@ -279,7 +293,16 @@ func (r *Resolver) prepareTurnRunWithRewriteAnchor(ctx context.Context, req conv
 }
 
 func (*Resolver) resolveTurnRunParent(ctx context.Context, store turnStore, sessionID pgtype.UUID, req conversation.ChatRequest, rewriteAnchor *conversation.TurnAnchor) (TurnRunMode, pgtype.UUID, resolvedBaseHead, error) {
+	sess, err := store.GetSessionByID(ctx, sessionID)
+	if err != nil {
+		return "", pgtype.UUID{}, resolvedBaseHead{}, fmt.Errorf("prepare turn run: get session: %w", err)
+	}
+	variantsEnabled := sessionpkg.SupportsTurnVariants(sess.Type)
+
 	if rewriteAnchor != nil {
+		if !variantsEnabled {
+			return "", pgtype.UUID{}, resolvedBaseHead{}, errors.New("turn variants are only supported for chat sessions")
+		}
 		if rewriteAnchor.Role != conversation.TurnAnchorRoleUser {
 			return "", pgtype.UUID{}, resolvedBaseHead{}, errors.New("prepare turn run: rewrite anchor is not a user message")
 		}
@@ -297,13 +320,20 @@ func (*Resolver) resolveTurnRunParent(ctx context.Context, store turnStore, sess
 		return TurnRunModeRewrite, parentTurnID, baseHead, nil
 	}
 
-	baseHead, err := resolveBaseSessionHead(ctx, store, sessionID, req.BaseHeadTurnID)
+	requestedBaseHeadTurnID := req.BaseHeadTurnID
+	if !variantsEnabled {
+		requestedBaseHeadTurnID = ""
+	}
+	baseHead, err := resolveBaseSessionHeadFromSession(ctx, store, sessionID, sess, requestedBaseHeadTurnID)
 	if err != nil {
 		return "", pgtype.UUID{}, resolvedBaseHead{}, err
 	}
 
 	rewriteTargetID := strings.TrimSpace(req.RewriteTargetMessageID)
 	if rewriteTargetID != "" {
+		if !variantsEnabled {
+			return "", pgtype.UUID{}, resolvedBaseHead{}, errors.New("turn variants are only supported for chat sessions")
+		}
 		anchor, err := resolveVisibleUserTurnAnchor(ctx, store, sessionID, baseHead.HeadTurnID, rewriteTargetID)
 		if err != nil {
 			return "", pgtype.UUID{}, resolvedBaseHead{}, err
@@ -323,6 +353,10 @@ func resolveBaseSessionHead(ctx context.Context, store sessionHeadStore, session
 	if err != nil {
 		return resolvedBaseHead{}, fmt.Errorf("prepare turn run: get session: %w", err)
 	}
+	return resolveBaseSessionHeadFromSession(ctx, store, sessionID, sess, requestedHeadTurnID)
+}
+
+func resolveBaseSessionHeadFromSession(ctx context.Context, store sessionHeadStore, sessionID pgtype.UUID, sess dbsqlc.BotSession, requestedHeadTurnID string) (resolvedBaseHead, error) {
 	baseHeadID := sess.DefaultHeadTurnID
 	if requestedHead := strings.TrimSpace(requestedHeadTurnID); requestedHead != "" {
 		parsed, err := dbpkg.ParseUUID(requestedHead)

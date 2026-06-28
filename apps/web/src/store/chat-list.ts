@@ -204,6 +204,26 @@ function variantLoadFailedMessage() {
 	return localizedMessages().chat.errors.loadVariantFailed
 }
 
+function isStaleSessionHeadError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const payload = error as {
+    status?: unknown
+    statusCode?: unknown
+    response?: { status?: unknown }
+    message?: unknown
+    error?: unknown
+    detail?: unknown
+  }
+  const status = payload.status ?? payload.statusCode ?? payload.response?.status
+  if (status !== undefined && status !== 409) return false
+  for (const value of [payload.message, payload.error, payload.detail]) {
+    if (typeof value === 'string' && /^\s*stale session head\s*$/i.test(value)) {
+      return true
+    }
+  }
+  return false
+}
+
 function isSessionNotFoundError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   const payload = error as {
@@ -351,6 +371,7 @@ export const useChatStore = defineStore('chat', () => {
   // placeholders hidden while a fresh transcript is on its way.
   const loadingChats = ref(false)
   const loadingMessages = ref(false)
+  const variantSelectionLoading = ref(false)
   const loadingOlder = ref(false)
   const hasMoreOlder = ref(true)
   // Tracks whether the user has scrolled back and loaded at least one page of
@@ -532,6 +553,7 @@ export const useChatStore = defineStore('chat', () => {
   let activeWs: ChatWebSocket | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let refreshPromise: { key: string; promise: Promise<void> } | null = null
+  let variantSelectionRequestId = 0
   let sessionListRefreshPromise: { botId: string; promise: Promise<void> } | null = null
   const latestBackgroundTasks = new Map<string, BackgroundTask>()
   const ephemeralAssistantErrors = new Map<string, EphemeralAssistantError[]>()
@@ -694,6 +716,7 @@ export const useChatStore = defineStore('chat', () => {
     if (ct && ct !== 'local') return true
     return false
   })
+  const activeSessionSupportsTurnVariants = computed(() => sessionSupportsTurnVariants(sessionId.value))
 
   function acpRuntimeKey(botId: string, targetSessionId: string) {
     const bid = botId.trim()
@@ -1232,8 +1255,24 @@ export const useChatStore = defineStore('chat', () => {
     return selectedHeadTurnIds.get(sid)?.trim() || turnGraphs.get(sid)?.defaultHeadTurnId || ''
   }
 
+  function sessionSupportsTurnVariants(targetSessionId?: string | null): boolean {
+    const sid = (targetSessionId ?? sessionId.value ?? '').trim()
+    return knownSessionSummary(sid)?.type === 'chat'
+  }
+
   function baseHeadForRequest(targetSessionId?: string | null): string | undefined {
+    if (!sessionSupportsTurnVariants(targetSessionId)) return undefined
     return selectedHeadForSession(targetSessionId).trim() || undefined
+  }
+
+  function baseHeadPayload(targetSessionId?: string | null): { base_head_turn_id: string } | Record<string, never> {
+    const baseHeadTurnId = baseHeadForRequest(targetSessionId)
+    return baseHeadTurnId ? { base_head_turn_id: baseHeadTurnId } : {}
+  }
+
+  function continuationHeadPayload(targetSessionId: string, persistTurnId?: string): { base_head_turn_id: string } | Record<string, never> {
+    const head = persistTurnId?.trim()
+    return head ? { base_head_turn_id: head } : baseHeadPayload(targetSessionId)
   }
 
   function explicitSelectedHeadForSession(targetSessionId?: string | null): string {
@@ -1243,8 +1282,18 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function viewHeadFetchOption(targetSessionId?: string | null): { headTurnId: string } | Record<string, never> {
+    if (!sessionSupportsTurnVariants(targetSessionId)) return {}
     const headTurnId = explicitSelectedHeadForSession(targetSessionId)
     return headTurnId ? { headTurnId } : {}
+  }
+
+  function currentViewHeadKey(targetSessionId?: string | null, useSelectedView = true): string {
+    if (!useSelectedView || !sessionSupportsTurnVariants(targetSessionId)) return 'default'
+    return explicitSelectedHeadForSession(targetSessionId) || 'default'
+  }
+
+  function isCurrentViewHead(targetSessionId: string, expectedHeadKey: string, useSelectedView = true): boolean {
+    return currentViewHeadKey(targetSessionId, useSelectedView) === expectedHeadKey
   }
 
   function resetSelectedHeadForSession(targetSessionId?: string | null) {
@@ -1343,6 +1392,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function variantContextForMessage(messageId: string) {
     const sid = (sessionId.value ?? '').trim()
+    if (!sessionSupportsTurnVariants(sid)) return null
     const graph = turnGraphs.get(sid)
     if (!sid || !graph) return null
     const message = messages.find(item => item.id === messageId)
@@ -1415,31 +1465,38 @@ export const useChatStore = defineStore('chat', () => {
 
   async function selectTurnVariant(headTurnId: string): Promise<boolean> {
     const sid = (sessionId.value ?? '').trim()
-    if (streaming.value || isMessageActionLoading(sid)) return false
+    if (!sessionSupportsTurnVariants(sid)) return false
+    if (streaming.value || loadingMessages.value || isMessageActionLoading(sid)) return false
     const head = headTurnId.trim()
     const graph = turnGraphs.get(sid)
     if (!sid || !head || !graph || !graph.headTurnIds.includes(head)) return false
     const bid = (currentBotId.value ?? '').trim()
     if (!bid) return false
-    const previousHead = selectedHeadForSession(sid)
+    const previousExplicitHead = explicitSelectedHeadForSession(sid)
     const previousHasLoadedOlder = hasLoadedOlder.value
     const previousHasMoreOlder = hasMoreOlder.value
-    selectedHeadTurnIds.set(sid, head)
+    const requestId = ++variantSelectionRequestId
     hasLoadedOlder.value = false
     hasMoreOlder.value = true
+    variantSelectionLoading.value = true
     loadingMessages.value = true
     try {
       const payload = await fetchMessagesUI(bid, sid, {
         limit: PAGE_SIZE,
         headTurnId: head,
       })
-      if ((currentBotId.value ?? '').trim() !== bid || (sessionId.value ?? '').trim() !== sid) return false
+      if (
+        requestId !== variantSelectionRequestId
+        || (currentBotId.value ?? '').trim() !== bid
+        || (sessionId.value ?? '').trim() !== sid
+      ) return false
+      selectedHeadTurnIds.set(sid, head)
       replaceMessages(payload.items, sid)
       reattachPendingAssistantStreams(sid)
       startSessionMessagesStream(bid, sid, { skipInitialRefreshOnce: true })
     } catch (error) {
-      if ((currentBotId.value ?? '').trim() === bid && (sessionId.value ?? '').trim() === sid) {
-        if (previousHead) selectedHeadTurnIds.set(sid, previousHead)
+      if (requestId === variantSelectionRequestId && (currentBotId.value ?? '').trim() === bid && (sessionId.value ?? '').trim() === sid) {
+        if (previousExplicitHead) selectedHeadTurnIds.set(sid, previousExplicitHead)
         else selectedHeadTurnIds.delete(sid)
         hasLoadedOlder.value = previousHasLoadedOlder
         hasMoreOlder.value = previousHasMoreOlder
@@ -1448,11 +1505,21 @@ export const useChatStore = defineStore('chat', () => {
       toast.error(resolveApiErrorMessage(error, variantLoadFailedMessage()))
       return false
     } finally {
-      if ((currentBotId.value ?? '').trim() === bid && (sessionId.value ?? '').trim() === sid) {
+      if (requestId === variantSelectionRequestId) {
+        variantSelectionLoading.value = false
+      }
+      if (requestId === variantSelectionRequestId && (currentBotId.value ?? '').trim() === bid && (sessionId.value ?? '').trim() === sid) {
         loadingMessages.value = false
       }
     }
     return true
+  }
+
+  function cancelVariantSelectionLoad() {
+    if (!variantSelectionLoading.value) return
+    variantSelectionRequestId++
+    variantSelectionLoading.value = false
+    loadingMessages.value = false
   }
 
   function sortChatMessages(items: ChatMessage[]): ChatMessage[] {
@@ -2163,7 +2230,8 @@ export const useChatStore = defineStore('chat', () => {
     const sid = (targetSessionId ?? sessionId.value ?? '').trim()
     if (!bid || !sid) return
     const useSelectedView = options.useSelectedView !== false
-    const key = `${bid}:${sid}:${useSelectedView ? 'selected-view' : 'default-view'}`
+    let expectedHeadKey = currentViewHeadKey(sid, useSelectedView)
+    const key = `${bid}:${sid}:${useSelectedView ? 'selected' : 'default'}:${expectedHeadKey}`
 
     if (refreshPromise) {
       if (refreshPromise.key === key) {
@@ -2174,14 +2242,29 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     const promise = (async () => {
-      const payload = await fetchMessagesUI(bid, sid, {
-        limit: PAGE_SIZE,
-        includeGraph: true,
-        ...(useSelectedView ? viewHeadFetchOption(sid) : {}),
-      })
+      let payload: FetchMessagesUIResult
+      try {
+        payload = await fetchMessagesUI(bid, sid, {
+          limit: PAGE_SIZE,
+          includeGraph: true,
+          ...(useSelectedView ? viewHeadFetchOption(sid) : {}),
+        })
+      } catch (error) {
+        if (useSelectedView && expectedHeadKey !== 'default' && isStaleSessionHeadError(error)) {
+          resetSelectedHeadForSession(sid)
+          expectedHeadKey = currentViewHeadKey(sid, useSelectedView)
+          payload = await fetchMessagesUI(bid, sid, {
+            limit: PAGE_SIZE,
+            includeGraph: true,
+          })
+        } else {
+          throw error
+        }
+      }
       // The user may have switched away while the request was in flight. Drop
       // the result silently — the new session has its own load underway.
       if (currentBotId.value !== bid || sessionId.value !== sid) return
+      if (!isCurrentViewHead(sid, expectedHeadKey, useSelectedView)) return
       // Pick replace vs merge by whether the user has scrolled back to load
       // older history. When older pages are present we MUST preserve them
       // (otherwise an SSE-triggered refresh wipes the prepended history).
@@ -2405,7 +2488,7 @@ export const useChatStore = defineStore('chat', () => {
       }
       await streamSessionMessageEvents(bid, sid, signal, (event) => {
         handleSessionMessageEvent(bid, sid, event)
-      }, selectedHeadForSession(sid))
+      }, explicitSelectedHeadForSession(sid))
     })
   }
 
@@ -2585,7 +2668,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!bid || !sid || !target) return null
 
     try {
-      const result = await locateMessageUI(bid, sid, target, PAGE_SIZE, PAGE_SIZE)
+      const result = await locateMessageUI(bid, sid, target, PAGE_SIZE, PAGE_SIZE, viewHeadFetchOption(sid))
       if (!result.items.length) return null
       mergeMessages(result.items, sid)
       hasMoreOlder.value = true
@@ -3109,6 +3192,7 @@ export const useChatStore = defineStore('chat', () => {
   // already gated on `sessionId.value === <stream's sessionId>`, so the
   // orphan does not bleed into B's view).
   function switchActiveSession(sid: string) {
+    cancelVariantSelectionLoad()
     sessionMessagesStream.stop()
     replaceMessages([])
     hasMoreOlder.value = false
@@ -3163,6 +3247,7 @@ export const useChatStore = defineStore('chat', () => {
     const bid = await ensureBot()
     if (!bid) return
     selectSessionRequestId++
+    cancelVariantSelectionLoad()
     clearPendingACPSession()
     sessionId.value = null
     draftIntent.value = true
@@ -3179,6 +3264,7 @@ export const useChatStore = defineStore('chat', () => {
   function selectDraft() {
     selectSessionRequestId++
     if (messageActionLoading.value) return
+    cancelVariantSelectionLoad()
     draftIntent.value = true
     if (!sessionId.value) return
     clearPendingACPSession()
@@ -3202,6 +3288,7 @@ export const useChatStore = defineStore('chat', () => {
     removeSessionFromList(delId)
     if (sessionId.value === delId) {
       if (sessions.value.length === 0) {
+        cancelVariantSelectionLoad()
         sessionId.value = null
         sessionMessagesStream.stop()
         replaceMessages([])
@@ -3232,7 +3319,7 @@ export const useChatStore = defineStore('chat', () => {
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
     const mid = messageId.trim()
-    if (!bid || !sid || !mid || activeChatReadOnly.value || streaming.value || isMessageActionLoading(sid)) return false
+    if (!bid || !sid || !mid || !sessionSupportsTurnVariants(sid) || activeChatReadOnly.value || streaming.value || loadingMessages.value || isMessageActionLoading(sid)) return false
     const previousMessages = [...messages]
     const previousHasMoreOlder = hasMoreOlder.value
     const previousHasLoadedOlder = hasLoadedOlder.value
@@ -3278,7 +3365,7 @@ export const useChatStore = defineStore('chat', () => {
     const mid = messageId.trim()
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
-    if (!mid || !bid || !sid || streaming.value || activeChatReadOnly.value || isMessageActionLoading(sid)) {
+    if (!mid || !bid || !sid || !sessionSupportsTurnVariants(sid) || streaming.value || loadingMessages.value || activeChatReadOnly.value || isMessageActionLoading(sid)) {
       return { ok: false, stage: 'startup' }
     }
     const target = messages.find((message): message is ChatAssistantTurn => message.role === 'assistant' && message.id === mid)
@@ -3295,7 +3382,7 @@ export const useChatStore = defineStore('chat', () => {
           type: 'retry_message',
           stream_id: streamId,
           session_id: sid,
-          base_head_turn_id: baseHeadForRequest(sid),
+          ...baseHeadPayload(sid),
           retry_message_id: mid,
           model_id: modelId,
           reasoning_effort: reasoningEffort,
@@ -3309,7 +3396,7 @@ export const useChatStore = defineStore('chat', () => {
     const trimmed = text.trim()
     const bid = (currentBotId.value ?? '').trim()
     const sid = (sessionId.value ?? '').trim()
-    if (!mid || !trimmed || !bid || !sid || streaming.value || activeChatReadOnly.value || isMessageActionLoading(sid)) {
+    if (!mid || !trimmed || !bid || !sid || !sessionSupportsTurnVariants(sid) || streaming.value || loadingMessages.value || activeChatReadOnly.value || isMessageActionLoading(sid)) {
       return { ok: false, stage: 'startup' }
     }
     const target = messages.find((message): message is ChatUserTurn => message.role === 'user' && message.id === mid)
@@ -3324,7 +3411,7 @@ export const useChatStore = defineStore('chat', () => {
           type: 'edit_message',
           stream_id: streamId,
           session_id: sid,
-          base_head_turn_id: baseHeadForRequest(sid),
+          ...baseHeadPayload(sid),
           edit_message_id: mid,
           text: trimmed,
           model_id: modelId,
@@ -3336,7 +3423,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function sendMessage(text: string, attachments?: ChatAttachment[]): Promise<SendMessageResult> {
     const trimmed = text.trim()
-    if ((!trimmed && !attachments?.length) || streaming.value || isMessageActionLoading(sessionId.value) || !currentBotId.value) return { ok: false, stage: 'startup' }
+    if ((!trimmed && !attachments?.length) || streaming.value || loadingMessages.value || isMessageActionLoading(sessionId.value) || !currentBotId.value) return { ok: false, stage: 'startup' }
 
     loading.value = true
     let assistantTurn: ChatAssistantTurn | null = null
@@ -3377,7 +3464,7 @@ export const useChatStore = defineStore('chat', () => {
           stream_id: sendStreamId,
           text: trimmed,
           session_id: sid,
-          base_head_turn_id: baseHeadForRequest(sid),
+          ...baseHeadPayload(sid),
           attachments,
           model_id: modelId,
           reasoning_effort: reasoningEffort,
@@ -3430,6 +3517,7 @@ export const useChatStore = defineStore('chat', () => {
     const sid = sessionId.value ?? ''
     const approvalId = approval.approval_id?.trim()
     if (!bid || !sid || !approvalId) return false
+    if (variantSelectionLoading.value) return false
     if (approval.status !== 'pending' || approval.can_approve === false) return false
     if (hasPendingApprovalResponse(approvalId)) return false
     const ws = ensureWebSocket(bid)
@@ -3456,7 +3544,7 @@ export const useChatStore = defineStore('chat', () => {
         type: 'tool_approval_response',
         stream_id: streamId,
         session_id: sid,
-        base_head_turn_id: baseHeadForRequest(sid),
+        ...continuationHeadPayload(sid, approval.persist_turn_id),
         approval_id: approvalId,
         short_id: approval.short_id,
         decision,
@@ -3482,6 +3570,7 @@ export const useChatStore = defineStore('chat', () => {
     const bid = currentBotId.value ?? ''
     const sid = sessionId.value ?? ''
     if (!bid || !sid || !userInput.user_input_id) return
+    if (variantSelectionLoading.value) return false
     const ws = ensureWebSocket(bid)
     if (!ws?.connected) {
       toast.error(userInputConnectionLostMessage())
@@ -3525,7 +3614,7 @@ export const useChatStore = defineStore('chat', () => {
         type: 'user_input_response',
         stream_id: streamId,
         session_id: sid,
-        base_head_turn_id: baseHeadForRequest(sid),
+        ...continuationHeadPayload(sid, userInput.persist_turn_id),
         user_input_id: userInput.user_input_id,
         short_id: userInput.short_id,
         answers: payload.answers,
@@ -3545,6 +3634,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function clearMessages() {
     abort()
+    cancelVariantSelectionLoad()
     replaceMessages([])
     clearSessionTurnGraph()
     hasMoreOlder.value = false
@@ -3578,6 +3668,7 @@ export const useChatStore = defineStore('chat', () => {
     currentBotId,
     bots,
     activeSession,
+    activeSessionSupportsTurnVariants,
     activeChatReadOnly,
     knownSessions,
     knownSessionSummary,

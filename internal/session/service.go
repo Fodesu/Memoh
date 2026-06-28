@@ -93,6 +93,13 @@ func IsUserFacingType(typ string) bool {
 	return slices.Contains(userFacingSessionTypes, strings.TrimSpace(typ))
 }
 
+// SupportsTurnVariants reports whether a session type may expose multiple
+// selectable turn heads and history rewrite actions. Non-chat sessions still use
+// the turn graph as storage, but they must remain linear at the product layer.
+func SupportsTurnVariants(typ string) bool {
+	return strings.TrimSpace(typ) == TypeChat
+}
+
 // CreateInput holds input for creating a new session.
 type CreateInput struct {
 	BotID               string

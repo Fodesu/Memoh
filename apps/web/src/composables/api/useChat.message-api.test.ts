@@ -18,6 +18,7 @@ vi.mock('@memohai/sdk/client', () => ({
 }))
 
 import {
+  getBotsByBotIdMessagesLocate,
   postBotsByBotIdWebMessages,
   getBotsByBotIdSessionsBySessionIdMessagesEvents,
   getBotsByBotIdSessionsEvents,
@@ -26,6 +27,7 @@ import { client } from '@memohai/sdk/client'
 
 import {
   fetchMessagesUI,
+  locateMessageUI,
   sendLocalChannelMessage,
   streamBotSessionsActivityEvents,
   streamSessionMessageEvents,
@@ -81,6 +83,34 @@ describe('fetchMessagesUI', () => {
         limit: 12,
         include_graph: '1',
         head_turn_id: 'turn-selected',
+      },
+      throwOnError: true,
+    })
+  })
+})
+
+describe('locateMessageUI', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('passes the selected session head to the locate endpoint', async () => {
+    vi.mocked(getBotsByBotIdMessagesLocate).mockResolvedValue({
+      data: { items: [], target_id: 'message-1' },
+    } as never)
+
+    await locateMessageUI('bot-1', 'session-1', 'external-1', 4, 5, {
+      headTurnId: ' turn-c ',
+    })
+
+    expect(getBotsByBotIdMessagesLocate).toHaveBeenCalledWith({
+      path: { bot_id: 'bot-1' },
+      query: {
+        session_id: 'session-1',
+        external_message_id: 'external-1',
+        before: 4,
+        after: 5,
+        head_turn_id: 'turn-c',
       },
       throwOnError: true,
     })

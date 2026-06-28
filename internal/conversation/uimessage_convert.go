@@ -640,6 +640,7 @@ func extractApprovalMetadata(metadata map[string]any) *UIToolApproval {
 		Status:         status,
 		DecisionReason: stringFromAny(obj["decision_reason"]),
 		CanApprove:     boolFromAny(obj["can_approve"], true),
+		PersistTurnID:  stringFromAny(obj["persist_turn_id"]),
 	}
 }
 
@@ -669,6 +670,7 @@ func extractUserInputMetadata(metadata map[string]any) *UIUserInput {
 		status,
 		obj["ui_payload"],
 		status == "pending",
+		stringFromAny(obj["persist_turn_id"]),
 	)
 }
 

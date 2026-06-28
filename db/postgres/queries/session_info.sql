@@ -3,6 +3,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -19,6 +20,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id, 0::bigint AS depth
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -40,6 +42,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL
@@ -68,6 +71,7 @@ WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id
   FROM bot_sessions bs
   JOIN bot_history_turns t ON t.id = bs.default_head_turn_id
+    AND t.bot_id = bs.bot_id
   WHERE bs.id = sqlc.arg(session_id)
     AND bs.deleted_at IS NULL
   UNION ALL

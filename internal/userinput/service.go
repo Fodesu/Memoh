@@ -542,13 +542,14 @@ func (s *Service) listBySession(ctx context.Context, botID, sessionID string, pe
 
 func DeferredMetadata(req Request) map[string]any {
 	return map[string]any{
-		"kind":          DeferredKind,
-		"user_input_id": req.ID,
-		"short_id":      req.ShortID,
-		"status":        req.Status,
-		"tool_call_id":  req.ToolCallID,
-		"tool_name":     req.ToolName,
-		"ui_payload":    req.UIPayload,
+		"kind":            DeferredKind,
+		"user_input_id":   req.ID,
+		"short_id":        req.ShortID,
+		"status":          req.Status,
+		"tool_call_id":    req.ToolCallID,
+		"tool_name":       req.ToolName,
+		"ui_payload":      req.UIPayload,
+		"persist_turn_id": req.PersistTurnID,
 	}
 }
 

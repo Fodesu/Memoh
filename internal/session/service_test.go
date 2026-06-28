@@ -26,6 +26,19 @@ func TestIsKnownTypeIncludesACPAgent(t *testing.T) {
 	}
 }
 
+func TestSupportsTurnVariantsOnlyForChat(t *testing.T) {
+	if !SupportsTurnVariants(TypeChat) {
+		t.Fatal("chat sessions should support turn variants")
+	}
+	for _, typ := range []string{TypeDiscuss, TypeACPAgent, TypeHeartbeat, TypeSchedule, TypeSubagent, ""} {
+		t.Run(typ, func(t *testing.T) {
+			if SupportsTurnVariants(typ) {
+				t.Fatalf("SupportsTurnVariants(%q) = true, want false", typ)
+			}
+		})
+	}
+}
+
 func TestValidateACPMetadata(t *testing.T) {
 	tests := []struct {
 		name    string

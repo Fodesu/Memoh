@@ -28,17 +28,20 @@ CREATE TABLE channel_identities (
 );
 CREATE TABLE bot_sessions (
   id TEXT PRIMARY KEY,
+  bot_id TEXT,
   default_head_turn_id TEXT,
   deleted_at TEXT,
   channel_type TEXT
 );
 CREATE TABLE bot_history_turns (
   id TEXT PRIMARY KEY,
+  bot_id TEXT,
   parent_turn_id TEXT
 );
 CREATE TABLE bot_session_turn_heads (
   session_id TEXT NOT NULL,
   head_turn_id TEXT NOT NULL,
+  bot_id TEXT NOT NULL,
   PRIMARY KEY (session_id, head_turn_id)
 );
 CREATE TABLE bot_history_messages (
@@ -64,13 +67,13 @@ CREATE TABLE bot_history_messages (
 	botID := "00000000-0000-0000-0000-000000002001"
 	sessionID := "00000000-0000-0000-0000-000000002002"
 	turnID := "00000000-0000-0000-0000-000000002005"
-	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_history_turns (id) VALUES (?)`, turnID); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_history_turns (id, bot_id) VALUES (?, ?)`, turnID, botID); err != nil {
 		t.Fatalf("insert turn: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, default_head_turn_id, channel_type) VALUES (?, ?, ?)`, sessionID, turnID, "local"); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, bot_id, default_head_turn_id, channel_type) VALUES (?, ?, ?, ?)`, sessionID, botID, turnID, "local"); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_session_turn_heads (session_id, head_turn_id) VALUES (?, ?)`, sessionID, turnID); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_session_turn_heads (session_id, head_turn_id, bot_id) VALUES (?, ?, ?)`, sessionID, turnID, botID); err != nil {
 		t.Fatalf("insert session turn head: %v", err)
 	}
 	for index, item := range []struct {

@@ -71,14 +71,16 @@ type UIToolApproval struct {
 	Status         string `json:"status"`
 	DecisionReason string `json:"decision_reason,omitempty"`
 	CanApprove     bool   `json:"can_approve,omitempty"`
+	PersistTurnID  string `json:"persist_turn_id,omitempty"`
 }
 
 type UIUserInput struct {
-	UserInputID string                 `json:"user_input_id"`
-	ShortID     int                    `json:"short_id,omitempty"`
-	Status      string                 `json:"status"`
-	Questions   []userinput.UIQuestion `json:"questions,omitempty"`
-	CanRespond  bool                   `json:"can_respond,omitempty"`
+	UserInputID   string                 `json:"user_input_id"`
+	ShortID       int                    `json:"short_id,omitempty"`
+	Status        string                 `json:"status"`
+	Questions     []userinput.UIQuestion `json:"questions,omitempty"`
+	CanRespond    bool                   `json:"can_respond,omitempty"`
+	PersistTurnID string                 `json:"persist_turn_id,omitempty"`
 }
 
 // UITurn is the normalized chat turn used by the web frontend.
@@ -120,20 +122,21 @@ type UIBackgroundTask struct {
 // UIMessageStreamEvent is the generic event shape accepted by the UI stream converter.
 // The handler layer adapts agent/channel events to this struct to avoid package cycles.
 type UIMessageStreamEvent struct {
-	Type        string
-	Delta       string
-	ToolName    string
-	ToolCallID  string
-	Input       any
-	Output      any
-	Progress    any
-	Attachments []UIAttachment
-	Error       string
-	ApprovalID  string
-	UserInputID string
-	ShortID     int
-	Status      string
-	Metadata    map[string]any
+	Type          string
+	Delta         string
+	ToolName      string
+	ToolCallID    string
+	Input         any
+	Output        any
+	Progress      any
+	Attachments   []UIAttachment
+	Error         string
+	ApprovalID    string
+	UserInputID   string
+	ShortID       int
+	Status        string
+	PersistTurnID string
+	Metadata      map[string]any
 }
 
 func uiBoolPtr(v bool) *bool {
