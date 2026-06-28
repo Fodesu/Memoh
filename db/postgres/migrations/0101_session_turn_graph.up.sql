@@ -154,6 +154,7 @@ WITH ordered AS (
     m.id,
     m.bot_id,
     m.session_id,
+    m.turn_id,
     m.role,
     m.created_at,
     ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY m.created_at, m.id) AS message_seq,
