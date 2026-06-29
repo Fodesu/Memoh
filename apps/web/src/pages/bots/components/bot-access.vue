@@ -57,75 +57,49 @@
                 {{ $t('bots.access.members.subtitle') }}
               </p>
             </div>
-            <Button
-              v-if="!memberFormVisible"
-              size="sm"
-              variant="outline"
-              class="shrink-0"
-              @click="openMemberForm"
-            >
-              <Plus class="size-4" />
-              {{ memberAddLabel }}
-            </Button>
-          </div>
-
-          <div
-            v-if="memberFormVisible"
-            class="mx-4 space-y-3 border-b border-border py-4"
-          >
-            <SearchableSelectPopover
-              v-model="memberFormIdentityId"
-              :options="memberCandidateOptions"
-              :placeholder="$t('bots.access.members.selectIdentity')"
-              :search-placeholder="$t('bots.access.members.searchIdentity')"
-              :empty-text="$t('bots.access.members.noIdentityCandidates')"
-              :show-group-headers="false"
-            >
-              <template #option-label="{ option }">
-                <div class="flex min-w-0 items-center gap-2 py-0.5 text-left">
-                  <Avatar class="size-6 shrink-0">
-                    <AvatarImage
-                      :src="optionMeta(option.meta).avatarUrl || ''"
-                      :alt="option.label"
-                    />
-                    <AvatarFallback class="text-caption">
-                      {{ option.label.slice(0, 2).toUpperCase() }}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div class="min-w-0">
-                    <div class="truncate text-xs">
-                      {{ option.label }}
-                    </div>
-                    <div
-                      v-if="optionMeta(option.meta).channelLabel"
-                      class="truncate text-xs text-muted-foreground"
-                    >
-                      {{ optionMeta(option.meta).channelLabel }}
+            <!-- Inline add-member select, same shape as the model picker in
+                 settings: a w-56 select-trigger that opens a search menu. Picking
+                 an option adds it immediately; the card layout never swaps. -->
+            <div class="w-56 shrink-0">
+              <SearchableSelectPopover
+                v-model="memberFormIdentityId"
+                :options="memberCandidateOptions"
+                :placeholder="memberAddLabel"
+                :aria-label="memberAddLabel"
+                :search-placeholder="$t('bots.access.members.searchIdentity')"
+                :empty-text="$t('bots.access.members.noIdentityCandidates')"
+                :show-group-headers="true"
+              >
+                <template #option-label="{ option }">
+                  <div class="flex min-w-0 items-center gap-2 py-0.5 text-left">
+                    <Avatar class="size-6 shrink-0">
+                      <AvatarImage
+                        :src="optionMeta(option.meta).avatarUrl || ''"
+                        :alt="option.label"
+                      />
+                      <AvatarFallback class="text-caption">
+                        {{ option.label.slice(0, 2).toUpperCase() }}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div class="min-w-0">
+                      <div class="truncate text-xs">
+                        {{ option.label }}
+                      </div>
+                      <div
+                        v-if="optionMeta(option.meta).channelLabel"
+                        class="truncate text-xs text-muted-foreground"
+                      >
+                        {{ optionMeta(option.meta).channelLabel }}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </template>
-            </SearchableSelectPopover>
-            <div class="flex items-center justify-end gap-2 pt-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                @click="closeMemberForm"
-              >
-                {{ $t('common.cancel') }}
-              </Button>
-              <Button
-                size="sm"
-                :disabled="!memberFormIdentityId"
-                @click="confirmAddMember"
-              >
-                {{ memberAddConfirmLabel }}
-              </Button>
+                </template>
+              </SearchableSelectPopover>
             </div>
           </div>
 
           <div
-            v-if="isLoadingRules || isLoadingManagers"
+            v-if="isPendingRules || isPendingManagers"
             class="mx-4 flex min-h-[3.75rem] items-center gap-3 border-b border-border py-3 text-sm text-muted-foreground last:border-b-0"
           >
             <Spinner class="size-4" />
@@ -172,6 +146,7 @@
                     size="1em"
                   />
                   <span>{{ formatPlatformName(member.channelType) }}</span>
+                  <span v-if="member.kind === 'group'"> · {{ $t('bots.access.members.groupBadge') }}</span>
                 </div>
               </div>
 
@@ -184,10 +159,19 @@
                   />
                   {{ $t('bots.access.members.chat') }}
                 </label>
-                <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground">
+                <!-- Groups can't be channel managers (bot_channel_admins is keyed by
+                     channel_identity, which groups don't have), so Manage is shown disabled
+                     rather than hidden — keeping the Chat/Manage columns aligned across
+                     row kinds. -->
+                <label
+                  class="flex items-center gap-1.5 text-xs"
+                  :class="member.kind === 'group'
+                    ? 'cursor-not-allowed text-muted-foreground'
+                    : 'cursor-pointer text-foreground'"
+                >
                   <Checkbox
                     :model-value="member.manage"
-                    :disabled="isRowBusy(member)"
+                    :disabled="isRowBusy(member) || member.kind === 'group'"
                     @update:model-value="(v) => toggleManage(member, v === true)"
                   />
                   {{ $t('bots.access.members.manage') }}
@@ -244,7 +228,9 @@
                  (untick Manage to suppress) rather than deleted from this list. -->
                 <ConfirmPopover
                   v-if="!member.bound && !member.manageInherited"
-                  :message="$t('bots.access.members.removeConfirm')"
+                  :message="member.kind === 'group'
+                    ? $t('bots.access.members.removeGroupConfirm')
+                    : $t('bots.access.members.removeConfirm')"
                   :confirm-text="$t('common.delete')"
                   @confirm="() => removeMember(member)"
                 >
@@ -616,12 +602,11 @@ import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import ChannelIcon from '@/components/channel-icon/index.vue'
 import PageShell from '@/components/page-shell/index.vue'
 import SearchableSelectPopover from '@/components/searchable-select-popover/index.vue'
-import type { SearchableSelectOption } from '@/components/searchable-select-popover/index.vue'
 import BotUserAccess from './bot-user-access.vue'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { channelTypeDisplayName } from '@/utils/channel-type-label'
 import SettingsSection from '@/components/settings/section.vue'
-import type { AclRule, AclSourceScope, ChannelaccessManager, HandlersChannelMeta } from '@memohai/sdk'
+import type { AclObservedConversationCandidate, AclRule, AclSourceScope, ChannelaccessManager, HandlersChannelMeta } from '@memohai/sdk'
 import {
   getChannels,
   getBotsByBotIdAclRules,
@@ -631,6 +616,7 @@ import {
   putBotsByBotIdAclRulesByRuleId,
   deleteBotsByBotIdAclRulesByRuleId,
   getBotsByBotIdAclChannelIdentities,
+  getBotsByBotIdAclChannelTypesByChannelTypeConversations,
   getBotsByBotIdChannelManagers,
   postBotsByBotIdChannelManagers,
   deleteBotsByBotIdChannelManagersByChannelIdentityId,
@@ -649,12 +635,10 @@ const accessModeItems = computed(() => [
   {
     value: 'allow',
     label: t('bots.access.blacklistMode'),
-    disabled: isSavingDefaultEffect.value,
   },
   {
     value: 'deny',
     label: t('bots.access.whitelistMode'),
-    disabled: isSavingDefaultEffect.value,
   },
 ])
 
@@ -667,18 +651,28 @@ const chatScopeOptions = computed(() => [
 
 const aclExcludedChannelTypes = new Set(['web'])
 
-interface IdentityOptionMeta {
+interface MemberOptionMeta {
+  kind?: 'identity' | 'group'
   avatarUrl?: string
   channelLabel?: string
+  conversationId?: string
+  channelType?: string
 }
 
-function optionMeta(meta: unknown): IdentityOptionMeta {
-  return (meta ?? {}) as IdentityOptionMeta
+function optionMeta(meta: unknown): MemberOptionMeta {
+  return (meta ?? {}) as MemberOptionMeta
+}
+
+// Stable row key for a group-target member. Encodes channel + conversation so it
+// can never collide with a channel_identity UUID, and the same pair always maps
+// to the same row across the picker, the members list, and busy/pending sets.
+function groupRowKey(channelType: string, conversationId: string): string {
+  return `group:${channelType}:${conversationId}`
 }
 
 // ---- queries ----
 
-const { data: rulesData, isLoading: isLoadingRules } = useQuery({
+const { data: rulesData, isPending: isPendingRules } = useQuery({
   key: () => ['bot-acl-rules', props.botId],
   query: async () => {
     const { data } = await getBotsByBotIdAclRules({ path: { bot_id: props.botId }, throwOnError: true })
@@ -687,7 +681,7 @@ const { data: rulesData, isLoading: isLoadingRules } = useQuery({
   enabled: () => !!props.botId,
 })
 
-const { data: managersData, isLoading: isLoadingManagers } = useQuery({
+const { data: managersData, isPending: isPendingManagers } = useQuery({
   key: () => ['bot-channel-managers', props.botId],
   query: async () => {
     const { data } = await getBotsByBotIdChannelManagers({ path: { bot_id: props.botId }, throwOnError: true })
@@ -761,23 +755,47 @@ function isPureIdentityRule(rule: AclRule): boolean {
   return !!rule.channel_identity_id && !rule.subject_channel_type && !rule.source_scope
 }
 
+// A pure-group rule targets "everyone in this group on a platform": no identity,
+// subject is the platform (subject_channel_type), scope pins the group conversation.
+// subject_channel_type is required by the backend — resolveSourceChannel derives the
+// DB-mandatory source_channel from it; without it the source_scope_check constraint
+// rejects the rule. The evaluator then matches every message from that group on that
+// platform regardless of sender.
+function isPureGroupRule(rule: AclRule): boolean {
+  return !rule.channel_identity_id
+    && !!rule.subject_channel_type
+    && !!rule.source_scope?.conversation_type
+    && rule.source_scope.conversation_type === 'group'
+    && !!rule.source_scope.conversation_id
+}
+
 // Identity-scoped chat rules for the current mode (deny in blacklist, allow in whitelist).
 const identityChatRules = computed(() =>
   rules.value.filter(r => r.effect === listEntryEffect.value && isPureIdentityRule(r)),
 )
 
-// Advanced rules: platform-wide or conversation-scoped (everything not a pure-identity rule).
+// Group-target chat rules for the current mode — rendered as first-class member rows.
+const groupRules = computed(() =>
+  rules.value.filter(r => r.effect === listEntryEffect.value && isPureGroupRule(r)),
+)
+
+// Advanced rules: platform-wide or conversation-scoped combinations that are
+// neither a pure-identity nor a pure-group member (e.g. "this person in this group").
 const advancedRules = computed(() =>
-  rules.value.filter(r => r.effect === listEntryEffect.value && !isPureIdentityRule(r)),
+  rules.value.filter(r => r.effect === listEntryEffect.value && !isPureIdentityRule(r) && !isPureGroupRule(r)),
 )
 
 // ---- members aggregation ----
 
 interface MemberRow {
+  // For identity rows: the channel_identity UUID. For group rows: the synthetic
+  // groupRowKey — used as the v-for key and the busy/pending identity.
   channelIdentityId: string
+  kind: 'identity' | 'group'
   label: string
   avatarUrl: string
   channelType: string
+  conversationId?: string
   chat: boolean
   chatRuleId?: string
   manage: boolean
@@ -790,6 +808,15 @@ interface MemberRow {
 
 const pendingIds = ref<Set<string>>(new Set())
 const busyIds = ref<Set<string>>(new Set())
+// Optimistic group row for an in-flight add. Identity adds use pendingIds (a
+// placeholder row filled from identityInfoById on refetch); a group carries its
+// own meta up front, so we hold the full row here until the persisted rule lands.
+const pendingGroupRow = ref<MemberRow | null>(null)
+
+// Local UI overrides applied while a chat/manage mutation is in flight. They are
+// cleared by the mutation that created them; keeping cleanup local avoids a
+// members -> overrides -> members update loop that can interrupt popovers.
+const localOverrides = ref(new Map<string, { chat?: boolean; manage?: boolean }>())
 
 const identityInfoById = computed(() => {
   const map = new Map<string, { label: string, avatarUrl: string, channelType: string }>()
@@ -811,6 +838,7 @@ const members = computed<MemberRow[]>(() => {
     if (!row) {
       row = {
         channelIdentityId: id,
+        kind: 'identity',
         label: id,
         avatarUrl: '',
         channelType: '',
@@ -846,17 +874,67 @@ const members = computed<MemberRow[]>(() => {
     if (!id) continue
     const row = ensure(id)
     row.chatRuleId = rule.id
-    // blacklist: a deny rule means chat OFF; whitelist: an allow rule means chat ON.
-    row.chat = !isBlacklistMode.value
+    // Whitelist: an enabled allow rule means chat ON; disabled means chat OFF.
+    // Blacklist: an enabled deny rule means chat OFF; disabled means chat ON.
+    const enabled = rule.enabled ?? true
+    row.chat = isBlacklistMode.value ? !enabled : enabled
     if (rule.channel_identity_display_name) row.label = rule.channel_identity_display_name
     else if (rule.channel_subject_id) row.label = rule.channel_subject_id
     if (rule.channel_identity_avatar_url) row.avatarUrl = rule.channel_identity_avatar_url
     if (rule.channel_type) row.channelType = rule.channel_type
   }
 
+  // Group-target chat rules for current mode — first-class group member rows.
+  for (const rule of groupRules.value) {
+    const conversationId = rule.source_scope?.conversation_id
+    if (!conversationId) continue
+    const ct = rule.subject_channel_type ?? rule.channel_type ?? ''
+    const key = groupRowKey(ct, conversationId)
+    const row = ensure(key)
+    row.kind = 'group'
+    row.conversationId = conversationId
+    row.channelType = ct
+    row.chatRuleId = rule.id
+    // Same chat semantics as identity rules: whitelist allow / blacklist deny.
+    const enabled = rule.enabled ?? true
+    row.chat = isBlacklistMode.value ? !enabled : enabled
+    if (rule.source_conversation_name) row.label = rule.source_conversation_name
+    else row.label = conversationId
+    if (rule.source_conversation_avatar_url) row.avatarUrl = rule.source_conversation_avatar_url
+  }
+
   // Optimistic rows for an in-flight add, until the persisted record is refetched.
   for (const id of pendingIds.value) {
     ensure(id)
+  }
+
+  // Optimistic group row for an in-flight add. Only seeds when the persisted
+  // rule hasn't landed yet (byId has no entry for this key) — once refetch
+  // populates the real row via groupRules above, this stops overriding it.
+  if (pendingGroupRow.value && !byId.has(pendingGroupRow.value.channelIdentityId)) {
+    const row = ensure(pendingGroupRow.value.channelIdentityId)
+    Object.assign(row, pendingGroupRow.value)
+  }
+
+  // Fill display info for group rows from the candidate directory where missing.
+  const groupInfoByKey = new Map<string, { label: string, avatarUrl: string, channelType: string }>()
+  for (const g of groupCandidates.value ?? []) {
+    if (!g.conversation_id || !g.channel) continue
+    groupInfoByKey.set(groupRowKey(g.channel, g.conversation_id), {
+      label: g.conversation_name || g.conversation_id,
+      avatarUrl: g.conversation_avatar_url ?? '',
+      channelType: g.channel,
+    })
+  }
+  for (const row of byId.values()) {
+    if (row.kind !== 'group') continue
+    const key = row.channelIdentityId
+    const info = groupInfoByKey.get(key)
+    if (info) {
+      if ((!row.label || row.label === row.conversationId) && info.label) row.label = info.label
+      if (!row.avatarUrl) row.avatarUrl = info.avatarUrl
+      if (!row.channelType) row.channelType = info.channelType
+    }
   }
 
   // Fill display info from candidate directory where missing.
@@ -871,6 +949,15 @@ const members = computed<MemberRow[]>(() => {
     }
   }
 
+  // Apply any in-flight optimistic overrides so the UI flips immediately while
+  // the mutation is still on the wire.
+  for (const row of byId.values()) {
+    const override = localOverrides.value.get(row.channelIdentityId)
+    if (!override) continue
+    if (override.chat !== undefined) row.chat = override.chat
+    if (override.manage !== undefined) row.manage = override.manage
+  }
+
   return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label))
 })
 
@@ -880,14 +967,79 @@ function isRowBusy(member: MemberRow): boolean {
 
 // ---- member add form ----
 
-const memberFormVisible = ref(false)
 const memberFormIdentityId = ref('')
+
+// Group-chat candidates: the backend only exposes observed conversations per
+// platform (no "list all groups for this bot" endpoint), so once channel
+// metadata is available we prefetch each known platform and merge the observed
+// group conversations for the member picker.
+const { data: groupCandidates } = useQuery({
+  key: () => ['bot-acl-group-candidates', props.botId],
+  query: async (): Promise<AclObservedConversationCandidate[]> => {
+    const types = platformOptions.value.map(p => p.value).filter(Boolean)
+    const results = await Promise.all(types.map(async (channelType) => {
+      try {
+        const { data } = await getBotsByBotIdAclChannelTypesByChannelTypeConversations({
+          path: { bot_id: props.botId, channel_type: channelType },
+          throwOnError: true,
+        })
+        return (data?.items ?? []).map(item => ({ ...item, channel: item.channel || channelType }))
+      }
+      catch {
+        return []
+      }
+    }))
+    const seen = new Set<string>()
+    const merged: AclObservedConversationCandidate[] = []
+    for (const item of results.flat()) {
+      // Only group conversations — the endpoint returns every observed route on the
+      // platform (DMs and threads too); a non-group conversation_id paired with a
+      // 'group' source_scope would never match inbound traffic (dead rule).
+      if (!item.conversation_id || !item.channel) continue
+      if (item.conversation_type !== 'group') continue
+      const dedupe = `${item.channel}:${item.conversation_id}`
+      if (seen.has(dedupe)) continue
+      seen.add(dedupe)
+      merged.push(item)
+    }
+    return merged
+  },
+  enabled: () => !!props.botId && (channelMetas.value?.length ?? 0) > 0,
+})
+
+// Watches need to live below the members computed and its dependencies
+// (groupCandidates, identityInfoById, etc.) so the first eager evaluation
+// never hits an uninitialized variable.
+watch(isBlacklistMode, () => {
+  localOverrides.value = new Map()
+})
+
+function setLocalOverride(key: string, patch: { chat?: boolean; manage?: boolean }) {
+  localOverrides.value = new Map(localOverrides.value).set(key, {
+    ...localOverrides.value.get(key),
+    ...patch,
+  })
+}
+
+function clearLocalOverride(key: string, field?: 'chat' | 'manage') {
+  const next = new Map(localOverrides.value)
+  if (!field) {
+    next.delete(key)
+  }
+  else {
+    const current = next.get(key)
+    if (current) {
+      const updated = { ...current }
+      delete updated[field]
+      if (updated.chat === undefined && updated.manage === undefined) next.delete(key)
+      else next.set(key, updated)
+    }
+  }
+  localOverrides.value = next
+}
 
 const memberAddLabel = computed(() =>
   isBlacklistMode.value ? t('bots.access.members.addBlocked') : t('bots.access.members.add'),
-)
-const memberAddConfirmLabel = computed(() =>
-  isBlacklistMode.value ? t('bots.access.members.blockConfirm') : t('common.add'),
 )
 const memberEmptyDescription = computed(() =>
   isBlacklistMode.value ? t('bots.access.members.emptyBlacklist') : t('bots.access.members.emptyWhitelist'),
@@ -899,44 +1051,100 @@ const memberAddFailedMessage = computed(() =>
   isBlacklistMode.value ? t('bots.access.members.blockFailed') : t('bots.access.members.addFailed'),
 )
 
-const memberCandidateOptions = computed<SearchableSelectOption[]>(() => {
+interface MemberCandidateOption {
+  value: string
+  label: string
+  description?: string
+  group: string
+  groupLabel: string
+  keywords: string[]
+  meta: MemberOptionMeta
+}
+
+const memberCandidateOptions = computed<MemberCandidateOption[]>(() => {
   const present = new Set(members.value.map(m => m.channelIdentityId))
-  return (identityCandidates.value?.items ?? [])
+  const identityOptions = (identityCandidates.value?.items ?? [])
     .filter(i => i.id && !present.has(i.id) && !aclExcludedChannelTypes.has(i.channel ?? ''))
     .map(i => ({
       value: i.id ?? '',
       label: i.display_name || i.channel_subject_id || i.id || '',
+      group: 'identities',
+      groupLabel: t('bots.access.members.identityGroupLabel'),
       keywords: [i.display_name ?? '', i.channel_subject_id ?? '', i.channel ?? ''],
-      meta: { avatarUrl: i.avatar_url, channelLabel: channelTypeDisplayName(t, i.channel ?? '') },
+      meta: { kind: 'identity', avatarUrl: i.avatar_url, channelLabel: channelTypeDisplayName(t, i.channel ?? '') },
     }))
+  const groupOptions = (groupCandidates.value ?? [])
+    .filter(g => g.conversation_id && g.channel && !aclExcludedChannelTypes.has(g.channel))
+    .flatMap((g) => {
+      const key = groupRowKey(g.channel ?? '', g.conversation_id ?? '')
+      if (present.has(key)) return []
+      return [{
+        value: key,
+        label: g.conversation_name || g.conversation_id || '',
+        group: 'groups',
+        groupLabel: t('bots.access.groupConversationGroup'),
+        keywords: [g.conversation_name ?? '', g.conversation_id ?? '', g.channel ?? ''],
+        meta: {
+          kind: 'group',
+          avatarUrl: g.conversation_avatar_url,
+          channelLabel: channelTypeDisplayName(t, g.channel ?? ''),
+          conversationId: g.conversation_id,
+          channelType: g.channel,
+        },
+      }]
+    })
+  return [...identityOptions, ...groupOptions]
 })
-
-function openMemberForm() {
-  memberFormVisible.value = true
-  memberFormIdentityId.value = ''
-}
-
-function closeMemberForm() {
-  memberFormVisible.value = false
-  memberFormIdentityId.value = ''
-}
 
 // Add persists immediately (no in-memory-only draft): adding a member writes the
 // list entry for the active mode. Whitelist entries allow chat; blacklist entries
 // deny chat. Manage is only written by the Manage checkbox so list membership
 // cannot accidentally suppress inherited workspace permissions.
 async function confirmAddMember() {
-  const id = memberFormIdentityId.value.trim()
-  if (!id) return
-  busyIds.value.add(id)
-  pendingIds.value.add(id) // optimistic row while the write lands
-  closeMemberForm()
+  const value = memberFormIdentityId.value.trim()
+  if (!value) return
+  const isGroup = value.startsWith('group:')
+  // Capture the selected option's meta before resetting the picker: the select
+  // is a single v-model, so read the option while it's still selected, then
+  // clear it in finally to return the trigger to its placeholder.
+  const selectedOption = isGroup
+    ? memberCandidateOptions.value.find(o => o.value === value)
+    : undefined
+  const groupMeta = isGroup ? optionMeta(selectedOption?.meta) : undefined
+  busyIds.value.add(value)
+  if (isGroup) {
+    // Optimistic group row: we already have the full meta (name/avatar/channel/
+    // conversationId), so show the row immediately in a busy state instead of
+    // waiting for the refetch to surface it.
+    pendingGroupRow.value = {
+      channelIdentityId: value,
+      kind: 'group',
+      label: selectedOption?.label || groupMeta?.conversationId || value,
+      avatarUrl: groupMeta?.avatarUrl ?? '',
+      channelType: groupMeta?.channelType ?? '',
+      conversationId: groupMeta?.conversationId,
+      chat: !isBlacklistMode.value,
+      manage: false,
+      manageInherited: false,
+      manageHasOverride: false,
+      bound: false,
+    }
+  }
+  else {
+    pendingIds.value.add(value)
+  }
   try {
-    if (isBlacklistMode.value) {
-      await createIdentityRule(id, 'deny')
+    if (isGroup) {
+      const conversationId = groupMeta?.conversationId ?? ''
+      const channelType = groupMeta?.channelType ?? ''
+      if (!conversationId || !channelType) throw new Error('missing conversation id or channel')
+      await createGroupRule(channelType, conversationId, isBlacklistMode.value ? 'deny' : 'allow')
+    }
+    else if (isBlacklistMode.value) {
+      await createIdentityRule(value, 'deny')
     }
     else {
-      await createIdentityRule(id, 'allow')
+      await createIdentityRule(value, 'allow')
     }
     await Promise.all([invalidateRules(), invalidateManagers()])
     toast.success(memberAddedMessage.value)
@@ -945,10 +1153,19 @@ async function confirmAddMember() {
     toast.error(resolveApiErrorMessage(e, memberAddFailedMessage.value))
   }
   finally {
-    pendingIds.value.delete(id)
-    busyIds.value.delete(id)
+    if (isGroup) pendingGroupRow.value = null
+    else pendingIds.value.delete(value)
+    busyIds.value.delete(value)
+    memberFormIdentityId.value = ''
   }
 }
+
+// The inline select commits on pick: selecting an option fires confirmAddMember
+// immediately (no separate Confirm button). The model is reset in confirmAddMember's
+// finally so the trigger returns to its placeholder, ready for the next add.
+watch(memberFormIdentityId, (value) => {
+  if (value) confirmAddMember()
+})
 
 // ---- chat / manage toggles ----
 
@@ -956,6 +1173,25 @@ async function createIdentityRule(channelIdentityId: string, effect: string) {
   await postBotsByBotIdAclRules({
     path: { bot_id: props.botId },
     body: { enabled: true, effect, channel_identity_id: channelIdentityId },
+    throwOnError: true,
+  })
+}
+
+// "Everyone in this group on this platform" — subject is the platform
+// (subject_channel_type) and scope pins the group conversation. subject_channel_type
+// is mandatory: the backend's resolveSourceChannel derives the DB-required source_channel
+// from it (without it, the source_scope_check constraint rejects the rule). The
+// platform pin is redundant for matching — conversation_id is already platform-specific —
+// but the constraint demands it.
+async function createGroupRule(channelType: string, conversationId: string, effect: string) {
+  await postBotsByBotIdAclRules({
+    path: { bot_id: props.botId },
+    body: {
+      enabled: true,
+      effect,
+      subject_channel_type: channelType,
+      source_scope: { conversation_type: 'group', conversation_id: conversationId },
+    },
     throwOnError: true,
   })
 }
@@ -973,39 +1209,100 @@ function invalidateManagers() {
 }
 
 async function toggleChat(member: MemberRow, next: boolean) {
-  busyIds.value.add(member.channelIdentityId)
+  const key = member.channelIdentityId
+  setLocalOverride(key, { chat: next })
+  busyIds.value.add(key)
   try {
-    if (isBlacklistMode.value) {
-      // blacklist: chat ON = no deny rule; chat OFF = deny rule.
-      if (next) {
-        if (member.chatRuleId) await deleteRule(member.chatRuleId)
-      }
-      else if (!member.chatRuleId) {
-        await createIdentityRule(member.channelIdentityId, 'deny')
-      }
-    }
-    else {
-      // whitelist: chat ON = allow rule; chat OFF = no allow rule.
-      if (next) {
-        if (!member.chatRuleId) await createIdentityRule(member.channelIdentityId, 'allow')
-      }
-      else if (member.chatRuleId) {
-        await deleteRule(member.chatRuleId)
-      }
-    }
+    await applyChatToggle(member, next)
     await invalidateRules()
-    toast.success(t('bots.access.members.updated'))
+    clearLocalOverride(key, 'chat')
   }
   catch (e) {
     toast.error(resolveApiErrorMessage(e, t('bots.access.members.updateFailed')))
+    clearLocalOverride(key, 'chat')
   }
   finally {
-    busyIds.value.delete(member.channelIdentityId)
+    busyIds.value.delete(key)
+  }
+}
+
+async function applyChatToggle(member: MemberRow, next: boolean) {
+  // The "natural" enabled state for the active mode: whitelist wants allow rules
+  // enabled; blacklist wants deny rules enabled. Chat ON always matches that
+  // state, chat OFF is the opposite.
+  const desiredEnabled = !isBlacklistMode.value
+  const effect = isBlacklistMode.value ? 'deny' : 'allow'
+  if (member.kind === 'group') {
+    const conversationId = member.conversationId ?? ''
+    const channelType = member.channelType ?? ''
+    if (!conversationId || !channelType) throw new Error('missing group info')
+    if (next === desiredEnabled) {
+      if (member.chatRuleId) {
+        await putBotsByBotIdAclRulesByRuleId({
+          path: { bot_id: props.botId, rule_id: member.chatRuleId },
+          body: {
+            enabled: true,
+            effect,
+            subject_channel_type: channelType,
+            source_scope: { conversation_type: 'group', conversation_id: conversationId },
+          },
+          throwOnError: true,
+        })
+      }
+      else {
+        await createGroupRule(channelType, conversationId, effect)
+      }
+    }
+    else if (member.chatRuleId) {
+      await putBotsByBotIdAclRulesByRuleId({
+        path: { bot_id: props.botId, rule_id: member.chatRuleId },
+        body: {
+          enabled: false,
+          effect,
+          subject_channel_type: channelType,
+          source_scope: { conversation_type: 'group', conversation_id: conversationId },
+        },
+        throwOnError: true,
+      })
+    }
+  }
+  else if (next === desiredEnabled) {
+    if (member.chatRuleId) {
+      await putBotsByBotIdAclRulesByRuleId({
+        path: { bot_id: props.botId, rule_id: member.chatRuleId },
+        body: {
+          enabled: true,
+          effect,
+          channel_identity_id: member.channelIdentityId,
+        },
+        throwOnError: true,
+      })
+    }
+    else {
+      await createIdentityRule(member.channelIdentityId, effect)
+    }
+  }
+  else if (member.chatRuleId) {
+    await putBotsByBotIdAclRulesByRuleId({
+      path: { bot_id: props.botId, rule_id: member.chatRuleId },
+      body: {
+        enabled: false,
+        effect,
+        channel_identity_id: member.channelIdentityId,
+      },
+      throwOnError: true,
+    })
   }
 }
 
 async function toggleManage(member: MemberRow, next: boolean) {
-  busyIds.value.add(member.channelIdentityId)
+  // Groups can't be channel managers (bot_channel_admins is keyed by
+  // channel_identity). The checkbox is disabled for group rows, so this is a
+  // defensive guard — never expected to fire.
+  if (member.kind === 'group') return
+  const key = member.channelIdentityId
+  setLocalOverride(key, { manage: next })
+  busyIds.value.add(key)
   try {
     // Toggling Manage always writes an explicit local override (granted = next);
     // it never deletes the membership. This keeps the row stable (final state =
@@ -1018,13 +1315,14 @@ async function toggleManage(member: MemberRow, next: boolean) {
       throwOnError: true,
     })
     await invalidateManagers()
-    toast.success(t('bots.access.members.updated'))
+    clearLocalOverride(key, 'manage')
   }
   catch (e) {
     toast.error(resolveApiErrorMessage(e, t('bots.access.members.updateFailed')))
+    clearLocalOverride(key, 'manage')
   }
   finally {
-    busyIds.value.delete(member.channelIdentityId)
+    busyIds.value.delete(key)
   }
 }
 
@@ -1047,16 +1345,17 @@ async function recoverInherit(member: MemberRow) {
 }
 
 async function removeMember(member: MemberRow) {
-  busyIds.value.add(member.channelIdentityId)
+  const key = member.channelIdentityId
+  busyIds.value.add(key)
   try {
     if (member.chatRuleId) await deleteRule(member.chatRuleId)
     if (member.manageHasOverride || (member.manage && !member.manageInherited)) {
       await deleteBotsByBotIdChannelManagersByChannelIdentityId({
-        path: { bot_id: props.botId, channel_identity_id: member.channelIdentityId },
+        path: { bot_id: props.botId, channel_identity_id: key },
         throwOnError: true,
       }).catch(() => undefined)
     }
-    pendingIds.value.delete(member.channelIdentityId)
+    pendingIds.value.delete(key)
     await Promise.all([invalidateRules(), invalidateManagers()])
     toast.success(t('bots.access.members.removed'))
   }
@@ -1064,7 +1363,8 @@ async function removeMember(member: MemberRow) {
     toast.error(resolveApiErrorMessage(e, t('bots.access.members.removeFailed')))
   }
   finally {
-    busyIds.value.delete(member.channelIdentityId)
+    busyIds.value.delete(key)
+    clearLocalOverride(key)
   }
 }
 
@@ -1078,7 +1378,6 @@ async function handleSetDefaultEffect(effect: string) {
   try {
     await putBotsByBotIdAclDefaultEffect({ path: { bot_id: props.botId }, body: { default_effect: effect }, throwOnError: true })
     queryCache.invalidateQueries({ key: ['bot-acl-default-effect', props.botId] })
-    toast.success(t('bots.access.defaultEffectSaved'))
   }
   catch (e) {
     defaultEffectDraft.value = previousEffect
