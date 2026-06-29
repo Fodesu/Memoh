@@ -58,7 +58,7 @@
         </TooltipContent>
       </Tooltip>
 
-      <!-- ASSISTANT role: reply-level actions. Share/read-aloud stay withheld
+      <!-- User role: request-level actions. Share/read-aloud stay withheld
            until their flows are wired. -->
       <template v-if="role === 'user'">
         <Tooltip v-if="canEdit">
@@ -131,7 +131,7 @@
               @select="handleFork"
             >
               <ForkSplitIcon />
-              <span>{{ t('chat.actions.createBranch') }}</span>
+              <span>{{ t('chat.actions.createFork') }}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -149,8 +149,7 @@
               variant="ghost"
               size="icon-sm"
               :class="variantArrowClass"
-              :disabled="!variantState.previousHeadTurnId"
-              :aria-disabled="!canSelectVariant"
+              :disabled="!canSelectVariant || !variantState.previousHeadTurnId"
               :aria-label="previousVariantLabel"
               @click="switchVariant(variantState.previousHeadTurnId)"
             >
@@ -171,8 +170,7 @@
               variant="ghost"
               size="icon-sm"
               :class="variantArrowClass"
-              :disabled="!variantState.nextHeadTurnId"
-              :aria-disabled="!canSelectVariant"
+              :disabled="!canSelectVariant || !variantState.nextHeadTurnId"
               :aria-label="nextVariantLabel"
               @click="switchVariant(variantState.nextHeadTurnId)"
             >

@@ -46,6 +46,7 @@ func (r *Resolver) RespondUserInput(ctx context.Context, input UserInputResponse
 	target, err := r.userInput.ResolveTarget(ctx, userinput.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.SessionID,
+		BaseHeadTurnID:         input.BaseHeadTurnID,
 		ExplicitID:             firstNonEmpty(input.ExplicitID, input.UserInputID),
 		ReplyExternalMessageID: input.ReplyExternalMessageID,
 	})
@@ -161,7 +162,7 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 		ConversationType:  req.ConversationType,
 		SessionToken:      input.ChatToken,
 		PersistTurnID:     req.PersistTurnID,
-		BaseHeadTurnID:    req.PersistTurnID,
+		BaseHeadTurnID:    input.BaseHeadTurnID,
 	})
 	if err != nil {
 		return err

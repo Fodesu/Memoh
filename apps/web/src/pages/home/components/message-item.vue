@@ -574,6 +574,7 @@ const canEditUserMessage = computed(() =>
 
 const canSubmitEdit = computed(() =>
   props.message.role === 'user'
+  && props.canRunMessageAction === true
   && editDraft.value.trim().length > 0
   && editDraft.value.trim() !== cleanCurrentUserText.value.trim()
   && !editSubmitting.value,

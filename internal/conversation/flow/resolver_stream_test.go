@@ -127,6 +127,8 @@ type fakeTurnStore struct {
 	sessionHeadErr   error
 	historyTurn      dbsqlc.BotHistoryTurn
 	historyTurnErr   error
+	turnPath         []dbsqlc.BotHistoryTurn
+	turnPathErr      error
 	updateDefaultErr error
 	createdTurns     []dbsqlc.CreateHistoryTurnParams
 	createdHeads     []dbsqlc.CreateSessionTurnHeadParams
@@ -159,6 +161,16 @@ func (s *fakeTurnStore) GetHistoryTurnByID(_ context.Context, id pgtype.UUID) (d
 		return s.historyTurn, nil
 	}
 	return dbsqlc.BotHistoryTurn{ID: id, BotID: s.session.BotID, OwnerSessionID: s.session.ID}, nil
+}
+
+func (s *fakeTurnStore) ListHistoryTurnPathFromHead(_ context.Context, headTurnID pgtype.UUID) ([]dbsqlc.BotHistoryTurn, error) {
+	if s.turnPathErr != nil {
+		return nil, s.turnPathErr
+	}
+	if s.turnPath != nil {
+		return s.turnPath, nil
+	}
+	return []dbsqlc.BotHistoryTurn{{ID: headTurnID, BotID: s.session.BotID, OwnerSessionID: s.session.ID}}, nil
 }
 
 func (s *fakeTurnStore) CreateSessionTurnHead(_ context.Context, arg dbsqlc.CreateSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error) {
@@ -511,6 +523,7 @@ func TestValidateContinuationTurnAcceptsPendingOwnedTurn(t *testing.T) {
 	sessionID := testUUID(1)
 	botID := testUUID(2)
 	persistTurnID := testUUID(3)
+	baseHeadTurnID := testUUID(4)
 	store := &fakeTurnStore{
 		session: dbsqlc.BotSession{ID: sessionID, BotID: botID, Type: "chat"},
 		historyTurn: dbsqlc.BotHistoryTurn{
@@ -518,14 +531,47 @@ func TestValidateContinuationTurnAcceptsPendingOwnedTurn(t *testing.T) {
 			BotID:          botID,
 			OwnerSessionID: sessionID,
 		},
+		turnPath: []dbsqlc.BotHistoryTurn{
+			{ID: baseHeadTurnID, BotID: botID, OwnerSessionID: sessionID, ParentTurnID: persistTurnID},
+			{ID: persistTurnID, BotID: botID, OwnerSessionID: sessionID},
+		},
 	}
 	resolver := &Resolver{queries: store}
 
-	if err := resolver.validateBaseContinuationTurnHead(context.Background(), sessionID.String(), persistTurnID.String(), persistTurnID.String(), "tool approval"); err != nil {
+	if err := resolver.validateBaseContinuationTurnHead(context.Background(), sessionID.String(), persistTurnID.String(), baseHeadTurnID.String(), "tool approval"); err != nil {
 		t.Fatalf("validateBaseContinuationTurnHead() error = %v", err)
 	}
 	if len(store.createdHeads) != 0 || len(store.replacedHeads) != 0 {
 		t.Fatalf("validation mutated heads: created=%#v replaced=%#v", store.createdHeads, store.replacedHeads)
+	}
+}
+
+func TestValidateContinuationTurnRejectsPendingTurnOutsideSelectedHeadPath(t *testing.T) {
+	t.Parallel()
+
+	sessionID := testUUID(1)
+	botID := testUUID(2)
+	persistTurnID := testUUID(3)
+	baseHeadTurnID := testUUID(4)
+	store := &fakeTurnStore{
+		session: dbsqlc.BotSession{ID: sessionID, BotID: botID, Type: "chat"},
+		historyTurn: dbsqlc.BotHistoryTurn{
+			ID:             persistTurnID,
+			BotID:          botID,
+			OwnerSessionID: sessionID,
+		},
+		turnPath: []dbsqlc.BotHistoryTurn{
+			{ID: baseHeadTurnID, BotID: botID, OwnerSessionID: sessionID},
+		},
+	}
+	resolver := &Resolver{queries: store}
+
+	err := resolver.validateBaseContinuationTurnHead(context.Background(), sessionID.String(), persistTurnID.String(), baseHeadTurnID.String(), "tool approval")
+	if err == nil {
+		t.Fatal("validateBaseContinuationTurnHead() error = nil, want selected path rejection")
+	}
+	if !strings.Contains(err.Error(), "tool approval turn is no longer active for the requested conversation version") {
+		t.Fatalf("validateBaseContinuationTurnHead() error = %v, want selected path rejection", err)
 	}
 }
 

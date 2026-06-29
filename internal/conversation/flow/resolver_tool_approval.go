@@ -38,6 +38,7 @@ func (r *Resolver) RespondToolApproval(ctx context.Context, input ToolApprovalRe
 	target, err := r.toolApproval.ResolveTarget(ctx, toolapproval.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.SessionID,
+		BaseHeadTurnID:         input.BaseHeadTurnID,
 		ExplicitID:             firstNonEmpty(input.ExplicitID, input.ApprovalID),
 		ReplyExternalMessageID: input.ReplyExternalMessageID,
 	})
@@ -188,7 +189,7 @@ func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Req
 		ConversationType:  req.ConversationType,
 		SessionToken:      input.ChatToken,
 		PersistTurnID:     req.PersistTurnID,
-		BaseHeadTurnID:    req.PersistTurnID,
+		BaseHeadTurnID:    input.BaseHeadTurnID,
 	})
 	if err != nil {
 		return sdk.ToolResultPart{}, err
@@ -236,7 +237,7 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 		ConversationType:  approval.ConversationType,
 		SessionToken:      input.ChatToken,
 		PersistTurnID:     approval.PersistTurnID,
-		BaseHeadTurnID:    approval.PersistTurnID,
+		BaseHeadTurnID:    input.BaseHeadTurnID,
 	})
 	if err != nil {
 		return err

@@ -1,8 +1,9 @@
 -- name: CreateUserInputRequest :one
 WITH locked_session AS (
-  SELECT id
+  SELECT id, bot_id
   FROM bot_sessions
   WHERE id = sqlc.arg(session_id)
+    AND bot_id = sqlc.arg(bot_id)
   FOR UPDATE
 ),
 next_short_id AS (
@@ -62,10 +63,19 @@ RETURNING *;
 
 -- name: CreateUserInputRequestForTurn :one
 WITH locked_session AS (
-  SELECT id
+  SELECT id, bot_id
   FROM bot_sessions
   WHERE id = sqlc.arg(session_id)
+    AND bot_id = sqlc.arg(bot_id)
   FOR UPDATE
+),
+persist_turn AS (
+  SELECT t.id
+  FROM locked_session
+  JOIN bot_history_turns t
+    ON t.id = sqlc.arg(persist_turn_id)
+   AND t.bot_id = locked_session.bot_id
+   AND t.owner_session_id = locked_session.id
 ),
 next_short_id AS (
   SELECT COALESCE(MAX(user_input_requests.short_id), 0) + 1 AS short_id
@@ -101,13 +111,14 @@ INSERT INTO user_input_requests (
   sqlc.arg(ui_payload_json),
   sqlc.arg(provider_metadata),
   sqlc.narg(requested_by_channel_identity_id),
-  sqlc.arg(persist_turn_id),
+  persist_turn.id,
   sqlc.arg(source_platform),
   sqlc.arg(reply_target),
   sqlc.arg(conversation_type),
   sqlc.narg(expires_at)
 FROM locked_session
 CROSS JOIN next_short_id
+CROSS JOIN persist_turn
 ON CONFLICT (session_id, tool_call_id, persist_turn_id) WHERE persist_turn_id IS NOT NULL DO UPDATE
 SET input_json = EXCLUDED.input_json,
     ui_payload_json = EXCLUDED.ui_payload_json,
@@ -126,6 +137,59 @@ RETURNING *;
 SELECT *
 FROM user_input_requests
 WHERE id = $1;
+
+-- name: GetPendingUserInputByVisibleRequestID :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = sqlc.arg(session_id)
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.*
+FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
+WHERE uir.id = sqlc.arg(id)
+  AND uir.bot_id = sqlc.arg(bot_id)
+  AND uir.session_id = sqlc.arg(session_id)
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns));
+
+-- name: GetPendingUserInputByBaseHeadRequestID :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
+    AND h.head_turn_id = sqlc.arg(base_head_turn_id)
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = sqlc.arg(session_id)
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.*
+FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
+WHERE uir.id = sqlc.arg(id)
+  AND uir.bot_id = sqlc.arg(bot_id)
+  AND uir.session_id = sqlc.arg(session_id)
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns));
 
 -- name: GetUserInputRequestBySessionToolCall :one
 SELECT *
@@ -157,6 +221,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.*
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = sqlc.arg(bot_id)
   AND uir.session_id = sqlc.arg(session_id)
   AND uir.short_id = sqlc.arg(short_id)
@@ -180,6 +247,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.*
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = sqlc.arg(bot_id)
   AND uir.session_id = sqlc.arg(session_id)
   AND uir.status = 'pending'
@@ -204,6 +274,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.*
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = sqlc.arg(bot_id)
   AND uir.session_id = sqlc.arg(session_id)
   AND uir.prompt_external_message_id = sqlc.arg(prompt_external_message_id)
@@ -299,6 +372,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.*
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = sqlc.arg(bot_id)
   AND uir.session_id = sqlc.arg(session_id)
   AND uir.status = 'pending'
@@ -322,6 +398,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.*
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = sqlc.arg(bot_id)
   AND uir.session_id = sqlc.arg(session_id)
   AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
@@ -343,6 +422,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.*
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = sqlc.arg(bot_id)
   AND uir.session_id = sqlc.arg(session_id)
   AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT DISTINCT visible_turns.id FROM visible_turns))

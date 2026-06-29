@@ -395,7 +395,7 @@
       "share": "Share",
       "retry": "Try again",
       "fork": "Fork",
-      "createBranch": "Create new branch",
+      "createFork": "Create fork",
       "more": "More",
       "requestVariant": {
         "previous": "Previous request",

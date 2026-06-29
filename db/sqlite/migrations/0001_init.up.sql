@@ -655,7 +655,8 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   decided_at TEXT,
   CONSTRAINT tool_approval_operation_check CHECK (operation IN ('read', 'write', 'exec')),
   CONSTRAINT tool_approval_status_check CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'cancelled')),
-  CONSTRAINT tool_approval_short_id_unique UNIQUE (session_id, short_id)
+  CONSTRAINT tool_approval_short_id_unique UNIQUE (session_id, short_id),
+  FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_approval_bot_status_created
@@ -706,7 +707,8 @@ CREATE TABLE IF NOT EXISTS user_input_requests (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT user_input_tool_name_check CHECK (tool_name = 'ask_user'),
   CONSTRAINT user_input_status_check CHECK (status IN ('pending', 'submitted', 'canceled', 'expired', 'failed')),
-  CONSTRAINT user_input_short_id_unique UNIQUE (session_id, short_id)
+  CONSTRAINT user_input_short_id_unique UNIQUE (session_id, short_id),
+  FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS user_input_tool_call_legacy_unique
@@ -725,6 +727,66 @@ CREATE INDEX IF NOT EXISTS idx_user_input_persist_turn
 CREATE INDEX IF NOT EXISTS idx_user_input_prompt_external
   ON user_input_requests(prompt_external_message_id)
   WHERE prompt_external_message_id != '';
+
+CREATE TRIGGER IF NOT EXISTS tool_approval_persist_turn_owner_insert
+BEFORE INSERT ON tool_approval_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
+END;
+
+CREATE TRIGGER IF NOT EXISTS tool_approval_persist_turn_owner_update
+BEFORE UPDATE OF persist_turn_id, bot_id, session_id ON tool_approval_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
+END;
+
+CREATE TRIGGER IF NOT EXISTS user_input_persist_turn_owner_insert
+BEFORE INSERT ON user_input_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
+END;
+
+CREATE TRIGGER IF NOT EXISTS user_input_persist_turn_owner_update
+BEFORE UPDATE OF persist_turn_id, bot_id, session_id ON user_input_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
+END;
 
 CREATE TABLE IF NOT EXISTS containers (
   id TEXT PRIMARY KEY,

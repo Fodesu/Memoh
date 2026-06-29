@@ -1276,11 +1276,6 @@ export const useChatStore = defineStore('chat', () => {
     return baseHeadTurnId ? { base_head_turn_id: baseHeadTurnId } : {}
   }
 
-  function continuationHeadPayload(targetSessionId: string, persistTurnId?: string): { base_head_turn_id: string } | Record<string, never> {
-    const head = persistTurnId?.trim()
-    return head ? { base_head_turn_id: head } : baseHeadPayload(targetSessionId)
-  }
-
   function explicitSelectedHeadForSession(targetSessionId?: string | null): string {
     const sid = (targetSessionId ?? sessionId.value ?? '').trim()
     if (!sid) return ''
@@ -3727,7 +3722,7 @@ export const useChatStore = defineStore('chat', () => {
         type: 'tool_approval_response',
         stream_id: streamId,
         session_id: sid,
-        ...continuationHeadPayload(sid, approval.persist_turn_id),
+        ...baseHeadPayload(sid),
         approval_id: approvalId,
         short_id: approval.short_id,
         decision,
@@ -3797,7 +3792,7 @@ export const useChatStore = defineStore('chat', () => {
         type: 'user_input_response',
         stream_id: streamId,
         session_id: sid,
-        ...continuationHeadPayload(sid, userInput.persist_turn_id),
+        ...baseHeadPayload(sid),
         user_input_id: userInput.user_input_id,
         short_id: userInput.short_id,
         answers: payload.answers,

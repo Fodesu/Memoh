@@ -57,6 +57,7 @@ type CreatePendingInput struct {
 type ResolveInput struct {
 	BotID                  string
 	SessionID              string
+	BaseHeadTurnID         string
 	ExplicitID             string
 	ReplyExternalMessageID string
 }

@@ -2307,6 +2307,25 @@ func (q *Queries) GetHistoryTurnByID(ctx context.Context, id pgtype.UUID) (pgsql
 	return result, nil
 }
 
+func (q *Queries) ListHistoryTurnPathFromHead(ctx context.Context, headTurnID pgtype.UUID) ([]pgsqlc.BotHistoryTurn, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteHeadTurnID string
+	if err := convertValue(headTurnID, &sqliteHeadTurnID); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ListHistoryTurnPathFromHead(ctx, sqliteHeadTurnID)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.BotHistoryTurn
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (q *Queries) GetCompactionLogByID(ctx context.Context, id pgtype.UUID) (pgsqlc.BotHistoryMessageCompact, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.BotHistoryMessageCompact{}, errSQLiteQueriesNotConfigured
@@ -2774,6 +2793,25 @@ func (q *Queries) GetPendingToolApprovalByReplyMessage(ctx context.Context, arg 
 	return result, nil
 }
 
+func (q *Queries) GetPendingToolApprovalByBaseHeadRequestID(ctx context.Context, arg pgsqlc.GetPendingToolApprovalByBaseHeadRequestIDParams) (pgsqlc.ToolApprovalRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.ToolApprovalRequest{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.GetPendingToolApprovalByBaseHeadRequestIDParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.ToolApprovalRequest{}, err
+	}
+	out, err := q.store.queries.GetPendingToolApprovalByBaseHeadRequestID(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.ToolApprovalRequest{}, mapQueryErr(err)
+	}
+	var result pgsqlc.ToolApprovalRequest
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.ToolApprovalRequest{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) GetPendingToolApprovalBySessionShortID(ctx context.Context, arg pgsqlc.GetPendingToolApprovalBySessionShortIDParams) (pgsqlc.ToolApprovalRequest, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.ToolApprovalRequest{}, errSQLiteQueriesNotConfigured
@@ -2783,6 +2821,25 @@ func (q *Queries) GetPendingToolApprovalBySessionShortID(ctx context.Context, ar
 		return pgsqlc.ToolApprovalRequest{}, err
 	}
 	out, err := q.store.queries.GetPendingToolApprovalBySessionShortID(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.ToolApprovalRequest{}, mapQueryErr(err)
+	}
+	var result pgsqlc.ToolApprovalRequest
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.ToolApprovalRequest{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) GetPendingToolApprovalByVisibleRequestID(ctx context.Context, arg pgsqlc.GetPendingToolApprovalByVisibleRequestIDParams) (pgsqlc.ToolApprovalRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.ToolApprovalRequest{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.GetPendingToolApprovalByVisibleRequestIDParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.ToolApprovalRequest{}, err
+	}
+	out, err := q.store.queries.GetPendingToolApprovalByVisibleRequestID(ctx, sqliteArg)
 	if err != nil {
 		return pgsqlc.ToolApprovalRequest{}, mapQueryErr(err)
 	}
@@ -6468,6 +6525,25 @@ func (q *Queries) GetPendingUserInputByReplyMessage(ctx context.Context, arg pgs
 	return result, nil
 }
 
+func (q *Queries) GetPendingUserInputByBaseHeadRequestID(ctx context.Context, arg pgsqlc.GetPendingUserInputByBaseHeadRequestIDParams) (pgsqlc.UserInputRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.UserInputRequest{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.GetPendingUserInputByBaseHeadRequestIDParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	out, err := q.store.queries.GetPendingUserInputByBaseHeadRequestID(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.UserInputRequest{}, mapQueryErr(err)
+	}
+	var result pgsqlc.UserInputRequest
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) GetPendingUserInputBySessionShortID(ctx context.Context, arg pgsqlc.GetPendingUserInputBySessionShortIDParams) (pgsqlc.UserInputRequest, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.UserInputRequest{}, errSQLiteQueriesNotConfigured
@@ -6477,6 +6553,25 @@ func (q *Queries) GetPendingUserInputBySessionShortID(ctx context.Context, arg p
 		return pgsqlc.UserInputRequest{}, err
 	}
 	out, err := q.store.queries.GetPendingUserInputBySessionShortID(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.UserInputRequest{}, mapQueryErr(err)
+	}
+	var result pgsqlc.UserInputRequest
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	return result, nil
+}
+
+func (q *Queries) GetPendingUserInputByVisibleRequestID(ctx context.Context, arg pgsqlc.GetPendingUserInputByVisibleRequestIDParams) (pgsqlc.UserInputRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.UserInputRequest{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.GetPendingUserInputByVisibleRequestIDParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.UserInputRequest{}, err
+	}
+	out, err := q.store.queries.GetPendingUserInputByVisibleRequestID(ctx, sqliteArg)
 	if err != nil {
 		return pgsqlc.UserInputRequest{}, mapQueryErr(err)
 	}

@@ -22,8 +22,14 @@ DROP INDEX IF EXISTS idx_bot_sessions_forked_from_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_session;
 DROP INDEX IF EXISTS idx_bot_sessions_default_head_turn;
 
+DROP TRIGGER IF EXISTS user_input_persist_turn_owner_guard ON user_input_requests;
+DROP TRIGGER IF EXISTS tool_approval_persist_turn_owner_guard ON tool_approval_requests;
+DROP FUNCTION IF EXISTS enforce_request_persist_turn_owner();
+
 ALTER TABLE user_input_requests DROP CONSTRAINT IF EXISTS fk_user_input_persist_turn;
 ALTER TABLE tool_approval_requests DROP CONSTRAINT IF EXISTS fk_tool_approval_persist_turn;
+ALTER TABLE user_input_requests DROP CONSTRAINT IF EXISTS fk_user_input_session_bot;
+ALTER TABLE tool_approval_requests DROP CONSTRAINT IF EXISTS fk_tool_approval_session_bot;
 ALTER TABLE bot_history_messages DROP CONSTRAINT IF EXISTS fk_bot_history_messages_turn;
 
 WITH ranked_tool_approvals AS (

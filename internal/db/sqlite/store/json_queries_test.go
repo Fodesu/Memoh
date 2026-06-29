@@ -267,7 +267,8 @@ CREATE TABLE bots (
   id TEXT PRIMARY KEY
 );
 CREATE TABLE bot_sessions (
-  id TEXT PRIMARY KEY
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE
 );
 CREATE TABLE bot_channel_routes (
   id TEXT PRIMARY KEY
@@ -329,7 +330,7 @@ CREATE TABLE user_input_requests (
 	if _, err := conn.ExecContext(ctx, `INSERT INTO bots (id) VALUES (?)`, botID); err != nil {
 		t.Fatalf("insert bot: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id) VALUES (?)`, sessionID); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO bot_sessions (id, bot_id) VALUES (?, ?)`, sessionID, botID); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO channel_identities (id) VALUES (?)`, actorID); err != nil {

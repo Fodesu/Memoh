@@ -29,7 +29,12 @@ DROP INDEX IF EXISTS idx_bot_sessions_forked_from_turn;
 DROP INDEX IF EXISTS idx_bot_sessions_forked_from_session;
 DROP INDEX IF EXISTS idx_bot_sessions_default_head_turn;
 
-CREATE TABLE bot_sessions_0024_down (
+DROP TRIGGER IF EXISTS user_input_persist_turn_owner_update;
+DROP TRIGGER IF EXISTS user_input_persist_turn_owner_insert;
+DROP TRIGGER IF EXISTS tool_approval_persist_turn_owner_update;
+DROP TRIGGER IF EXISTS tool_approval_persist_turn_owner_insert;
+
+CREATE TABLE bot_sessions_0026_down (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   route_id TEXT REFERENCES bot_channel_routes(id) ON DELETE SET NULL,
@@ -44,7 +49,7 @@ CREATE TABLE bot_sessions_0024_down (
   deleted_at TEXT
 );
 
-INSERT INTO bot_sessions_0024_down (
+INSERT INTO bot_sessions_0026_down (
   id,
   bot_id,
   route_id,
@@ -74,9 +79,9 @@ SELECT
 FROM bot_sessions;
 
 DROP TABLE bot_sessions;
-ALTER TABLE bot_sessions_0024_down RENAME TO bot_sessions;
+ALTER TABLE bot_sessions_0026_down RENAME TO bot_sessions;
 
-CREATE TABLE bot_history_messages_0024_down (
+CREATE TABLE bot_history_messages_0026_down (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,
@@ -95,7 +100,7 @@ CREATE TABLE bot_history_messages_0024_down (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO bot_history_messages_0024_down (
+INSERT INTO bot_history_messages_0026_down (
   id,
   bot_id,
   session_id,
@@ -133,12 +138,12 @@ SELECT
 FROM bot_history_messages;
 
 DROP TABLE bot_history_messages;
-ALTER TABLE bot_history_messages_0024_down RENAME TO bot_history_messages;
+ALTER TABLE bot_history_messages_0026_down RENAME TO bot_history_messages;
 
 DROP TABLE IF EXISTS bot_session_turn_heads;
 DROP TABLE IF EXISTS bot_history_turns;
 
-CREATE TABLE tool_approval_requests_0024_down (
+CREATE TABLE tool_approval_requests_0026_down (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   session_id TEXT NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
@@ -167,7 +172,7 @@ CREATE TABLE tool_approval_requests_0024_down (
   CONSTRAINT tool_approval_tool_call_unique UNIQUE (session_id, tool_call_id)
 );
 
-INSERT INTO tool_approval_requests_0024_down (
+INSERT INTO tool_approval_requests_0026_down (
   id,
   bot_id,
   session_id,
@@ -227,9 +232,9 @@ FROM ranked_tool_approvals
 WHERE row_num = 1;
 
 DROP TABLE tool_approval_requests;
-ALTER TABLE tool_approval_requests_0024_down RENAME TO tool_approval_requests;
+ALTER TABLE tool_approval_requests_0026_down RENAME TO tool_approval_requests;
 
-CREATE TABLE user_input_requests_0024_down (
+CREATE TABLE user_input_requests_0026_down (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   session_id TEXT NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
@@ -262,7 +267,7 @@ CREATE TABLE user_input_requests_0024_down (
   CONSTRAINT user_input_short_id_unique UNIQUE (session_id, short_id)
 );
 
-INSERT INTO user_input_requests_0024_down (
+INSERT INTO user_input_requests_0026_down (
   id,
   bot_id,
   session_id,
@@ -332,7 +337,7 @@ FROM ranked_user_inputs
 WHERE row_num = 1;
 
 DROP TABLE user_input_requests;
-ALTER TABLE user_input_requests_0024_down RENAME TO user_input_requests;
+ALTER TABLE user_input_requests_0026_down RENAME TO user_input_requests;
 
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_id ON bot_sessions(bot_id);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_route_id ON bot_sessions(route_id);

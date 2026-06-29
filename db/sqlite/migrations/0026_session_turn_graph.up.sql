@@ -61,6 +61,7 @@ SELECT
 FROM bot_sessions;
 DROP TABLE bot_sessions;
 ALTER TABLE bot_sessions_new RENAME TO bot_sessions;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_sessions_id_bot_unique ON bot_sessions(id, bot_id);
 
 CREATE TABLE bot_history_messages_new (
   id TEXT PRIMARY KEY,
@@ -162,7 +163,8 @@ CREATE TABLE tool_approval_requests_new (
   decided_at TEXT,
   CONSTRAINT tool_approval_operation_check CHECK (operation IN ('read', 'write', 'exec')),
   CONSTRAINT tool_approval_status_check CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'cancelled')),
-  CONSTRAINT tool_approval_short_id_unique UNIQUE (session_id, short_id)
+  CONSTRAINT tool_approval_short_id_unique UNIQUE (session_id, short_id),
+  FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE
 );
 INSERT INTO tool_approval_requests_new (
   id,
@@ -248,7 +250,8 @@ CREATE TABLE user_input_requests_new (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT user_input_tool_name_check CHECK (tool_name = 'ask_user'),
   CONSTRAINT user_input_status_check CHECK (status IN ('pending', 'submitted', 'canceled', 'expired', 'failed')),
-  CONSTRAINT user_input_short_id_unique UNIQUE (session_id, short_id)
+  CONSTRAINT user_input_short_id_unique UNIQUE (session_id, short_id),
+  FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE
 );
 INSERT INTO user_input_requests_new (
   id,
@@ -323,7 +326,6 @@ CREATE INDEX IF NOT EXISTS idx_bot_sessions_forked_from_turn ON bot_sessions(for
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_created_by_user_id ON bot_sessions(created_by_user_id) WHERE created_by_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_created_by ON bot_sessions(bot_id, created_by_user_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_active_updated ON bot_sessions(bot_id, updated_at DESC, id DESC) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_sessions_id_bot_unique ON bot_sessions(id, bot_id);
 
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_bot_created ON bot_history_turns(bot_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_bot_history_turns_owner_session ON bot_history_turns(owner_session_id, created_at, id) WHERE owner_session_id IS NOT NULL;
@@ -627,6 +629,66 @@ WHEN NEW.forked_from_turn_id IS NOT NULL
   )
 BEGIN
   SELECT RAISE(ABORT, 'bot_sessions.forked_from_turn_id must reference a turn from the same bot');
+END;
+
+CREATE TRIGGER IF NOT EXISTS tool_approval_persist_turn_owner_insert
+BEFORE INSERT ON tool_approval_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
+END;
+
+CREATE TRIGGER IF NOT EXISTS tool_approval_persist_turn_owner_update
+BEFORE UPDATE OF persist_turn_id, bot_id, session_id ON tool_approval_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
+END;
+
+CREATE TRIGGER IF NOT EXISTS user_input_persist_turn_owner_insert
+BEFORE INSERT ON user_input_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
+END;
+
+CREATE TRIGGER IF NOT EXISTS user_input_persist_turn_owner_update
+BEFORE UPDATE OF persist_turn_id, bot_id, session_id ON user_input_requests
+FOR EACH ROW
+WHEN NEW.persist_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'persist_turn_id must reference a turn from the same bot session');
 END;
 
 DROP TABLE session_turn_seed;

@@ -131,6 +131,8 @@ type sessionHeadStore interface {
 type continuationTurnStore interface {
 	GetSessionByID(context.Context, pgtype.UUID) (dbsqlc.BotSession, error)
 	GetHistoryTurnByID(context.Context, pgtype.UUID) (dbsqlc.BotHistoryTurn, error)
+	GetSessionTurnHead(context.Context, dbsqlc.GetSessionTurnHeadParams) (dbsqlc.BotSessionTurnHead, error)
+	ListHistoryTurnPathFromHead(context.Context, pgtype.UUID) ([]dbsqlc.BotHistoryTurn, error)
 }
 
 type turnTxRunner interface {
@@ -219,13 +221,53 @@ func (r *Resolver) validateBaseContinuationTurnHead(ctx context.Context, session
 	if persistTurnID == "" {
 		return nil
 	}
-	if baseHeadTurnID != "" && baseHeadTurnID != persistTurnID {
-		if strings.TrimSpace(label) == "" {
-			label = "continuation"
-		}
-		return fmt.Errorf("%s turn is no longer active for the requested conversation version", label)
+	if err := r.validateContinuationTurnHead(ctx, sessionID, persistTurnID); err != nil {
+		return err
 	}
-	return r.validateContinuationTurnHead(ctx, sessionID, persistTurnID)
+	if baseHeadTurnID == "" {
+		return nil
+	}
+	if strings.TrimSpace(label) == "" {
+		label = "continuation"
+	}
+	if r == nil || r.queries == nil {
+		return nil
+	}
+	store, ok := r.queries.(continuationTurnStore)
+	if !ok {
+		return nil
+	}
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return fmt.Errorf("validate continuation turn: invalid session id: %w", err)
+	}
+	pgBaseHeadTurnID, err := dbpkg.ParseUUID(baseHeadTurnID)
+	if err != nil {
+		return fmt.Errorf("validate continuation turn: invalid base head turn id: %w", err)
+	}
+	pgPersistTurnID, err := dbpkg.ParseUUID(persistTurnID)
+	if err != nil {
+		return fmt.Errorf("validate continuation turn: invalid persist turn id: %w", err)
+	}
+	if _, err := store.GetSessionTurnHead(ctx, dbsqlc.GetSessionTurnHeadParams{
+		SessionID:  pgSessionID,
+		HeadTurnID: pgBaseHeadTurnID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%s turn is no longer active for the requested conversation version", label)
+		}
+		return fmt.Errorf("validate continuation turn: get base head: %w", err)
+	}
+	path, err := store.ListHistoryTurnPathFromHead(ctx, pgBaseHeadTurnID)
+	if err != nil {
+		return fmt.Errorf("validate continuation turn: list base head path: %w", err)
+	}
+	for _, turn := range path {
+		if turn.ID == pgPersistTurnID {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s turn is no longer active for the requested conversation version", label)
 }
 
 func contextScopeFromParentTurn(parentTurnID pgtype.UUID) TurnContextScope {

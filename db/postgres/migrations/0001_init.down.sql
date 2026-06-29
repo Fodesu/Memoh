@@ -63,4 +63,5 @@ DROP TABLE IF EXISTS providers CASCADE;
 DROP TABLE IF EXISTS user_channel_bindings CASCADE;
 DROP TABLE IF EXISTS channel_identities CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP FUNCTION IF EXISTS enforce_request_persist_turn_owner();
 DROP TYPE IF EXISTS user_role;

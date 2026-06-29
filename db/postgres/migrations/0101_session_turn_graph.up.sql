@@ -296,6 +296,20 @@ WHERE request.id = ranked.id
 DO $$
 BEGIN
   IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'fk_tool_approval_session_bot'
+  ) THEN
+    ALTER TABLE tool_approval_requests
+      ADD CONSTRAINT fk_tool_approval_session_bot
+      FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'fk_user_input_session_bot'
+  ) THEN
+    ALTER TABLE user_input_requests
+      ADD CONSTRAINT fk_user_input_session_bot
+      FOREIGN KEY (session_id, bot_id) REFERENCES bot_sessions(id, bot_id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'fk_bot_session_turn_heads_session_bot'
   ) THEN
     ALTER TABLE bot_session_turn_heads
@@ -374,3 +388,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS user_input_tool_call_legacy_unique
 CREATE UNIQUE INDEX IF NOT EXISTS user_input_tool_call_turn_unique
   ON user_input_requests(session_id, tool_call_id, persist_turn_id)
   WHERE persist_turn_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION enforce_request_persist_turn_owner()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.persist_turn_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM bot_history_turns t
+    WHERE t.id = NEW.persist_turn_id
+      AND t.bot_id = NEW.bot_id
+      AND t.owner_session_id = NEW.session_id
+  ) THEN
+    RAISE EXCEPTION 'persist_turn_id must reference a turn from the same bot session';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tool_approval_persist_turn_owner_guard ON tool_approval_requests;
+CREATE TRIGGER tool_approval_persist_turn_owner_guard
+BEFORE INSERT OR UPDATE OF persist_turn_id, bot_id, session_id ON tool_approval_requests
+FOR EACH ROW EXECUTE FUNCTION enforce_request_persist_turn_owner();
+
+DROP TRIGGER IF EXISTS user_input_persist_turn_owner_guard ON user_input_requests;
+CREATE TRIGGER user_input_persist_turn_owner_guard
+BEFORE INSERT OR UPDATE OF persist_turn_id, bot_id, session_id ON user_input_requests
+FOR EACH ROW EXECUTE FUNCTION enforce_request_persist_turn_owner();

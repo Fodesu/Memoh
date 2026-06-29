@@ -1406,7 +1406,7 @@ describe('chat-list store', () => {
     })
   })
 
-  it('uses the pending persist turn when responding to pending actions', async () => {
+  it('keeps the selected head when responding to turn-scoped pending actions', async () => {
     api.fetchSessions.mockResolvedValueOnce({ items: [
       { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
     ], nextCursor: null })
@@ -1445,10 +1445,10 @@ describe('chat-list store', () => {
     await flushPromises()
 
     expect(sentWSMessages.find(message => message.type === 'tool_approval_response')).toMatchObject({
-      base_head_turn_id: 'turn-pending',
+      base_head_turn_id: 'turn-c',
     })
     expect(sentWSMessages.find(message => message.type === 'user_input_response')).toMatchObject({
-      base_head_turn_id: 'turn-pending',
+      base_head_turn_id: 'turn-c',
     })
   })
 

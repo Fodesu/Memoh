@@ -122,9 +122,10 @@ func (q *Queries) CancelPendingToolApprovalsBySession(ctx context.Context, arg C
 
 const createToolApprovalRequest = `-- name: CreateToolApprovalRequest :one
 WITH locked_session AS (
-  SELECT id
+  SELECT id, bot_id
   FROM bot_sessions
   WHERE id = $2
+    AND bot_id = $1
   FOR UPDATE
 ),
 next_short_id AS (
@@ -239,10 +240,19 @@ func (q *Queries) CreateToolApprovalRequest(ctx context.Context, arg CreateToolA
 
 const createToolApprovalRequestForTurn = `-- name: CreateToolApprovalRequestForTurn :one
 WITH locked_session AS (
-  SELECT id
+  SELECT id, bot_id
   FROM bot_sessions
   WHERE id = $2
+    AND bot_id = $1
   FOR UPDATE
+),
+persist_turn AS (
+  SELECT t.id
+  FROM locked_session
+  JOIN bot_history_turns t
+    ON t.id = $14
+   AND t.bot_id = locked_session.bot_id
+   AND t.owner_session_id = locked_session.id
 ),
 next_short_id AS (
   SELECT COALESCE(MAX(tool_approval_requests.short_id), 0) + 1 AS short_id
@@ -277,12 +287,13 @@ INSERT INTO tool_approval_requests (
   next_short_id.short_id,
   $9,
   $10,
+  persist_turn.id,
   $11,
   $12,
-  $13,
-  $14
+  $13
 FROM locked_session
 CROSS JOIN next_short_id
+CROSS JOIN persist_turn
 ON CONFLICT (session_id, tool_call_id, persist_turn_id) WHERE persist_turn_id IS NOT NULL DO UPDATE
 SET tool_input = CASE
   WHEN tool_approval_requests.status = 'pending' THEN EXCLUDED.tool_input
@@ -302,10 +313,10 @@ type CreateToolApprovalRequestForTurnParams struct {
 	ToolInput                    []byte      `json:"tool_input"`
 	RequestedByChannelIdentityID pgtype.UUID `json:"requested_by_channel_identity_id"`
 	RequestedMessageID           pgtype.UUID `json:"requested_message_id"`
-	PersistTurnID                pgtype.UUID `json:"persist_turn_id"`
 	SourcePlatform               string      `json:"source_platform"`
 	ReplyTarget                  string      `json:"reply_target"`
 	ConversationType             string      `json:"conversation_type"`
+	PersistTurnID                pgtype.UUID `json:"persist_turn_id"`
 }
 
 func (q *Queries) CreateToolApprovalRequestForTurn(ctx context.Context, arg CreateToolApprovalRequestForTurnParams) (ToolApprovalRequest, error) {
@@ -320,10 +331,10 @@ func (q *Queries) CreateToolApprovalRequestForTurn(ctx context.Context, arg Crea
 		arg.ToolInput,
 		arg.RequestedByChannelIdentityID,
 		arg.RequestedMessageID,
-		arg.PersistTurnID,
 		arg.SourcePlatform,
 		arg.ReplyTarget,
 		arg.ConversationType,
+		arg.PersistTurnID,
 	)
 	var i ToolApprovalRequest
 	err := row.Scan(
@@ -370,6 +381,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
 FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
 WHERE tar.bot_id = $1
   AND tar.session_id = $2
   AND tar.status = 'pending'
@@ -385,6 +399,76 @@ type GetLatestPendingToolApprovalBySessionParams struct {
 
 func (q *Queries) GetLatestPendingToolApprovalBySession(ctx context.Context, arg GetLatestPendingToolApprovalBySessionParams) (ToolApprovalRequest, error) {
 	row := q.db.QueryRow(ctx, getLatestPendingToolApprovalBySession, arg.BotID, arg.SessionID)
+	var i ToolApprovalRequest
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.RouteID,
+		&i.ChannelIdentityID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.Operation,
+		&i.ToolInput,
+		&i.ShortID,
+		&i.Status,
+		&i.DecisionReason,
+		&i.RequestedByChannelIdentityID,
+		&i.DecidedByChannelIdentityID,
+		&i.RequestedMessageID,
+		&i.PromptMessageID,
+		&i.PersistTurnID,
+		&i.PromptExternalMessageID,
+		&i.SourcePlatform,
+		&i.ReplyTarget,
+		&i.ConversationType,
+		&i.CreatedAt,
+		&i.DecidedAt,
+	)
+	return i, err
+}
+
+const getPendingToolApprovalByBaseHeadRequestID = `-- name: GetPendingToolApprovalByBaseHeadRequestID :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
+    AND h.head_turn_id = $4
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = $3
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
+FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
+WHERE tar.id = $1
+  AND tar.bot_id = $2
+  AND tar.session_id = $3
+  AND tar.status = 'pending'
+  AND (tar.persist_turn_id IS NULL OR tar.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+`
+
+type GetPendingToolApprovalByBaseHeadRequestIDParams struct {
+	ID             pgtype.UUID `json:"id"`
+	BotID          pgtype.UUID `json:"bot_id"`
+	SessionID      pgtype.UUID `json:"session_id"`
+	BaseHeadTurnID pgtype.UUID `json:"base_head_turn_id"`
+}
+
+func (q *Queries) GetPendingToolApprovalByBaseHeadRequestID(ctx context.Context, arg GetPendingToolApprovalByBaseHeadRequestIDParams) (ToolApprovalRequest, error) {
+	row := q.db.QueryRow(ctx, getPendingToolApprovalByBaseHeadRequestID,
+		arg.ID,
+		arg.BotID,
+		arg.SessionID,
+		arg.BaseHeadTurnID,
+	)
 	var i ToolApprovalRequest
 	err := row.Scan(
 		&i.ID,
@@ -430,6 +514,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
 FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
 WHERE tar.bot_id = $1
   AND tar.session_id = $2
   AND tar.prompt_external_message_id = $3
@@ -492,6 +579,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
 FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
 WHERE tar.bot_id = $1
   AND tar.session_id = $2
   AND tar.short_id = $3
@@ -507,6 +597,69 @@ type GetPendingToolApprovalBySessionShortIDParams struct {
 
 func (q *Queries) GetPendingToolApprovalBySessionShortID(ctx context.Context, arg GetPendingToolApprovalBySessionShortIDParams) (ToolApprovalRequest, error) {
 	row := q.db.QueryRow(ctx, getPendingToolApprovalBySessionShortID, arg.BotID, arg.SessionID, arg.ShortID)
+	var i ToolApprovalRequest
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.RouteID,
+		&i.ChannelIdentityID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.Operation,
+		&i.ToolInput,
+		&i.ShortID,
+		&i.Status,
+		&i.DecisionReason,
+		&i.RequestedByChannelIdentityID,
+		&i.DecidedByChannelIdentityID,
+		&i.RequestedMessageID,
+		&i.PromptMessageID,
+		&i.PersistTurnID,
+		&i.PromptExternalMessageID,
+		&i.SourcePlatform,
+		&i.ReplyTarget,
+		&i.ConversationType,
+		&i.CreatedAt,
+		&i.DecidedAt,
+	)
+	return i, err
+}
+
+const getPendingToolApprovalByVisibleRequestID = `-- name: GetPendingToolApprovalByVisibleRequestID :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = $3
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
+FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
+WHERE tar.id = $1
+  AND tar.bot_id = $2
+  AND tar.session_id = $3
+  AND tar.status = 'pending'
+  AND (tar.persist_turn_id IS NULL OR tar.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+`
+
+type GetPendingToolApprovalByVisibleRequestIDParams struct {
+	ID        pgtype.UUID `json:"id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+	SessionID pgtype.UUID `json:"session_id"`
+}
+
+func (q *Queries) GetPendingToolApprovalByVisibleRequestID(ctx context.Context, arg GetPendingToolApprovalByVisibleRequestIDParams) (ToolApprovalRequest, error) {
+	row := q.db.QueryRow(ctx, getPendingToolApprovalByVisibleRequestID, arg.ID, arg.BotID, arg.SessionID)
 	var i ToolApprovalRequest
 	err := row.Scan(
 		&i.ID,
@@ -589,6 +742,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
 FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
 WHERE tar.bot_id = $1
   AND tar.session_id = $2
   AND tar.status = 'pending'
@@ -661,6 +817,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
 FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
 WHERE tar.bot_id = $1
   AND tar.session_id = $2
   AND (tar.persist_turn_id IS NULL OR tar.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
@@ -732,6 +891,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT tar.id, tar.bot_id, tar.session_id, tar.route_id, tar.channel_identity_id, tar.tool_call_id, tar.tool_name, tar.operation, tar.tool_input, tar.short_id, tar.status, tar.decision_reason, tar.requested_by_channel_identity_id, tar.decided_by_channel_identity_id, tar.requested_message_id, tar.prompt_message_id, tar.persist_turn_id, tar.prompt_external_message_id, tar.source_platform, tar.reply_target, tar.conversation_type, tar.created_at, tar.decided_at
 FROM tool_approval_requests tar
+JOIN bot_sessions s ON s.id = tar.session_id
+  AND s.bot_id = tar.bot_id
+  AND s.deleted_at IS NULL
 WHERE tar.bot_id = $1
   AND tar.session_id = $2
   AND (tar.persist_turn_id IS NULL OR tar.persist_turn_id IN (SELECT DISTINCT visible_turns.id FROM visible_turns))

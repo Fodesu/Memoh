@@ -138,9 +138,10 @@ func (q *Queries) CancelUserInputRequest(ctx context.Context, arg CancelUserInpu
 
 const createUserInputRequest = `-- name: CreateUserInputRequest :one
 WITH locked_session AS (
-  SELECT id
+  SELECT id, bot_id
   FROM bot_sessions
   WHERE id = $2
+    AND bot_id = $1
   FOR UPDATE
 ),
 next_short_id AS (
@@ -271,10 +272,19 @@ func (q *Queries) CreateUserInputRequest(ctx context.Context, arg CreateUserInpu
 
 const createUserInputRequestForTurn = `-- name: CreateUserInputRequestForTurn :one
 WITH locked_session AS (
-  SELECT id
+  SELECT id, bot_id
   FROM bot_sessions
   WHERE id = $2
+    AND bot_id = $1
   FOR UPDATE
+),
+persist_turn AS (
+  SELECT t.id
+  FROM locked_session
+  JOIN bot_history_turns t
+    ON t.id = $15
+   AND t.bot_id = locked_session.bot_id
+   AND t.owner_session_id = locked_session.id
 ),
 next_short_id AS (
   SELECT COALESCE(MAX(user_input_requests.short_id), 0) + 1 AS short_id
@@ -310,13 +320,14 @@ INSERT INTO user_input_requests (
   $8,
   $9,
   $10,
+  persist_turn.id,
   $11,
   $12,
   $13,
-  $14,
-  $15
+  $14
 FROM locked_session
 CROSS JOIN next_short_id
+CROSS JOIN persist_turn
 ON CONFLICT (session_id, tool_call_id, persist_turn_id) WHERE persist_turn_id IS NOT NULL DO UPDATE
 SET input_json = EXCLUDED.input_json,
     ui_payload_json = EXCLUDED.ui_payload_json,
@@ -343,11 +354,11 @@ type CreateUserInputRequestForTurnParams struct {
 	UiPayloadJson                []byte             `json:"ui_payload_json"`
 	ProviderMetadata             []byte             `json:"provider_metadata"`
 	RequestedByChannelIdentityID pgtype.UUID        `json:"requested_by_channel_identity_id"`
-	PersistTurnID                pgtype.UUID        `json:"persist_turn_id"`
 	SourcePlatform               string             `json:"source_platform"`
 	ReplyTarget                  string             `json:"reply_target"`
 	ConversationType             string             `json:"conversation_type"`
 	ExpiresAt                    pgtype.Timestamptz `json:"expires_at"`
+	PersistTurnID                pgtype.UUID        `json:"persist_turn_id"`
 }
 
 func (q *Queries) CreateUserInputRequestForTurn(ctx context.Context, arg CreateUserInputRequestForTurnParams) (UserInputRequest, error) {
@@ -362,11 +373,11 @@ func (q *Queries) CreateUserInputRequestForTurn(ctx context.Context, arg CreateU
 		arg.UiPayloadJson,
 		arg.ProviderMetadata,
 		arg.RequestedByChannelIdentityID,
-		arg.PersistTurnID,
 		arg.SourcePlatform,
 		arg.ReplyTarget,
 		arg.ConversationType,
 		arg.ExpiresAt,
+		arg.PersistTurnID,
 	)
 	var i UserInputRequest
 	err := row.Scan(
@@ -470,6 +481,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = $1
   AND uir.session_id = $2
   AND uir.status = 'pending'
@@ -520,6 +534,82 @@ func (q *Queries) GetLatestPendingUserInputBySession(ctx context.Context, arg Ge
 	return i, err
 }
 
+const getPendingUserInputByBaseHeadRequestID = `-- name: GetPendingUserInputByBaseHeadRequestID :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
+    AND h.head_turn_id = $4
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = $3
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
+WHERE uir.id = $1
+  AND uir.bot_id = $2
+  AND uir.session_id = $3
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+`
+
+type GetPendingUserInputByBaseHeadRequestIDParams struct {
+	ID             pgtype.UUID `json:"id"`
+	BotID          pgtype.UUID `json:"bot_id"`
+	SessionID      pgtype.UUID `json:"session_id"`
+	BaseHeadTurnID pgtype.UUID `json:"base_head_turn_id"`
+}
+
+func (q *Queries) GetPendingUserInputByBaseHeadRequestID(ctx context.Context, arg GetPendingUserInputByBaseHeadRequestIDParams) (UserInputRequest, error) {
+	row := q.db.QueryRow(ctx, getPendingUserInputByBaseHeadRequestID,
+		arg.ID,
+		arg.BotID,
+		arg.SessionID,
+		arg.BaseHeadTurnID,
+	)
+	var i UserInputRequest
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.RouteID,
+		&i.ChannelIdentityID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.ShortID,
+		&i.Status,
+		&i.InputJson,
+		&i.UiPayloadJson,
+		&i.ResultJson,
+		&i.ProviderMetadata,
+		&i.RequestedByChannelIdentityID,
+		&i.RespondedByChannelIdentityID,
+		&i.AssistantMessageID,
+		&i.ToolResultMessageID,
+		&i.PromptMessageID,
+		&i.PersistTurnID,
+		&i.PromptExternalMessageID,
+		&i.SourcePlatform,
+		&i.ReplyTarget,
+		&i.ConversationType,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.RespondedAt,
+		&i.CanceledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPendingUserInputByReplyMessage = `-- name: GetPendingUserInputByReplyMessage :one
 WITH RECURSIVE visible_turns AS (
   SELECT t.id, t.parent_turn_id
@@ -536,6 +626,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = $1
   AND uir.session_id = $2
   AND uir.prompt_external_message_id = $3
@@ -604,6 +697,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = $1
   AND uir.session_id = $2
   AND uir.short_id = $3
@@ -620,6 +716,75 @@ type GetPendingUserInputBySessionShortIDParams struct {
 
 func (q *Queries) GetPendingUserInputBySessionShortID(ctx context.Context, arg GetPendingUserInputBySessionShortIDParams) (UserInputRequest, error) {
 	row := q.db.QueryRow(ctx, getPendingUserInputBySessionShortID, arg.BotID, arg.SessionID, arg.ShortID)
+	var i UserInputRequest
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.RouteID,
+		&i.ChannelIdentityID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.ShortID,
+		&i.Status,
+		&i.InputJson,
+		&i.UiPayloadJson,
+		&i.ResultJson,
+		&i.ProviderMetadata,
+		&i.RequestedByChannelIdentityID,
+		&i.RespondedByChannelIdentityID,
+		&i.AssistantMessageID,
+		&i.ToolResultMessageID,
+		&i.PromptMessageID,
+		&i.PersistTurnID,
+		&i.PromptExternalMessageID,
+		&i.SourcePlatform,
+		&i.ReplyTarget,
+		&i.ConversationType,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.RespondedAt,
+		&i.CanceledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPendingUserInputByVisibleRequestID = `-- name: GetPendingUserInputByVisibleRequestID :one
+WITH RECURSIVE visible_turns AS (
+  SELECT t.id, t.parent_turn_id
+  FROM bot_sessions s
+  JOIN bot_session_turn_heads h ON h.session_id = s.id
+    AND h.bot_id = s.bot_id
+  JOIN bot_history_turns t ON t.id = h.head_turn_id
+  WHERE s.id = $3
+    AND s.deleted_at IS NULL
+  UNION
+  SELECT p.id, p.parent_turn_id
+  FROM bot_history_turns p
+  JOIN visible_turns vt ON vt.parent_turn_id = p.id
+)
+SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
+FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
+WHERE uir.id = $1
+  AND uir.bot_id = $2
+  AND uir.session_id = $3
+  AND uir.status = 'pending'
+  AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
+`
+
+type GetPendingUserInputByVisibleRequestIDParams struct {
+	ID        pgtype.UUID `json:"id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+	SessionID pgtype.UUID `json:"session_id"`
+}
+
+func (q *Queries) GetPendingUserInputByVisibleRequestID(ctx context.Context, arg GetPendingUserInputByVisibleRequestIDParams) (UserInputRequest, error) {
+	row := q.db.QueryRow(ctx, getPendingUserInputByVisibleRequestID, arg.ID, arg.BotID, arg.SessionID)
 	var i UserInputRequest
 	err := row.Scan(
 		&i.ID,
@@ -811,6 +976,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = $1
   AND uir.session_id = $2
   AND uir.status = 'pending'
@@ -889,6 +1057,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = $1
   AND uir.session_id = $2
   AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT visible_turns.id FROM visible_turns))
@@ -965,6 +1136,9 @@ WITH RECURSIVE visible_turns AS (
 )
 SELECT uir.id, uir.bot_id, uir.session_id, uir.route_id, uir.channel_identity_id, uir.tool_call_id, uir.tool_name, uir.short_id, uir.status, uir.input_json, uir.ui_payload_json, uir.result_json, uir.provider_metadata, uir.requested_by_channel_identity_id, uir.responded_by_channel_identity_id, uir.assistant_message_id, uir.tool_result_message_id, uir.prompt_message_id, uir.persist_turn_id, uir.prompt_external_message_id, uir.source_platform, uir.reply_target, uir.conversation_type, uir.expires_at, uir.created_at, uir.responded_at, uir.canceled_at, uir.updated_at
 FROM user_input_requests uir
+JOIN bot_sessions s ON s.id = uir.session_id
+  AND s.bot_id = uir.bot_id
+  AND s.deleted_at IS NULL
 WHERE uir.bot_id = $1
   AND uir.session_id = $2
   AND (uir.persist_turn_id IS NULL OR uir.persist_turn_id IN (SELECT DISTINCT visible_turns.id FROM visible_turns))
