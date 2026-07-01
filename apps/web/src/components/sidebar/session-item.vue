@@ -1,17 +1,13 @@
 <template>
   <div
     role="button"
-    :tabindex="disabled ? -1 : 0"
-    :aria-disabled="disabled ? 'true' : undefined"
+    tabindex="0"
     class="group relative flex items-center min-h-[2.125rem] w-full rounded-[9px] px-[11px] text-left transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    :class="[
-      isActive ? 'bg-sidebar-accent' : 'hover:bg-[color:var(--sidebar-hover)]',
-      disabled ? 'pointer-events-none opacity-40' : '',
-    ]"
+    :class="isActive ? 'bg-sidebar-accent' : 'hover:bg-[color:var(--sidebar-hover)]'"
     :title="hoverTitle"
-    @click="handleSelect"
-    @keydown.enter.prevent="handleSelect"
-    @keydown.space.prevent="handleSelect"
+    @click="$emit('select', session)"
+    @keydown.enter.prevent="$emit('select', session)"
+    @keydown.space.prevent="$emit('select', session)"
   >
     <!-- Native session rows stay text-only. ACP rows carry only the agent icon
          because Recent now mixes local model chats with external-agent chats. -->
@@ -118,10 +114,9 @@ const props = defineProps<{
   session: SessionSummary
   isActive: boolean
   streaming?: boolean
-  disabled?: boolean
 }>()
 
-const emit = defineEmits<{
+defineEmits<{
   select: [session: SessionSummary]
   rename: [session: SessionSummary]
   delete: [session: SessionSummary]
@@ -130,11 +125,6 @@ const emit = defineEmits<{
 const { t } = useI18n()
 
 const menuOpen = ref(false)
-
-function handleSelect() {
-  if (props.disabled) return
-  emit('select', props.session)
-}
 
 const titleRuns = computed(() =>
   splitScriptRuns((props.session.title ?? '').trim() || t('chat.untitledSession')),

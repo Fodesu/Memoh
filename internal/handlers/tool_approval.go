@@ -23,9 +23,7 @@ type ToolApprovalHandler struct {
 }
 
 type ToolApprovalDecisionRequest struct {
-	SessionID      string `json:"session_id,omitempty"`
-	BaseHeadTurnID string `json:"base_head_turn_id,omitempty"`
-	Reason         string `json:"reason,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 func NewToolApprovalHandler(log *slog.Logger, botService *bots.Service, accountService *accounts.Service, resolver *flow.Resolver) *ToolApprovalHandler {
@@ -87,8 +85,6 @@ func (h *ToolApprovalHandler) respond(c echo.Context, decision string) error {
 	_ = c.Bind(&req)
 	if err := h.resolver.RespondToolApproval(context.WithoutCancel(c.Request().Context()), flow.ToolApprovalResponseInput{
 		BotID:                  botID,
-		SessionID:              strings.TrimSpace(req.SessionID),
-		BaseHeadTurnID:         strings.TrimSpace(req.BaseHeadTurnID),
 		ActorChannelIdentityID: channelIdentityID,
 		ActorUserID:            channelIdentityID,
 		ApprovalID:             approvalID,
