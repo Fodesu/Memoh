@@ -108,9 +108,8 @@ type Resolver struct {
 	// response; nil means storeUserInputResultAndContinue. Test seam.
 	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
 	sessionTurnMu       sync.Mutex
-	sessionTurnLocks    map[string]*sync.Mutex
 	sessionTurnRefs     map[string]int // key: "botID:sessionID" → active turn refcount
-	persistTurnMu       sync.Mutex
+	sessionTurnLocks    map[string]*sync.Mutex
 	timeout             time.Duration
 	clockLocation       *time.Location
 	logger              *slog.Logger
@@ -163,8 +162,8 @@ func NewResolver(
 		settingsService:  settingsService,
 		accountService:   accountService,
 		streamHTTPClient: streamHTTPClient,
-		sessionTurnLocks: make(map[string]*sync.Mutex),
 		sessionTurnRefs:  make(map[string]int),
+		sessionTurnLocks: make(map[string]*sync.Mutex),
 		timeout:          timeout,
 		clockLocation:    clockLocation,
 		logger:           log.With(slog.String("service", "conversation_resolver")),
@@ -284,7 +283,7 @@ type resolvedContext struct {
 	estimatedTokens             int // estimated input token count for compaction
 }
 
-func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest, run *TurnRun) (resolvedContext, error) {
+func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {
 	if strings.TrimSpace(req.Query) == "" && len(req.Attachments) == 0 {
 		return resolvedContext{}, errors.New("query or attachments is required")
 	}
@@ -307,15 +306,9 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest, ru
 		ConversationType:  req.ConversationType,
 		SessionToken:      req.ChatToken,
 		SessionType:       req.SessionType,
-		PersistTurnID:     run.PersistTurnID,
-		BaseHeadTurnID:    run.Variant.BaseHeadTurnID,
-		ViewHeadTurnID:    run.ViewHeadTurnID(),
-		EnsurePersistTurnID: func(ctx context.Context) (string, error) {
-			return r.ensurePersistTurn(ctx, run)
-		},
-		Model:           req.Model,
-		Provider:        req.Provider,
-		ReasoningEffort: req.ReasoningEffort,
+		Model:             req.Model,
+		Provider:          req.Provider,
+		ReasoningEffort:   req.ReasoningEffort,
 	})
 	if err != nil {
 		r.logger.Error("resolve: buildBaseRunConfig failed",
@@ -335,7 +328,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest, ru
 	// the rendered event stream (RC) + bot turn responses (TR) instead of
 	// loading raw history from bot_history_messages. The current inbound
 	// message is already in the RC, so it must not be appended again.
-	usePipeline := r.pipeline != nil && strings.TrimSpace(req.SessionID) != "" && turnRunAllowsPipelineContext(*run)
+	usePipeline := r.pipeline != nil && strings.TrimSpace(req.SessionID) != ""
 	if usePipeline {
 		if _, loaded := r.pipeline.GetIC(strings.TrimSpace(req.SessionID)); !loaded {
 			usePipeline = false
@@ -352,7 +345,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest, ru
 	if usePipeline {
 		messages = r.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 	} else if r.conversationSvc != nil {
-		loaded, loadErr := r.loadMessagesForTurnRun(ctx, req, *run, defaultMaxContextMinutes)
+		loaded, loadErr := r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
 		if loadErr != nil {
 			r.logger.Error("resolve: loadMessages failed",
 				slog.String("bot_id", req.BotID),
@@ -382,7 +375,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest, ru
 			)
 			r.runCompactionSync(ctx, req, estimatedTokens)
 			// Reload messages after compaction.
-			loaded, loadErr = r.loadMessagesForTurnRun(ctx, req, *run, defaultMaxContextMinutes)
+			loaded, loadErr = r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
 			if loadErr != nil {
 				r.logger.Error("resolve: reload messages after compaction failed",
 					slog.String("bot_id", req.BotID),
@@ -493,19 +486,15 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
 	defer doneTurn()
 
-	var err error
-	run, err := r.prepareTurnRun(ctx, req)
-	if err != nil {
-		return conversation.ChatResponse{}, err
-	}
 	if req.RawQuery == "" {
 		req.RawQuery = strings.TrimSpace(req.Query)
 	}
+	var err error
 	req, err = r.applyUserMessageHook(ctx, req)
 	if err != nil {
 		return conversation.ChatResponse{}, err
 	}
-	rc, err := r.resolve(ctx, req, &run)
+	rc, err := r.resolve(ctx, req)
 	if err != nil {
 		return conversation.ChatResponse{}, err
 	}
@@ -527,7 +516,7 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 		storeReq.UserMessagePersisted = true
 	}
 	roundMessages := prependUserMessage(storeReq.Query, outputMessages)
-	if _, err := r.storeRoundAndApplyVariantTransition(ctx, storeReq, &run, roundMessages, rc.model.ID, storeRoundOptions{}); err != nil {
+	if err := r.storeRound(ctx, storeReq, roundMessages, rc.model.ID); err != nil {
 		return conversation.ChatResponse{}, err
 	}
 
@@ -545,24 +534,20 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 // baseRunConfigParams holds parameters for buildBaseRunConfig that differ
 // between chat and discuss callers.
 type baseRunConfigParams struct {
-	BotID               string
-	ChatID              string
-	SessionID           string
-	RouteID             string
-	UserID              string
-	ChannelIdentityID   string
-	CurrentPlatform     string
-	ReplyTarget         string
-	ConversationType    string
-	SessionToken        string //nolint:gosec // session credential material, not a hardcoded secret
-	SessionType         string
-	PersistTurnID       string
-	BaseHeadTurnID      string
-	ViewHeadTurnID      string
-	EnsurePersistTurnID func(context.Context) (string, error)
-	Model               string
-	Provider            string
-	ReasoningEffort     string // caller-provided override (empty = use bot default)
+	BotID             string
+	ChatID            string
+	SessionID         string
+	RouteID           string
+	UserID            string
+	ChannelIdentityID string
+	CurrentPlatform   string
+	ReplyTarget       string
+	ConversationType  string
+	SessionToken      string //nolint:gosec // session credential material, not a hardcoded secret
+	SessionType       string
+	Model             string
+	Provider          string
+	ReasoningEffort   string // caller-provided override (empty = use bot default)
 }
 
 // buildBaseRunConfig creates a RunConfig with model, credentials, skills,
@@ -651,7 +636,6 @@ func (r *Resolver) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams
 			BotID:             p.BotID,
 			ChatID:            chatID,
 			SessionID:         p.SessionID,
-			ViewHeadTurnID:    strings.TrimSpace(p.ViewHeadTurnID),
 			ChannelIdentityID: strings.TrimSpace(p.ChannelIdentityID),
 			CurrentPlatform:   p.CurrentPlatform,
 			ReplyTarget:       strings.TrimSpace(p.ReplyTarget),
@@ -866,10 +850,6 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			// No ExpiresAt here: chat-flow requests have no in-process
 			// waiter — the run pauses and resumes whenever the user answers,
 			// even much later. Only waiter-backed (ACP/MCP) requests expire.
-			persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
-			if err != nil {
-				return sdk.ToolApprovalResult{}, err
-			}
 			req, err := r.userInput.CreatePending(ctx, userinput.CreatePendingInput{
 				BotID:                        p.BotID,
 				SessionID:                    p.SessionID,
@@ -882,7 +862,6 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 				SourcePlatform:               p.CurrentPlatform,
 				ReplyTarget:                  p.ReplyTarget,
 				ConversationType:             p.ConversationType,
-				PersistTurnID:                persistTurnID,
 			})
 			if err != nil {
 				return sdk.ToolApprovalResult{}, err
@@ -913,7 +892,6 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			SourcePlatform:               p.CurrentPlatform,
 			ReplyTarget:                  p.ReplyTarget,
 			ConversationType:             p.ConversationType,
-			PersistTurnID:                p.PersistTurnID,
 		}
 		forcedApprovalReason, forcedApproval := agentpkg.HookForcedApprovalReason(ctx)
 		if r.toolApproval == nil {
@@ -935,11 +913,6 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			}
 		}
 		if !isInteractiveApprovalSession(p.SessionType) {
-			persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
-			if err != nil {
-				return sdk.ToolApprovalResult{}, err
-			}
-			input.PersistTurnID = persistTurnID
 			req, err := r.toolApproval.CreatePending(ctx, input)
 			if err != nil {
 				return sdk.ToolApprovalResult{}, err
@@ -957,11 +930,6 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			}, call.ToolName), nil
 		}
 		if forcedApproval {
-			persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
-			if err != nil {
-				return sdk.ToolApprovalResult{}, err
-			}
-			input.PersistTurnID = persistTurnID
 			req, err := r.toolApproval.CreatePending(ctx, input)
 			if err != nil {
 				return sdk.ToolApprovalResult{}, err
@@ -972,38 +940,25 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 				Metadata:   approvalResultMetadata(req),
 			}, nil
 		}
-		persistTurnID, err := ensurePersistTurnIDForPending(ctx, p)
-		if err != nil {
-			return sdk.ToolApprovalResult{}, err
-		}
-		input.PersistTurnID = persistTurnID
-		req, err := r.toolApproval.CreatePending(ctx, input)
+		eval, err := r.toolApproval.Evaluate(ctx, input)
 		if err != nil {
 			return sdk.ToolApprovalResult{}, err
 		}
 		return sdk.ToolApprovalResult{
 			Decision:   sdk.ToolApprovalDecisionDeferred,
-			ApprovalID: req.ID,
-			Metadata:   approvalResultMetadata(req),
+			ApprovalID: eval.Request.ID,
+			Metadata:   approvalResultMetadata(eval.Request),
 		}, nil
 	}
 }
 
-func ensurePersistTurnIDForPending(ctx context.Context, p baseRunConfigParams) (string, error) {
-	if p.EnsurePersistTurnID != nil {
-		return p.EnsurePersistTurnID(ctx)
-	}
-	return strings.TrimSpace(p.PersistTurnID), nil
-}
-
 func approvalResultMetadata(req toolapproval.Request) map[string]any {
 	return map[string]any{
-		"short_id":        req.ShortID,
-		"status":          req.Status,
-		"tool_name":       req.ToolName,
-		"operation":       req.Operation,
-		"tool_call_id":    req.ToolCallID,
-		"persist_turn_id": req.PersistTurnID,
+		"short_id":     req.ShortID,
+		"status":       req.Status,
+		"tool_name":    req.ToolName,
+		"operation":    req.Operation,
+		"tool_call_id": req.ToolCallID,
 	}
 }
 
@@ -1062,7 +1017,31 @@ func buildModelSelectionRequest(p baseRunConfigParams, chatID string) conversati
 // The caller is responsible for filling RunConfig.Messages.
 // Used by the discuss driver to reuse the resolver's model/tools/prompt pipeline.
 func (r *Resolver) ResolveRunConfig(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string) (pipelinepkg.ResolveRunConfigResult, error) {
-	return r.resolveRunConfig(ctx, baseRunConfigParams{
+	if strings.TrimSpace(botID) == "" {
+		return pipelinepkg.ResolveRunConfigResult{}, errors.New("bot id is required")
+	}
+
+	sessionType, runtimeType := r.resolveRunConfigSessionDescriptor(ctx, sessionID)
+	if runtimeType == sessionpkg.RuntimeACPAgent {
+		cfg := agentpkg.RunConfig{
+			SessionType: sessionType,
+			Identity: agentpkg.SessionContext{
+				BotID:             botID,
+				ChatID:            botID,
+				SessionID:         sessionID,
+				ChannelIdentityID: strings.TrimSpace(channelIdentityID),
+				CurrentPlatform:   currentPlatform,
+				ReplyTarget:       strings.TrimSpace(replyTarget),
+				ConversationType:  strings.TrimSpace(conversationType),
+				SessionToken:      chatToken,
+			},
+		}
+		return pipelinepkg.ResolveRunConfigResult{
+			RunConfig:   cfg,
+			RuntimeType: runtimeType,
+		}, nil
+	}
+	cfg, chatModel, _, err := r.buildBaseRunConfig(ctx, baseRunConfigParams{
 		BotID:             botID,
 		SessionID:         sessionID,
 		ChannelIdentityID: channelIdentityID,
@@ -1070,30 +1049,8 @@ func (r *Resolver) ResolveRunConfig(ctx context.Context, botID, sessionID, chann
 		ReplyTarget:       replyTarget,
 		ConversationType:  conversationType,
 		SessionToken:      chatToken,
+		SessionType:       sessionType,
 	})
-}
-
-func (r *Resolver) resolveRunConfig(ctx context.Context, p baseRunConfigParams) (pipelinepkg.ResolveRunConfigResult, error) {
-	if strings.TrimSpace(p.BotID) == "" {
-		return pipelinepkg.ResolveRunConfigResult{}, errors.New("bot id is required")
-	}
-
-	sessionType := strings.TrimSpace(p.SessionType)
-	var runtimeType string
-	if sessionType == "" {
-		sessionType, runtimeType = r.resolveRunConfigSessionDescriptor(ctx, p.SessionID)
-	} else {
-		_, runtimeType = r.resolveRunConfigSessionDescriptor(ctx, p.SessionID)
-	}
-	p.SessionType = sessionType
-	if runtimeType == sessionpkg.RuntimeACPAgent {
-		return pipelinepkg.ResolveRunConfigResult{
-			RunConfig:   agentpkg.RunConfig{SessionType: sessionType},
-			RuntimeType: runtimeType,
-		}, nil
-	}
-
-	cfg, chatModel, _, err := r.buildBaseRunConfig(ctx, p)
 	if err != nil {
 		return pipelinepkg.ResolveRunConfigResult{}, err
 	}

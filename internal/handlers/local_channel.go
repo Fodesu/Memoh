@@ -118,7 +118,7 @@ func (h *LocalChannelHandler) Register(e *echo.Echo) {
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/web/stream [get].
+// @Router /bots/{bot_id}/local/stream [get].
 func (h *LocalChannelHandler) StreamMessages(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
 	if err != nil {
@@ -181,7 +181,6 @@ type LocalChannelMessageRequest struct {
 	Message         channel.Message `json:"message" validate:"required"`
 	ModelID         string          `json:"model_id,omitempty"`
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
-	BaseHeadTurnID  string          `json:"base_head_turn_id,omitempty"`
 }
 
 // PostMessage godoc
@@ -196,7 +195,7 @@ type LocalChannelMessageRequest struct {
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/web/messages [post].
+// @Router /bots/{bot_id}/local/messages [post].
 func (h *LocalChannelHandler) PostMessage(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
 	if err != nil {
@@ -258,12 +257,6 @@ func (h *LocalChannelHandler) PostMessage(c echo.Context) error {
 		}
 		msg.Metadata["reasoning_effort"] = re
 	}
-	if head := strings.TrimSpace(req.BaseHeadTurnID); head != "" {
-		if msg.Metadata == nil {
-			msg.Metadata = make(map[string]any)
-		}
-		msg.Metadata["base_head_turn_id"] = head
-	}
 	if err := h.channelManager.HandleInbound(c.Request().Context(), cfg, msg); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -279,9 +272,6 @@ type wsClientMessage struct {
 	StreamID        string                     `json:"stream_id,omitempty"`
 	Text            string                     `json:"text,omitempty"`
 	SessionID       string                     `json:"session_id,omitempty"`
-	RetryMessageID  string                     `json:"retry_message_id,omitempty"`
-	EditMessageID   string                     `json:"edit_message_id,omitempty"`
-	BaseHeadTurnID  string                     `json:"base_head_turn_id,omitempty"`
 	Attachments     []json.RawMessage          `json:"attachments,omitempty"`
 	ModelID         string                     `json:"model_id,omitempty"`
 	ReasoningEffort string                     `json:"reasoning_effort,omitempty"`
@@ -610,7 +600,7 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, ac
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/web/ws [get].
+// @Router /bots/{bot_id}/local/ws [get].
 func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
 	if err != nil {
@@ -710,7 +700,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						ActorUserID:                channelIdentityID,
 						ApprovalID:                 strings.TrimSpace(msg.ApprovalID),
 						ExplicitID:                 explicitID,
-						BaseHeadTurnID:             strings.TrimSpace(msg.BaseHeadTurnID),
 						Decision:                   strings.TrimSpace(msg.Decision),
 						Reason:                     strings.TrimSpace(msg.Reason),
 						ChatToken:                  bearerToken,
@@ -749,7 +738,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						ActorUserID:                channelIdentityID,
 						UserInputID:                strings.TrimSpace(msg.UserInputID),
 						ExplicitID:                 explicitID,
-						BaseHeadTurnID:             strings.TrimSpace(msg.BaseHeadTurnID),
 						Answers:                    msg.Answers,
 						Canceled:                   msg.Canceled,
 						Reason:                     strings.TrimSpace(msg.Reason),
@@ -803,7 +791,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						BotID:                   botID,
 						ChatID:                  botID,
 						SessionID:               sessionID,
-						BaseHeadTurnID:          strings.TrimSpace(msg.BaseHeadTurnID),
 						StreamID:                streamID,
 						UserID:                  channelIdentityID,
 						SourceChannelIdentityID: channelIdentityID,
@@ -820,122 +807,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						ToolHTTPURL:             buildACPMCPToolsURL(c, botID),
 					}
 					return h.resolver.StreamChatWS(ctx, req, eventCh, abortCh)
-				},
-			)
-
-		case "retry_message":
-			sessionID := strings.TrimSpace(msg.SessionID)
-			streamID := strings.TrimSpace(msg.StreamID)
-			retryMessageID := strings.TrimSpace(msg.RetryMessageID)
-			if streamID == "" {
-				sendWSError(writer, "", sessionID, "stream_id is required")
-				continue
-			}
-			if sessionID == "" {
-				sendWSError(writer, streamID, "", "session_id is required")
-				continue
-			}
-			if retryMessageID == "" {
-				sendWSError(writer, streamID, sessionID, "retry_message_id is required")
-				continue
-			}
-			if err := h.authorizeWSSession(c, channelIdentityID, botID, sessionID); err != nil {
-				sendWSError(writer, streamID, sessionID, wsErrorMessage(err))
-				continue
-			}
-			acpInfo, err := h.authorizeWSACPExecution(c.Request().Context(), channelIdentityID, botID, sessionID)
-			if err != nil {
-				sendWSErrorFromError(writer, streamID, sessionID, err)
-				continue
-			}
-			streamToken := bearerToken
-			if acpInfo.IsACP {
-				streamToken = h.issueRuntimeOwnerBearerToken(acpInfo.RuntimeOwnerAccountID, bearerToken)
-			}
-
-			h.startWSStream(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws retry stream error",
-				func(ctx context.Context, eventCh chan<- flow.WSStreamEvent, abortCh <-chan struct{}) error {
-					req := conversation.ChatRequest{
-						BotID:                   botID,
-						ChatID:                  botID,
-						SessionID:               sessionID,
-						BaseHeadTurnID:          strings.TrimSpace(msg.BaseHeadTurnID),
-						StreamID:                streamID,
-						Token:                   streamToken,
-						UserID:                  channelIdentityID,
-						SourceChannelIdentityID: channelIdentityID,
-						ConversationType:        channel.ConversationTypePrivate,
-						CurrentChannel:          h.channelType.String(),
-						ReplyTarget:             botID,
-						Channels:                []string{h.channelType.String()},
-						Model:                   strings.TrimSpace(msg.ModelID),
-						ReasoningEffort:         strings.TrimSpace(msg.ReasoningEffort),
-						ToolHTTPURL:             buildACPMCPToolsURL(c, botID),
-					}
-					return h.resolver.StreamRetryWS(ctx, req, retryMessageID, eventCh, abortCh)
-				},
-			)
-
-		case "edit_message":
-			text := strings.TrimSpace(msg.Text)
-			sessionID := strings.TrimSpace(msg.SessionID)
-			streamID := strings.TrimSpace(msg.StreamID)
-			editMessageID := strings.TrimSpace(msg.EditMessageID)
-			if streamID == "" {
-				sendWSError(writer, "", sessionID, "stream_id is required")
-				continue
-			}
-			if sessionID == "" {
-				sendWSError(writer, streamID, "", "session_id is required")
-				continue
-			}
-			if editMessageID == "" {
-				sendWSError(writer, streamID, sessionID, "edit_message_id is required")
-				continue
-			}
-			if text == "" {
-				sendWSError(writer, streamID, sessionID, "message text is required")
-				continue
-			}
-			if err := h.authorizeWSSession(c, channelIdentityID, botID, sessionID); err != nil {
-				sendWSError(writer, streamID, sessionID, wsErrorMessage(err))
-				continue
-			}
-			acpInfo, err := h.authorizeWSACPExecution(c.Request().Context(), channelIdentityID, botID, sessionID)
-			if err != nil {
-				sendWSErrorFromError(writer, streamID, sessionID, err)
-				continue
-			}
-			streamToken := bearerToken
-			if acpInfo.IsACP {
-				streamToken = h.issueRuntimeOwnerBearerToken(acpInfo.RuntimeOwnerAccountID, bearerToken)
-			}
-
-			h.startWSStream(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws edit stream error",
-				func(ctx context.Context, eventCh chan<- flow.WSStreamEvent, abortCh <-chan struct{}) error {
-					req := conversation.ChatRequest{
-						BotID:                   botID,
-						ChatID:                  botID,
-						SessionID:               sessionID,
-						BaseHeadTurnID:          strings.TrimSpace(msg.BaseHeadTurnID),
-						StreamID:                streamID,
-						Token:                   streamToken,
-						UserID:                  channelIdentityID,
-						SourceChannelIdentityID: channelIdentityID,
-						ConversationType:        channel.ConversationTypePrivate,
-						Query:                   text,
-						RawQuery:                text,
-						CurrentChannel:          h.channelType.String(),
-						ReplyTarget:             botID,
-						Channels:                []string{h.channelType.String()},
-						Model:                   strings.TrimSpace(msg.ModelID),
-						ReasoningEffort:         strings.TrimSpace(msg.ReasoningEffort),
-						ToolHTTPURL:             buildACPMCPToolsURL(c, botID),
-					}
-					return h.resolver.StreamRewriteWS(ctx, req, flow.RewriteSource{
-						TargetMessageID: editMessageID,
-						Query:           text,
-					}, eventCh, abortCh)
 				},
 			)
 

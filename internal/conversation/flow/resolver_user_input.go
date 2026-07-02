@@ -30,7 +30,6 @@ type userInputService interface {
 type UserInputResponseInput struct {
 	BotID                      string
 	SessionID                  string
-	BaseHeadTurnID             string
 	ActorChannelIdentityID     string
 	ActorUserID                string
 	UserInputID                string
@@ -51,14 +50,10 @@ func (r *Resolver) RespondUserInput(ctx context.Context, input UserInputResponse
 	target, err := r.userInput.ResolveTarget(ctx, userinput.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.SessionID,
-		BaseHeadTurnID:         input.BaseHeadTurnID,
 		ExplicitID:             firstNonEmpty(input.ExplicitID, input.UserInputID),
 		ReplyExternalMessageID: input.ReplyExternalMessageID,
 	})
 	if err != nil {
-		return err
-	}
-	if err := r.validateBaseContinuationTurnHead(ctx, target.SessionID, target.PersistTurnID, input.BaseHeadTurnID, "user input"); err != nil {
 		return err
 	}
 
@@ -262,13 +257,7 @@ func splitUserInputAnswerText(text string) []string {
 
 func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
 	req = withLocalWebUserInputReplyTarget(req)
-	doneTurn := r.enterSessionTurn(ctx, input.BotID, req.SessionID)
-	defer doneTurn()
-	if err := r.validateBaseContinuationTurnHead(ctx, req.SessionID, req.PersistTurnID, input.BaseHeadTurnID, "user input"); err != nil {
-		return err
-	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
-	run := continuationTurnRun(req.SessionID, req.PersistTurnID)
 	storeReq := conversation.ChatRequest{
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
@@ -279,7 +268,7 @@ func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req user
 		ConversationType:        req.ConversationType,
 		UserMessagePersisted:    true,
 	}
-	if err := r.storeRoundWithOptions(ctx, storeReq, &run, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
+	if err := r.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
 		return err
 	}
 	return r.continueUserInputSession(ctx, req, input, eventCh)
@@ -287,28 +276,20 @@ func (r *Resolver) storeUserInputResultAndContinue(ctx context.Context, req user
 
 func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.Request, input UserInputResponseInput, eventCh chan<- WSStreamEvent) error {
 	req = withLocalWebUserInputReplyTarget(req)
-	resolved, err := r.resolveRunConfig(ctx, baseRunConfigParams{
-		BotID:             input.BotID,
-		SessionID:         req.SessionID,
-		ChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentPlatform:   req.SourcePlatform,
-		ReplyTarget:       req.ReplyTarget,
-		ConversationType:  req.ConversationType,
-		SessionToken:      input.ChatToken,
-		PersistTurnID:     req.PersistTurnID,
-		BaseHeadTurnID:    input.BaseHeadTurnID,
-	})
+	resolved, err := r.ResolveRunConfig(ctx,
+		input.BotID,
+		req.SessionID,
+		firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
+		req.SourcePlatform,
+		req.ReplyTarget,
+		req.ConversationType,
+		input.ChatToken,
+	)
 	if err != nil {
 		return err
 	}
 
-	run := continuationTurnRun(req.SessionID, req.PersistTurnID)
-	contextReq := conversation.ChatRequest{
-		BotID:     input.BotID,
-		ChatID:    input.BotID,
-		SessionID: req.SessionID,
-	}
-	loaded, err := r.loadMessagesForTurnRun(ctx, contextReq, run, defaultMaxContextMinutes)
+	loaded, err := r.loadMessages(ctx, input.BotID, req.SessionID, defaultMaxContextMinutes)
 	if err != nil {
 		return err
 	}
@@ -346,7 +327,6 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 				if storeErr := r.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
 					chatReq,
-					&run,
 					resolvedContext{model: models.GetResponse{ID: resolved.ModelID}},
 					snap,
 				); storeErr != nil {

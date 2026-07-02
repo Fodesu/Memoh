@@ -42,6 +42,7 @@ const DEFAULT_CHAT_TITLE = 'New Session'
 // first splits off below the chat. ~1/3 mirrors VS Code's editor:panel ratio
 // (≈554:269) — enough room to work in without burying the conversation.
 const TERMINAL_PANEL_HEIGHT_RATIO = 1 / 3
+const workspaceLayoutStorage = typeof localStorage !== 'undefined' ? localStorage : undefined
 
 export type WorkspacePanelComponent = 'chat' | 'file' | 'preview' | 'asset' | 'terminal' | 'browser' | 'display' | 'schedule'
 
@@ -127,7 +128,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     localStorage.removeItem('workspace-tabs')
     localStorage.removeItem('workspace-panes')
   }
-  const storage = useStorage<WorkspaceLayoutStorage>('workspace-layout', {})
+  const storage = useStorage<WorkspaceLayoutStorage>('workspace-layout', {}, workspaceLayoutStorage)
 
   // ---- dockview wiring -----------------------------------------------------
 
@@ -629,13 +630,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     dragSourceTerminal = false
     draftChatQueued = false
     reconcilingDeletedChatPanelIds.clear()
-    suppressReconcileActivation = false
-    reconcileActivationReleaseToken++
-    if (reconcileActivationReleaseTimer) {
-      clearTimeout(reconcileActivationReleaseTimer)
-      reconcileActivationReleaseTimer = null
-    }
-    chatActivationExplicitOverrides.clear()
+    releaseDeletedChatActivationNow()
   }
 
   // ---- panel operations ----------------------------------------------------
@@ -994,6 +989,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       // do not let the restored layout promote that stale id into an explicit user
       // selection. Once loading settles, the loading watcher calls this again.
       if (!explicitSelection && chatStore.loadingChats) return
+      if (isDeletedSessionForCurrentBot(sid)) return
       if (activeIsChat && activeSession === sid) return
       openSessionChat({ sessionId: sid, groupId, explicitSelection })
       return
@@ -1111,8 +1107,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
           sessionId: sid,
           explicitSelection: chatStore.hasExplicitSessionSelection === true,
         })
+      } else {
+        openDraftChat({ explicitSelection: chatStore.hasExplicitSessionSelection === true })
       }
-      else openDraftChat({ explicitSelection: chatStore.hasExplicitSessionSelection === true })
     })
   }
 

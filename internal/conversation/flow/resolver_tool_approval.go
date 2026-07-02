@@ -21,7 +21,6 @@ import (
 type ToolApprovalResponseInput struct {
 	BotID                      string
 	SessionID                  string
-	BaseHeadTurnID             string
 	ActorChannelIdentityID     string
 	ActorUserID                string
 	ApprovalID                 string
@@ -40,14 +39,10 @@ func (r *Resolver) RespondToolApproval(ctx context.Context, input ToolApprovalRe
 	target, err := r.toolApproval.ResolveTarget(ctx, toolapproval.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.SessionID,
-		BaseHeadTurnID:         input.BaseHeadTurnID,
 		ExplicitID:             firstNonEmpty(input.ExplicitID, input.ApprovalID),
 		ReplyExternalMessageID: input.ReplyExternalMessageID,
 	})
 	if err != nil {
-		return err
-	}
-	if err := r.validateBaseContinuationTurnHead(ctx, target.SessionID, target.PersistTurnID, input.BaseHeadTurnID, "tool approval"); err != nil {
 		return err
 	}
 	if isACP, err := r.isACPToolApprovalSession(ctx, target.SessionID); err != nil {
@@ -224,17 +219,15 @@ func emitApprovalAck(ctx context.Context, eventCh chan<- WSStreamEvent) error {
 
 func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Request, input ToolApprovalResponseInput) (sdk.ToolResultPart, error) {
 	req = withLocalWebReplyTarget(req)
-	resolved, err := r.resolveRunConfig(ctx, baseRunConfigParams{
-		BotID:             input.BotID,
-		SessionID:         req.SessionID,
-		ChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentPlatform:   req.SourcePlatform,
-		ReplyTarget:       req.ReplyTarget,
-		ConversationType:  req.ConversationType,
-		SessionToken:      input.ChatToken,
-		PersistTurnID:     req.PersistTurnID,
-		BaseHeadTurnID:    input.BaseHeadTurnID,
-	})
+	resolved, err := r.ResolveRunConfig(ctx,
+		input.BotID,
+		req.SessionID,
+		firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
+		req.SourcePlatform,
+		req.ReplyTarget,
+		req.ConversationType,
+		input.ChatToken,
+	)
 	if err != nil {
 		return sdk.ToolResultPart{}, err
 	}
@@ -247,13 +240,7 @@ func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Req
 
 func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
 	approval = withLocalWebReplyTarget(approval)
-	doneTurn := r.enterSessionTurn(ctx, input.BotID, approval.SessionID)
-	defer doneTurn()
-	if err := r.validateBaseContinuationTurnHead(ctx, approval.SessionID, approval.PersistTurnID, input.BaseHeadTurnID, "tool approval"); err != nil {
-		return err
-	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
-	run := continuationTurnRun(approval.SessionID, approval.PersistTurnID)
 	storeReq := conversation.ChatRequest{
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
@@ -264,7 +251,7 @@ func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval tool
 		ConversationType:        approval.ConversationType,
 		UserMessagePersisted:    true,
 	}
-	if err := r.storeRoundWithOptions(ctx, storeReq, &run, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
+	if err := r.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
 		return err
 	}
 	return r.continueToolApprovalSession(ctx, approval, input, eventCh)
@@ -272,28 +259,20 @@ func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval tool
 
 func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
 	approval = withLocalWebReplyTarget(approval)
-	resolved, err := r.resolveRunConfig(ctx, baseRunConfigParams{
-		BotID:             input.BotID,
-		SessionID:         approval.SessionID,
-		ChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentPlatform:   approval.SourcePlatform,
-		ReplyTarget:       approval.ReplyTarget,
-		ConversationType:  approval.ConversationType,
-		SessionToken:      input.ChatToken,
-		PersistTurnID:     approval.PersistTurnID,
-		BaseHeadTurnID:    input.BaseHeadTurnID,
-	})
+	resolved, err := r.ResolveRunConfig(ctx,
+		input.BotID,
+		approval.SessionID,
+		firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
+		approval.SourcePlatform,
+		approval.ReplyTarget,
+		approval.ConversationType,
+		input.ChatToken,
+	)
 	if err != nil {
 		return err
 	}
 
-	run := continuationTurnRun(approval.SessionID, approval.PersistTurnID)
-	contextReq := conversation.ChatRequest{
-		BotID:     input.BotID,
-		ChatID:    input.BotID,
-		SessionID: approval.SessionID,
-	}
-	loaded, err := r.loadMessagesForTurnRun(ctx, contextReq, run, defaultMaxContextMinutes)
+	loaded, err := r.loadMessages(ctx, input.BotID, approval.SessionID, defaultMaxContextMinutes)
 	if err != nil {
 		return err
 	}
@@ -331,7 +310,6 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 				if storeErr := r.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
 					req,
-					&run,
 					resolvedContext{model: models.GetResponse{ID: resolved.ModelID}},
 					snap,
 				); storeErr != nil {
