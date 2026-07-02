@@ -1,0 +1,38 @@
+[db]
+dsn = "postgres://memoh:memoh123@127.0.0.1:15432/memoh_chat_turn_bench_20260702_133722?sslmode=disable"
+max_open_conns = 32
+statement_timeout = "300s"
+
+[seed]
+marker = "saas-chat-turn-sql-20260702"
+cleanup_before = false
+bots = 8
+sessions_per_bot = 50
+hot_session_ratio = 0.05
+turns_per_session = 2500
+branch_factor = 2
+branch_depth = 96
+active_heads_per_session = 3
+messages_per_turn = 2
+approval_every_n_turns = 40
+user_input_every_n_turns = 60
+asset_every_n_messages = 200
+pending_ratio = 0.50
+
+[workload]
+runner = "sqlc"
+scenario = "latest_page"
+duration = "30s"
+warmup = "5s"
+concurrency = 16
+page_size = 50
+random_seed = 20260702
+fail_on_error = true
+selected_head_ratio = 0.35
+hot_traffic_ratio = 0.95
+
+[output]
+json_path = "benchmarks/chat_turn_sql/out/bounded-latest-baseline-results.json"
+csv_path = "benchmarks/chat_turn_sql/out/bounded-latest-baseline-results.csv"
+explain = false
+explain_dir = "benchmarks/chat_turn_sql/out/saas-explain"

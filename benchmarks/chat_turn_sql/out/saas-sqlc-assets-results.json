@@ -1,0 +1,581 @@
+{
+  "benchmark": "chat_turn_sql",
+  "marker": "saas-chat-turn-sql-20260702",
+  "runner": "sqlc",
+  "scenario": "mixed_saas_read",
+  "started_at": "2026-07-02T06:05:15.791843Z",
+  "duration": "90s",
+  "warmup": "15s",
+  "config": {
+    "db": {
+      "max_open_conns": 32,
+      "statement_timeout": "300s"
+    },
+    "seed": {
+      "Marker": "saas-chat-turn-sql-20260702",
+      "CleanupBefore": false,
+      "Bots": 8,
+      "SessionsPerBot": 50,
+      "HotSessionRatio": 0.05,
+      "TurnsPerSession": 2500,
+      "BranchFactor": 2,
+      "BranchDepth": 96,
+      "ActiveHeadsPerSess": 3,
+      "MessagesPerTurn": 2,
+      "ApprovalEveryNTurns": 40,
+      "UserInputEveryNTurns": 60,
+      "AssetEveryNMessages": 200,
+      "PendingRatio": 0.5
+    },
+    "workload": {
+      "Runner": "sqlc",
+      "Scenario": "mixed_saas_read",
+      "Duration": "90s",
+      "Warmup": "15s",
+      "Concurrency": 16,
+      "PageSize": 50,
+      "RandomSeed": 20260702,
+      "FailOnError": true,
+      "SelectedHeadRatio": 0.35,
+      "HotTrafficRatio": 0.95,
+      "QueryWeights": {
+        "after_page": 4,
+        "approval_base_head_request": 1,
+        "approval_graph_list": 2,
+        "approval_latest": 4,
+        "approval_pending_list": 4,
+        "approval_reply_message": 1,
+        "approval_short_id": 3,
+        "approval_visible_request": 1,
+        "before_page": 18,
+        "external_lookup": 3,
+        "graph_metadata": 8,
+        "latest_page": 40,
+        "turn_graph": 8,
+        "user_input_base_head_request": 1,
+        "user_input_graph_list": 2,
+        "user_input_latest": 3,
+        "user_input_pending_list": 3,
+        "user_input_reply_message": 1,
+        "user_input_short_id": 2,
+        "user_input_visible_request": 1
+      }
+    },
+    "output": {
+      "JSONPath": "benchmarks/chat_turn_sql/out/saas-sqlc-assets-results.json",
+      "CSVPath": "benchmarks/chat_turn_sql/out/saas-sqlc-assets-results.csv",
+      "Explain": false,
+      "ExplainDir": "benchmarks/chat_turn_sql/out/saas-explain"
+    }
+  },
+  "seed": {
+    "bots": 8,
+    "sessions": 400,
+    "turns": 1076800,
+    "messages": 2153600,
+    "heads": 1200,
+    "approvals": 26920,
+    "user_inputs": 17946,
+    "assets": 10768
+  },
+  "queries": [
+    {
+      "name": "after_page",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 675,
+      "count": 675,
+      "errors": 0,
+      "rows": 22275,
+      "p50_ms": 73.957,
+      "p90_ms": 137.535,
+      "p95_ms": 163.578,
+      "p99_ms": 280.952,
+      "max_ms": 532.361,
+      "avg_ms": 80.28781037037037,
+      "qps": 7.5,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/messages.sql ListMessagesAfterBySession"
+      ],
+      "args": [
+        "session_id",
+        "head_turn_id",
+        "after_id",
+        "created_at",
+        "max_count"
+      ]
+    },
+    {
+      "name": "approval_base_head_request",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 168,
+      "count": 50,
+      "errors": 118,
+      "rows": 50,
+      "p50_ms": 34.104,
+      "p90_ms": 55.587,
+      "p95_ms": 60.561,
+      "p99_ms": 74.395,
+      "max_ms": 74.395,
+      "avg_ms": 35.11572,
+      "qps": 0.5555555555555556,
+      "error_rate": 0.7023809523809523,
+      "last_error": "no rows in result set",
+      "sources": [
+        "db/postgres/queries/tool_approval.sql GetPendingToolApprovalByBaseHeadRequestID"
+      ],
+      "args": [
+        "id",
+        "bot_id",
+        "session_id",
+        "base_head_turn_id"
+      ]
+    },
+    {
+      "name": "approval_graph_list",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 337,
+      "count": 337,
+      "errors": 0,
+      "rows": 22585,
+      "p50_ms": 37.028,
+      "p90_ms": 66.282,
+      "p95_ms": 77.64,
+      "p99_ms": 104.241,
+      "max_ms": 334.537,
+      "avg_ms": 43.24923738872403,
+      "qps": 3.7444444444444445,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/tool_approval.sql ListToolApprovalsBySessionTurnGraph"
+      ],
+      "args": [
+        "bot_id",
+        "session_id"
+      ]
+    },
+    {
+      "name": "approval_latest",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 672,
+      "count": 672,
+      "errors": 0,
+      "rows": 672,
+      "p50_ms": 33.991,
+      "p90_ms": 57.07,
+      "p95_ms": 68.732,
+      "p99_ms": 102.836,
+      "max_ms": 360.015,
+      "avg_ms": 38.76450595238095,
+      "qps": 7.466666666666667,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/tool_approval.sql GetLatestPendingToolApprovalBySession"
+      ],
+      "args": [
+        "bot_id",
+        "session_id"
+      ]
+    },
+    {
+      "name": "approval_pending_list",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 674,
+      "count": 674,
+      "errors": 0,
+      "rows": 22585,
+      "p50_ms": 38.362,
+      "p90_ms": 67.32,
+      "p95_ms": 79.858,
+      "p99_ms": 116.057,
+      "max_ms": 126.793,
+      "avg_ms": 42.78569287833828,
+      "qps": 7.488888888888889,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/tool_approval.sql ListPendingToolApprovalsBySession"
+      ],
+      "args": [
+        "bot_id",
+        "session_id"
+      ]
+    },
+    {
+      "name": "approval_reply_message",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 168,
+      "count": 168,
+      "errors": 0,
+      "rows": 168,
+      "p50_ms": 37.47,
+      "p90_ms": 63.634,
+      "p95_ms": 74.869,
+      "p99_ms": 115.237,
+      "max_ms": 128.04,
+      "avg_ms": 41.58102380952381,
+      "qps": 1.8666666666666667,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/tool_approval.sql GetPendingToolApprovalByReplyMessage"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "prompt_external_message_id"
+      ]
+    },
+    {
+      "name": "approval_short_id",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 504,
+      "count": 504,
+      "errors": 0,
+      "rows": 504,
+      "p50_ms": 33.72,
+      "p90_ms": 59.603,
+      "p95_ms": 70.483,
+      "p99_ms": 108.202,
+      "max_ms": 270.15,
+      "avg_ms": 38.01528174603175,
+      "qps": 5.6,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/tool_approval.sql GetPendingToolApprovalBySessionShortID"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "short_id"
+      ]
+    },
+    {
+      "name": "approval_visible_request",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 168,
+      "count": 168,
+      "errors": 0,
+      "rows": 168,
+      "p50_ms": 34.415,
+      "p90_ms": 62.846,
+      "p95_ms": 80.818,
+      "p99_ms": 105.193,
+      "max_ms": 141.155,
+      "avg_ms": 38.04036904761905,
+      "qps": 1.8666666666666667,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/tool_approval.sql GetPendingToolApprovalByVisibleRequestID"
+      ],
+      "args": [
+        "id",
+        "bot_id",
+        "session_id"
+      ]
+    },
+    {
+      "name": "before_page",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 3042,
+      "count": 3042,
+      "errors": 0,
+      "rows": 57900,
+      "p50_ms": 62.898,
+      "p90_ms": 117.758,
+      "p95_ms": 139.55,
+      "p99_ms": 195.838,
+      "max_ms": 408.024,
+      "avg_ms": 69.33741157133464,
+      "qps": 33.8,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/messages.sql ListMessagesBeforeBySession"
+      ],
+      "args": [
+        "session_id",
+        "head_turn_id",
+        "before_id",
+        "created_at",
+        "max_count"
+      ]
+    },
+    {
+      "name": "external_lookup",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 507,
+      "count": 507,
+      "errors": 0,
+      "rows": 507,
+      "p50_ms": 38.123,
+      "p90_ms": 66.178,
+      "p95_ms": 80.118,
+      "p99_ms": 121.714,
+      "max_ms": 171.636,
+      "avg_ms": 43.35247337278107,
+      "qps": 5.633333333333334,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/messages.sql GetMessageByExternalIDBySession"
+      ],
+      "args": [
+        "session_id",
+        "head_turn_id",
+        "external_message_id"
+      ]
+    },
+    {
+      "name": "graph_metadata",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 1344,
+      "count": 1344,
+      "errors": 0,
+      "rows": 3618048,
+      "p50_ms": 191.163,
+      "p90_ms": 316.08,
+      "p95_ms": 365.33,
+      "p99_ms": 458.027,
+      "max_ms": 665.273,
+      "avg_ms": 211.6092738095238,
+      "qps": 14.933333333333334,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/messages.sql ListSessionTurnGraphNodeMetadata"
+      ],
+      "args": [
+        "session_id"
+      ]
+    },
+    {
+      "name": "latest_page",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 6759,
+      "count": 6759,
+      "errors": 0,
+      "rows": 337950,
+      "p50_ms": 74.667,
+      "p90_ms": 127.304,
+      "p95_ms": 146.827,
+      "p99_ms": 188.437,
+      "max_ms": 359.5,
+      "avg_ms": 82.53360511910046,
+      "qps": 75.1,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/messages.sql ListMessagesLatestBySession"
+      ],
+      "args": [
+        "session_id",
+        "head_turn_id",
+        "max_count"
+      ]
+    },
+    {
+      "name": "turn_graph",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 1349,
+      "count": 1349,
+      "errors": 0,
+      "rows": 3631508,
+      "p50_ms": 72.256,
+      "p90_ms": 123.931,
+      "p95_ms": 145.171,
+      "p99_ms": 194.111,
+      "max_ms": 263.07,
+      "avg_ms": 80.35017123795403,
+      "qps": 14.988888888888889,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/messages.sql ListSessionTurnGraphTurns"
+      ],
+      "args": [
+        "session_id"
+      ]
+    },
+    {
+      "name": "user_input_base_head_request",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 168,
+      "count": 86,
+      "errors": 82,
+      "rows": 86,
+      "p50_ms": 34.824,
+      "p90_ms": 64.371,
+      "p95_ms": 85.37,
+      "p99_ms": 104.254,
+      "max_ms": 104.254,
+      "avg_ms": 40.362127906976745,
+      "qps": 0.9555555555555556,
+      "error_rate": 0.4880952380952381,
+      "last_error": "no rows in result set",
+      "sources": [
+        "db/postgres/queries/user_input.sql GetPendingUserInputByBaseHeadRequestID"
+      ],
+      "args": [
+        "id",
+        "bot_id",
+        "session_id",
+        "base_head_turn_id"
+      ]
+    },
+    {
+      "name": "user_input_graph_list",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 336,
+      "count": 336,
+      "errors": 0,
+      "rows": 15033,
+      "p50_ms": 41.187,
+      "p90_ms": 65.293,
+      "p95_ms": 76.578,
+      "p99_ms": 118.046,
+      "max_ms": 174.153,
+      "avg_ms": 44.266020833333336,
+      "qps": 3.7333333333333334,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/user_input.sql ListUserInputsBySessionTurnGraph"
+      ],
+      "args": [
+        "bot_id",
+        "session_id"
+      ]
+    },
+    {
+      "name": "user_input_latest",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 504,
+      "count": 504,
+      "errors": 0,
+      "rows": 504,
+      "p50_ms": 36.673,
+      "p90_ms": 66.263,
+      "p95_ms": 76.687,
+      "p99_ms": 94.785,
+      "max_ms": 108.388,
+      "avg_ms": 41.56713888888889,
+      "qps": 5.6,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/user_input.sql GetLatestPendingUserInputBySession"
+      ],
+      "args": [
+        "bot_id",
+        "session_id"
+      ]
+    },
+    {
+      "name": "user_input_pending_list",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 504,
+      "count": 504,
+      "errors": 0,
+      "rows": 11245,
+      "p50_ms": 35.584,
+      "p90_ms": 65.477,
+      "p95_ms": 77.908,
+      "p99_ms": 99.73,
+      "max_ms": 147.54,
+      "avg_ms": 40.81630952380952,
+      "qps": 5.6,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/user_input.sql ListPendingUserInputsBySession"
+      ],
+      "args": [
+        "bot_id",
+        "session_id"
+      ]
+    },
+    {
+      "name": "user_input_reply_message",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 168,
+      "count": 168,
+      "errors": 0,
+      "rows": 168,
+      "p50_ms": 39.424,
+      "p90_ms": 68.232,
+      "p95_ms": 83.235,
+      "p99_ms": 127.899,
+      "max_ms": 171.972,
+      "avg_ms": 44.94444047619048,
+      "qps": 1.8666666666666667,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/user_input.sql GetPendingUserInputByReplyMessage"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "prompt_external_message_id"
+      ]
+    },
+    {
+      "name": "user_input_short_id",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 336,
+      "count": 336,
+      "errors": 0,
+      "rows": 336,
+      "p50_ms": 36.312,
+      "p90_ms": 63.239,
+      "p95_ms": 75.348,
+      "p99_ms": 107.759,
+      "max_ms": 130.6,
+      "avg_ms": 40.42950892857143,
+      "qps": 3.7333333333333334,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/user_input.sql GetPendingUserInputBySessionShortID"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "short_id"
+      ]
+    },
+    {
+      "name": "user_input_visible_request",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 168,
+      "count": 168,
+      "errors": 0,
+      "rows": 168,
+      "p50_ms": 38.826,
+      "p90_ms": 59.623,
+      "p95_ms": 70.001,
+      "p99_ms": 93.778,
+      "max_ms": 99.739,
+      "avg_ms": 41.30900595238095,
+      "qps": 1.8666666666666667,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/user_input.sql GetPendingUserInputByVisibleRequestID"
+      ],
+      "args": [
+        "id",
+        "bot_id",
+        "session_id"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "benchmark": "chat_turn_sql",
+  "marker": "local-chat-turn-sql",
+  "runner": "http",
+  "scenario": "latest_page",
+  "started_at": "2026-07-02T13:30:19.108589Z",
+  "duration": "30s",
+  "warmup": "5s",
+  "config": {
+    "db": {
+      "max_open_conns": 16,
+      "statement_timeout": "30s"
+    },
+    "seed": {
+      "Marker": "local-chat-turn-sql",
+      "CleanupBefore": true,
+      "Bots": 4,
+      "SessionsPerBot": 25,
+      "HotSessionRatio": 0.1,
+      "TurnsPerSession": 1000,
+      "BranchFactor": 2,
+      "BranchDepth": 64,
+      "ActiveHeadsPerSess": 1,
+      "MessagesPerTurn": 2,
+      "ApprovalEveryNTurns": 50,
+      "UserInputEveryNTurns": 80,
+      "AssetEveryNMessages": 200,
+      "PendingRatio": 0.5
+    },
+    "workload": {
+      "Runner": "http",
+      "Scenario": "latest_page",
+      "Duration": "30s",
+      "Warmup": "5s",
+      "Concurrency": 8,
+      "PageSize": 50,
+      "RandomSeed": 1,
+      "FailOnError": true,
+      "SelectedHeadRatio": 0,
+      "HotTrafficRatio": 0.9,
+      "HTTPFormat": "ui",
+      "HTTPIncludeGraph": true,
+      "HTTPDecodeJSON": true,
+      "QueryWeights": {
+        "after_page": 4,
+        "approval_base_head_request": 1,
+        "approval_graph_list": 2,
+        "approval_latest": 4,
+        "approval_pending_list": 4,
+        "approval_reply_message": 1,
+        "approval_short_id": 3,
+        "approval_visible_request": 1,
+        "before_page": 18,
+        "external_lookup": 3,
+        "graph_metadata": 16,
+        "latest_page": 40,
+        "turn_graph": 0,
+        "user_input_base_head_request": 1,
+        "user_input_graph_list": 2,
+        "user_input_latest": 3,
+        "user_input_pending_list": 3,
+        "user_input_reply_message": 1,
+        "user_input_short_id": 2,
+        "user_input_visible_request": 1
+      }
+    },
+    "output": {
+      "JSONPath": "benchmarks/chat_turn_sql/out/http_latest_linear_gated.json",
+      "CSVPath": "benchmarks/chat_turn_sql/out/http_latest_linear_gated.csv",
+      "Explain": false,
+      "ExplainDir": "benchmarks/chat_turn_sql/out/explain"
+    }
+  },
+  "seed": {
+    "bots": 4,
+    "sessions": 100,
+    "turns": 100000,
+    "messages": 200000,
+    "heads": 100,
+    "approvals": 2000,
+    "user_inputs": 1250,
+    "assets": 0
+  },
+  "queries": [
+    {
+      "name": "latest_page",
+      "query_source": "http_handler",
+      "scan_mode": "http_json_decode",
+      "total_count": 51184,
+      "count": 51184,
+      "errors": 0,
+      "rows": 2559200,
+      "p50_ms": 4.538,
+      "p90_ms": 5.969,
+      "p95_ms": 6.481,
+      "p99_ms": 7.73,
+      "max_ms": 60.268,
+      "avg_ms": 4.688136487964989,
+      "qps": 1706.1333333333334,
+      "error_rate": 0,
+      "sources": [
+        "internal/handlers/message.go ListMessages"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "limit",
+        "format",
+        "include_graph",
+        "head_turn_id"
+      ]
+    }
+  ]
+}

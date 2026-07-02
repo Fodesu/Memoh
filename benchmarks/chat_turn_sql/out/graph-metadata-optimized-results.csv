@@ -1,0 +1,2 @@
+query,query_source,scan_mode,total_count,count,errors,error_rate,rows,p50_ms,p90_ms,p95_ms,p99_ms,max_ms,avg_ms,qps,last_error
+graph_metadata,generated_sqlc,sqlc_struct_scan,3031,3031,0,0.000000,8159452,150.698,209.308,235.401,306.504,472.001,157.662,101.033,

@@ -1,0 +1,108 @@
+{
+  "benchmark": "chat_turn_sql",
+  "marker": "saas-chat-turn-sql-20260702",
+  "runner": "sqlc",
+  "scenario": "latest_page",
+  "started_at": "2026-07-02T10:26:45.907067Z",
+  "duration": "30s",
+  "warmup": "5s",
+  "config": {
+    "db": {
+      "max_open_conns": 32,
+      "statement_timeout": "300s"
+    },
+    "seed": {
+      "Marker": "saas-chat-turn-sql-20260702",
+      "CleanupBefore": false,
+      "Bots": 8,
+      "SessionsPerBot": 50,
+      "HotSessionRatio": 0.05,
+      "TurnsPerSession": 2500,
+      "BranchFactor": 2,
+      "BranchDepth": 96,
+      "ActiveHeadsPerSess": 3,
+      "MessagesPerTurn": 2,
+      "ApprovalEveryNTurns": 40,
+      "UserInputEveryNTurns": 60,
+      "AssetEveryNMessages": 200,
+      "PendingRatio": 0.5
+    },
+    "workload": {
+      "Runner": "sqlc",
+      "Scenario": "latest_page",
+      "Duration": "30s",
+      "Warmup": "5s",
+      "Concurrency": 16,
+      "PageSize": 50,
+      "RandomSeed": 20260702,
+      "FailOnError": true,
+      "SelectedHeadRatio": 0.35,
+      "HotTrafficRatio": 0.95,
+      "QueryWeights": {
+        "after_page": 4,
+        "approval_base_head_request": 1,
+        "approval_graph_list": 2,
+        "approval_latest": 4,
+        "approval_pending_list": 4,
+        "approval_reply_message": 1,
+        "approval_short_id": 3,
+        "approval_visible_request": 1,
+        "before_page": 18,
+        "external_lookup": 3,
+        "graph_metadata": 16,
+        "latest_page": 40,
+        "turn_graph": 0,
+        "user_input_base_head_request": 1,
+        "user_input_graph_list": 2,
+        "user_input_latest": 3,
+        "user_input_pending_list": 3,
+        "user_input_reply_message": 1,
+        "user_input_short_id": 2,
+        "user_input_visible_request": 1
+      }
+    },
+    "output": {
+      "JSONPath": "benchmarks/chat_turn_sql/out/bounded-latest-baseline-results.json",
+      "CSVPath": "benchmarks/chat_turn_sql/out/bounded-latest-baseline-results.csv",
+      "Explain": false,
+      "ExplainDir": "benchmarks/chat_turn_sql/out/saas-explain"
+    }
+  },
+  "seed": {
+    "bots": 8,
+    "sessions": 400,
+    "turns": 1076800,
+    "messages": 2153600,
+    "heads": 1200,
+    "approvals": 26920,
+    "user_inputs": 17946,
+    "assets": 10768
+  },
+  "queries": [
+    {
+      "name": "latest_page",
+      "query_source": "generated_sqlc",
+      "scan_mode": "sqlc_struct_scan",
+      "total_count": 9980,
+      "count": 9980,
+      "errors": 0,
+      "rows": 499000,
+      "p50_ms": 47.124,
+      "p90_ms": 61.7,
+      "p95_ms": 66.988,
+      "p99_ms": 84.764,
+      "max_ms": 200.627,
+      "avg_ms": 48.0646493987976,
+      "qps": 332.6666666666667,
+      "error_rate": 0,
+      "sources": [
+        "db/postgres/queries/messages.sql ListMessagesLatestBySession"
+      ],
+      "args": [
+        "session_id",
+        "head_turn_id",
+        "max_count"
+      ]
+    }
+  ]
+}

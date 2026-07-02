@@ -1,0 +1,21 @@
+query,query_source,scan_mode,total_count,count,errors,error_rate,rows,p50_ms,p90_ms,p95_ms,p99_ms,max_ms,avg_ms,qps,last_error
+after_page,generated_sqlc,sqlc_struct_scan,1033,1033,0,0.000000,34935,53.383,80.489,87.395,109.962,160.967,51.529,11.478,
+approval_base_head_request,generated_sqlc,sqlc_struct_scan,258,82,176,0.682171,82,24.043,32.192,35.343,36.282,36.282,24.560,0.911,no rows in result set
+approval_graph_list,generated_sqlc,sqlc_struct_scan,516,516,0,0.000000,34583,27.420,37.669,42.839,51.524,76.235,28.208,5.733,
+approval_latest,generated_sqlc,sqlc_struct_scan,1032,1032,0,0.000000,1032,24.210,35.972,39.590,48.696,60.037,25.330,11.467,
+approval_pending_list,generated_sqlc,sqlc_struct_scan,1032,1032,0,0.000000,34564,26.517,37.760,42.679,52.110,72.726,27.344,11.467,
+approval_reply_message,generated_sqlc,sqlc_struct_scan,258,258,0,0.000000,258,26.534,37.446,40.974,52.195,56.846,27.090,2.867,
+approval_short_id,generated_sqlc,sqlc_struct_scan,774,774,0,0.000000,774,24.430,35.468,39.007,48.663,59.342,25.259,8.600,
+approval_visible_request,generated_sqlc,sqlc_struct_scan,258,258,0,0.000000,258,24.628,36.585,42.189,49.460,51.905,25.615,2.867,
+before_page,generated_sqlc,sqlc_struct_scan,4660,4660,0,0.000000,87350,45.549,68.886,76.258,99.342,150.489,45.263,51.778,
+external_lookup,generated_sqlc,sqlc_struct_scan,777,777,0,0.000000,777,27.161,37.966,41.728,53.950,86.806,28.131,8.633,
+graph_metadata,generated_sqlc,sqlc_struct_scan,2064,2064,0,0.000000,5556288,132.498,171.565,188.012,227.636,327.245,136.172,22.933,
+latest_page,generated_sqlc,sqlc_struct_scan,10359,10359,0,0.000000,517950,53.181,71.962,78.490,96.379,298.079,54.531,115.100,
+turn_graph,generated_sqlc,sqlc_struct_scan,2064,2064,0,0.000000,5556288,49.858,65.872,71.386,89.102,130.484,50.930,22.933,
+user_input_base_head_request,generated_sqlc,sqlc_struct_scan,258,109,149,0.577519,109,23.964,35.464,37.819,47.184,80.459,24.802,1.211,no rows in result set
+user_input_graph_list,generated_sqlc,sqlc_struct_scan,516,516,0,0.000000,23089,28.099,39.856,43.708,55.054,59.870,28.573,5.733,
+user_input_latest,generated_sqlc,sqlc_struct_scan,774,774,0,0.000000,774,27.969,40.728,44.095,60.908,92.100,28.949,8.600,
+user_input_pending_list,generated_sqlc,sqlc_struct_scan,774,774,0,0.000000,17294,27.037,38.978,42.953,54.404,67.022,27.636,8.600,
+user_input_reply_message,generated_sqlc,sqlc_struct_scan,258,258,0,0.000000,258,28.091,40.983,45.599,61.094,90.853,29.324,2.867,
+user_input_short_id,generated_sqlc,sqlc_struct_scan,516,516,0,0.000000,516,25.961,37.987,43.032,52.816,73.175,27.262,5.733,
+user_input_visible_request,generated_sqlc,sqlc_struct_scan,258,258,0,0.000000,258,25.558,37.929,42.695,55.324,80.897,27.037,2.867,

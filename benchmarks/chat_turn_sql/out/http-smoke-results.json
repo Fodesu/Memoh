@@ -1,0 +1,183 @@
+{
+  "benchmark": "chat_turn_sql",
+  "marker": "http-chat-turn-smoke-20260702",
+  "runner": "http",
+  "scenario": "mixed_saas_read",
+  "started_at": "2026-07-02T11:16:15.775872Z",
+  "duration": "2s",
+  "warmup": "200ms",
+  "config": {
+    "db": {
+      "max_open_conns": 4,
+      "statement_timeout": "60s"
+    },
+    "seed": {
+      "Marker": "http-chat-turn-smoke-20260702",
+      "CleanupBefore": true,
+      "Bots": 1,
+      "SessionsPerBot": 2,
+      "HotSessionRatio": 0.5,
+      "TurnsPerSession": 40,
+      "BranchFactor": 1,
+      "BranchDepth": 8,
+      "ActiveHeadsPerSess": 2,
+      "MessagesPerTurn": 2,
+      "ApprovalEveryNTurns": 4,
+      "UserInputEveryNTurns": 5,
+      "AssetEveryNMessages": 0,
+      "PendingRatio": 1
+    },
+    "workload": {
+      "Runner": "http",
+      "Scenario": "mixed_saas_read",
+      "Duration": "2s",
+      "Warmup": "200ms",
+      "Concurrency": 2,
+      "PageSize": 20,
+      "RandomSeed": 20260702,
+      "FailOnError": true,
+      "SelectedHeadRatio": 0.3,
+      "HotTrafficRatio": 0.9,
+      "HTTPFormat": "ui",
+      "HTTPIncludeGraph": true,
+      "HTTPDecodeJSON": true,
+      "QueryWeights": {
+        "after_page": 1,
+        "before_page": 2,
+        "external_lookup": 1,
+        "latest_page": 4
+      }
+    },
+    "output": {
+      "JSONPath": "benchmarks/chat_turn_sql/out/http-smoke-results.json",
+      "CSVPath": "benchmarks/chat_turn_sql/out/http-smoke-results.csv",
+      "Explain": false,
+      "ExplainDir": "benchmarks/chat_turn_sql/out/http-smoke-explain"
+    }
+  },
+  "seed": {
+    "bots": 1,
+    "sessions": 2,
+    "turns": 96,
+    "messages": 192,
+    "heads": 4,
+    "approvals": 24,
+    "user_inputs": 19,
+    "assets": 0
+  },
+  "queries": [
+    {
+      "name": "after_page",
+      "query_source": "http_handler",
+      "scan_mode": "http_json_decode",
+      "total_count": 121,
+      "count": 121,
+      "errors": 0,
+      "rows": 2541,
+      "p50_ms": 6.978,
+      "p90_ms": 8.238,
+      "p95_ms": 8.735,
+      "p99_ms": 9.982,
+      "max_ms": 10.214,
+      "avg_ms": 7.093900826446281,
+      "qps": 60.5,
+      "error_rate": 0,
+      "sources": [
+        "internal/handlers/message.go LocateMessage"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "external_message_id",
+        "before",
+        "after",
+        "head_turn_id"
+      ]
+    },
+    {
+      "name": "before_page",
+      "query_source": "http_handler",
+      "scan_mode": "http_json_decode",
+      "total_count": 242,
+      "count": 242,
+      "errors": 0,
+      "rows": 6125,
+      "p50_ms": 2.874,
+      "p90_ms": 6.91,
+      "p95_ms": 7.6,
+      "p99_ms": 8.919,
+      "max_ms": 11.812,
+      "avg_ms": 3.7890785123966944,
+      "qps": 121,
+      "error_rate": 0,
+      "sources": [
+        "internal/handlers/message.go ListMessages"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "limit",
+        "format",
+        "before",
+        "before_id",
+        "head_turn_id"
+      ]
+    },
+    {
+      "name": "external_lookup",
+      "query_source": "http_handler",
+      "scan_mode": "http_json_decode",
+      "total_count": 121,
+      "count": 121,
+      "errors": 0,
+      "rows": 121,
+      "p50_ms": 4.912,
+      "p90_ms": 5.742,
+      "p95_ms": 6.038,
+      "p99_ms": 7.205,
+      "max_ms": 7.617,
+      "avg_ms": 4.924809917355372,
+      "qps": 60.5,
+      "error_rate": 0,
+      "sources": [
+        "internal/handlers/message.go LocateMessage"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "external_message_id",
+        "before",
+        "after",
+        "head_turn_id"
+      ]
+    },
+    {
+      "name": "latest_page",
+      "query_source": "http_handler",
+      "scan_mode": "http_json_decode",
+      "total_count": 483,
+      "count": 483,
+      "errors": 0,
+      "rows": 9660,
+      "p50_ms": 3.07,
+      "p90_ms": 4.055,
+      "p95_ms": 4.667,
+      "p99_ms": 9.032,
+      "max_ms": 17.763,
+      "avg_ms": 3.3641614906832302,
+      "qps": 241.5,
+      "error_rate": 0,
+      "sources": [
+        "internal/handlers/message.go ListMessages"
+      ],
+      "args": [
+        "bot_id",
+        "session_id",
+        "limit",
+        "format",
+        "include_graph",
+        "head_turn_id"
+      ]
+    }
+  ]
+}

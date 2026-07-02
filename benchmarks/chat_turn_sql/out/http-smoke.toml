@@ -1,0 +1,47 @@
+[db]
+dsn = "postgres://memoh:memoh123@127.0.0.1:15432/memoh_chat_turn_bench_20260702_133722?sslmode=disable"
+max_open_conns = 4
+statement_timeout = "60s"
+
+[seed]
+marker = "http-chat-turn-smoke-20260702"
+cleanup_before = true
+bots = 1
+sessions_per_bot = 2
+hot_session_ratio = 0.50
+turns_per_session = 40
+branch_factor = 1
+branch_depth = 8
+active_heads_per_session = 2
+messages_per_turn = 2
+approval_every_n_turns = 4
+user_input_every_n_turns = 5
+asset_every_n_messages = 0
+pending_ratio = 1.00
+
+[workload]
+runner = "http"
+scenario = "mixed_saas_read"
+duration = "2s"
+warmup = "200ms"
+concurrency = 2
+page_size = 20
+random_seed = 20260702
+fail_on_error = true
+selected_head_ratio = 0.30
+hot_traffic_ratio = 0.90
+http_format = "ui"
+http_include_graph = true
+http_decode_json = true
+
+[workload.query_weights]
+latest_page = 4
+before_page = 2
+after_page = 1
+external_lookup = 1
+
+[output]
+json_path = "benchmarks/chat_turn_sql/out/http-smoke-results.json"
+csv_path = "benchmarks/chat_turn_sql/out/http-smoke-results.csv"
+explain = false
+explain_dir = "benchmarks/chat_turn_sql/out/http-smoke-explain"
