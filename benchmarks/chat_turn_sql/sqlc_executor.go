@@ -183,7 +183,11 @@ func (e *sqlcExecutor) execQuery(ctx context.Context, queryName string, s Sessio
 }
 
 func (e *sqlcExecutor) execChatPageUI(ctx context.Context, s SessionSeed, rng *rand.Rand) (int64, error) {
-	rows, err := e.execQuery(ctx, queryLatestPage, s, rng)
+	items, err := e.queries.ListMessagesLatestUIBySession(ctx, postgresqlc.ListMessagesLatestUIBySessionParams{
+		SessionID: pgUUID(s.SessionID),
+		MaxCount:  pageSizeInt32(e.cfg),
+	})
+	rows := int64(len(items))
 	if err != nil {
 		return rows, err
 	}
