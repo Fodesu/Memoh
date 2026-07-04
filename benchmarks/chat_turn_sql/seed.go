@@ -383,6 +383,7 @@ WITH benchmark_sessions AS (
   FROM bot_sessions s
   JOIN bots b ON b.id = s.bot_id
   WHERE b.metadata->>'benchmark_marker' = $1
+    AND s.metadata->>'benchmark_marker' = $1
 )
 SELECT
   s.bot_id,
@@ -750,19 +751,24 @@ func actualSeedEstimate(ctx context.Context, pool *pgxpool.Pool, marker string) 
 	err := pool.QueryRow(ctx, `
 WITH bench_bots AS (
   SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1
+),
+bench_sessions AS (
+  SELECT id, bot_id
+  FROM bot_sessions
+  WHERE metadata->>'benchmark_marker' = $1
 )
 SELECT
   (SELECT COUNT(*) FROM bench_bots),
-  (SELECT COUNT(*) FROM bot_sessions WHERE bot_id IN (SELECT id FROM bench_bots)),
-  (SELECT COUNT(*) FROM bot_history_turns WHERE bot_id IN (SELECT id FROM bench_bots)),
-  (SELECT COUNT(*) FROM bot_history_messages WHERE bot_id IN (SELECT id FROM bench_bots)),
+  (SELECT COUNT(*) FROM bench_sessions),
+  (SELECT COUNT(*) FROM bot_history_turns WHERE session_id IN (SELECT id FROM bench_sessions)),
+  (SELECT COUNT(*) FROM bot_history_messages WHERE session_id IN (SELECT id FROM bench_sessions)),
   0,
-  (SELECT COUNT(*) FROM tool_approval_requests WHERE bot_id IN (SELECT id FROM bench_bots)),
-  (SELECT COUNT(*) FROM user_input_requests WHERE bot_id IN (SELECT id FROM bench_bots)),
+  (SELECT COUNT(*) FROM tool_approval_requests WHERE session_id IN (SELECT id FROM bench_sessions)),
+  (SELECT COUNT(*) FROM user_input_requests WHERE session_id IN (SELECT id FROM bench_sessions)),
   (SELECT COUNT(*)
    FROM bot_history_message_assets a
    JOIN bot_history_messages m ON m.id = a.message_id
-   WHERE m.bot_id IN (SELECT id FROM bench_bots))`, marker).Scan(
+   WHERE m.session_id IN (SELECT id FROM bench_sessions))`, marker).Scan(
 		&estimate.Bots,
 		&estimate.Sessions,
 		&estimate.Turns,
