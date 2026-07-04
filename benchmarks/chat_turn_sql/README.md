@@ -98,7 +98,7 @@ Config parsing is strict. Unknown keys and invalid explicit values fail early in
 - `external_lookup`: low-level visible-message lookup by external message id. Seeds sample recent/mid/old external ids instead of always using the first message.
 - `turn_graph`: full visible turn graph from active heads. This is no longer part of the default mixed production-path workload.
 - `head_resolve`: resolve a non-head turn id to the newest active head containing it (variant switching with a pinned mid-path turn). Uses the seeded `mid_path_turn_id`; reseed or reload the catalog after upgrading.
-- `turn_siblings`: per-page sibling variant metadata aggregation — the query every UI transcript page of a chat session now runs. Uses the seeded `page_turn_ids`, about 25 turns for the default 50-message / 2-message-per-turn UI page, with branch fork points placed inside that page window.
+- `turn_siblings`: per-page sibling variant metadata aggregation — the query every UI transcript page of a chat session now runs. Uses the seeded `page_turn_ids`, about 15 turns for the default 30-message / 2-message-per-turn UI page, with branch fork points placed inside that page window.
 - `turn_path`: single-head ancestor path ids. This is kept as an old-path comparison scenario; it is no longer part of the default production mix.
 - `turn_ancestor`: low-level SSE live-filter ancestor existence check. Samples mostly the common direct append case, plus deep ancestor and cross-branch negative checks, without returning the whole path to Go.
 - `approval_tool_calls`: direct UI decoration query for `ListToolApprovalsBySessionToolCalls`.

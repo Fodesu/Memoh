@@ -105,7 +105,7 @@ func defaultConfig() Config {
 			Duration:               "30s",
 			Warmup:                 "5s",
 			Concurrency:            8,
-			PageSize:               50,
+			PageSize:               30,
 			RandomSeed:             1,
 			FailOnError:            true,
 			SelectedHeadRatio:      0.25,
