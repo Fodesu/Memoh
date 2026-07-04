@@ -165,6 +165,48 @@ func TestHTTPRunnerAcceptsListMessagesMixedScenario(t *testing.T) {
 	}
 }
 
+func TestMixedSaaSWriteDefaultsToWriteWeights(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	raw := []byte(`
+[workload]
+scenario = "mixed_saas_write"
+runner = "sqlc"
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Workload.QueryWeights[queryWriteTurnPair] != 80 {
+		t.Fatalf("write_turn_pair weight = %d", cfg.Workload.QueryWeights[queryWriteTurnPair])
+	}
+	if cfg.Workload.QueryWeights[queryLatestPage] != 0 {
+		t.Fatalf("latest_page weight = %d, want 0", cfg.Workload.QueryWeights[queryLatestPage])
+	}
+	if !cfg.Workload.SerializeSessionWrites {
+		t.Fatal("expected write scenarios to serialize session writes by default")
+	}
+}
+
+func TestWriteScenarioRequiresSQLCRunner(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Workload.Runner = runnerSQL
+	cfg.Workload.Scenario = queryWriteTurnPair
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected write scenario to reject sql runner")
+	}
+}
+
+func TestReadScenarioDoesNotSerializeSessionWritesByDefault(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.Workload.SerializeSessionWrites {
+		t.Fatal("expected read scenario to leave session write serialization disabled")
+	}
+}
+
 func TestNormalizeWeightsRejectsUnknownQuery(t *testing.T) {
 	_, err := normalizeWeights(map[string]int{"unknown": 1})
 	if err == nil {

@@ -36,8 +36,9 @@ runner = "sqlc"
 
 # One of:
 # mixed_saas_read, chat_page_ui, locate_window, approval_resolve,
-# user_input_resolve, sse_live_filter, latest_page, before_page, after_page,
-# external_lookup, message_assets, approval_*, user_input_*
+# user_input_resolve, mixed_saas_write, write_turn_pair,
+# write_user_message, write_assistant_message, latest_page, before_page,
+# after_page, external_lookup, message_assets, approval_*, user_input_*
 scenario = "mixed_saas_read"
 duration = "30s"
 warmup = "5s"
@@ -54,12 +55,23 @@ hot_traffic_ratio = 0.90
 http_format = "ui"
 http_decode_json = true
 
+# Write runner only. Keep true to model one writer per chat session; set false
+# only when intentionally testing same-session concurrent write conflicts.
+serialize_session_writes = false
+
 [workload.query_weights]
 chat_page_ui = 70
 before_page = 18
 locate_window = 6
 approval_resolve = 3
 user_input_resolve = 3
+
+# For write-path runs, set scenario = "mixed_saas_write" and use write weights
+# like the block below. The write scenarios require runner = "sqlc" because they
+# call the production message.DBService Persist path.
+# write_turn_pair = 80
+# write_user_message = 10
+# write_assistant_message = 10
 
 [output]
 json_path = "benchmarks/chat_turn_sql/out/results.json"

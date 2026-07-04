@@ -10,17 +10,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	postgresqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
+	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
+	messagepkg "github.com/memohai/memoh/internal/message"
 )
 
 type sqlcExecutor struct {
-	cfg     Config
-	queries *postgresqlc.Queries
+	cfg            Config
+	queries        *postgresqlc.Queries
+	messageService *messagepkg.DBService
 }
 
 func newSQLCExecutor(cfg Config, pool *pgxpool.Pool) *sqlcExecutor {
+	queries := postgresqlc.New(pool)
 	return &sqlcExecutor{
-		cfg:     cfg,
-		queries: postgresqlc.New(pool),
+		cfg:            cfg,
+		queries:        queries,
+		messageService: messagepkg.NewService(nil, postgresstore.NewQueries(queries)),
 	}
 }
 
@@ -43,6 +48,12 @@ func (e *sqlcExecutor) execQuery(ctx context.Context, queryName string, s Sessio
 		return e.execApprovalResolve(ctx, s)
 	case queryUserInputResolve:
 		return e.execUserInputResolve(ctx, s)
+	case queryWriteUserMessage:
+		return e.execWriteUserMessage(ctx, s)
+	case queryWriteAssistantMessage:
+		return e.execWriteAssistantMessage(ctx, s)
+	case queryWriteTurnPair:
+		return e.execWriteTurnPair(ctx, s)
 	case queryLatestPage:
 		items, err := e.queries.ListMessagesLatestBySession(ctx, postgresqlc.ListMessagesLatestBySessionParams{
 			SessionID: pgUUID(s.SessionID),
@@ -204,6 +215,70 @@ func (e *sqlcExecutor) execChatPageUI(ctx context.Context, s SessionSeed, rng *r
 	extra, err = e.execQuery(ctx, queryUserInputToolCalls, s, rng)
 	rows += extra
 	return rows, err
+}
+
+func (e *sqlcExecutor) execWriteUserMessage(ctx context.Context, s SessionSeed) (int64, error) {
+	_, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user"))
+	return rowsForWrite(1, err)
+}
+
+func (e *sqlcExecutor) execWriteAssistantMessage(ctx context.Context, s SessionSeed) (int64, error) {
+	_, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "assistant"))
+	return rowsForWrite(1, err)
+}
+
+func (e *sqlcExecutor) execWriteTurnPair(ctx context.Context, s SessionSeed) (int64, error) {
+	if _, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user")); err != nil {
+		return 0, err
+	}
+	if _, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "assistant")); err != nil {
+		return 1, err
+	}
+	return 2, nil
+}
+
+func (e *sqlcExecutor) writeMessageInput(s SessionSeed, role string) messagepkg.PersistInput {
+	messageID := uuid.NewString()
+	content := jsonRaw(`{"type":"text","content":"bench write"}`)
+	displayText := "bench write"
+	if role == "assistant" {
+		content = jsonText(map[string]any{
+			"role":    "assistant",
+			"content": []map[string]string{{"type": "text", "text": "bench write assistant"}},
+		})
+		displayText = "bench write assistant"
+	}
+	return messagepkg.PersistInput{
+		BotID:             s.BotID.String(),
+		SessionID:         s.SessionID.String(),
+		SenderUserID:      senderUserIDForRole(s, role),
+		ExternalMessageID: "bench-write-" + messageID,
+		Role:              role,
+		Content:           content,
+		Metadata: map[string]any{
+			"benchmark":        benchmarkName,
+			"benchmark_marker": e.cfg.Seed.Marker,
+			"benchmark_write":  true,
+		},
+		Usage:       jsonRaw("{}"),
+		SessionMode: "chat",
+		RuntimeType: "model",
+		DisplayText: displayText,
+	}
+}
+
+func senderUserIDForRole(s SessionSeed, role string) string {
+	if role == "user" && s.OwnerUserID != uuid.Nil {
+		return s.OwnerUserID.String()
+	}
+	return ""
+}
+
+func rowsForWrite(rows int64, err error) (int64, error) {
+	if err != nil {
+		return rows, err
+	}
+	return rows, nil
 }
 
 func (e *sqlcExecutor) execLocateWindow(ctx context.Context, s SessionSeed, rng *rand.Rand) (int64, error) {

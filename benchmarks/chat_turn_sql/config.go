@@ -43,19 +43,20 @@ type SeedConfig struct {
 }
 
 type WorkloadConfig struct {
-	Runner            string         `toml:"runner"`
-	Scenario          string         `toml:"scenario"`
-	Duration          string         `toml:"duration"`
-	Warmup            string         `toml:"warmup"`
-	Concurrency       int            `toml:"concurrency"`
-	PageSize          int            `toml:"page_size"`
-	RandomSeed        uint64         `toml:"random_seed"`
-	FailOnError       bool           `toml:"fail_on_error"`
-	SelectedHeadRatio float64        `toml:"selected_head_ratio"`
-	HotTrafficRatio   float64        `toml:"hot_traffic_ratio"`
-	HTTPFormat        string         `toml:"http_format"`
-	HTTPDecodeJSON    bool           `toml:"http_decode_json"`
-	QueryWeights      map[string]int `toml:"query_weights"`
+	Runner                 string         `toml:"runner"`
+	Scenario               string         `toml:"scenario"`
+	Duration               string         `toml:"duration"`
+	Warmup                 string         `toml:"warmup"`
+	Concurrency            int            `toml:"concurrency"`
+	PageSize               int            `toml:"page_size"`
+	RandomSeed             uint64         `toml:"random_seed"`
+	FailOnError            bool           `toml:"fail_on_error"`
+	SelectedHeadRatio      float64        `toml:"selected_head_ratio"`
+	HotTrafficRatio        float64        `toml:"hot_traffic_ratio"`
+	HTTPFormat             string         `toml:"http_format"`
+	HTTPDecodeJSON         bool           `toml:"http_decode_json"`
+	SerializeSessionWrites bool           `toml:"serialize_session_writes"`
+	QueryWeights           map[string]int `toml:"query_weights"`
 }
 
 type OutputConfig struct {
@@ -99,18 +100,19 @@ func defaultConfig() Config {
 			PendingRatio:         0.5,
 		},
 		Workload: WorkloadConfig{
-			Runner:            runnerSQLC,
-			Scenario:          "mixed_saas_read",
-			Duration:          "30s",
-			Warmup:            "5s",
-			Concurrency:       8,
-			PageSize:          50,
-			RandomSeed:        1,
-			FailOnError:       true,
-			SelectedHeadRatio: 0.25,
-			HotTrafficRatio:   0.9,
-			HTTPFormat:        "ui",
-			HTTPDecodeJSON:    true,
+			Runner:                 runnerSQLC,
+			Scenario:               "mixed_saas_read",
+			Duration:               "30s",
+			Warmup:                 "5s",
+			Concurrency:            8,
+			PageSize:               50,
+			RandomSeed:             1,
+			FailOnError:            true,
+			SelectedHeadRatio:      0.25,
+			HotTrafficRatio:        0.9,
+			HTTPFormat:             "ui",
+			HTTPDecodeJSON:         true,
+			SerializeSessionWrites: false,
 			QueryWeights: map[string]int{
 				queryChatPageUI:       70,
 				queryBeforePage:       18,
@@ -239,8 +241,15 @@ func (c *Config) applyDefaults(meta *toml.MetaData) {
 	if !isDefined(meta, "workload", "http_decode_json") {
 		c.Workload.HTTPDecodeJSON = d.Workload.HTTPDecodeJSON
 	}
+	if !isDefined(meta, "workload", "serialize_session_writes") {
+		c.Workload.SerializeSessionWrites = c.Workload.Scenario == "mixed_saas_write" || isWriteScenario(c.Workload.Scenario)
+	}
 	if !isDefined(meta, "workload", "query_weights") {
-		c.Workload.QueryWeights = d.Workload.QueryWeights
+		if c.Workload.Scenario == "mixed_saas_write" {
+			c.Workload.QueryWeights = defaultWriteQueryWeights()
+		} else {
+			c.Workload.QueryWeights = d.Workload.QueryWeights
+		}
 	}
 	if !isDefined(meta, "output", "json_path") {
 		c.Output.JSONPath = d.Output.JSONPath
@@ -253,6 +262,14 @@ func (c *Config) applyDefaults(meta *toml.MetaData) {
 	}
 	if !isDefined(meta, "output", "explain_dir") {
 		c.Output.ExplainDir = d.Output.ExplainDir
+	}
+}
+
+func defaultWriteQueryWeights() map[string]int {
+	return map[string]int{
+		queryWriteTurnPair:         80,
+		queryWriteUserMessage:      10,
+		queryWriteAssistantMessage: 10,
 	}
 }
 
@@ -328,17 +345,27 @@ func (c Config) validate() error {
 	if c.Workload.HotTrafficRatio < 0 || c.Workload.HotTrafficRatio > 1 {
 		return errors.New("workload.hot_traffic_ratio must be between 0 and 1")
 	}
-	if c.Workload.Scenario != "mixed_saas_read" && !isKnownQuery(c.Workload.Scenario) {
+	if !isMixedWorkloadScenario(c.Workload.Scenario) && !isKnownQuery(c.Workload.Scenario) {
 		return fmt.Errorf("unknown workload.scenario %q", c.Workload.Scenario)
+	}
+	if isWriteScenario(c.Workload.Scenario) && c.Workload.Runner != runnerSQLC {
+		return fmt.Errorf("write workload.scenario %q requires runner %q", c.Workload.Scenario, runnerSQLC)
 	}
 	if c.Workload.Runner == runnerHTTP {
 		if err := validateHTTPRunnerScenario(c.Workload); err != nil {
 			return err
 		}
 	}
-	if c.Workload.Scenario == "mixed_saas_read" {
+	if isMixedWorkloadScenario(c.Workload.Scenario) {
 		if _, err := normalizeWeights(c.Workload.QueryWeights); err != nil {
 			return err
+		}
+		if c.Workload.Runner != runnerSQLC {
+			for name, weight := range c.Workload.QueryWeights {
+				if weight > 0 && isWriteScenario(name) {
+					return fmt.Errorf("weighted write query %q requires runner %q", name, runnerSQLC)
+				}
+			}
 		}
 	}
 	return nil

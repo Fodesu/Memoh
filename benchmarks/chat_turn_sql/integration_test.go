@@ -114,6 +114,25 @@ WHERE role = 'assistant'
 			}
 		}
 	}
+	cfg.Workload.Runner = runnerSQLC
+	for _, scenario := range []string{queryWriteUserMessage, queryWriteAssistantMessage, queryWriteTurnPair} {
+		cfg.Workload.Scenario = scenario
+		executor, err := newQueryExecutor(cfg, pool, queries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := newRunner(cfg, executor, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := r.run(ctx)
+		if err != nil {
+			t.Fatalf("%s/%s: %v; result=%#v", runnerSQLC, scenario, err, result)
+		}
+		if result.TotalErrors() != 0 {
+			t.Fatalf("%s/%s: expected zero errors, got %d", runnerSQLC, scenario, result.TotalErrors())
+		}
+	}
 	cfg.Workload.Runner = runnerHTTP
 	for _, scenario := range []string{queryLatestPage, queryBeforePage, queryLocateWindow, queryExternalLookup} {
 		cfg.Workload.Scenario = scenario

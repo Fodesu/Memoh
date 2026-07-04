@@ -18,14 +18,15 @@ import (
 )
 
 type runner struct {
-	cfg      Config
-	executor queryExecutor
-	meta     executorMetadata
-	catalog  SeedCatalog
-	weighted []WeightedQuery
-	stats    *statsCollector
-	counter  atomic.Int64
-	errors   atomic.Int64
+	cfg        Config
+	executor   queryExecutor
+	meta       executorMetadata
+	catalog    SeedCatalog
+	weighted   []WeightedQuery
+	stats      *statsCollector
+	counter    atomic.Int64
+	errors     atomic.Int64
+	writeLocks map[uuid.UUID]*sync.Mutex
 }
 
 func newRunner(cfg Config, executor queryExecutor, catalog SeedCatalog) (*runner, error) {
@@ -34,7 +35,7 @@ func newRunner(cfg Config, executor queryExecutor, catalog SeedCatalog) (*runner
 	}
 	var weighted []WeightedQuery
 	var err error
-	if cfg.Workload.Scenario == "mixed_saas_read" {
+	if isMixedWorkloadScenario(cfg.Workload.Scenario) {
 		weighted, err = normalizeWeights(cfg.Workload.QueryWeights)
 		if err != nil {
 			return nil, err
@@ -48,9 +49,10 @@ func newRunner(cfg Config, executor queryExecutor, catalog SeedCatalog) (*runner
 			QuerySource: executor.querySource(),
 			ScanMode:    executor.scanMode(),
 		},
-		catalog:  catalog,
-		weighted: weighted,
-		stats:    newStatsCollector(),
+		catalog:    catalog,
+		weighted:   weighted,
+		stats:      newStatsCollector(),
+		writeLocks: sessionWriteLocks(catalog),
 	}, nil
 }
 
@@ -121,9 +123,18 @@ func (r *runner) worker(ctx context.Context, workerID int, warmup bool) error {
 		}
 		n := int(r.counter.Add(1))
 		queryName := r.nextQuery(n)
+		execCtx := ctx
+		if isWriteScenario(queryName) {
+			if !hasWriteBudget(ctx) {
+				return nil
+			}
+			execCtx = context.WithoutCancel(ctx)
+		}
 		sample := r.nextSample(rng)
+		unlock := r.lockWriteSession(queryName, sample)
 		start := time.Now()
-		rows, err := r.executor.execQuery(ctx, queryName, sample, rng)
+		rows, err := r.executor.execQuery(execCtx, queryName, sample, rng)
+		unlock()
 		if errors.Is(err, context.DeadlineExceeded) {
 			if phaseDone(ctx) {
 				return nil
@@ -149,11 +160,48 @@ func (r *runner) worker(ctx context.Context, workerID int, warmup bool) error {
 	}
 }
 
+func hasWriteBudget(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(deadline) > 250*time.Millisecond
+}
+
+func sessionWriteLocks(catalog SeedCatalog) map[uuid.UUID]*sync.Mutex {
+	locks := make(map[uuid.UUID]*sync.Mutex, len(catalog.Sessions))
+	for _, session := range catalog.Sessions {
+		if session.SessionID == uuid.Nil {
+			continue
+		}
+		if _, ok := locks[session.SessionID]; !ok {
+			locks[session.SessionID] = &sync.Mutex{}
+		}
+	}
+	return locks
+}
+
+func (r *runner) lockWriteSession(queryName string, sample SessionSeed) func() {
+	if !r.cfg.Workload.SerializeSessionWrites || !isWriteScenario(queryName) {
+		return func() {}
+	}
+	lock := r.writeLocks[sample.SessionID]
+	if lock == nil {
+		return func() {}
+	}
+	lock.Lock()
+	return lock.Unlock
+}
+
 func (r *runner) nextQuery(n int) string {
-	if r.cfg.Workload.Scenario != "mixed_saas_read" {
+	if !isMixedWorkloadScenario(r.cfg.Workload.Scenario) {
 		return r.cfg.Workload.Scenario
 	}
 	return pickWeightedQuery(r.weighted, n)
+}
+
+func isMixedWorkloadScenario(name string) bool {
+	return name == "mixed_saas_read" || name == "mixed_saas_write"
 }
 
 func (r *runner) nextSample(rng *rand.Rand) SessionSeed {

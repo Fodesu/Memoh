@@ -30,6 +30,9 @@ const (
 	queryUserInputLatest       = "user_input_latest"
 	queryUserInputShortID      = "user_input_short_id"
 	queryUserInputReplyMessage = "user_input_reply_message"
+	queryWriteUserMessage      = "write_user_message"
+	queryWriteAssistantMessage = "write_assistant_message"
+	queryWriteTurnPair         = "write_turn_pair"
 )
 
 type QueryDefinition struct {
@@ -66,6 +69,9 @@ var (
 		queryLocateWindow,
 		queryApprovalResolve,
 		queryUserInputResolve,
+		queryWriteUserMessage,
+		queryWriteAssistantMessage,
+		queryWriteTurnPair,
 	}, knownQueries...)
 )
 
@@ -118,6 +124,15 @@ func isKnownQuery(name string) bool {
 		}
 	}
 	return false
+}
+
+func isWriteScenario(name string) bool {
+	switch name {
+	case queryWriteUserMessage, queryWriteAssistantMessage, queryWriteTurnPair:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeWeights(weights map[string]int) ([]WeightedQuery, error) {

@@ -228,6 +228,29 @@ func compositeResultSourceAndArgs(name string) ([]string, []string, bool) {
 			"db/postgres/queries/user_input.sql GetLatestPendingUserInputBySession",
 			"db/postgres/queries/user_input.sql GetPendingUserInputBySessionShortID",
 		}, []string{"bot_id", "session_id", "short_id"}, true
+	case queryWriteUserMessage:
+		return []string{
+			"internal/message/service.go Persist",
+			"db/postgres/queries/messages.sql CreateMessage",
+			"db/postgres/queries/messages.sql CreateHistoryTurn",
+			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
+		}, []string{"bot_id", "session_id", "role=user", "content", "metadata"}, true
+	case queryWriteAssistantMessage:
+		return []string{
+			"internal/message/service.go Persist",
+			"db/postgres/queries/messages.sql CreateMessage",
+			"db/postgres/queries/messages.sql BindLatestHistoryTurnAssistant",
+			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
+			"db/postgres/queries/messages.sql AppendMessageToLatestHistoryTurn",
+		}, []string{"bot_id", "session_id", "role=assistant", "content", "metadata"}, true
+	case queryWriteTurnPair:
+		return []string{
+			"internal/message/service.go Persist",
+			"db/postgres/queries/messages.sql CreateMessage",
+			"db/postgres/queries/messages.sql CreateHistoryTurn",
+			"db/postgres/queries/messages.sql BindLatestHistoryTurnAssistant",
+			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
+		}, []string{"bot_id", "session_id", "user_content", "assistant_content", "metadata"}, true
 	default:
 		return nil, nil, false
 	}

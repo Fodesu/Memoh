@@ -77,8 +77,10 @@ Important knobs:
 - `workload.random_seed`: reproducible sampling.
 - `workload.fail_on_error`: returns non-zero if measured query errors occur.
 - `workload.query_weights`: scenario mix for `mixed_saas_read`. The default mix uses semantic production-ish paths (`chat_page_ui`, `locate_window`, `approval_resolve`, `user_input_resolve`, `sse_live_filter`) instead of randomly interleaving every component query. Keep low-level scenarios such as `latest_page`, `before_page`, `turn_siblings`, `turn_graph`, and `turn_path` for SQL component microbenchmarks.
+- `mixed_saas_write` uses the same `workload.query_weights` table, but with write scenarios. If no weights are provided, it defaults to `write_turn_pair = 80`, `write_user_message = 10`, and `write_assistant_message = 10`.
 - `workload.http_format`: HTTP runner query `format`. Use `"ui"` for chat UI shape or `""` for raw message REST shape. UI pages of chat sessions carry per-turn variant metadata automatically.
 - `workload.http_decode_json`: HTTP runner decodes the JSON response and counts `items` when true; disabling it counts response bytes only.
+- `workload.serialize_session_writes`: write runner only. Defaults to true for write scenarios. It models the normal one-writer-per-session chat flow and prevents artificial same-session races in `Persist(assistant)`. Set it to false only to intentionally test same-session concurrent write conflicts.
 - `output.explain`: writes `EXPLAIN (ANALYZE, BUFFERS, WAL, FORMAT JSON)` per hot query.
 
 Config parsing is strict. Unknown keys and invalid explicit values fail early instead of being silently clamped.
@@ -101,10 +103,14 @@ Config parsing is strict. Unknown keys and invalid explicit values fail early in
 - `turn_ancestor`: low-level SSE live-filter ancestor existence check. Samples mostly the common direct append case, plus deep ancestor and cross-branch negative checks, without returning the whole path to Go.
 - `approval_tool_calls`: direct UI decoration query for `ListToolApprovalsBySessionToolCalls`.
 - `user_input_tool_calls`: direct UI decoration query for `ListUserInputsBySessionToolCalls`.
+- `write_turn_pair`: production message write path for a normal user+assistant turn. It calls `message.DBService.Persist` twice and covers `CreateMessage`, `CreateHistoryTurn`, `BindLatestHistoryTurnAssistant`, and `LinkMessageToHistoryTurn`.
+- `write_user_message`: production message write path for a user message. It calls `message.DBService.Persist` and covers message insert plus turn creation/linking.
+- `write_assistant_message`: production message write path for an assistant message. It calls `message.DBService.Persist` and covers message insert plus binding or appending to the latest visible turn.
 - `approval_pending_list`, `approval_graph_list`, `approval_latest`, `approval_short_id`, `approval_visible_request`, `approval_base_head_request`, `approval_reply_message`: production tool approval read paths kept as component microbenchmarks.
 - `user_input_pending_list`, `user_input_graph_list`, `user_input_latest`, `user_input_short_id`, `user_input_visible_request`, `user_input_base_head_request`, `user_input_reply_message`: production user input read paths kept as component microbenchmarks.
 - `runner=http` supports `chat_page_ui`, `latest_page`, `before_page`, `locate_window`, and `external_lookup`.
 - `mixed_saas_read`: weighted mix of the configured scenarios.
+- `mixed_saas_write`: weighted mix of write scenarios. It requires `runner = "sqlc"` and mutates the seeded benchmark rows. Use `hot_traffic_ratio = 1.0` with a very small hot set to measure single-session serialized throughput; set `serialize_session_writes = false` only when deliberately probing unsafe same-session concurrent write behavior.
 
 ## Output
 
