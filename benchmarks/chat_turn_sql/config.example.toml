@@ -37,8 +37,9 @@ runner = "sqlc"
 # One of:
 # mixed_saas_read, chat_page_ui, locate_window, approval_resolve,
 # user_input_resolve, mixed_saas_write, write_turn_pair,
-# write_user_message, write_assistant_message, latest_page, before_page,
-# after_page, external_lookup, message_assets, approval_*, user_input_*
+# write_user_message, write_assistant_message, write_tool_tail,
+# latest_page, before_page, after_page, external_lookup, message_assets,
+# approval_*, user_input_*
 scenario = "mixed_saas_read"
 duration = "30s"
 warmup = "5s"
@@ -69,9 +70,10 @@ user_input_resolve = 3
 # For write-path runs, set scenario = "mixed_saas_write" and use write weights
 # like the block below. The write scenarios require runner = "sqlc" because they
 # call the production message.DBService Persist path.
-# write_turn_pair = 80
-# write_user_message = 10
-# write_assistant_message = 10
+# write_turn_pair = 55
+# write_tool_tail = 35
+# write_user_message = 5
+# write_assistant_message = 5
 
 [output]
 json_path = "benchmarks/chat_turn_sql/out/results.json"

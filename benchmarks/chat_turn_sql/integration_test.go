@@ -115,7 +115,7 @@ WHERE role = 'assistant'
 		}
 	}
 	cfg.Workload.Runner = runnerSQLC
-	for _, scenario := range []string{queryWriteUserMessage, queryWriteAssistantMessage, queryWriteTurnPair} {
+	for _, scenario := range []string{queryWriteUserMessage, queryWriteAssistantMessage, queryWriteTurnPair, queryWriteToolTail} {
 		cfg.Workload.Scenario = scenario
 		executor, err := newQueryExecutor(cfg, pool, queries)
 		if err != nil {

@@ -54,6 +54,8 @@ func (e *sqlcExecutor) execQuery(ctx context.Context, queryName string, s Sessio
 		return e.execWriteAssistantMessage(ctx, s)
 	case queryWriteTurnPair:
 		return e.execWriteTurnPair(ctx, s)
+	case queryWriteToolTail:
+		return e.execWriteToolTail(ctx, s)
 	case queryLatestPage:
 		items, err := e.queries.ListMessagesLatestBySession(ctx, postgresqlc.ListMessagesLatestBySessionParams{
 			SessionID: pgUUID(s.SessionID),
@@ -238,6 +240,24 @@ func (e *sqlcExecutor) execWriteTurnPair(ctx context.Context, s SessionSeed) (in
 	return 2, nil
 }
 
+func (e *sqlcExecutor) execWriteToolTail(ctx context.Context, s SessionSeed) (int64, error) {
+	toolCallID := "bench-tool-" + uuid.NewString()
+	user, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user", ""))
+	if err != nil {
+		return 0, err
+	}
+	if _, err := e.messageService.Persist(ctx, e.writeAssistantToolCallInput(s, user.ID, toolCallID)); err != nil {
+		return 1, err
+	}
+	if _, err := e.messageService.Persist(ctx, e.writeToolResultInput(s, user.ID, toolCallID)); err != nil {
+		return 2, err
+	}
+	if _, err := e.messageService.Persist(ctx, e.writeAssistantFinalInput(s, user.ID)); err != nil {
+		return 3, err
+	}
+	return 4, nil
+}
+
 func (e *sqlcExecutor) writeMessageInput(s SessionSeed, role string, turnRequestMessageID string) messagepkg.PersistInput {
 	messageID := uuid.NewString()
 	content := jsonRaw(`{"type":"text","content":"bench write"}`)
@@ -266,6 +286,58 @@ func (e *sqlcExecutor) writeMessageInput(s SessionSeed, role string, turnRequest
 		RuntimeType:          "model",
 		DisplayText:          displayText,
 		TurnRequestMessageID: turnRequestMessageID,
+	}
+}
+
+func (e *sqlcExecutor) writeAssistantToolCallInput(s SessionSeed, turnRequestMessageID string, toolCallID string) messagepkg.PersistInput {
+	return e.writeCustomMessageInput(s, "assistant", jsonText(map[string]any{
+		"role": "assistant",
+		"content": []map[string]any{
+			{"type": "text", "text": "bench write tool call"},
+			{"type": "tool-call", "toolCallId": toolCallID, "toolName": "read_file", "input": map[string]any{"path": "/tmp/bench.txt"}},
+		},
+	}), "bench write tool call", turnRequestMessageID)
+}
+
+func (e *sqlcExecutor) writeToolResultInput(s SessionSeed, turnRequestMessageID string, toolCallID string) messagepkg.PersistInput {
+	return e.writeCustomMessageInput(s, "tool", jsonText(map[string]any{
+		"role":       "tool",
+		"toolCallId": toolCallID,
+		"toolName":   "read_file",
+		"content":    "bench tool result",
+	}), "bench tool result", turnRequestMessageID)
+}
+
+func (e *sqlcExecutor) writeAssistantFinalInput(s SessionSeed, turnRequestMessageID string) messagepkg.PersistInput {
+	return e.writeCustomMessageInput(s, "assistant", jsonText(map[string]any{
+		"role":    "assistant",
+		"content": []map[string]string{{"type": "text", "text": "bench write final"}},
+	}), "bench write final", turnRequestMessageID)
+}
+
+func (e *sqlcExecutor) writeCustomMessageInput(s SessionSeed, role string, content []byte, displayText string, turnRequestMessageID string) messagepkg.PersistInput {
+	messageID := uuid.NewString()
+	return messagepkg.PersistInput{
+		BotID:                s.BotID.String(),
+		SessionID:            s.SessionID.String(),
+		SenderUserID:         senderUserIDForRole(s, role),
+		ExternalMessageID:    "bench-write-" + messageID,
+		Role:                 role,
+		Content:              content,
+		Metadata:             e.writeMetadata(),
+		Usage:                jsonRaw("{}"),
+		SessionMode:          "chat",
+		RuntimeType:          "model",
+		DisplayText:          displayText,
+		TurnRequestMessageID: turnRequestMessageID,
+	}
+}
+
+func (e *sqlcExecutor) writeMetadata() map[string]any {
+	return map[string]any{
+		"benchmark":        benchmarkName,
+		"benchmark_marker": e.cfg.Seed.Marker,
+		"benchmark_write":  true,
 	}
 }
 

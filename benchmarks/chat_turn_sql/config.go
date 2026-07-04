@@ -267,9 +267,10 @@ func (c *Config) applyDefaults(meta *toml.MetaData) {
 
 func defaultWriteQueryWeights() map[string]int {
 	return map[string]int{
-		queryWriteTurnPair:         80,
-		queryWriteUserMessage:      10,
-		queryWriteAssistantMessage: 10,
+		queryWriteTurnPair:         55,
+		queryWriteToolTail:         35,
+		queryWriteUserMessage:      5,
+		queryWriteAssistantMessage: 5,
 	}
 }
 

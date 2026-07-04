@@ -33,6 +33,7 @@ const (
 	queryWriteUserMessage      = "write_user_message"
 	queryWriteAssistantMessage = "write_assistant_message"
 	queryWriteTurnPair         = "write_turn_pair"
+	queryWriteToolTail         = "write_tool_tail"
 )
 
 type QueryDefinition struct {
@@ -72,6 +73,7 @@ var (
 		queryWriteUserMessage,
 		queryWriteAssistantMessage,
 		queryWriteTurnPair,
+		queryWriteToolTail,
 	}, knownQueries...)
 )
 
@@ -128,7 +130,7 @@ func isKnownQuery(name string) bool {
 
 func isWriteScenario(name string) bool {
 	switch name {
-	case queryWriteUserMessage, queryWriteAssistantMessage, queryWriteTurnPair:
+	case queryWriteUserMessage, queryWriteAssistantMessage, queryWriteTurnPair, queryWriteToolTail:
 		return true
 	default:
 		return false

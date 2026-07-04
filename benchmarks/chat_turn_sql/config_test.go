@@ -180,8 +180,11 @@ runner = "sqlc"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Workload.QueryWeights[queryWriteTurnPair] != 80 {
+	if cfg.Workload.QueryWeights[queryWriteTurnPair] != 55 {
 		t.Fatalf("write_turn_pair weight = %d", cfg.Workload.QueryWeights[queryWriteTurnPair])
+	}
+	if cfg.Workload.QueryWeights[queryWriteToolTail] != 35 {
+		t.Fatalf("write_tool_tail weight = %d", cfg.Workload.QueryWeights[queryWriteToolTail])
 	}
 	if cfg.Workload.QueryWeights[queryLatestPage] != 0 {
 		t.Fatalf("latest_page weight = %d, want 0", cfg.Workload.QueryWeights[queryLatestPage])
@@ -194,7 +197,7 @@ runner = "sqlc"
 func TestWriteScenarioRequiresSQLCRunner(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Workload.Runner = runnerSQL
-	cfg.Workload.Scenario = queryWriteTurnPair
+	cfg.Workload.Scenario = queryWriteToolTail
 	if err := cfg.validate(); err == nil {
 		t.Fatal("expected write scenario to reject sql runner")
 	}

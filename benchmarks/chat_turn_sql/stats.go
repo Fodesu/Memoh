@@ -248,9 +248,18 @@ func compositeResultSourceAndArgs(name string) ([]string, []string, bool) {
 			"internal/message/service.go Persist",
 			"db/postgres/queries/messages.sql CreateMessage",
 			"db/postgres/queries/messages.sql CreateHistoryTurn",
-			"db/postgres/queries/messages.sql BindLatestHistoryTurnAssistant",
+			"db/postgres/queries/messages.sql BindHistoryTurnAssistantByRequest",
 			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
 		}, []string{"bot_id", "session_id", "user_content", "assistant_content", "metadata"}, true
+	case queryWriteToolTail:
+		return []string{
+			"internal/message/service.go Persist",
+			"db/postgres/queries/messages.sql CreateMessage",
+			"db/postgres/queries/messages.sql CreateHistoryTurn",
+			"db/postgres/queries/messages.sql BindHistoryTurnAssistantByRequest",
+			"db/postgres/queries/messages.sql AppendMessageToHistoryTurnByRequest",
+			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
+		}, []string{"bot_id", "session_id", "user_content", "assistant_tool_call", "tool_result", "assistant_final", "metadata"}, true
 	default:
 		return nil, nil, false
 	}
