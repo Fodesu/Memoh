@@ -246,16 +246,15 @@ func (e *sqlcExecutor) execWriteToolTail(ctx context.Context, s SessionSeed) (in
 	if err != nil {
 		return 0, err
 	}
-	if _, err := e.messageService.Persist(ctx, e.writeAssistantToolCallInput(s, user.ID, toolCallID)); err != nil {
-		return 1, err
+	tail, err := e.messageService.PersistBatch(ctx, []messagepkg.PersistInput{
+		e.writeAssistantToolCallInput(s, user.ID, toolCallID),
+		e.writeToolResultInput(s, user.ID, toolCallID),
+		e.writeAssistantFinalInput(s, user.ID),
+	})
+	if err != nil {
+		return 1 + int64(len(tail)), err
 	}
-	if _, err := e.messageService.Persist(ctx, e.writeToolResultInput(s, user.ID, toolCallID)); err != nil {
-		return 2, err
-	}
-	if _, err := e.messageService.Persist(ctx, e.writeAssistantFinalInput(s, user.ID)); err != nil {
-		return 3, err
-	}
-	return 4, nil
+	return 1 + int64(len(tail)), nil
 }
 
 func (e *sqlcExecutor) writeMessageInput(s SessionSeed, role string, turnRequestMessageID string) messagepkg.PersistInput {
