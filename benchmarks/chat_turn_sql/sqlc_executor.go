@@ -25,7 +25,7 @@ func newSQLCExecutor(cfg Config, pool *pgxpool.Pool) *sqlcExecutor {
 	return &sqlcExecutor{
 		cfg:            cfg,
 		queries:        queries,
-		messageService: messagepkg.NewService(nil, postgresstore.NewQueries(queries)),
+		messageService: messagepkg.NewService(nil, postgresstore.NewQueriesWithPool(pool, queries)),
 	}
 }
 

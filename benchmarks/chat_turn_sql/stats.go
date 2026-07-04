@@ -231,9 +231,8 @@ func compositeResultSourceAndArgs(name string) ([]string, []string, bool) {
 	case queryWriteUserMessage:
 		return []string{
 			"internal/message/service.go Persist",
-			"db/postgres/queries/messages.sql CreateMessage",
-			"db/postgres/queries/messages.sql CreateHistoryTurn",
-			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
+			"db/postgres/queries/messages.sql CreateMessageWithTurn",
+			"db/postgres/queries/messages.sql CreateHistoryTurnWithID",
 		}, []string{"bot_id", "session_id", "role=user", "content", "metadata"}, true
 	case queryWriteAssistantMessage:
 		return []string{
@@ -246,19 +245,18 @@ func compositeResultSourceAndArgs(name string) ([]string, []string, bool) {
 	case queryWriteTurnPair:
 		return []string{
 			"internal/message/service.go Persist",
-			"db/postgres/queries/messages.sql CreateMessage",
-			"db/postgres/queries/messages.sql CreateHistoryTurn",
+			"db/postgres/queries/messages.sql CreateMessageWithTurn",
+			"db/postgres/queries/messages.sql CreateHistoryTurnWithID",
+			"db/postgres/queries/messages.sql CreateMessageInHistoryTurnByRequest",
 			"db/postgres/queries/messages.sql BindHistoryTurnAssistantByRequest",
-			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
 		}, []string{"bot_id", "session_id", "user_content", "assistant_content", "metadata"}, true
 	case queryWriteToolTail:
 		return []string{
 			"internal/message/service.go Persist",
-			"db/postgres/queries/messages.sql CreateMessage",
-			"db/postgres/queries/messages.sql CreateHistoryTurn",
+			"db/postgres/queries/messages.sql CreateMessageWithTurn",
+			"db/postgres/queries/messages.sql CreateHistoryTurnWithID",
+			"db/postgres/queries/messages.sql CreateMessageInHistoryTurnByRequest",
 			"db/postgres/queries/messages.sql BindHistoryTurnAssistantByRequest",
-			"db/postgres/queries/messages.sql AppendMessageToHistoryTurnByRequest",
-			"db/postgres/queries/messages.sql LinkMessageToHistoryTurn",
 		}, []string{"bot_id", "session_id", "user_content", "assistant_tool_call", "tool_result", "assistant_final", "metadata"}, true
 	default:
 		return nil, nil, false

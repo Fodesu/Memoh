@@ -103,10 +103,10 @@ Config parsing is strict. Unknown keys and invalid explicit values fail early in
 - `turn_ancestor`: low-level SSE live-filter ancestor existence check. Samples mostly the common direct append case, plus deep ancestor and cross-branch negative checks, without returning the whole path to Go.
 - `approval_tool_calls`: direct UI decoration query for `ListToolApprovalsBySessionToolCalls`.
 - `user_input_tool_calls`: direct UI decoration query for `ListUserInputsBySessionToolCalls`.
-- `write_turn_pair`: production message write path for a normal user+assistant turn. It calls `message.DBService.Persist` twice and covers `CreateMessage`, `CreateHistoryTurn`, `BindHistoryTurnAssistantByRequest`, and `LinkMessageToHistoryTurn`.
-- `write_user_message`: production message write path for a user message. It calls `message.DBService.Persist` and covers message insert plus turn creation/linking.
+- `write_turn_pair`: production message write path for a normal user+assistant turn. It calls `message.DBService.Persist` twice and covers `CreateMessageWithTurn`, `CreateHistoryTurnWithID`, `CreateMessageInHistoryTurnByRequest`, and `BindHistoryTurnAssistantByRequest`.
+- `write_user_message`: production message write path for a user message. It calls `message.DBService.Persist` and covers direct message+turn linking via `CreateMessageWithTurn` plus `CreateHistoryTurnWithID`.
 - `write_assistant_message`: production message write path for an assistant message. It calls `message.DBService.Persist` and covers message insert plus binding or appending to the latest visible turn.
-- `write_tool_tail`: hot agent-tool write path for `user -> assistant(tool-call) -> tool result -> assistant final`. It covers turn creation, request-bound assistant binding, and appending tool/final assistant messages to the latest turn.
+- `write_tool_tail`: hot agent-tool write path for `user -> assistant(tool-call) -> tool result -> assistant final`. It covers direct user turn creation, request-bound assistant binding, and direct request-turn insertion for tool/final assistant tail messages.
 - `approval_pending_list`, `approval_graph_list`, `approval_latest`, `approval_short_id`, `approval_visible_request`, `approval_base_head_request`, `approval_reply_message`: production tool approval read paths kept as component microbenchmarks.
 - `user_input_pending_list`, `user_input_graph_list`, `user_input_latest`, `user_input_short_id`, `user_input_visible_request`, `user_input_base_head_request`, `user_input_reply_message`: production user input read paths kept as component microbenchmarks.
 - `runner=http` supports `chat_page_ui`, `latest_page`, `before_page`, `locate_window`, and `external_lookup`.
