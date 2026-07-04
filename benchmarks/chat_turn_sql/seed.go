@@ -383,112 +383,124 @@ WITH benchmark_sessions AS (
   FROM bot_sessions s
   JOIN bots b ON b.id = s.bot_id
   WHERE b.metadata->>'benchmark_marker' = $1
-),
-ranked_visible AS (
-  SELECT
-    m.session_id,
-    m.id,
-    m.source_message_id,
-    m.content,
-    m.created_at,
-    ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC) AS rn,
-    COUNT(*) OVER (PARTITION BY m.session_id) AS cnt
-  FROM bot_visible_history_messages m
-  JOIN benchmark_sessions s ON s.id = m.session_id
 )
 SELECT
   s.bot_id,
   s.owner_user_id,
   s.route_id,
   s.id,
-  COALESCE((
-    SELECT t.id FROM bot_history_turns t
-    WHERE t.session_id = s.id AND t.superseded_at IS NULL
-    ORDER BY t.position DESC LIMIT 1
-  ), '00000000-0000-0000-0000-000000000000'::uuid) AS latest_turn_id,
-  COALESCE((
-    SELECT m.id FROM bot_visible_history_messages m
-    WHERE m.session_id = s.id
-    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-    LIMIT 1
-  ), '00000000-0000-0000-0000-000000000000'::uuid) AS latest_message_id,
-  COALESCE((
-    SELECT array_agg(rm.id ORDER BY rm.rn)
-    FROM ranked_visible rm
-    WHERE rm.session_id = s.id
-      AND rm.rn > GREATEST(rm.cnt - $2::int, 0)
-  ), ARRAY[]::uuid[]) AS page_message_ids,
-  COALESCE((
-    SELECT array_agg(page_tool_calls.tool_call_id ORDER BY page_tool_calls.tool_call_id)
-    FROM (
-      SELECT DISTINCT tool_call.value->>'toolCallId' AS tool_call_id
-      FROM ranked_visible rm
-      CROSS JOIN LATERAL jsonb_array_elements(
-        CASE
-          WHEN jsonb_typeof(rm.content->'content') = 'array' THEN rm.content->'content'
-          ELSE '[]'::jsonb
-        END
-      ) AS tool_call(value)
-      WHERE rm.session_id = s.id
-        AND rm.rn > GREATEST(rm.cnt - $2::int, 0)
-        AND tool_call.value->>'type' = 'tool-call'
-        AND COALESCE(tool_call.value->>'toolCallId', '') <> ''
-    ) AS page_tool_calls
-  ), ARRAY[]::text[]) AS page_tool_call_ids,
-  COALESCE((
-    SELECT array_agg(rm.id ORDER BY rm.rn)
-    FROM ranked_visible rm
-    WHERE rm.session_id = s.id
-      AND rm.rn IN (1, GREATEST(rm.cnt / 2, 1), GREATEST(rm.cnt - 5, 1))
-  ), ARRAY[]::uuid[]) AS cursor_message_ids,
-  COALESCE((
-    SELECT array_agg(rm.created_at ORDER BY rm.rn)
-    FROM ranked_visible rm
-    WHERE rm.session_id = s.id
-      AND rm.rn IN (1, GREATEST(rm.cnt / 2, 1), GREATEST(rm.cnt - 5, 1))
-  ), ARRAY[]::timestamptz[]) AS cursor_created_ats,
-  COALESCE((
-    SELECT array_agg(rm.source_message_id ORDER BY rm.rn)
-    FROM ranked_visible rm
-    WHERE rm.session_id = s.id
-      AND rm.source_message_id IS NOT NULL
-      AND rm.rn IN (1, GREATEST(rm.cnt / 2, 1), GREATEST(rm.cnt - 5, 1))
-  ), ARRAY[]::text[]) AS external_message_ids,
-  COALESCE((
-    SELECT id FROM tool_approval_requests tar
-    WHERE tar.session_id = s.id AND tar.status = 'pending'
-    ORDER BY tar.created_at DESC, tar.short_id DESC LIMIT 1
-  ), '00000000-0000-0000-0000-000000000000'::uuid) AS approval_request_id,
-  COALESCE((
-    SELECT short_id FROM tool_approval_requests tar
-    WHERE tar.session_id = s.id AND tar.status = 'pending'
-    ORDER BY tar.created_at DESC, tar.short_id DESC LIMIT 1
-  ), 0) AS approval_short_id,
-  COALESCE((
-    SELECT prompt_external_message_id FROM tool_approval_requests tar
-    WHERE tar.session_id = s.id AND tar.status = 'pending'
-    ORDER BY tar.created_at DESC, tar.short_id DESC LIMIT 1
-  ), '') AS approval_prompt_external_id,
-  COALESCE((
-    SELECT id FROM user_input_requests uir
-    WHERE uir.session_id = s.id AND uir.status = 'pending'
-      AND (uir.expires_at IS NULL OR uir.expires_at > now())
-    ORDER BY uir.created_at DESC, uir.short_id DESC LIMIT 1
-  ), '00000000-0000-0000-0000-000000000000'::uuid) AS user_input_request_id,
-  COALESCE((
-    SELECT short_id FROM user_input_requests uir
-    WHERE uir.session_id = s.id AND uir.status = 'pending'
-      AND (uir.expires_at IS NULL OR uir.expires_at > now())
-    ORDER BY uir.created_at DESC, uir.short_id DESC LIMIT 1
-  ), 0) AS user_input_short_id,
-  COALESCE((
-    SELECT prompt_external_message_id FROM user_input_requests uir
-    WHERE uir.session_id = s.id AND uir.status = 'pending'
-      AND (uir.expires_at IS NULL OR uir.expires_at > now())
-    ORDER BY uir.created_at DESC, uir.short_id DESC LIMIT 1
-  ), '') AS user_input_prompt_external_id,
+  COALESCE(latest_turn.id, '00000000-0000-0000-0000-000000000000'::uuid) AS latest_turn_id,
+  COALESCE(latest_message.id, '00000000-0000-0000-0000-000000000000'::uuid) AS latest_message_id,
+  COALESCE(page.page_message_ids, ARRAY[]::uuid[]) AS page_message_ids,
+  COALESCE(page_tools.page_tool_call_ids, ARRAY[]::text[]) AS page_tool_call_ids,
+  COALESCE(cursors.cursor_message_ids, ARRAY[]::uuid[]) AS cursor_message_ids,
+  COALESCE(cursors.cursor_created_ats, ARRAY[]::timestamptz[]) AS cursor_created_ats,
+  COALESCE(cursors.external_message_ids, ARRAY[]::text[]) AS external_message_ids,
+  COALESCE(approval.id, '00000000-0000-0000-0000-000000000000'::uuid) AS approval_request_id,
+  COALESCE(approval.short_id, 0) AS approval_short_id,
+  COALESCE(approval.prompt_external_message_id, '') AS approval_prompt_external_id,
+  COALESCE(user_input.id, '00000000-0000-0000-0000-000000000000'::uuid) AS user_input_request_id,
+  COALESCE(user_input.short_id, 0) AS user_input_short_id,
+  COALESCE(user_input.prompt_external_message_id, '') AS user_input_prompt_external_id,
   COALESCE((s.metadata->>'hot')::boolean, false) AS hot
 FROM benchmark_sessions s
+LEFT JOIN LATERAL (
+  SELECT t.id, t.position
+  FROM bot_history_turns t
+  WHERE t.session_id = s.id AND t.superseded_at IS NULL
+  ORDER BY t.position DESC
+  LIMIT 1
+) latest_turn ON true
+LEFT JOIN LATERAL (
+  SELECT m.id
+  FROM bot_history_messages m
+  WHERE m.turn_id = latest_turn.id
+  ORDER BY m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+  LIMIT 1
+) latest_message ON true
+LEFT JOIN LATERAL (
+  SELECT array_agg(pm.id ORDER BY pm.position ASC, pm.turn_message_seq ASC, pm.created_at ASC, pm.id ASC) AS page_message_ids
+  FROM (
+    SELECT t.position, m.turn_message_seq, m.created_at, m.id
+    FROM (
+      SELECT t.id, t.position
+      FROM bot_history_turns t
+      WHERE t.session_id = s.id AND t.superseded_at IS NULL
+      ORDER BY t.position DESC
+      LIMIT $2::int
+    ) t
+    JOIN bot_history_messages m ON m.turn_id = t.id
+    ORDER BY t.position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT $2::int
+  ) pm
+) page ON true
+LEFT JOIN LATERAL (
+  SELECT array_agg(page_tool_calls.tool_call_id ORDER BY page_tool_calls.tool_call_id) AS page_tool_call_ids
+  FROM (
+    SELECT DISTINCT tool_call.value->>'toolCallId' AS tool_call_id
+    FROM (
+      SELECT t.position, m.turn_message_seq, m.created_at, m.id, m.content
+      FROM (
+        SELECT t.id, t.position
+        FROM bot_history_turns t
+        WHERE t.session_id = s.id AND t.superseded_at IS NULL
+        ORDER BY t.position DESC
+        LIMIT $2::int
+      ) t
+      JOIN bot_history_messages m ON m.turn_id = t.id
+      ORDER BY t.position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+      LIMIT $2::int
+    ) pm
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE
+        WHEN jsonb_typeof(pm.content->'content') = 'array' THEN pm.content->'content'
+        ELSE '[]'::jsonb
+      END
+    ) AS tool_call(value)
+    WHERE tool_call.value->>'type' = 'tool-call'
+      AND COALESCE(tool_call.value->>'toolCallId', '') <> ''
+  ) AS page_tool_calls
+) page_tools ON true
+LEFT JOIN LATERAL (
+  SELECT
+    array_agg(cm.id ORDER BY cm.ord) AS cursor_message_ids,
+    array_agg(cm.created_at ORDER BY cm.ord) AS cursor_created_ats,
+    array_agg(cm.source_message_id ORDER BY cm.ord) FILTER (WHERE cm.source_message_id IS NOT NULL) AS external_message_ids
+  FROM (
+    SELECT target.ord, m.id, m.created_at, m.source_message_id
+    FROM (
+      VALUES
+        (1, 1::bigint),
+        (2, GREATEST(COALESCE(latest_turn.position, 1) / 2, 1)),
+        (3, GREATEST(COALESCE(latest_turn.position, 1) - 5, 1))
+    ) AS target(ord, target_position)
+    CROSS JOIN LATERAL (
+      SELECT m.id, m.created_at, m.source_message_id
+      FROM bot_history_turns t
+      JOIN bot_history_messages m ON m.turn_id = t.id
+      WHERE t.session_id = s.id
+        AND t.superseded_at IS NULL
+        AND t.position >= target.target_position
+      ORDER BY t.position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+      LIMIT 1
+    ) m
+  ) cm
+) cursors ON true
+LEFT JOIN LATERAL (
+  SELECT id, short_id, prompt_external_message_id
+  FROM tool_approval_requests tar
+  WHERE tar.session_id = s.id AND tar.status = 'pending'
+  ORDER BY tar.created_at DESC, tar.short_id DESC
+  LIMIT 1
+) approval ON true
+LEFT JOIN LATERAL (
+  SELECT id, short_id, prompt_external_message_id
+  FROM user_input_requests uir
+  WHERE uir.session_id = s.id AND uir.status = 'pending'
+    AND (uir.expires_at IS NULL OR uir.expires_at > now())
+  ORDER BY uir.created_at DESC, uir.short_id DESC
+  LIMIT 1
+) user_input ON true
 ORDER BY s.created_at ASC, s.id ASC`, cfg.Seed.Marker, cfg.Workload.PageSize)
 	if err != nil {
 		return SeedCatalog{}, err
