@@ -218,26 +218,27 @@ func (e *sqlcExecutor) execChatPageUI(ctx context.Context, s SessionSeed, rng *r
 }
 
 func (e *sqlcExecutor) execWriteUserMessage(ctx context.Context, s SessionSeed) (int64, error) {
-	_, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user"))
+	_, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user", ""))
 	return rowsForWrite(1, err)
 }
 
 func (e *sqlcExecutor) execWriteAssistantMessage(ctx context.Context, s SessionSeed) (int64, error) {
-	_, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "assistant"))
+	_, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "assistant", ""))
 	return rowsForWrite(1, err)
 }
 
 func (e *sqlcExecutor) execWriteTurnPair(ctx context.Context, s SessionSeed) (int64, error) {
-	if _, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user")); err != nil {
+	user, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user", ""))
+	if err != nil {
 		return 0, err
 	}
-	if _, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "assistant")); err != nil {
+	if _, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "assistant", user.ID)); err != nil {
 		return 1, err
 	}
 	return 2, nil
 }
 
-func (e *sqlcExecutor) writeMessageInput(s SessionSeed, role string) messagepkg.PersistInput {
+func (e *sqlcExecutor) writeMessageInput(s SessionSeed, role string, turnRequestMessageID string) messagepkg.PersistInput {
 	messageID := uuid.NewString()
 	content := jsonRaw(`{"type":"text","content":"bench write"}`)
 	displayText := "bench write"
@@ -260,10 +261,11 @@ func (e *sqlcExecutor) writeMessageInput(s SessionSeed, role string) messagepkg.
 			"benchmark_marker": e.cfg.Seed.Marker,
 			"benchmark_write":  true,
 		},
-		Usage:       jsonRaw("{}"),
-		SessionMode: "chat",
-		RuntimeType: "model",
-		DisplayText: displayText,
+		Usage:                jsonRaw("{}"),
+		SessionMode:          "chat",
+		RuntimeType:          "model",
+		DisplayText:          displayText,
+		TurnRequestMessageID: turnRequestMessageID,
 	}
 }
 
