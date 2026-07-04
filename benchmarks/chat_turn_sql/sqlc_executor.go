@@ -242,6 +242,16 @@ func (e *sqlcExecutor) execWriteTurnPair(ctx context.Context, s SessionSeed) (in
 
 func (e *sqlcExecutor) execWriteToolTail(ctx context.Context, s SessionSeed) (int64, error) {
 	toolCallID := "bench-tool-" + uuid.NewString()
+	inputs := []messagepkg.PersistInput{
+		e.writeMessageInput(s, "user", ""),
+		e.writeAssistantToolCallInput(s, "", toolCallID),
+		e.writeToolResultInput(s, "", toolCallID),
+		e.writeAssistantFinalInput(s, ""),
+	}
+	messages, handled, err := e.messageService.PersistToolTailRound(ctx, inputs)
+	if handled || err != nil {
+		return int64(len(messages)), err
+	}
 	user, err := e.messageService.Persist(ctx, e.writeMessageInput(s, "user", ""))
 	if err != nil {
 		return 0, err
