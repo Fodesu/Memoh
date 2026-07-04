@@ -1,0 +1,38 @@
+-- after_page
+-- Production query: db/postgres/queries/messages.sql ListMessagesAfterMessageBySession
+WITH cursor_message AS (
+  SELECT target.turn_position, target.turn_message_seq, target.created_at, target.id
+  FROM bot_visible_history_messages target
+  WHERE target.session_id = $1
+    AND target.id = $3
+  LIMIT 1
+)
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.session_mode,
+  m.runtime_type,
+  m.event_id,
+  m.display_text,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform
+FROM bot_visible_history_messages m
+CROSS JOIN cursor_message cursor
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
+LEFT JOIN bot_sessions s ON s.id = m.session_id
+WHERE m.session_id = $1
+  AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+    > (cursor.turn_position, cursor.turn_message_seq, cursor.created_at, cursor.id)
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+LIMIT $2;

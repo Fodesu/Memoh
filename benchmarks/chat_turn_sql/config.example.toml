@@ -1,0 +1,68 @@
+[db]
+# You can also override this with -dsn or MEMOH_BENCH_DSN in your shell wrapper.
+dsn = "postgres://memoh:memoh123@127.0.0.1:15432/memoh?sslmode=disable"
+max_open_conns = 16
+statement_timeout = "30s"
+
+[seed]
+# All benchmark-owned rows include this marker in metadata and cleanup deletes by it.
+marker = "local-chat-turn-sql"
+cleanup_before = true
+
+# SaaS shape: many sessions, a small hot subset, and deep turn chains.
+bots = 4
+sessions_per_bot = 25
+hot_session_ratio = 0.10
+turns_per_session = 1000
+
+# This branch is single-head linear history. Variant knobs are kept only so
+# old configs still parse; they should stay zero/one here.
+branch_factor = 0
+branch_depth = 0
+active_heads_per_session = 1
+
+# At least two messages per turn gives user + assistant messages.
+messages_per_turn = 2
+approval_every_n_turns = 50
+user_input_every_n_turns = 80
+asset_every_n_messages = 200
+pending_ratio = 0.50
+
+[workload]
+# sqlc = generated Postgres sqlc methods, closest to the production Go hot path.
+# sql = runnable SQL templates, useful for EXPLAIN and candidate SQL microbenchmarks.
+# http = Echo httptest handler path for ListMessages/LocateMessage.
+runner = "sqlc"
+
+# One of:
+# mixed_saas_read, chat_page_ui, locate_window, approval_resolve,
+# user_input_resolve, sse_live_filter, latest_page, before_page, after_page,
+# external_lookup, message_assets, approval_*, user_input_*
+scenario = "mixed_saas_read"
+duration = "30s"
+warmup = "5s"
+concurrency = 8
+page_size = 50
+random_seed = 1
+fail_on_error = true
+selected_head_ratio = 0.25
+hot_traffic_ratio = 0.90
+
+# HTTP runner only. Default measures the chat UI first-page shape:
+# GET /bots/:bot_id/messages?format=ui (turn variant metadata rides along
+# automatically for chat sessions)
+http_format = "ui"
+http_decode_json = true
+
+[workload.query_weights]
+chat_page_ui = 70
+before_page = 18
+locate_window = 6
+approval_resolve = 3
+user_input_resolve = 3
+
+[output]
+json_path = "benchmarks/chat_turn_sql/out/results.json"
+csv_path = "benchmarks/chat_turn_sql/out/results.csv"
+explain = false
+explain_dir = "benchmarks/chat_turn_sql/out/explain"
