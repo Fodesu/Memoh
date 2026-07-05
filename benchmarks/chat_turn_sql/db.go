@@ -45,16 +45,11 @@ func cleanupBenchmarkData(ctx context.Context, pool *pgxpool.Pool, marker string
 
 	statements := []string{
 		`UPDATE bot_channel_routes
-		 SET active_session_id = NULL
-		 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
-		`UPDATE bot_history_turns
-		 SET request_message_id = NULL,
-		     assistant_message_id = NULL,
-		     superseded_by_turn_id = NULL
-		 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
+			 SET active_session_id = NULL
+			 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
 		`DELETE FROM bot_history_message_assets
-		 WHERE message_id IN (
-		   SELECT id FROM bot_history_messages
+			 WHERE message_id IN (
+			   SELECT id FROM bot_history_messages
 		   WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)
 		 )`,
 		`DELETE FROM tool_approval_requests
@@ -62,11 +57,9 @@ func cleanupBenchmarkData(ctx context.Context, pool *pgxpool.Pool, marker string
 		`DELETE FROM user_input_requests
 		 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
 		`DELETE FROM bot_history_messages
-		 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
-		`DELETE FROM bot_history_turns
-		 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
+			 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
 		`DELETE FROM bot_sessions
-		 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
+			 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
 		`DELETE FROM bot_channel_routes
 		 WHERE bot_id IN (SELECT id FROM bots WHERE metadata->>'benchmark_marker' = $1)`,
 		`DELETE FROM bots WHERE metadata->>'benchmark_marker' = $1`,
@@ -88,7 +81,6 @@ func analyzeBenchmarkTables(ctx context.Context, pool *pgxpool.Pool) error {
 		"bots",
 		"bot_channel_routes",
 		"bot_sessions",
-		"bot_history_turns",
 		"bot_history_messages",
 		"bot_history_message_assets",
 		"tool_approval_requests",

@@ -305,8 +305,8 @@ func (c Config) validate() error {
 	if c.Seed.TurnsPerSession <= 0 {
 		return errors.New("seed.turns_per_session must be > 0")
 	}
-	if c.Seed.MessagesPerTurn < 2 {
-		return errors.New("seed.messages_per_turn must be >= 2")
+	if c.Seed.MessagesPerTurn != 2 {
+		return errors.New("seed.messages_per_turn must be 2 for the current single-head seed generator")
 	}
 	if c.Seed.ActiveHeadsPerSess <= 0 {
 		return errors.New("seed.active_heads_per_session must be > 0")
@@ -360,6 +360,20 @@ func (c Config) validate() error {
 	if isMixedWorkloadScenario(c.Workload.Scenario) {
 		if _, err := normalizeWeights(c.Workload.QueryWeights); err != nil {
 			return err
+		}
+		if c.Workload.Scenario == "mixed_saas_write" {
+			for name, weight := range c.Workload.QueryWeights {
+				if weight > 0 && !isWriteScenario(name) {
+					return fmt.Errorf("mixed_saas_write does not support weighted read query %q", name)
+				}
+			}
+		}
+		if c.Workload.Scenario == "mixed_saas_read" {
+			for name, weight := range c.Workload.QueryWeights {
+				if weight > 0 && isWriteScenario(name) {
+					return fmt.Errorf("mixed_saas_read does not support weighted write query %q", name)
+				}
+			}
 		}
 		if c.Workload.Runner != runnerSQLC {
 			for name, weight := range c.Workload.QueryWeights {

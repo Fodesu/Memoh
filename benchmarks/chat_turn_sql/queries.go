@@ -45,9 +45,9 @@ type QueryDefinition struct {
 
 var queryDefinitions = []QueryDefinition{
 	{Name: queryLatestPage, SourceFile: "db/postgres/queries/messages.sql", SourceName: "ListMessagesLatestBySession", Args: []string{"session_id", "max_count"}},
-	{Name: queryBeforePage, SourceFile: "db/postgres/queries/messages.sql", SourceName: "ListMessagesBeforeMessageBySession", Args: []string{"session_id", "max_count", "before_message_id"}},
-	{Name: queryAfterPage, SourceFile: "db/postgres/queries/messages.sql", SourceName: "ListMessagesAfterMessageBySession", Args: []string{"session_id", "max_count", "after_message_id"}},
-	{Name: queryExternalLookup, SourceFile: "db/postgres/queries/messages.sql", SourceName: "GetMessageByExternalIDBySession", Args: []string{"session_id", "external_message_id"}},
+	{Name: queryBeforePage, SourceFile: "db/postgres/queries/messages.sql", SourceName: "GetVisibleMessageCursorByIDBySession + ListMessagesBeforeCursorBySession", Args: []string{"session_id", "before_message_id", "max_count"}},
+	{Name: queryAfterPage, SourceFile: "db/postgres/queries/messages.sql", SourceName: "GetVisibleMessageCursorByIDBySession + ListMessagesAfterCursorBySession", Args: []string{"session_id", "after_message_id", "max_count"}},
+	{Name: queryExternalLookup, SourceFile: "db/postgres/queries/messages.sql", SourceName: "GetVisibleMessageCursorByExternalIDBySession", Args: []string{"session_id", "external_message_id"}},
 	{Name: queryMessageAssets, SourceFile: "db/postgres/queries/media.sql", SourceName: "ListMessageAssetsBatch", Args: []string{"message_ids"}},
 	{Name: queryApprovalList, SourceFile: "db/postgres/queries/tool_approval.sql", SourceName: "ListToolApprovalsBySession", Args: []string{"bot_id", "session_id"}},
 	{Name: queryApprovalToolCalls, SourceFile: "db/postgres/queries/tool_approval.sql", SourceName: "ListToolApprovalsBySessionToolCalls", Args: []string{"bot_id", "session_id", "tool_call_ids"}},

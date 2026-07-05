@@ -1,12 +1,6 @@
 -- after_page
--- Production query: db/postgres/queries/messages.sql ListMessagesAfterMessageBySession
-WITH cursor_message AS (
-  SELECT target.turn_position, target.turn_message_seq, target.created_at, target.id
-  FROM bot_visible_history_messages target
-  WHERE target.session_id = $1
-    AND target.id = $3
-  LIMIT 1
-)
+-- Production path: GetVisibleMessageCursorByIDBySession + ListMessagesAfterCursorBySession.
+-- Template keeps the same external args as after_page for SQL microbench/explain.
 SELECT
   m.id,
   m.bot_id,
@@ -27,12 +21,25 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_visible_history_messages m
-CROSS JOIN cursor_message cursor
+FROM bot_history_messages m
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
 LEFT JOIN bot_sessions s ON s.id = m.session_id
 WHERE m.session_id = $1
+  AND m.turn_visible = true
+  AND m.turn_id IS NOT NULL
+  AND m.turn_position IS NOT NULL
+  AND m.turn_message_seq IS NOT NULL
   AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
-    > (cursor.turn_position, cursor.turn_message_seq, cursor.created_at, cursor.id)
+    > (
+      SELECT c.turn_position, c.turn_message_seq, c.created_at, c.id
+      FROM bot_history_messages c
+      WHERE c.session_id = $1
+        AND c.turn_visible = true
+        AND c.turn_id IS NOT NULL
+        AND c.turn_position IS NOT NULL
+        AND c.turn_message_seq IS NOT NULL
+        AND c.id = $3
+      LIMIT 1
+    )
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 LIMIT $2;

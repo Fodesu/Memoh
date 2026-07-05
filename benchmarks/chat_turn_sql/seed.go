@@ -104,9 +104,8 @@ func seedBenchmarkData(ctx context.Context, pool *pgxpool.Pool, cfg Config) (See
 	identityBatch := newCopyBatcher(ctx, tx, "channel_identities", []string{"id", "channel_type", "channel_subject_id", "display_name", "metadata", "created_at", "updated_at"}, 5000)
 	botBatch := newCopyBatcher(ctx, tx, "bots", []string{"id", "owner_user_id", "name", "display_name", "timezone", "metadata", "created_at", "updated_at"}, 5000)
 	routeBatch := newCopyBatcher(ctx, tx, "bot_channel_routes", []string{"id", "bot_id", "channel_type", "external_conversation_id", "external_thread_id", "conversation_type", "default_reply_target", "metadata", "created_at", "updated_at"}, 5000)
-	sessionBatch := newCopyBatcher(ctx, tx, "bot_sessions", []string{"id", "bot_id", "route_id", "channel_type", "type", "title", "metadata", "created_by_user_id", "created_at", "updated_at"}, 5000)
-	messageBatch := newCopyBatcher(ctx, tx, "bot_history_messages", []string{"id", "bot_id", "session_id", "sender_channel_identity_id", "sender_account_user_id", "source_message_id", "source_reply_to_message_id", "role", "content", "metadata", "usage", "display_text", "turn_id", "turn_message_seq", "created_at"}, 10000)
-	turnBatch := newCopyBatcher(ctx, tx, "bot_history_turns", []string{"id", "bot_id", "session_id", "position", "request_message_id", "assistant_message_id", "created_at", "updated_at"}, 10000)
+	sessionBatch := newCopyBatcher(ctx, tx, "bot_sessions", []string{"id", "bot_id", "route_id", "channel_type", "type", "title", "metadata", "next_turn_position", "created_by_user_id", "created_at", "updated_at"}, 5000)
+	messageBatch := newCopyBatcher(ctx, tx, "bot_history_messages", []string{"id", "bot_id", "session_id", "sender_channel_identity_id", "sender_account_user_id", "source_message_id", "source_reply_to_message_id", "role", "content", "metadata", "usage", "display_text", "turn_id", "turn_position", "turn_message_seq", "turn_visible", "created_at"}, 10000)
 	approvalBatch := newCopyBatcher(ctx, tx, "tool_approval_requests", approvalShape.columns, 5000)
 	userInputBatch := newCopyBatcher(ctx, tx, "user_input_requests", userInputShape.columns, 5000)
 	assetBatch := newCopyBatcher(ctx, tx, "bot_history_message_assets", []string{"id", "message_id", "role", "ordinal", "content_hash", "name", "metadata", "created_at"}, 5000)
@@ -163,7 +162,8 @@ func seedBenchmarkData(ctx context.Context, pool *pgxpool.Pool, cfg Config) (See
 			if err := routeBatch.add(routeID, botID, "local", uniqueName("bench-conversation", cfg.Seed.Marker, sessionIdx), nil, "group", "", routeMetadata, sessionCreated, sessionCreated); err != nil {
 				return SeedCatalog{}, err
 			}
-			if err := sessionBatch.add(sessionID, botID, routeID, "local", "chat", fmt.Sprintf("Bench Session %d", sessionIdx), sessionMetadata, userID, sessionCreated, sessionCreated); err != nil {
+			nextTurnPosition := int64(cfg.Seed.TurnsPerSession + 1)
+			if err := sessionBatch.add(sessionID, botID, routeID, "local", "chat", fmt.Sprintf("Bench Session %d", sessionIdx), sessionMetadata, nextTurnPosition, userID, sessionCreated, sessionCreated); err != nil {
 				return SeedCatalog{}, err
 			}
 			for _, batch := range []*copyBatcher{routeBatch, sessionBatch} {
@@ -210,22 +210,19 @@ func seedBenchmarkData(ctx context.Context, pool *pgxpool.Pool, cfg Config) (See
 				}
 
 				requestSource := uniqueName("bench-msg", cfg.Seed.Marker, messageGlobalIdx+1)
+				turnPosition := int64(turnIdx + 1)
 				if err := messageBatch.add(requestID, botID, sessionID, identityID, userID, requestSource, nil, "user", jsonText(map[string]any{
 					"type":    "text",
 					"content": fmt.Sprintf("bench user session=%d turn=%d", sessionIdx, turnIdx),
-				}), jsonRaw("{}"), jsonRaw("{}"), fmt.Sprintf("bench user %d", turnIdx), turnID, int64(1), requestCreated); err != nil {
+				}), jsonRaw("{}"), jsonRaw("{}"), fmt.Sprintf("bench user %d", turnIdx), turnID, turnPosition, int64(1), true, requestCreated); err != nil {
 					return SeedCatalog{}, err
 				}
 				messageGlobalIdx++
 				assistantSource := uniqueName("bench-msg", cfg.Seed.Marker, messageGlobalIdx+1)
-				if err := messageBatch.add(assistantID, botID, sessionID, nil, nil, assistantSource, nil, "assistant", assistantContentWithToolCalls(fmt.Sprintf("bench assistant %d", turnIdx), toolCalls), jsonRaw("{}"), jsonRaw("{}"), fmt.Sprintf("bench assistant %d", turnIdx), turnID, int64(2), assistantCreated); err != nil {
+				if err := messageBatch.add(assistantID, botID, sessionID, nil, nil, assistantSource, nil, "assistant", assistantContentWithToolCalls(fmt.Sprintf("bench assistant %d", turnIdx), toolCalls), jsonRaw("{}"), jsonRaw("{}"), fmt.Sprintf("bench assistant %d", turnIdx), turnID, turnPosition, int64(2), true, assistantCreated); err != nil {
 					return SeedCatalog{}, err
 				}
 				messageGlobalIdx++
-				if err := turnBatch.add(turnID, botID, sessionID, int64(turnIdx+1), requestID, assistantID, turnCreated, turnCreated); err != nil {
-					return SeedCatalog{}, err
-				}
-
 				sessionSeed.LatestTurnID = turnID
 				sessionSeed.LatestMessageID = assistantID
 				if sessionSeed.ExternalMessageID == "" {
@@ -293,7 +290,7 @@ func seedBenchmarkData(ctx context.Context, pool *pgxpool.Pool, cfg Config) (See
 				}
 			}
 
-			for _, batch := range []*copyBatcher{messageBatch, turnBatch, approvalBatch, userInputBatch} {
+			for _, batch := range []*copyBatcher{messageBatch, approvalBatch, userInputBatch} {
 				if err := batch.flush(); err != nil {
 					return SeedCatalog{}, err
 				}
@@ -325,7 +322,6 @@ func seedBenchmarkData(ctx context.Context, pool *pgxpool.Pool, cfg Config) (See
 		routeBatch,
 		sessionBatch,
 		messageBatch,
-		turnBatch,
 		approvalBatch,
 		userInputBatch,
 		assetBatch,
@@ -390,7 +386,7 @@ SELECT
   s.owner_user_id,
   s.route_id,
   s.id,
-  COALESCE(latest_turn.id, '00000000-0000-0000-0000-000000000000'::uuid) AS latest_turn_id,
+  COALESCE(latest_message.turn_id, '00000000-0000-0000-0000-000000000000'::uuid) AS latest_turn_id,
   COALESCE(latest_message.id, '00000000-0000-0000-0000-000000000000'::uuid) AS latest_message_id,
   COALESCE(page.page_message_ids, ARRAY[]::uuid[]) AS page_message_ids,
   COALESCE(page_tools.page_tool_call_ids, ARRAY[]::text[]) AS page_tool_call_ids,
@@ -406,32 +402,27 @@ SELECT
   COALESCE((s.metadata->>'hot')::boolean, false) AS hot
 FROM benchmark_sessions s
 LEFT JOIN LATERAL (
-  SELECT t.id, t.position
-  FROM bot_history_turns t
-  WHERE t.session_id = s.id AND t.superseded_at IS NULL
-  ORDER BY t.position DESC
-  LIMIT 1
-) latest_turn ON true
-LEFT JOIN LATERAL (
-  SELECT m.id
+  SELECT m.turn_id, m.turn_position, m.id
   FROM bot_history_messages m
-  WHERE m.turn_id = latest_turn.id
-  ORDER BY m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+  WHERE m.session_id = s.id
+    AND m.turn_visible = true
+    AND m.turn_id IS NOT NULL
+    AND m.turn_position IS NOT NULL
+    AND m.turn_message_seq IS NOT NULL
+  ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
   LIMIT 1
 ) latest_message ON true
 LEFT JOIN LATERAL (
-  SELECT array_agg(pm.id ORDER BY pm.position ASC, pm.turn_message_seq ASC, pm.created_at ASC, pm.id ASC) AS page_message_ids
+  SELECT array_agg(pm.id ORDER BY pm.turn_position ASC, pm.turn_message_seq ASC, pm.created_at ASC, pm.id ASC) AS page_message_ids
   FROM (
-    SELECT t.position, m.turn_message_seq, m.created_at, m.id
-    FROM (
-      SELECT t.id, t.position
-      FROM bot_history_turns t
-      WHERE t.session_id = s.id AND t.superseded_at IS NULL
-      ORDER BY t.position DESC
-      LIMIT $2::int
-    ) t
-    JOIN bot_history_messages m ON m.turn_id = t.id
-    ORDER BY t.position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    SELECT m.turn_position, m.turn_message_seq, m.created_at, m.id
+    FROM bot_history_messages m
+    WHERE m.session_id = s.id
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
     LIMIT $2::int
   ) pm
 ) page ON true
@@ -440,16 +431,14 @@ LEFT JOIN LATERAL (
   FROM (
     SELECT DISTINCT tool_call.value->>'toolCallId' AS tool_call_id
     FROM (
-      SELECT t.position, m.turn_message_seq, m.created_at, m.id, m.content
-      FROM (
-        SELECT t.id, t.position
-        FROM bot_history_turns t
-        WHERE t.session_id = s.id AND t.superseded_at IS NULL
-        ORDER BY t.position DESC
-        LIMIT $2::int
-      ) t
-      JOIN bot_history_messages m ON m.turn_id = t.id
-      ORDER BY t.position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+      SELECT m.turn_position, m.turn_message_seq, m.created_at, m.id, m.content
+      FROM bot_history_messages m
+      WHERE m.session_id = s.id
+        AND m.turn_visible = true
+        AND m.turn_id IS NOT NULL
+        AND m.turn_position IS NOT NULL
+        AND m.turn_message_seq IS NOT NULL
+      ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
       LIMIT $2::int
     ) pm
     CROSS JOIN LATERAL jsonb_array_elements(
@@ -472,17 +461,19 @@ LEFT JOIN LATERAL (
     FROM (
       VALUES
         (1, 1::bigint),
-        (2, GREATEST(COALESCE(latest_turn.position, 1) / 2, 1)),
-        (3, GREATEST(COALESCE(latest_turn.position, 1) - 5, 1))
+        (2, GREATEST(COALESCE(latest_message.turn_position, 1) / 2, 1)),
+        (3, GREATEST(COALESCE(latest_message.turn_position, 1) - 5, 1))
     ) AS target(ord, target_position)
     CROSS JOIN LATERAL (
       SELECT m.id, m.created_at, m.source_message_id
-      FROM bot_history_turns t
-      JOIN bot_history_messages m ON m.turn_id = t.id
-      WHERE t.session_id = s.id
-        AND t.superseded_at IS NULL
-        AND t.position >= target.target_position
-      ORDER BY t.position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+      FROM bot_history_messages m
+      WHERE m.session_id = s.id
+        AND m.turn_visible = true
+        AND m.turn_id IS NOT NULL
+        AND m.turn_position IS NOT NULL
+        AND m.turn_message_seq IS NOT NULL
+        AND m.turn_position >= target.target_position
+      ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
       LIMIT 1
     ) m
   ) cm
@@ -760,7 +751,7 @@ bench_sessions AS (
 SELECT
   (SELECT COUNT(*) FROM bench_bots),
   (SELECT COUNT(*) FROM bench_sessions),
-  (SELECT COUNT(*) FROM bot_history_turns WHERE session_id IN (SELECT id FROM bench_sessions)),
+  (SELECT COUNT(DISTINCT turn_id) FROM bot_history_messages WHERE session_id IN (SELECT id FROM bench_sessions) AND turn_id IS NOT NULL),
   (SELECT COUNT(*) FROM bot_history_messages WHERE session_id IN (SELECT id FROM bench_sessions)),
   0,
   (SELECT COUNT(*) FROM tool_approval_requests WHERE session_id IN (SELECT id FROM bench_sessions)),

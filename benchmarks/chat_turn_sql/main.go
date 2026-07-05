@@ -30,14 +30,16 @@ func runMain() error {
 		scenario   string
 		runnerName string
 		queriesDir string
+		addr       string
 		profiles   profileOptions
 	)
 	flag.StringVar(&configPath, "config", "benchmarks/chat_turn_sql/config.example.toml", "Path to benchmark TOML config")
-	flag.StringVar(&mode, "mode", "seed-run", "Mode: estimate, seed, run, seed-run, cleanup, explain")
+	flag.StringVar(&mode, "mode", "seed-run", "Mode: estimate, seed, run, seed-run, cleanup, explain, wrk-server")
 	flag.StringVar(&dsn, "dsn", "", "PostgreSQL DSN override")
 	flag.StringVar(&scenario, "scenario", "", "Scenario override")
 	flag.StringVar(&runnerName, "runner", "", `Runner override: "sqlc" for generated production path, "sql" for SQL templates, "http" for Echo handler path`)
 	flag.StringVar(&queriesDir, "queries-dir", "benchmarks/chat_turn_sql/queries/postgres", "Directory containing runnable SQL templates")
+	flag.StringVar(&addr, "addr", "127.0.0.1:18083", "Listen address for -mode wrk-server")
 	flag.StringVar(&profiles.CPUPath, "cpuprofile", "", "Write Go CPU profile for the measured benchmark phase")
 	flag.StringVar(&profiles.MemPath, "memprofile", "", "Write Go heap profile after the measured benchmark phase")
 	flag.StringVar(&profiles.TracePath, "trace", "", "Write Go runtime trace for the measured benchmark phase")
@@ -59,7 +61,7 @@ func runMain() error {
 	switch mode {
 	case "estimate":
 		return printJSON(estimateSeed(cfg))
-	case "seed", "run", "seed-run", "cleanup", "explain":
+	case "seed", "run", "seed-run", "cleanup", "explain", "wrk-server":
 	default:
 		return fmt.Errorf("unknown mode %q", mode)
 	}
@@ -103,6 +105,12 @@ func runMain() error {
 		}
 		cfg.Output.Explain = true
 		return writeExplainPlans(ctx, pool, cfg, queries, catalog)
+	case "wrk-server":
+		catalog, err := loadSeedCatalog(ctx, pool, cfg)
+		if err != nil {
+			return err
+		}
+		return serveWRKBenchmark(ctx, cfg, pool, catalog, addr)
 	default:
 		panic("unreachable")
 	}

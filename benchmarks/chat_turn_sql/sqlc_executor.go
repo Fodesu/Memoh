@@ -64,23 +64,43 @@ func (e *sqlcExecutor) execQuery(ctx context.Context, queryName string, s Sessio
 		return int64(len(items)), err
 	case queryBeforePage:
 		cursorID, _ := selectedCursor(s, rng)
-		items, err := e.queries.ListMessagesBeforeMessageBySession(ctx, postgresqlc.ListMessagesBeforeMessageBySessionParams{
-			SessionID:       pgUUID(s.SessionID),
-			MaxCount:        maxCount,
-			BeforeMessageID: pgUUID(cursorID),
+		cursor, err := e.queries.GetVisibleMessageCursorByIDBySession(ctx, postgresqlc.GetVisibleMessageCursorByIDBySessionParams{
+			SessionID: pgUUID(s.SessionID),
+			MessageID: pgUUID(cursorID),
 		})
-		return int64(len(items)), err
+		if err != nil {
+			return rowsForOne(err)
+		}
+		items, err := e.queries.ListMessagesBeforeCursorBySession(ctx, postgresqlc.ListMessagesBeforeCursorBySessionParams{
+			SessionID:            pgUUID(s.SessionID),
+			CursorTurnPosition:   cursor.TurnPosition.Int64,
+			CursorTurnMessageSeq: cursor.TurnMessageSeq.Int64,
+			CursorCreatedAt:      cursor.CreatedAt,
+			CursorMessageID:      cursor.ID,
+			MaxCount:             maxCount,
+		})
+		return int64(len(items)) + 1, err
 	case queryAfterPage:
 		cursorID, _ := selectedCursor(s, rng)
-		items, err := e.queries.ListMessagesAfterMessageBySession(ctx, postgresqlc.ListMessagesAfterMessageBySessionParams{
-			SessionID:      pgUUID(s.SessionID),
-			MaxCount:       maxCount,
-			AfterMessageID: pgUUID(cursorID),
+		cursor, err := e.queries.GetVisibleMessageCursorByIDBySession(ctx, postgresqlc.GetVisibleMessageCursorByIDBySessionParams{
+			SessionID: pgUUID(s.SessionID),
+			MessageID: pgUUID(cursorID),
 		})
-		return int64(len(items)), err
+		if err != nil {
+			return rowsForOne(err)
+		}
+		items, err := e.queries.ListMessagesAfterCursorBySession(ctx, postgresqlc.ListMessagesAfterCursorBySessionParams{
+			SessionID:            pgUUID(s.SessionID),
+			CursorTurnPosition:   cursor.TurnPosition.Int64,
+			CursorTurnMessageSeq: cursor.TurnMessageSeq.Int64,
+			CursorCreatedAt:      cursor.CreatedAt,
+			CursorMessageID:      cursor.ID,
+			MaxCount:             maxCount,
+		})
+		return int64(len(items)) + 1, err
 	case queryExternalLookup:
 		externalID := selectedExternalMessageID(s, rng)
-		_, err := e.queries.GetMessageByExternalIDBySession(ctx, postgresqlc.GetMessageByExternalIDBySessionParams{
+		_, err := e.queries.GetVisibleMessageCursorByExternalIDBySession(ctx, postgresqlc.GetVisibleMessageCursorByExternalIDBySessionParams{
 			SessionID:         pgUUID(s.SessionID),
 			ExternalMessageID: pgText(externalID),
 		})
@@ -367,7 +387,7 @@ func rowsForWrite(rows int64, err error) (int64, error) {
 
 func (e *sqlcExecutor) execLocateWindow(ctx context.Context, s SessionSeed, rng *rand.Rand) (int64, error) {
 	externalID := selectedExternalMessageID(s, rng)
-	target, err := e.queries.GetMessageByExternalIDBySession(ctx, postgresqlc.GetMessageByExternalIDBySessionParams{
+	cursor, err := e.queries.GetVisibleMessageCursorByExternalIDBySession(ctx, postgresqlc.GetVisibleMessageCursorByExternalIDBySessionParams{
 		SessionID:         pgUUID(s.SessionID),
 		ExternalMessageID: pgText(externalID),
 	})
@@ -375,25 +395,40 @@ func (e *sqlcExecutor) execLocateWindow(ctx context.Context, s SessionSeed, rng 
 	if err != nil {
 		return rows, err
 	}
-	before, err := e.queries.ListMessagesBeforeMessageBySession(ctx, postgresqlc.ListMessagesBeforeMessageBySessionParams{
-		SessionID:       pgUUID(s.SessionID),
-		MaxCount:        pageSizeInt32(e.cfg),
-		BeforeMessageID: target.ID,
+	_, err = e.queries.GetMessageByIDBySession(ctx, postgresqlc.GetMessageByIDBySessionParams{
+		SessionID: pgUUID(s.SessionID),
+		MessageID: cursor.ID,
+	})
+	extra, err := rowsForOne(err)
+	rows += extra
+	if err != nil {
+		return rows, err
+	}
+	before, err := e.queries.ListMessagesBeforeCursorBySession(ctx, postgresqlc.ListMessagesBeforeCursorBySessionParams{
+		SessionID:            pgUUID(s.SessionID),
+		MaxCount:             pageSizeInt32(e.cfg),
+		CursorTurnPosition:   cursor.TurnPosition.Int64,
+		CursorTurnMessageSeq: cursor.TurnMessageSeq.Int64,
+		CursorCreatedAt:      cursor.CreatedAt,
+		CursorMessageID:      cursor.ID,
 	})
 	rows += int64(len(before))
 	if err != nil {
 		return rows, err
 	}
-	after, err := e.queries.ListMessagesAfterMessageBySession(ctx, postgresqlc.ListMessagesAfterMessageBySessionParams{
-		SessionID:      pgUUID(s.SessionID),
-		MaxCount:       pageSizeInt32(e.cfg),
-		AfterMessageID: target.ID,
+	after, err := e.queries.ListMessagesAfterCursorBySession(ctx, postgresqlc.ListMessagesAfterCursorBySessionParams{
+		SessionID:            pgUUID(s.SessionID),
+		MaxCount:             pageSizeInt32(e.cfg),
+		CursorTurnPosition:   cursor.TurnPosition.Int64,
+		CursorTurnMessageSeq: cursor.TurnMessageSeq.Int64,
+		CursorCreatedAt:      cursor.CreatedAt,
+		CursorMessageID:      cursor.ID,
 	})
 	rows += int64(len(after))
 	if err != nil {
 		return rows, err
 	}
-	extra, err := e.execQuery(ctx, queryMessageAssets, s, rng)
+	extra, err = e.execQuery(ctx, queryMessageAssets, s, rng)
 	rows += extra
 	if err != nil {
 		return rows, err

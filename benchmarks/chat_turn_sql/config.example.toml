@@ -21,7 +21,7 @@ branch_factor = 0
 branch_depth = 0
 active_heads_per_session = 1
 
-# At least two messages per turn gives user + assistant messages.
+# Current seed generator creates exactly user + assistant per turn.
 messages_per_turn = 2
 approval_every_n_turns = 50
 user_input_every_n_turns = 80
@@ -47,12 +47,13 @@ concurrency = 8
 page_size = 30
 random_seed = 1
 fail_on_error = true
-selected_head_ratio = 0.25
 hot_traffic_ratio = 0.90
 
+# Legacy no-op for old selected-head configs; single-head benchmark ignores it.
+selected_head_ratio = 0.0
+
 # HTTP runner only. Default measures the chat UI first-page shape:
-# GET /bots/:bot_id/messages?format=ui (turn variant metadata rides along
-# automatically for chat sessions)
+# GET /bots/:bot_id/messages?format=ui.
 http_format = "ui"
 http_decode_json = true
 

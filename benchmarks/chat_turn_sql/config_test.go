@@ -194,6 +194,28 @@ runner = "sqlc"
 	}
 }
 
+func TestMixedSaaSWriteRejectsReadWeights(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Workload.Scenario = "mixed_saas_write"
+	cfg.Workload.QueryWeights = map[string]int{
+		queryChatPageUI: 1,
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected mixed_saas_write to reject read query weights")
+	}
+}
+
+func TestMixedSaaSReadRejectsWriteWeights(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Workload.Scenario = "mixed_saas_read"
+	cfg.Workload.QueryWeights = map[string]int{
+		queryWriteTurnPair: 1,
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected mixed_saas_read to reject write query weights")
+	}
+}
+
 func TestWriteScenarioRequiresSQLCRunner(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Workload.Runner = runnerSQL

@@ -209,11 +209,17 @@ func compositeResultSourceAndArgs(name string) ([]string, []string, bool) {
 			"db/postgres/queries/tool_approval.sql ListToolApprovalsBySessionToolCalls",
 			"db/postgres/queries/user_input.sql ListUserInputsBySessionToolCalls",
 		}, []string{"session_id", "max_count", "message_ids", "bot_id", "tool_call_ids"}, true
+	case queryBeforePage:
+		return []string{
+			"db/postgres/queries/messages.sql GetVisibleMessageCursorByIDBySession",
+			"db/postgres/queries/messages.sql ListMessagesBeforeCursorBySession",
+		}, []string{"session_id", "before_message_id", "max_count"}, true
 	case queryLocateWindow:
 		return []string{
-			"db/postgres/queries/messages.sql GetMessageByExternalIDBySession",
-			"db/postgres/queries/messages.sql ListMessagesBeforeMessageBySession",
-			"db/postgres/queries/messages.sql ListMessagesAfterMessageBySession",
+			"db/postgres/queries/messages.sql GetVisibleMessageCursorByExternalIDBySession",
+			"db/postgres/queries/messages.sql GetMessageByIDBySession",
+			"db/postgres/queries/messages.sql ListMessagesBeforeCursorBySession",
+			"db/postgres/queries/messages.sql ListMessagesAfterCursorBySession",
 			"db/postgres/queries/media.sql ListMessageAssetsBatch",
 			"db/postgres/queries/tool_approval.sql ListToolApprovalsBySessionToolCalls",
 			"db/postgres/queries/user_input.sql ListUserInputsBySessionToolCalls",
