@@ -102,7 +102,7 @@ func seedBenchmarkData(ctx context.Context, pool *pgxpool.Pool, cfg Config) (See
 
 	userBatch := newCopyBatcher(ctx, tx, "users", []string{"id", "username", "email", "role", "display_name", "timezone", "metadata", "created_at", "updated_at"}, 5000)
 	identityBatch := newCopyBatcher(ctx, tx, "channel_identities", []string{"id", "channel_type", "channel_subject_id", "display_name", "metadata", "created_at", "updated_at"}, 5000)
-	botBatch := newCopyBatcher(ctx, tx, "bots", []string{"id", "owner_user_id", "name", "display_name", "timezone", "metadata", "created_at", "updated_at"}, 5000)
+	botBatch := newCopyBatcher(ctx, tx, "bots", []string{"id", "owner_user_id", "type", "name", "display_name", "timezone", "metadata", "created_at", "updated_at"}, 5000)
 	routeBatch := newCopyBatcher(ctx, tx, "bot_channel_routes", []string{"id", "bot_id", "channel_type", "external_conversation_id", "external_thread_id", "conversation_type", "default_reply_target", "metadata", "created_at", "updated_at"}, 5000)
 	sessionBatch := newCopyBatcher(ctx, tx, "bot_sessions", []string{"id", "bot_id", "route_id", "channel_type", "type", "title", "metadata", "next_turn_position", "created_by_user_id", "created_at", "updated_at"}, 5000)
 	messageBatch := newCopyBatcher(ctx, tx, "bot_history_messages", []string{"id", "bot_id", "session_id", "sender_channel_identity_id", "sender_account_user_id", "source_message_id", "source_reply_to_message_id", "role", "content", "metadata", "usage", "display_text", "turn_id", "turn_position", "turn_message_seq", "turn_visible", "created_at"}, 10000)
@@ -134,7 +134,7 @@ func seedBenchmarkData(ctx context.Context, pool *pgxpool.Pool, cfg Config) (See
 		if err := identityBatch.add(identityID, "local", uniqueName("bench-subject", cfg.Seed.Marker, botIdx), fmt.Sprintf("Bench Identity %d", botIdx), markerJSON, now, now); err != nil {
 			return SeedCatalog{}, err
 		}
-		if err := botBatch.add(botID, userID, uniqueBotName(cfg.Seed.Marker, botIdx), fmt.Sprintf("Bench Bot %d", botIdx), "UTC", markerJSON, now, now); err != nil {
+		if err := botBatch.add(botID, userID, "personal", uniqueBotName(cfg.Seed.Marker, botIdx), fmt.Sprintf("Bench Bot %d", botIdx), "UTC", markerJSON, now, now); err != nil {
 			return SeedCatalog{}, err
 		}
 		for _, batch := range []*copyBatcher{userBatch, identityBatch, botBatch} {
