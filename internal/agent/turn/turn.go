@@ -150,6 +150,7 @@ type ToolApprovalResponse struct {
 	Reason                     string
 	ChatToken                  string
 	SuppressActivePromptAttach bool
+	ResolveOnly                bool
 }
 
 // UserInputResponse resumes a thread's turn deferred on ask_user
@@ -168,6 +169,7 @@ type UserInputResponse struct {
 	Reason                     string
 	ChatToken                  string
 	SuppressActivePromptAttach bool
+	ResolveOnly                bool
 }
 
 // Event is one element of a thread turn's event stream. Payload is the raw JSON

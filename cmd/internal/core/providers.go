@@ -36,6 +36,7 @@ import (
 	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	agenttools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/agent/turn"
 	audiopkg "github.com/memohai/memoh/internal/audio"
@@ -55,6 +56,7 @@ import (
 	pgvectordb "github.com/memohai/memoh/internal/db/pgvector"
 	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
 	dbstore "github.com/memohai/memoh/internal/db/store"
+	"github.com/memohai/memoh/internal/decisionruntime"
 	emailpkg "github.com/memohai/memoh/internal/email"
 	"github.com/memohai/memoh/internal/fetchproviders"
 	"github.com/memohai/memoh/internal/handlers"
@@ -183,6 +185,31 @@ func provideDBQueries(postgresStore *postgresstore.Store) (dbstore.Queries, erro
 		return nil, errors.New("postgres store not configured")
 	}
 	return postgresstore.NewQueriesWithPool(postgresStore.Pool(), postgresStore.SQLC()), nil
+}
+
+func provideSessionRuntime(lc fx.Lifecycle, log *slog.Logger, cfg config.Config) (*sessionruntime.Manager, error) {
+	manager, err := sessionruntime.NewManagerFromConfig(log, cfg.SessionRuntime)
+	if err != nil {
+		return nil, fmt.Errorf("session runtime: %w", err)
+	}
+	lc.Append(sessionRuntimeLifecycleHook(manager))
+	return manager, nil
+}
+
+func sessionRuntimeLifecycleHook(manager *sessionruntime.Manager) fx.Hook {
+	return fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			if err := manager.Start(ctx); err != nil {
+				cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancelCleanup()
+				return errors.Join(err, manager.CloseContext(cleanupCtx))
+			}
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			return manager.CloseContext(ctx)
+		},
+	}
 }
 
 func provideAccountStore(postgresStore *postgresstore.Store) (dbstore.AccountStore, error) {
@@ -996,13 +1023,17 @@ func (a *gatewayAssetLoaderAdapter) AccessPathForGateway(ctx context.Context, bo
 	return strings.TrimSpace(accessPath), nil
 }
 
-// provideTurnService exposes the application service as Channel's only Agent
-// surface. Both chat and discuss turns run directly on the same service.
-func provideTurnService(service *application.Service) turn.Service {
+// provideBaseTurnService exposes the application service as Channel's base
+// Agent surface. Both chat and discuss turns run directly on the same service.
+func provideBaseTurnService(service *application.Service) *application.Service {
 	// The self-hosted runtime binds its DB pool to the singleton team, so
 	// the service fails closed on any other TeamID (turn.ErrTeamNotServed).
 	service.SetAllowedTeam(team.DefaultTeamID)
 	return service
+}
+
+func provideTurnService(base *application.Service, router *decisionruntime.Router) turn.Service {
+	return decisionruntime.NewTurnService(base, router)
 }
 
 // applicationBotPermissionChecker duplicates the Channel module's inbound

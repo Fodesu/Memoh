@@ -83,6 +83,7 @@ func toolApprovalInputFromResponse(in turn.ToolApprovalResponse) ToolApprovalRes
 		Reason:                     in.Reason,
 		ChatToken:                  in.ChatToken,
 		SuppressActivePromptAttach: in.SuppressActivePromptAttach,
+		ResolveOnly:                in.ResolveOnly,
 	}
 }
 
@@ -101,5 +102,6 @@ func userInputInputFromResponse(in turn.UserInputResponse) UserInputResponseInpu
 		Reason:                     in.Reason,
 		ChatToken:                  in.ChatToken,
 		SuppressActivePromptAttach: in.SuppressActivePromptAttach,
+		ResolveOnly:                in.ResolveOnly,
 	}
 }

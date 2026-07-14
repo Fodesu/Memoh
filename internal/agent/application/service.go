@@ -93,6 +93,15 @@ type workspaceTargetResolver interface {
 	ResolveWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error)
 }
 
+type wsStreamResultRunner func(
+	ctx context.Context,
+	req ChatRequest,
+	eventCh chan<- WSStreamEvent,
+	abortCh <-chan struct{},
+	preflight func(context.Context) error,
+	sessionTurnHeld bool,
+) ([]messagepkg.Message, error)
+
 // Service orchestrates chat with the internal agent.
 type Service struct {
 	agent              *native.Agent
@@ -124,6 +133,9 @@ type Service struct {
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
 	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
+	// streamReplacementFn replaces only agent execution while retaining
+	// replacement validation and persistence. Test seam.
+	streamReplacementFn wsStreamResultRunner
 	sessionTurnMu       sync.Mutex
 	sessionTurnRefs     map[string]int // key: "botID:sessionID" → active turn refcount
 	sessionTurnLocks    map[string]*sync.Mutex
@@ -511,6 +523,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 				agentMsg := native.InjectMessage{
 					Text:            msg.Text,
 					HeaderifiedText: msg.HeaderifiedText,
+					Applied:         msg.Applied,
 				}
 				// Inline any image attachments from the injected message so the
 				// model receives them as vision input alongside the text.
@@ -1219,6 +1232,7 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 
 // prepareRunConfig generates the system prompt and appends the user message.
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
+	cfg.TerminalHookAuthority = TerminalHookAuthorityFromContext(ctx)
 	beforePromptContext := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,

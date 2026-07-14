@@ -143,10 +143,15 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	}
 	req.Query = strings.TrimSpace(req.Query)
 	var leadingUser *messagepkg.Message
-	req, leadingUser = s.persistACPLeadingUserMessage(context.WithoutCancel(ctx), req)
+	req, leadingUser, err = s.persistACPLeadingUserMessage(context.WithoutCancel(ctx), req)
+	if err != nil {
+		return err
+	}
 	cleanupLeadingUser := func() {
 		if leadingUser != nil {
-			s.cleanupReplacementMessages(context.WithoutCancel(ctx), []messagepkg.Message{*leadingUser})
+			if cleanupErr := s.cleanupPersistedRound(context.WithoutCancel(ctx), []messagepkg.Message{*leadingUser}); cleanupErr != nil {
+				s.logger.Warn("cleanup ACP leading user message failed", slog.Any("error", cleanupErr))
+			}
 		}
 	}
 	go s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
@@ -164,8 +169,9 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	}()
 
 	var (
-		projectedMu       sync.Mutex
-		projectedStatuses = map[string]string{}
+		projectedMu          sync.Mutex
+		projectedStatuses    = map[string]string{}
+		projectionPersistErr error
 	)
 	recordProjectionStatus := func(ev native.StreamEvent) bool {
 		toolCallID := strings.TrimSpace(ev.ToolCallID)
@@ -202,10 +208,26 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		}
 		return out
 	}
+	projectionError := func() error {
+		projectedMu.Lock()
+		defer projectedMu.Unlock()
+		return projectionPersistErr
+	}
 
 	emit := func(ev native.StreamEvent) {
 		if isACPDecisionProjectionEvent(ev) && recordProjectionStatus(ev) {
-			if !s.persistACPDecisionProjection(context.WithoutCancel(ctx), req, ev) {
+			persisted, persistErr := s.persistACPDecisionProjection(context.WithoutCancel(ctx), req, ev)
+			if persistErr != nil {
+				projectedMu.Lock()
+				if projectionPersistErr == nil {
+					projectionPersistErr = persistErr
+				}
+				projectedMu.Unlock()
+				releaseProjection(ev.ToolCallID)
+				cancel()
+				return
+			}
+			if !persisted {
 				releaseProjection(ev.ToolCallID)
 			}
 		}
@@ -257,15 +279,21 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		ContextMarkdown:       contextMarkdown,
 		RuntimeOwnerAccountID: runtimeOwnerAccountID,
 		ForceFreshRuntime:     req.ForceFreshRuntime,
+		RuntimeGuard:          persistenceGuardFromContext(streamCtx),
 		Sink:                  acpclient.EventSinkFunc(emit),
 	})
+	if persistErr := projectionError(); persistErr != nil {
+		return fmt.Errorf("persist ACP decision projection: %w", persistErr)
+	}
 	if err != nil {
 		s.logger.Error("ACP prompt failed",
 			slog.String("bot_id", req.BotID),
 			slog.String("session_id", req.ThreadID),
 			slog.Any("error", err),
 		)
-		s.cancelPendingACPApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the turn ended before a decision arrived")
+		if cancelErr := s.cancelPendingACPApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the turn ended before a decision arrived"); cancelErr != nil {
+			return cancelErr
+		}
 		var feedbackErr *acpfeedback.Error
 		if errors.As(err, &feedbackErr) {
 			cleanupLeadingUser()
@@ -286,8 +314,8 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		if failureDelta != "" {
 			emit(native.StreamEvent{Type: native.EventTextDelta, Delta: failureDelta})
 		}
-		if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err); err != nil {
-			s.logger.Error("ACP failure persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err); persistErr != nil {
+			return fmt.Errorf("persist failed ACP round: %w", persistErr)
 		}
 		emit(native.StreamEvent{Type: native.EventTextEnd})
 		emit(acpTerminalStreamEvent(native.EventAbort, failedResult))
@@ -299,7 +327,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	result = ensureACPPromptOutput(result)
 	result.Output = filterACPProjectedOutput(result.Output, projected)
 	if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil); err != nil {
-		s.logger.Error("ACP persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+		return fmt.Errorf("persist ACP round: %w", err)
 	}
 	emit(acpTerminalStreamEvent(native.EventEnd, result))
 	return nil
@@ -449,7 +477,7 @@ func ensureACPPromptOutput(result acpclient.PromptResult) acpclient.PromptResult
 
 func acpTerminalStreamEvent(eventType native.StreamEventType, result acpclient.PromptResult) native.StreamEvent {
 	result = ensureACPPromptOutput(result)
-	ev := native.StreamEvent{Type: eventType}
+	ev := native.StreamEvent{Type: eventType, HistoryCommitted: true}
 	if data, err := json.Marshal(result.Output); err == nil {
 		ev.Messages = data
 	}
@@ -569,16 +597,16 @@ func acpDecisionProjectionStatus(ev native.StreamEvent) string {
 	return status
 }
 
-func (s *Service) persistACPLeadingUserMessage(ctx context.Context, req ChatRequest) (ChatRequest, *messagepkg.Message) {
+func (s *Service) persistACPLeadingUserMessage(ctx context.Context, req ChatRequest) (ChatRequest, *messagepkg.Message, error) {
 	if req.UserMessagePersisted || s == nil || s.messageService == nil || strings.TrimSpace(req.BotID) == "" {
-		return req, nil
+		return req, nil, nil
 	}
 	displayText := strings.TrimSpace(req.RawQuery)
 	if displayText == "" {
 		displayText = strings.TrimSpace(req.Query)
 	}
 	if displayText == "" && len(req.Attachments) == 0 {
-		return req, nil
+		return req, nil, nil
 	}
 	contentText := strings.TrimSpace(req.Query)
 	if contentText == "" {
@@ -589,8 +617,7 @@ func (s *Service) persistACPLeadingUserMessage(ctx context.Context, req ChatRequ
 		Content: newTextContent(contentText),
 	})
 	if err != nil {
-		s.logger.Warn("persist ACP leading user message: marshal failed", slog.Any("error", err))
-		return req, nil
+		return req, nil, fmt.Errorf("marshal ACP leading user message: %w", err)
 	}
 	senderChannelIdentityID, senderUserID := s.resolvePersistSenderIDs(ctx, req)
 	sessionMode, runtimeType := s.persistSessionRuntimeSnapshot(ctx, req)
@@ -611,20 +638,16 @@ func (s *Service) persistACPLeadingUserMessage(ctx context.Context, req ChatRequ
 		RuntimeType:             runtimeType,
 	})
 	if err != nil {
-		s.logger.Warn("persist ACP leading user message failed",
-			slog.String("bot_id", req.BotID),
-			slog.String("session_id", req.ThreadID),
-			slog.Any("error", err))
-		return req, nil
+		return req, nil, fmt.Errorf("persist ACP leading user message: %w", err)
 	}
 	req.UserMessagePersisted = true
 	req.PersistedUserMessageID = persisted.ID
-	return req, &persisted
+	return req, &persisted, nil
 }
 
-func (s *Service) persistACPDecisionProjection(ctx context.Context, req ChatRequest, ev native.StreamEvent) bool {
+func (s *Service) persistACPDecisionProjection(ctx context.Context, req ChatRequest, ev native.StreamEvent) (bool, error) {
 	if s == nil || s.messageService == nil || strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
-		return false
+		return false, nil
 	}
 	output := sdkMessagesToModelMessages(acpclient.TranscriptFromEvents([]event.StreamEvent{ev}, ""))
 	sessionMode, runtimeType := s.persistSessionRuntimeSnapshot(ctx, req)
@@ -634,10 +657,7 @@ func (s *Service) persistACPDecisionProjection(ctx context.Context, req ChatRequ
 		}
 		content, err := json.Marshal(msg)
 		if err != nil {
-			s.logger.Warn("persist ACP decision projection: marshal failed",
-				slog.String("tool_call_id", ev.ToolCallID),
-				slog.Any("error", err))
-			return false
+			return false, fmt.Errorf("marshal ACP decision projection for %s: %w", ev.ToolCallID, err)
 		}
 		if _, err := s.messageService.Persist(ctx, messagepkg.PersistInput{
 			BotID:                   req.BotID,
@@ -649,16 +669,11 @@ func (s *Service) persistACPDecisionProjection(ctx context.Context, req ChatRequ
 			SessionMode:             sessionMode,
 			RuntimeType:             runtimeType,
 		}); err != nil {
-			s.logger.Warn("persist ACP decision projection failed",
-				slog.String("bot_id", req.BotID),
-				slog.String("session_id", req.ThreadID),
-				slog.String("tool_call_id", ev.ToolCallID),
-				slog.Any("error", err))
-			return false
+			return false, err
 		}
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 func filterACPProjectedOutput(messages []sdk.Message, projected map[string]struct{}) []sdk.Message {
@@ -701,23 +716,20 @@ func filterACPProjectedOutput(messages []sdk.Message, projected map[string]struc
 // pool's turn slot guarantees one turn per session), and its waiter is gone -
 // left pending, the persisted card would stay actionable forever and a late
 // approve would flip a row nobody executes.
-func (s *Service) cancelPendingACPApprovals(ctx context.Context, req ChatRequest, reason string) {
+func (s *Service) cancelPendingACPApprovals(ctx context.Context, req ChatRequest, reason string) error {
 	if s == nil || s.toolApproval == nil {
-		return
+		return nil
 	}
 	cancelled, err := s.toolApproval.CancelPendingForSession(ctx, req.BotID, req.ThreadID, reason)
 	if err != nil {
-		s.logger.Warn("cancel pending ACP approvals failed",
-			slog.String("bot_id", req.BotID),
-			slog.String("session_id", req.ThreadID),
-			slog.Any("error", err))
-		return
+		return fmt.Errorf("cancel pending ACP approvals: %w", err)
 	}
 	if len(cancelled) > 0 {
 		s.logger.Info("cancelled pending ACP approvals with their turn",
 			slog.String("session_id", req.ThreadID),
 			slog.Int("count", len(cancelled)))
 	}
+	return nil
 }
 
 func (s *Service) persistACPRound(ctx context.Context, req ChatRequest, agentID, projectPath string, result acpclient.PromptResult, promptErr error) error {

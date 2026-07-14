@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -10,6 +12,7 @@ import (
 
 	attachmentpkg "github.com/memohai/memoh/internal/attachment"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
+	"github.com/memohai/memoh/internal/runtimefence"
 )
 
 func (s *Service) storeRound(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string) error {
@@ -65,7 +68,10 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 		return nil, nil
 	}
 
-	persisted := s.storeMessages(ctx, req, filtered, modelID, opts)
+	persisted, err := s.storeMessages(ctx, req, filtered, modelID, opts)
+	if err != nil {
+		return nil, err
+	}
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
 		go s.storeMemory(context.WithoutCancel(ctx), req, filtered)
 	}
@@ -109,12 +115,12 @@ func (s *Service) StoreRound(ctx context.Context, botID, sessionID, channelIdent
 	return s.storeRound(ctx, req, modelMessages, modelID)
 }
 
-func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) []messagepkg.Message {
+func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) ([]messagepkg.Message, error) {
 	if s.messageService == nil {
-		return nil
+		return nil, errors.New("message service not configured")
 	}
 	if strings.TrimSpace(req.BotID) == "" {
-		return nil
+		return nil, errors.New("bot id is required for message persistence")
 	}
 
 	// Check bot setting for full tool result persistence.
@@ -160,8 +166,7 @@ func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages [
 
 		content, err := json.Marshal(msg)
 		if err != nil {
-			s.logger.Warn("storeMessages: marshal failed", slog.Any("error", err))
-			continue
+			return nil, fmt.Errorf("marshal %s message: %w", msg.Role, err)
 		}
 		messageSenderChannelIdentityID := ""
 		messageSenderUserID := ""
@@ -247,13 +252,53 @@ func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages [
 			SkipHistoryTurn:         req.SkipHistoryTurn,
 		})
 	}
+	replacement := replacementPersistenceFromContext(ctx)
+	_, fenced := runtimefence.FromContext(ctx)
+	if fenced || replacement != nil {
+		roundPersister, ok := s.messageService.(messagepkg.AtomicRoundPersister)
+		if !ok {
+			if replacement != nil {
+				return nil, errors.New("message service does not support atomic replacement persistence")
+			}
+			return nil, errors.New("message service does not support runtime-fenced round persistence")
+		}
+		persistenceOptions := messagepkg.RoundPersistenceOptions{}
+		if replacement != nil {
+			if !replacement.forkAnchorPrepared {
+				forkAnchor, err := s.prepareForkAnchorUpdate(ctx, req.ThreadID, replacement.replacedTailStartMessageID)
+				if err != nil {
+					return nil, fmt.Errorf("prepare replacement fork anchor: %w", err)
+				}
+				replacement.forkAnchor = forkAnchor
+				replacement.forkAnchorPrepared = true
+			}
+			persistenceOptions.Replacement = &messagepkg.TurnReplacement{
+				OldTurnID:        replacement.oldTurnID,
+				RequestMessageID: replacement.requestMessageID,
+				Reason:           replacement.reason,
+			}
+			if replacement.forkAnchor != nil {
+				persistenceOptions.Replacement.SessionMetadata = replacement.forkAnchor.metadata
+			}
+		}
+		persisted, handled, err := roundPersister.PersistRound(ctx, persistInputs, persistenceOptions)
+		if err != nil {
+			return nil, fmt.Errorf("persist atomic message round: %w", err)
+		}
+		if !handled {
+			return nil, errors.New("message service declined atomic round persistence")
+		}
+		if replacement != nil {
+			replacement.atomicCommitted = true
+		}
+		return persisted, nil
+	}
 	if batcher, ok := s.messageService.(messagepkg.ToolTailRoundPersister); ok {
 		if persisted, handled, err := batcher.PersistToolTailRound(ctx, persistInputs); handled || err != nil {
 			if err != nil {
-				s.logger.Warn("persist tool tail round failed", slog.Any("error", err))
-				return nil
+				return nil, fmt.Errorf("persist tool tail round: %w", err)
 			}
-			return persisted
+			return persisted, nil
 		}
 	}
 	return s.persistMessageInputs(ctx, persistInputs, turnRequestMessageID)
@@ -295,7 +340,7 @@ func (s *Service) persistSessionWorkspaceTarget(ctx context.Context, req ChatReq
 	return err
 }
 
-func (s *Service) persistMessageInputs(ctx context.Context, inputs []messagepkg.PersistInput, initialTurnRequestMessageID string) []messagepkg.Message {
+func (s *Service) persistMessageInputs(ctx context.Context, inputs []messagepkg.PersistInput, initialTurnRequestMessageID string) ([]messagepkg.Message, error) {
 	persisted := make([]messagepkg.Message, 0, len(inputs))
 	turnRequestMessageID := strings.TrimSpace(initialTurnRequestMessageID)
 	for _, input := range inputs {
@@ -304,15 +349,31 @@ func (s *Service) persistMessageInputs(ctx context.Context, inputs []messagepkg.
 		}
 		persistedMessage, err := s.messageService.Persist(ctx, input)
 		if err != nil {
-			s.logger.Warn("persist message failed", slog.Any("error", err))
-			continue
+			cleanupErr := s.cleanupPersistedRound(ctx, persisted)
+			return nil, errors.Join(fmt.Errorf("persist %s message: %w", input.Role, err), cleanupErr)
 		}
 		if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !input.SkipHistoryTurn {
 			turnRequestMessageID = persistedMessage.ID
 		}
 		persisted = append(persisted, persistedMessage)
 	}
-	return persisted
+	return persisted, nil
+}
+
+func (s *Service) cleanupPersistedRound(ctx context.Context, persisted []messagepkg.Message) error {
+	ids := make([]string, 0, len(persisted))
+	for _, message := range persisted {
+		if id := strings.TrimSpace(message.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := s.messageService.DeleteByIDs(context.WithoutCancel(ctx), ids); err != nil {
+		return fmt.Errorf("cleanup partially persisted round: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) persistSessionRuntimeSnapshot(ctx context.Context, req ChatRequest) (string, string) {
@@ -589,9 +650,9 @@ func (s *Service) resolvePersistSenderIDs(ctx context.Context, req ChatRequest) 
 // falls back to a bot-wide search.
 // Used by the WebSocket path where attachment ingestion happens after message
 // persistence.
-func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID string, assets []messagepkg.AssetRef) {
+func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID string, assets []messagepkg.AssetRef) error {
 	if s.messageService == nil || len(assets) == 0 || strings.TrimSpace(botID) == "" {
-		return
+		return nil
 	}
 	var (
 		msgs []messagepkg.Message
@@ -609,8 +670,7 @@ func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID strin
 		msgs, err = s.messageService.ListLatest(ctx, botID, anchorSearchWindow)
 	}
 	if err != nil {
-		s.logger.Warn("LinkOutboundAssets: list latest failed", slog.Any("error", err))
-		return
+		return fmt.Errorf("list messages for outbound asset linking: %w", err)
 	}
 
 	latestAssistantID := ""
@@ -621,8 +681,7 @@ func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID strin
 		}
 	}
 	if latestAssistantID == "" {
-		s.logger.Warn("LinkOutboundAssets: no assistant message found", slog.String("bot_id", botID))
-		return
+		return errors.New("no assistant message found for outbound assets")
 	}
 
 	byMessage := map[string][]messagepkg.AssetRef{}
@@ -648,9 +707,10 @@ func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID strin
 			group[i].Ordinal = i
 		}
 		if linkErr := s.messageService.LinkAssets(ctx, id, group); linkErr != nil {
-			s.logger.Warn("LinkOutboundAssets: link failed", slog.Any("error", linkErr))
+			return fmt.Errorf("link outbound assets to message %s: %w", id, linkErr)
 		}
 	}
+	return nil
 }
 
 // findAssistantMessageForToolCall returns the ID of the assistant message

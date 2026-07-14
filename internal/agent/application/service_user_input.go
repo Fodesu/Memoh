@@ -13,6 +13,7 @@ import (
 	"github.com/memohai/memoh/internal/bots"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/runtimefence"
 	"github.com/memohai/memoh/internal/workspace"
 )
 
@@ -49,6 +50,71 @@ type UserInputResponseInput struct {
 	Reason                     string
 	ChatToken                  string
 	SuppressActivePromptAttach bool
+	ResolveOnly                bool
+}
+
+func (s *Service) PrepareUserInputResponse(ctx context.Context, input UserInputResponseInput) (runtimefence.PreservedDecision, error) {
+	return s.prepareUserInputResponseTarget(ctx, input, false)
+}
+
+// PrepareUserInputResponseTarget validates a response and returns its
+// canonical scope even when the decision was already committed. Runtime
+// routers use that scope to replay or reconcile idempotent commands.
+func (s *Service) PrepareUserInputResponseTarget(ctx context.Context, input UserInputResponseInput) (runtimefence.PreservedDecision, error) {
+	return s.prepareUserInputResponseTarget(ctx, input, true)
+}
+
+func (s *Service) prepareUserInputResponseTarget(ctx context.Context, input UserInputResponseInput, includeDecided bool) (runtimefence.PreservedDecision, error) {
+	if s.userInput == nil {
+		return runtimefence.PreservedDecision{}, errors.New("user input service not configured")
+	}
+	target, err := s.userInput.ResolveTarget(ctx, userinput.ResolveInput{
+		BotID:                  input.BotID,
+		SessionID:              input.ThreadID,
+		ExplicitID:             firstNonEmpty(input.ExplicitID, input.UserInputID),
+		ReplyExternalMessageID: input.ReplyExternalMessageID,
+	})
+	if includeDecided && errors.Is(err, userinput.ErrNotFound) {
+		explicitID := firstNonEmpty(input.ExplicitID, input.UserInputID)
+		if getter, ok := s.userInput.(userInputRequestGetter); ok && explicitID != "" {
+			if existing, getErr := getter.Get(ctx, explicitID); getErr == nil {
+				if (strings.TrimSpace(input.BotID) == "" || strings.TrimSpace(input.BotID) == existing.BotID) &&
+					(strings.TrimSpace(input.ThreadID) == "" || strings.TrimSpace(input.ThreadID) == existing.SessionID) {
+					target = existing
+					err = nil
+				}
+			}
+		}
+	}
+	if err != nil {
+		return runtimefence.PreservedDecision{}, err
+	}
+	if err := runtimefence.ValidateScope(ctx, target.BotID, target.SessionID); err != nil {
+		return runtimefence.PreservedDecision{}, err
+	}
+	if userinput.IsACPMCPRequest(target) {
+		if err := s.authorizeACPUserInputResponse(ctx, target, input); err != nil {
+			return runtimefence.PreservedDecision{}, err
+		}
+	}
+	if !input.Canceled {
+		answers := input.Answers
+		if len(answers) == 0 && strings.TrimSpace(input.TextAnswer) != "" {
+			answers, err = userInputAnswersFromText(target.UIPayload, input.TextAnswer)
+			if err != nil {
+				return runtimefence.PreservedDecision{}, err
+			}
+		}
+		if err := userinput.ValidateAnswers(target.UIPayload, answers); err != nil {
+			return runtimefence.PreservedDecision{}, err
+		}
+	}
+	return runtimefence.PreservedDecision{
+		Kind:      runtimefence.DecisionUserInput,
+		ID:        target.ID,
+		BotID:     target.BotID,
+		SessionID: target.SessionID,
+	}, nil
 }
 
 func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseInput, eventCh chan<- WSStreamEvent) error {
@@ -62,6 +128,14 @@ func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseI
 		ReplyExternalMessageID: input.ReplyExternalMessageID,
 	})
 	if err != nil {
+		if input.ResolveOnly && errors.Is(err, userinput.ErrNotFound) {
+			if handled, replayErr := s.reconcileUserInputReplay(ctx, input); handled {
+				return replayErr
+			}
+		}
+		return err
+	}
+	if err := runtimefence.ValidateScope(ctx, target.BotID, target.SessionID); err != nil {
 		return err
 	}
 
@@ -74,7 +148,10 @@ func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseI
 	if !isACPMCP {
 		ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
 	}
-	if isACPMCP && !s.userInput.CanRespond(target) {
+	if isACPMCP && !input.ResolveOnly && !s.userInput.CanRespond(target) {
+		if target.RuntimeFenced {
+			return ErrRuntimeDecisionOwnerUnavailable
+		}
 		if _, err := s.userInput.Cancel(ctx, userinput.CancelInput{
 			RequestID:              target.ID,
 			ActorChannelIdentityID: input.ActorChannelIdentityID,
@@ -125,6 +202,9 @@ func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseI
 		}
 		return err
 	}
+	if input.ResolveOnly {
+		return emitApprovalAck(ctx, eventCh)
+	}
 	if userinput.IsACPMCPRequest(resolved) {
 		// An ACP/MCP waiter is blocked on this request and resumes the run
 		// itself. When this response stream has reattached to the active ACP
@@ -150,6 +230,63 @@ func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseI
 		continueFn = s.storeUserInputResultAndContinue
 	}
 	return continueFn(ctx, resolved, input, toolResult, eventCh)
+}
+
+type userInputRequestGetter interface {
+	Get(context.Context, string) (userinput.Request, error)
+}
+
+func (s *Service) reconcileUserInputReplay(ctx context.Context, input UserInputResponseInput) (bool, error) {
+	getter, ok := s.userInput.(userInputRequestGetter)
+	if !ok {
+		return false, nil
+	}
+	targetID := firstNonEmpty(input.ExplicitID, input.UserInputID)
+	target, err := getter.Get(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, userinput.ErrNotFound) {
+			return false, nil
+		}
+		return true, err
+	}
+	if strings.TrimSpace(target.BotID) != strings.TrimSpace(input.BotID) || strings.TrimSpace(target.SessionID) != strings.TrimSpace(input.ThreadID) {
+		return false, nil
+	}
+	if target.Status == userinput.StatusPending {
+		return false, nil
+	}
+	if err := runtimefence.ValidateScope(ctx, target.BotID, target.SessionID); err != nil {
+		return true, err
+	}
+	if userinput.IsACPMCPRequest(target) {
+		if err := s.authorizeACPUserInputResponse(ctx, target, input); err != nil {
+			return true, err
+		}
+	}
+	answers := input.Answers
+	if len(answers) == 0 && strings.TrimSpace(input.TextAnswer) != "" {
+		answers, err = userInputAnswersFromText(target.UIPayload, input.TextAnswer)
+		if err != nil {
+			return true, err
+		}
+	}
+	matches, err := userinput.ResponseMatches(target, input.Canceled, input.Reason, answers)
+	if err != nil {
+		return true, err
+	}
+	if !matches {
+		return true, userinput.ErrAlreadyDecided
+	}
+	return true, emitApprovalAck(ctx, nil)
+}
+
+// ReconcileUserInputResponse checks whether a ResolveOnly response was
+// already committed. It is read-only and does not require local run control.
+func (s *Service) ReconcileUserInputResponse(ctx context.Context, input UserInputResponseInput) (bool, error) {
+	if s == nil || s.userInput == nil {
+		return false, errors.New("user input service not configured")
+	}
+	return s.reconcileUserInputReplay(ctx, input)
 }
 
 func (s *Service) authorizeACPUserInputResponse(ctx context.Context, target userinput.Request, input UserInputResponseInput) error {
