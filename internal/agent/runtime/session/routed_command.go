@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/memohai/memoh/internal/conversation"
+	chatview "github.com/memohai/memoh/internal/agent/view"
 )
 
 // DispatchActiveCommand routes a response for a UI request embedded in the
@@ -397,7 +397,7 @@ func (m *Manager) projectUserInputCommandDecision(ctx context.Context, handle Ru
 		}
 		for _, message := range run.Messages {
 			if message.UserInput != nil && strings.TrimSpace(message.UserInput.UserInputID) == targetID {
-				return RuntimeDelta{MessageUpserts: []conversation.UIMessage{message}}
+				return RuntimeDelta{MessageUpserts: []chatview.UIMessage{message}}
 			}
 		}
 		return RuntimeDelta{}

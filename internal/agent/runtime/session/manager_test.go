@@ -1434,7 +1434,7 @@ func runRuntimeManagerForcesAbortAfterGraceContract(t *testing.T, suite runtimeB
 			default:
 			}
 		},
-		make(chan conversation.InjectMessage, 1),
+		make(chan turn.InjectMessage, 1),
 	)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
@@ -1481,7 +1481,7 @@ func runRuntimeManagerProjectsUserInputDecisionsContract(t *testing.T, suite run
 	defer sub.Close()
 	_ = waitRuntimeEvent(t, sub.C, func(event Event) bool { return event.Type == EventRuntimeSnapshot })
 
-	if err := owner.StartRun(context.Background(), testBotID, testSessionID, testStreamID, make(chan struct{}, 1), func() {}, make(chan conversation.InjectMessage, 1)); err != nil {
+	if err := owner.StartRun(context.Background(), testBotID, testSessionID, testStreamID, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
 		t.Fatalf("start user input run: %v", err)
 	}
 	handle := requireRunHandle(t, owner, testBotID, testSessionID, testStreamID)
@@ -3059,7 +3059,7 @@ func runRuntimeManagerPublishesLiveAdmissionsContract(t *testing.T, suite runtim
 	}{
 		{
 			name: "ordinary request",
-			admission: RunAdmissionView{RequestUserTurn: &conversation.UITurn{
+			admission: RunAdmissionView{RequestUserTurn: &chatview.UITurn{
 				Role: "user", Text: "new request",
 			}},
 			assertRun: func(t *testing.T, run *CurrentRunView) {
@@ -3072,7 +3072,7 @@ func runRuntimeManagerPublishesLiveAdmissionsContract(t *testing.T, suite runtim
 		{
 			name: "retry replacement",
 			admission: RunAdmissionView{
-				RequestUserTurn: &conversation.UITurn{Role: "user", Text: "retry request"},
+				RequestUserTurn: &chatview.UITurn{Role: "user", Text: "retry request"},
 				Operation: &RunOperationView{
 					Kind:                 RunOperationRetry,
 					ReplaceFromMessageID: "assistant-old",
@@ -3108,7 +3108,7 @@ func runRuntimeManagerPublishesLiveAdmissionsContract(t *testing.T, suite runtim
 			handle, err := owner.StartRunWithOptions(context.Background(), RunStartOptions{
 				BotID: testBotID, SessionID: sessionID, StreamID: streamID,
 				Admission: tt.admission,
-				AbortCh:   make(chan struct{}, 1), Cancel: func() {}, InjectCh: make(chan conversation.InjectMessage, 1),
+				AbortCh:   make(chan struct{}, 1), Cancel: func() {}, InjectCh: make(chan turn.InjectMessage, 1),
 			})
 			if err != nil {
 				t.Fatalf("start live admission: %v", err)
