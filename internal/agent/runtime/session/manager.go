@@ -1146,6 +1146,9 @@ func (m *Manager) HandleAgentEvent(ctx context.Context, handle RunHandle, event 
 		}
 		if event.Type == native.EventHistoryCommit {
 			run.HistoryCommitted = true
+			if run.RequestUserTurn != nil && strings.TrimSpace(event.HistoryRequestMessageID) != "" {
+				run.RequestUserTurn.ID = strings.TrimSpace(event.HistoryRequestMessageID)
+			}
 		}
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
@@ -1153,7 +1156,7 @@ func (m *Manager) HandleAgentEvent(ctx context.Context, handle RunHandle, event 
 		case native.EventError:
 			delta.Run = runtimeRunPatch(snapshot, false, true, false, false).Run
 		case native.EventHistoryCommit:
-			delta.Run = runtimeRunPatch(snapshot, true, false, false, false).Run
+			delta.CurrentRunView = snapshot.CurrentRunView
 		}
 		return delta
 	})

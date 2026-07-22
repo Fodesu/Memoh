@@ -152,11 +152,13 @@ func (s *Service) PrepareRetryLatestMessageWS(ctx context.Context, input RetryLa
 	if err != nil {
 		return PreparedReplacementWS{}, err
 	}
-	if !strings.EqualFold(target.Role, "assistant") {
-		return PreparedReplacementWS{}, errors.New("only latest assistant messages can be retried")
+	targetRole := strings.ToLower(strings.TrimSpace(target.Role))
+	userOnlyTurn := targetRole == "user" && strings.TrimSpace(turn.RequestMessageID) == target.ID && strings.TrimSpace(turn.AssistantMessageID) == ""
+	if targetRole != "assistant" && !userOnlyTurn {
+		return PreparedReplacementWS{}, errors.New("only latest assistant messages or interrupted user-only turns can be retried")
 	}
 	if err := s.ensureLatestVisibleTurn(ctx, sessionID, turn.ID); err != nil {
-		return PreparedReplacementWS{}, errors.New("only the latest assistant message can be retried")
+		return PreparedReplacementWS{}, errors.New("only the latest turn can be retried")
 	}
 	requestMessageID := strings.TrimSpace(turn.RequestMessageID)
 	if requestMessageID == "" {
@@ -179,6 +181,7 @@ func (s *Service) PrepareRetryLatestMessageWS(ctx context.Context, input RetryLa
 		ChatID:                       strings.TrimSpace(input.BotID),
 		ThreadID:                     sessionID,
 		StreamID:                     strings.TrimSpace(input.StreamID),
+		ExternalMessageID:            strings.TrimSpace(input.StreamID),
 		UserID:                       strings.TrimSpace(input.ActorUserID),
 		SourceChannelIdentityID:      strings.TrimSpace(input.ActorChannelIdentityID),
 		ConversationType:             turnpkg.ConversationTypePrivate,
@@ -255,6 +258,7 @@ func (s *Service) PrepareEditLatestMessageWS(ctx context.Context, input EditLate
 		ChatID:                       strings.TrimSpace(input.BotID),
 		ThreadID:                     sessionID,
 		StreamID:                     strings.TrimSpace(input.StreamID),
+		ExternalMessageID:            strings.TrimSpace(input.StreamID),
 		UserID:                       strings.TrimSpace(input.ActorUserID),
 		SourceChannelIdentityID:      strings.TrimSpace(input.ActorChannelIdentityID),
 		ConversationType:             turnpkg.ConversationTypePrivate,

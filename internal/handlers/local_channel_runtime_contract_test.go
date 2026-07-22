@@ -1487,6 +1487,7 @@ func TestLocalChannelHandleWebSocketReplacementCommandsUseRuntimeProtocolAfterSu
 			}
 
 			var operation *sessionruntime.RunOperationView
+			var requestUserTurn *conversation.UITurn
 			deadline := time.Now().Add(2 * time.Second)
 			for {
 				if err := client.SetReadDeadline(deadline); err != nil {
@@ -1508,8 +1509,13 @@ func TestLocalChannelHandleWebSocketReplacementCommandsUseRuntimeProtocolAfterSu
 				if err := json.Unmarshal(data, &event); err != nil {
 					t.Fatalf("decode runtime event: %v", err)
 				}
-				if run := runtimeDeltaCurrentRun(event); run != nil && run.Operation != nil {
-					operation = run.Operation
+				if run := runtimeDeltaCurrentRun(event); run != nil {
+					if run.Operation != nil {
+						operation = run.Operation
+					}
+					if run.RequestUserTurn != nil {
+						requestUserTurn = run.RequestUserTurn
+					}
 				}
 				if runtimeDeltaRunStatus(event) == sessionruntime.RunStatusCompleted {
 					break
@@ -1517,6 +1523,9 @@ func TestLocalChannelHandleWebSocketReplacementCommandsUseRuntimeProtocolAfterSu
 			}
 			if operation == nil || operation.Kind != tt.wantKind || operation.ReplaceFromMessageID != tt.wantReplaceFrom {
 				t.Fatalf("runtime operation = %#v", operation)
+			}
+			if requestUserTurn == nil || requestUserTurn.ExternalMessageID != tt.command["stream_id"] {
+				t.Fatalf("runtime request user turn = %#v", requestUserTurn)
 			}
 			if tt.wantReplacement != "" && (operation.ReplacementUserTurn == nil || operation.ReplacementUserTurn.Text != tt.wantReplacement) {
 				t.Fatalf("replacement user turn = %#v", operation.ReplacementUserTurn)
