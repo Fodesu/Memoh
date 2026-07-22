@@ -2947,8 +2947,8 @@ func runRuntimeManagerRejectsQueuedSteerOnAgentTerminalContract(t *testing.T, su
 		event      native.StreamEvent
 		wantStatus string
 	}{
-		{name: "end", event: native.StreamEvent{Type: native.EventAgentEnd, HistoryCommitted: true}, wantStatus: RunStatusCompleted},
-		{name: "abort", event: native.StreamEvent{Type: native.EventAgentAbort, HistoryCommitted: true}, wantStatus: RunStatusAborted},
+		{name: "end", event: native.StreamEvent{Type: native.EventAgentEnd, HistoryCommitted: true, HistoryAssistantID: "assistant-message-id"}, wantStatus: RunStatusCompleted},
+		{name: "abort", event: native.StreamEvent{Type: native.EventAgentAbort, HistoryCommitted: true, HistoryAssistantID: "assistant-message-id"}, wantStatus: RunStatusAborted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager := testRuntimeManager(t, suite.newBackend(t), "owner-agent-terminal-steer-"+tc.name)
@@ -2989,6 +2989,9 @@ func runRuntimeManagerRejectsQueuedSteerOnAgentTerminalContract(t *testing.T, su
 			if !snapshot.CurrentRunView.HistoryCommitted {
 				t.Fatalf("agent-terminal run = %#v, want committed history", snapshot.CurrentRunView)
 			}
+			if snapshot.CurrentRunView.HistoryAssistantID != "assistant-message-id" {
+				t.Fatalf("agent-terminal run = %#v, want canonical assistant identity", snapshot.CurrentRunView)
+			}
 			if snapshot.CurrentRunView.Steer.Error != steerRunFinishedError {
 				t.Fatalf("agent-terminal steer error = %q", snapshot.CurrentRunView.Steer.Error)
 			}
@@ -3000,6 +3003,9 @@ func runRuntimeManagerRejectsQueuedSteerOnAgentTerminalContract(t *testing.T, su
 			}
 			if event.Delta.Run.HistoryCommitted == nil || !*event.Delta.Run.HistoryCommitted {
 				t.Fatalf("agent-terminal delta = %#v, want committed history", event.Delta)
+			}
+			if event.Delta.Run.HistoryAssistantID == nil || *event.Delta.Run.HistoryAssistantID != "assistant-message-id" {
+				t.Fatalf("agent-terminal delta = %#v, want canonical assistant identity", event.Delta)
 			}
 		})
 	}

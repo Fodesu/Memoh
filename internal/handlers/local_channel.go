@@ -2735,7 +2735,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					return sessionruntime.RunAdmissionView{}, err
 				}
 				return sessionruntime.RunAdmissionView{
-					RequestUserTurn: flow.RuntimeRequestUserTurn(prepared.Request, time.Now().UTC()),
+					RequestUserTurn: application.RuntimeRequestUserTurn(prepared.Request, time.Now().UTC()),
 					Operation:       runtimeOperationFromPreparedReplacement(prepared),
 				}, nil
 			},
@@ -2831,7 +2831,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					return sessionruntime.RunAdmissionView{}, attachmentErr
 				}
 				return sessionruntime.RunAdmissionView{
-					RequestUserTurn: flow.RuntimeRequestUserTurn(prepared.Request, time.Now().UTC()),
+					RequestUserTurn: application.RuntimeRequestUserTurn(prepared.Request, time.Now().UTC()),
 					Operation:       runtimeOperationFromPreparedReplacement(prepared),
 				}, nil
 			},

@@ -196,7 +196,7 @@ func richActiveRunAgentContractScript() []native.StreamEvent {
 				},
 			},
 		},
-		{Type: native.EventAgentEnd, HistoryCommitted: true},
+		{Type: native.EventAgentEnd, HistoryCommitted: true, HistoryAssistantID: "assistant-runtime-rich"},
 	}
 }
 
@@ -1487,7 +1487,7 @@ func TestLocalChannelHandleWebSocketReplacementCommandsUseRuntimeProtocolAfterSu
 			}
 
 			var operation *sessionruntime.RunOperationView
-			var requestUserTurn *conversation.UITurn
+			var requestUserTurn *chatview.UITurn
 			deadline := time.Now().Add(2 * time.Second)
 			for {
 				if err := client.SetReadDeadline(deadline); err != nil {
