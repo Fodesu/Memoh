@@ -1101,7 +1101,7 @@ func (m *Manager) HandleAgentEvent(ctx context.Context, handle RunHandle, event 
 
 	var messages []chatview.UIMessage
 	switch event.Type {
-	case native.EventAgentStart:
+	case native.EventAgentStart, native.EventHistoryCommit:
 	case native.EventError:
 	default:
 		messages = ctrl.converter.HandleEvent(chatview.UIStreamEventFromAgentEvent(event))
@@ -1144,10 +1144,16 @@ func (m *Manager) HandleAgentEvent(ctx context.Context, handle RunHandle, event 
 			}
 			setRuntimeRunError(run, RunStatusErrored)
 		}
+		if event.Type == native.EventHistoryCommit {
+			run.HistoryCommitted = true
+		}
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
-		if event.Type == native.EventError {
+		switch event.Type {
+		case native.EventError:
 			delta.Run = runtimeRunPatch(snapshot, false, true, false, false).Run
+		case native.EventHistoryCommit:
+			delta.Run = runtimeRunPatch(snapshot, true, false, false, false).Run
 		}
 		return delta
 	})

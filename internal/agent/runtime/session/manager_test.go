@@ -1380,6 +1380,10 @@ func runCommonRuntimeManagerContract(t *testing.T, suite runtimeBackendContractS
 		t.Parallel()
 		runRuntimeManagerRejectsQueuedSteerOnAgentTerminalContract(t, suite)
 	})
+	t.Run("publishes history commit before terminal finalization", func(t *testing.T) {
+		t.Parallel()
+		runRuntimeManagerPublishesHistoryCommitContract(t, suite)
+	})
 	t.Run("recovers subscriber buffer overflow", func(t *testing.T) {
 		t.Parallel()
 		runRuntimeManagerSignalsSubscriberOverflowContract(t, suite)
@@ -1457,8 +1461,8 @@ func runRuntimeManagerForcesAbortAfterGraceContract(t *testing.T, suite runtimeB
 	if manager.localControlForHandle(handle) != nil {
 		t.Fatal("forced abort retained local owner control")
 	}
-	if _, err := manager.HandleAgentEvent(context.Background(), handle, agentpkg.StreamEvent{
-		Type: agentpkg.EventTextDelta, Delta: "late output",
+	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+		Type: native.EventTextDelta, Delta: "late output",
 	}); !errors.Is(err, ErrRunOwnershipLost) {
 		t.Fatalf("late runner event error = %v, want ErrRunOwnershipLost", err)
 	}
@@ -1486,8 +1490,8 @@ func runRuntimeManagerProjectsUserInputDecisionsContract(t *testing.T, suite run
 	}
 	handle := requireRunHandle(t, owner, testBotID, testSessionID, testStreamID)
 	for _, targetID := range []string{"input-submit", "input-cancel", "input-failed"} {
-		if _, err := owner.HandleAgentEvent(context.Background(), handle, agentpkg.StreamEvent{
-			Type: agentpkg.EventUserInputRequest, ToolName: "ask_user", ToolCallID: "call-" + targetID,
+		if _, err := owner.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+			Type: native.EventUserInputRequest, ToolName: "ask_user", ToolCallID: "call-" + targetID,
 			UserInputID: targetID, Status: "pending",
 		}); err != nil {
 			t.Fatalf("record %s: %v", targetID, err)
@@ -1580,6 +1584,39 @@ func runRuntimeManagerProjectsUserInputDecisionsContract(t *testing.T, suite run
 	}
 	if calls := handlerCalls.Load(); calls != 3 {
 		t.Fatalf("command handler calls = %d, want 3", calls)
+	}
+}
+
+func runRuntimeManagerPublishesHistoryCommitContract(t *testing.T, suite runtimeBackendContractSuite) {
+	t.Helper()
+	manager := testRuntimeManager(t, suite.newBackend(t), "owner-history-commit")
+	sub, err := manager.Subscribe(context.Background(), testBotID, testSessionID)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer sub.Close()
+	handle, err := startTestRunHandle(context.Background(), manager, testBotID, testSessionID, testStreamID, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1))
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+		Type:             native.EventHistoryCommit,
+		HistoryCommitted: true,
+	}); err != nil {
+		t.Fatalf("handle history commit: %v", err)
+	}
+	snapshot, err := manager.Snapshot(context.Background(), testBotID, testSessionID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snapshot.CurrentRunView == nil || !snapshot.CurrentRunView.HistoryCommitted || snapshot.CurrentRunView.CanonicalReady || snapshot.CurrentRunView.Status != RunStatusRunning {
+		t.Fatalf("history-committed running snapshot = %#v", snapshot.CurrentRunView)
+	}
+	event := waitRuntimeEvent(t, sub.C, func(event Event) bool {
+		return event.Delta != nil && event.Delta.Run != nil && event.Delta.Run.HistoryCommitted != nil && *event.Delta.Run.HistoryCommitted
+	})
+	if event.Delta.Run.CanonicalReady == nil || *event.Delta.Run.CanonicalReady {
+		t.Fatalf("history commit delta = %#v, want canonical_ready=false", event.Delta)
 	}
 }
 
@@ -3126,8 +3163,8 @@ func runRuntimeManagerPublishesLiveAdmissionsContract(t *testing.T, suite runtim
 				tt.assertRun(t, run)
 			}
 
-			if _, err := owner.HandleAgentEvent(context.Background(), handle, agentpkg.StreamEvent{
-				Type: agentpkg.EventTextDelta, Delta: "shared output",
+			if _, err := owner.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+				Type: native.EventTextDelta, Delta: "shared output",
 			}); err != nil {
 				t.Fatalf("publish live admission output: %v", err)
 			}

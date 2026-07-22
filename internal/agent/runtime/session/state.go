@@ -12,7 +12,7 @@ import (
 
 func runtimeDeltaForAgentEvent(event native.StreamEvent, messages []chatview.UIMessage) (RuntimeDelta, bool) {
 	switch event.Type {
-	case native.EventAgentEnd, native.EventAgentAbort, native.EventError:
+	case native.EventAgentEnd, native.EventAgentAbort, native.EventError, native.EventHistoryCommit:
 		return RuntimeDelta{MessageUpserts: append([]chatview.UIMessage(nil), messages...)}, true
 	case native.EventRetry:
 		return RuntimeDelta{ResetMessages: true}, true
