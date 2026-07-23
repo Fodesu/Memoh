@@ -145,6 +145,18 @@ type CurrentRunView struct {
 	Error               string               `json:"error,omitempty"`
 	Steer               *SteerState          `json:"steer,omitempty"`
 	Operation           *RunOperationView    `json:"operation,omitempty"`
+	// ResolvedDecision anchors a deferred ask_user / tool-approval continuation
+	// to the parent interactive turn so every subscriber can close the pending
+	// UI and reuse that assistant turn instead of opening a second one.
+	ResolvedDecision *ResolvedDecisionView `json:"resolved_decision,omitempty"`
+}
+
+// ResolvedDecisionView is the committed parent decision that caused a
+// continuation run to start when no live owner could accept the command.
+type ResolvedDecisionView struct {
+	Kind   string `json:"kind" validate:"required" enums:"user_input,tool_approval"`
+	ID     string `json:"id" validate:"required"`
+	Status string `json:"status" validate:"required" enums:"submitted,canceled,approved,rejected"`
 }
 
 // RunAdmissionView is the canonical state published when a reserved run
@@ -152,8 +164,9 @@ type CurrentRunView struct {
 // a durable history row; ordinary sends still persist user + assistant
 // together when the run reaches a terminal result.
 type RunAdmissionView struct {
-	RequestUserTurn *chatview.UITurn
-	Operation       *RunOperationView
+	RequestUserTurn  *chatview.UITurn
+	Operation        *RunOperationView
+	ResolvedDecision *ResolvedDecisionView
 }
 
 // RunStartOptions contains the complete admission and owner-local control

@@ -99,8 +99,10 @@ type localChannelAgentService interface {
 	PrepareRetryLatestMessageWS(ctx context.Context, input application.RetryLatestMessageInput) (application.PreparedReplacementWS, error)
 	PrepareToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
 	PrepareUserInputResponseTarget(ctx context.Context, input application.UserInputResponseInput) (runtimefence.PreservedDecision, error)
-	RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, eventCh chan<- application.WSStreamEvent) error
-	RespondUserInput(ctx context.Context, input turn.UserInputResponse, eventCh chan<- application.WSStreamEvent) error
+	CommitToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error)
+	ContinueCommittedToolApprovalResponse(ctx context.Context, committed application.CommittedToolApprovalResponse, eventCh chan<- application.WSStreamEvent) error
+	CommitUserInputResponse(ctx context.Context, input application.UserInputResponseInput) (application.CommittedUserInputResponse, error)
+	ContinueCommittedUserInputResponse(ctx context.Context, committed application.CommittedUserInputResponse, eventCh chan<- application.WSStreamEvent) error
 	DeferSessionCompaction(botID, sessionID, streamID string) func()
 	SessionTurnActive(botID, sessionID string) bool
 	StreamChatWS(ctx context.Context, req application.ChatRequest, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}) error
@@ -1721,6 +1723,22 @@ func (h *LocalChannelHandler) routeWSRuntimeResponse(baseCtx, connCtx context.Co
 			dispatchErr = nil
 		}
 		if !handled {
+			// A deferred StartRun cannot replace an already-active parent run. Doing so
+			// surfaces as session_runtime.run_failed on the sideband stream_id and breaks
+			// approval / ask_user continuation rendering. Fail closed as a command error.
+			if snapshot, snapErr := h.sessionRuntime.Snapshot(baseCtx, botID, sessionID); snapErr == nil {
+				if run := snapshot.CurrentRunView; run != nil {
+					status := strings.ToLower(strings.TrimSpace(run.Status))
+					if status == sessionruntime.RunStatusAdmitting ||
+						status == sessionruntime.RunStatusRunning ||
+						status == sessionruntime.RunStatusAborting {
+						if connCtx.Err() == nil {
+							h.sendWSSidebandResult(connCtx, writer, msg, actionID, sessionruntime.ErrCommandTargetNotActive)
+						}
+						return
+					}
+				}
+			}
 			deferred()
 			return
 		}
@@ -2289,13 +2307,23 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				}
 				suppressActivePromptAttach := activeStreams.hasSession(sessionID)
 				releaseWSMessageTurn := h.enterWSMessageTurn(botID, sessionID, streamID)
-				h.startWSStreamWithAdmissionBuilder(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws approval stream error", releaseWSMessageTurn, runtimefence.ActivationOptions{PreserveDecision: &preserved}, func(context.Context) (sessionruntime.RunAdmissionView, error) {
-					return sessionruntime.RunAdmissionView{}, nil
+				approvalStatus := sessionruntime.ApprovalDecisionStatus(responseInput.Decision)
+				var committed application.CommittedToolApprovalResponse
+				h.startWSStreamWithAdmissionBuilder(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws approval stream error", releaseWSMessageTurn, runtimefence.ActivationOptions{PreserveDecision: &preserved}, func(ctx context.Context) (sessionruntime.RunAdmissionView, error) {
+					if approvalStatus == "" {
+						return sessionruntime.RunAdmissionView{}, nil
+					}
+					input := responseInput
+					input.SuppressActivePromptAttach = suppressActivePromptAttach
+					var commitErr error
+				committed, commitErr = h.agentService.CommitToolApprovalResponse(ctx, input)
+					if commitErr != nil {
+						return sessionruntime.RunAdmissionView{}, commitErr
+					}
+					return sessionruntime.ResolvedDecisionAdmission(preserved.Kind, preserved.ID, approvalStatus), nil
 				},
 					func(ctx context.Context, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
-						input := responseInput
-						input.SuppressActivePromptAttach = suppressActivePromptAttach
-						return h.agentService.RespondToolApproval(ctx, turnToolApprovalResponse(input), eventCh)
+						return h.agentService.ContinueCommittedToolApprovalResponse(ctx, committed, eventCh)
 					},
 				)
 			}
@@ -2344,13 +2372,23 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				}
 				suppressActivePromptAttach := activeStreams.hasSession(sessionID)
 				releaseWSMessageTurn := h.enterWSMessageTurn(botID, sessionID, streamID)
-				h.startWSStreamWithAdmissionBuilder(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws user input stream error", releaseWSMessageTurn, runtimefence.ActivationOptions{PreserveDecision: &preserved}, func(context.Context) (sessionruntime.RunAdmissionView, error) {
-					return sessionruntime.RunAdmissionView{}, nil
+				userInputStatus := "submitted"
+				if responseInput.Canceled {
+					userInputStatus = "canceled"
+				}
+				var committed application.CommittedUserInputResponse
+				h.startWSStreamWithAdmissionBuilder(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws user input stream error", releaseWSMessageTurn, runtimefence.ActivationOptions{PreserveDecision: &preserved}, func(ctx context.Context) (sessionruntime.RunAdmissionView, error) {
+					input := responseInput
+					input.SuppressActivePromptAttach = suppressActivePromptAttach
+					var commitErr error
+				committed, commitErr = h.agentService.CommitUserInputResponse(ctx, input)
+					if commitErr != nil {
+						return sessionruntime.RunAdmissionView{}, commitErr
+					}
+					return sessionruntime.ResolvedDecisionAdmission(preserved.Kind, preserved.ID, userInputStatus), nil
 				},
 					func(ctx context.Context, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
-						input := responseInput
-						input.SuppressActivePromptAttach = suppressActivePromptAttach
-						return h.agentService.RespondUserInput(ctx, turnUserInputResponse(input), eventCh)
+						return h.agentService.ContinueCommittedUserInputResponse(ctx, committed, eventCh)
 					},
 				)
 			}

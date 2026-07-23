@@ -28,6 +28,29 @@ const (
 
 var runtimeFixtureStartTime = time.Date(2026, time.July, 10, 0, 0, 0, 0, time.UTC)
 
+func readRuntimeWireEventUntil(t *testing.T, client *websocket.Conn, pred func(runtimeWireEvent) bool) runtimeWireEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var events []runtimeWireEvent
+	for {
+		if err := client.SetReadDeadline(deadline); err != nil {
+			t.Fatalf("set read deadline: %v", err)
+		}
+		_, raw, err := client.ReadMessage()
+		if err != nil {
+			t.Fatalf("read runtime wire event: %v; events=%#v", err, events)
+		}
+		var event runtimeWireEvent
+		if err := json.Unmarshal(raw, &event); err != nil {
+			t.Fatalf("decode runtime wire event: %v; raw=%s", err, raw)
+		}
+		events = append(events, event)
+		if pred(event) {
+			return event
+		}
+	}
+}
+
 func committedAbortAgentContractScript() []agentpkg.StreamEvent {
 	return []agentpkg.StreamEvent{
 		{Type: agentpkg.EventAgentStart},

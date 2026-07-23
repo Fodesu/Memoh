@@ -31,6 +31,10 @@ type resolver interface {
 	ActivateRuntimePersistenceFenceWithOptions(context.Context, runtimefence.Fence, runtimefence.ActivationOptions) error
 	PrepareToolApprovalResponseTarget(context.Context, application.ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
 	PrepareUserInputResponseTarget(context.Context, application.UserInputResponseInput) (runtimefence.PreservedDecision, error)
+	CommitToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error)
+	ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.WSStreamEvent) error
+	CommitUserInputResponse(context.Context, application.UserInputResponseInput) (application.CommittedUserInputResponse, error)
+	ContinueCommittedUserInputResponse(context.Context, application.CommittedUserInputResponse, chan<- application.WSStreamEvent) error
 	ReconcileToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (bool, error)
 	ReconcileUserInputResponse(context.Context, application.UserInputResponseInput) (bool, error)
 	DeferSessionCompaction(botID, sessionID, streamID string) func()
@@ -38,8 +42,10 @@ type resolver interface {
 
 // CommandResolver applies owner-local decision commands after runtime routing.
 type CommandResolver interface {
-	RespondToolApproval(context.Context, turn.ToolApprovalResponse, chan<- application.WSStreamEvent) error
-	RespondUserInput(context.Context, turn.UserInputResponse, chan<- application.WSStreamEvent) error
+	CommitToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error)
+	ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.WSStreamEvent) error
+	CommitUserInputResponse(context.Context, application.UserInputResponseInput) (application.CommittedUserInputResponse, error)
+	ContinueCommittedUserInputResponse(context.Context, application.CommittedUserInputResponse, chan<- application.WSStreamEvent) error
 }
 
 type commandReconciler interface {
@@ -108,10 +114,15 @@ func (r *Router) RespondToolApproval(ctx context.Context, input application.Tool
 	if err != nil {
 		return fmt.Errorf("encode tool approval response: %w", err)
 	}
+	var committed application.CommittedToolApprovalResponse
 	return r.routeOrContinue(ctx, prepared, sessionruntime.CommandToolApprovalResponse, payload, output, func(reconcileCtx context.Context) (bool, error) {
 		return r.resolver.ReconcileToolApprovalResponse(reconcileCtx, routed)
+	}, func(commitCtx context.Context) error {
+		var commitErr error
+		committed, commitErr = r.resolver.CommitToolApprovalResponse(commitCtx, input)
+		return commitErr
 	}, func(runCtx context.Context, eventCh chan<- application.WSStreamEvent) error {
-		return r.resolver.RespondToolApproval(runCtx, turnToolApprovalResponse(input), eventCh)
+		return r.resolver.ContinueCommittedToolApprovalResponse(runCtx, committed, eventCh)
 	})
 }
 
@@ -137,10 +148,15 @@ func (r *Router) RespondUserInput(ctx context.Context, input application.UserInp
 	if err != nil {
 		return fmt.Errorf("encode user input response: %w", err)
 	}
+	var committed application.CommittedUserInputResponse
 	return r.routeOrContinue(ctx, prepared, sessionruntime.CommandUserInputResponse, payload, output, func(reconcileCtx context.Context) (bool, error) {
 		return r.resolver.ReconcileUserInputResponse(reconcileCtx, routed)
+	}, func(commitCtx context.Context) error {
+		var commitErr error
+		committed, commitErr = r.resolver.CommitUserInputResponse(commitCtx, input)
+		return commitErr
 	}, func(runCtx context.Context, eventCh chan<- application.WSStreamEvent) error {
-		return r.resolver.RespondUserInput(runCtx, turnUserInputResponse(input), eventCh)
+		return r.resolver.ContinueCommittedUserInputResponse(runCtx, committed, eventCh)
 	})
 }
 
@@ -199,9 +215,11 @@ func questionAnswersToTurn(in []userinput.QuestionAnswer) []turn.QuestionAnswer 
 
 type continuation func(context.Context, chan<- application.WSStreamEvent) error
 
+type decisionCommit func(context.Context) error
+
 type decisionReconciler func(context.Context) (bool, error)
 
-func (r *Router) routeOrContinue(ctx context.Context, prepared runtimefence.PreservedDecision, commandType string, payload []byte, output chan<- application.WSStreamEvent, reconcile decisionReconciler, run continuation) error {
+func (r *Router) routeOrContinue(ctx context.Context, prepared runtimefence.PreservedDecision, commandType string, payload []byte, output chan<- application.WSStreamEvent, reconcile decisionReconciler, commit decisionCommit, run continuation) error {
 	if strings.TrimSpace(prepared.BotID) == "" || strings.TrimSpace(prepared.SessionID) == "" || strings.TrimSpace(prepared.ID) == "" {
 		return errors.New("prepared decision is missing canonical scope")
 	}
@@ -216,8 +234,11 @@ func (r *Router) routeOrContinue(ctx context.Context, prepared runtimefence.Pres
 			return err
 		}
 	}
-	if r.manager == nil || !r.manager.IsDistributed() {
+	if r.manager == nil {
+		if err := commit(ctx); err != nil {
+			return err
+		}
 		return run(ctx, output)
 	}
-	return r.runDistributedContinuation(ctx, prepared, commandType, payload, output, reconcile, run)
+	return r.runContinuation(ctx, prepared, commandType, payload, output, reconcile, commit, run)
 }

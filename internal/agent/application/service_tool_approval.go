@@ -34,6 +34,113 @@ type ToolApprovalResponseInput struct {
 	ResolveOnly                bool
 }
 
+// CommittedToolApprovalResponse contains a durable approval decision and the
+// owner-local state needed to continue its parent turn.
+type CommittedToolApprovalResponse struct {
+	request      toolapproval.Request
+	input        ToolApprovalResponseInput
+	isACP        bool
+	activePrompt *acpActivePromptSubscription
+}
+
+// CommitToolApprovalResponse durably resolves an approval without executing
+// the tool or starting the agent continuation.
+func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput) (CommittedToolApprovalResponse, error) {
+	if s.toolApproval == nil {
+		return CommittedToolApprovalResponse{}, errors.New("tool approval service not configured")
+	}
+	target, err := s.toolApproval.ResolveTarget(ctx, toolapproval.ResolveInput{
+		BotID:                  input.BotID,
+		SessionID:              input.ThreadID,
+		ExplicitID:             firstNonEmpty(input.ExplicitID, input.ApprovalID),
+		ReplyExternalMessageID: input.ReplyExternalMessageID,
+	})
+	if err != nil {
+		return CommittedToolApprovalResponse{}, err
+	}
+	if err := runtimefence.ValidateScope(ctx, target.BotID, target.SessionID); err != nil {
+		return CommittedToolApprovalResponse{}, err
+	}
+	isACP, err := s.authorizeToolApprovalResponse(ctx, target, input)
+	if err != nil {
+		return CommittedToolApprovalResponse{}, err
+	}
+	if isACP && !s.toolApproval.CanRespond(target) {
+		if target.RuntimeFenced {
+			return CommittedToolApprovalResponse{}, ErrRuntimeDecisionOwnerUnavailable
+		}
+		rejected, rejectErr := s.toolApproval.Reject(ctx, target.ID, "", "tool approval expired: the requesting tool call is no longer waiting")
+		if rejectErr != nil && !errors.Is(rejectErr, toolapproval.ErrAlreadyDecided) {
+			return CommittedToolApprovalResponse{}, rejectErr
+		}
+		if rejectErr == nil {
+			target = rejected
+		}
+		return CommittedToolApprovalResponse{request: target, input: input, isACP: true}, nil
+	}
+
+	var activePrompt *acpActivePromptSubscription
+	if isACP && !input.SuppressActivePromptAttach {
+		activePrompt, _ = s.subscribeACPActivePrompt(
+			firstNonEmpty(target.BotID, input.BotID),
+			firstNonEmpty(target.SessionID, input.ThreadID),
+		)
+	}
+	switch strings.ToLower(strings.TrimSpace(input.Decision)) {
+	case "approve", "approved":
+		target, err = s.toolApproval.Approve(ctx, target.ID, input.ActorChannelIdentityID, input.Reason)
+	case "reject", "rejected":
+		target, err = s.toolApproval.Reject(ctx, target.ID, input.ActorChannelIdentityID, input.Reason)
+	default:
+		err = fmt.Errorf("unknown tool approval decision %q", input.Decision)
+	}
+	if err != nil {
+		if activePrompt != nil {
+			activePrompt.release()
+		}
+		return CommittedToolApprovalResponse{}, err
+	}
+	return CommittedToolApprovalResponse{request: target, input: input, isACP: isACP, activePrompt: activePrompt}, nil
+}
+
+// ContinueCommittedToolApprovalResponse executes the approved tool, when
+// applicable, and resumes the parent turn without updating the decision again.
+func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
+	target := committed.request
+	if strings.TrimSpace(target.ID) == "" {
+		return errors.New("committed tool approval response is missing its request")
+	}
+	if committed.isACP {
+		if committed.activePrompt != nil {
+			return forwardACPActivePrompt(ctx, committed.activePrompt, eventCh, acpActivePromptForwardOptions{
+				SkipToolCallID: target.ToolCallID,
+				SkipApprovalID: target.ID,
+			})
+		}
+		return emitApprovalAck(ctx, eventCh)
+	}
+	ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
+	var toolResult sdk.ToolResultPart
+	var err error
+	switch target.Status {
+	case toolapproval.StatusApproved:
+		toolResult, err = s.executeApprovedTool(ctx, target, committed.input)
+	case toolapproval.StatusRejected:
+		toolResult = sdk.ToolResultPart{
+			ToolCallID: target.ToolCallID,
+			ToolName:   target.ToolName,
+			Result:     s.limitToolResultText(rejectedToolResultText(committed.input.Reason), target.ToolName),
+			IsError:    true,
+		}
+	default:
+		return fmt.Errorf("committed tool approval has unexpected status %q", target.Status)
+	}
+	if err != nil {
+		return err
+	}
+	return s.storeToolResultAndContinue(ctx, target, committed.input, toolResult, eventCh)
+}
+
 func (s *Service) PrepareToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput) (runtimefence.PreservedDecision, error) {
 	return s.prepareToolApprovalResponseTarget(ctx, input, false)
 }

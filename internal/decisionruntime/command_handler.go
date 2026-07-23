@@ -34,13 +34,21 @@ func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver
 			if err != nil {
 				return err
 			}
-			return commandResolver.RespondToolApproval(ctx, turnToolApprovalResponse(input), nil)
+			committed, err := commandResolver.CommitToolApprovalResponse(ctx, input)
+			if err != nil {
+				return err
+			}
+			return commandResolver.ContinueCommittedToolApprovalResponse(ctx, committed, nil)
 		case sessionruntime.CommandUserInputResponse:
 			input, err := decodeUserInputCommand(command)
 			if err != nil {
 				return err
 			}
-			return commandResolver.RespondUserInput(ctx, turnUserInputResponse(input), nil)
+			committed, err := commandResolver.CommitUserInputResponse(ctx, input)
+			if err != nil {
+				return err
+			}
+			return commandResolver.ContinueCommittedUserInputResponse(ctx, committed, nil)
 		default:
 			return fmt.Errorf("unsupported runtime command %q", command.Type)
 		}

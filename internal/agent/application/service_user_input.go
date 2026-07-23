@@ -54,6 +54,123 @@ type UserInputResponseInput struct {
 	ResolveOnly                bool
 }
 
+// CommittedUserInputResponse contains the durable result of an ask_user
+// response and the owner-local state needed to continue its parent turn.
+// The decision is already terminal when this value is returned.
+type CommittedUserInputResponse struct {
+	request      userinput.Request
+	input        UserInputResponseInput
+	activePrompt *acpActivePromptSubscription
+}
+
+// CommitUserInputResponse durably resolves an ask_user decision without
+// starting its agent continuation. Runtime admission uses this split so the
+// terminal decision is published before any continuation event.
+func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputResponseInput) (CommittedUserInputResponse, error) {
+	if s.userInput == nil {
+		return CommittedUserInputResponse{}, errors.New("user input service not configured")
+	}
+	target, err := s.userInput.ResolveTarget(ctx, userinput.ResolveInput{
+		BotID:                  input.BotID,
+		SessionID:              input.ThreadID,
+		ExplicitID:             firstNonEmpty(input.ExplicitID, input.UserInputID),
+		ReplyExternalMessageID: input.ReplyExternalMessageID,
+	})
+	if err != nil {
+		return CommittedUserInputResponse{}, err
+	}
+	if err := runtimefence.ValidateScope(ctx, target.BotID, target.SessionID); err != nil {
+		return CommittedUserInputResponse{}, err
+	}
+
+	isACPMCP := userinput.IsACPMCPRequest(target)
+	if isACPMCP {
+		if err := s.authorizeACPUserInputResponse(ctx, target, input); err != nil {
+			return CommittedUserInputResponse{}, err
+		}
+	} else {
+		ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
+	}
+	if isACPMCP && !s.userInput.CanRespond(target) {
+		if target.RuntimeFenced {
+			return CommittedUserInputResponse{}, ErrRuntimeDecisionOwnerUnavailable
+		}
+		if _, err := s.userInput.Cancel(ctx, userinput.CancelInput{
+			RequestID:              target.ID,
+			ActorChannelIdentityID: input.ActorChannelIdentityID,
+			Reason:                 "user input expired: the requesting tool call is no longer waiting",
+		}); err != nil && !errors.Is(err, userinput.ErrAlreadyDecided) {
+			return CommittedUserInputResponse{}, err
+		}
+		return CommittedUserInputResponse{request: target, input: input}, nil
+	}
+
+	var activePrompt *acpActivePromptSubscription
+	if isACPMCP && !input.SuppressActivePromptAttach {
+		activePrompt, _ = s.subscribeACPActivePrompt(
+			firstNonEmpty(target.BotID, input.BotID),
+			firstNonEmpty(target.SessionID, input.ThreadID),
+		)
+	}
+
+	var resolved userinput.Request
+	if input.Canceled {
+		resolved, err = s.userInput.Cancel(ctx, userinput.CancelInput{
+			RequestID:              target.ID,
+			ActorChannelIdentityID: input.ActorChannelIdentityID,
+			Reason:                 input.Reason,
+		})
+	} else {
+		answers := input.Answers
+		if len(answers) == 0 && strings.TrimSpace(input.TextAnswer) != "" {
+			answers, err = userInputAnswersFromText(target.UIPayload, input.TextAnswer)
+		}
+		if err == nil {
+			resolved, err = s.userInput.Submit(ctx, userinput.SubmitInput{
+				RequestID:              target.ID,
+				ActorChannelIdentityID: input.ActorChannelIdentityID,
+				Answers:                answers,
+			})
+		}
+	}
+	if err != nil {
+		if activePrompt != nil {
+			activePrompt.release()
+		}
+		return CommittedUserInputResponse{}, err
+	}
+	return CommittedUserInputResponse{request: resolved, input: input, activePrompt: activePrompt}, nil
+}
+
+// ContinueCommittedUserInputResponse resumes the parent turn without
+// resolving the ask_user decision a second time.
+func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, committed CommittedUserInputResponse, eventCh chan<- WSStreamEvent) error {
+	resolved := committed.request
+	if strings.TrimSpace(resolved.ID) == "" {
+		return errors.New("committed user input response is missing its request")
+	}
+	if userinput.IsACPMCPRequest(resolved) {
+		if committed.activePrompt != nil {
+			return forwardACPActivePrompt(ctx, committed.activePrompt, eventCh, acpActivePromptForwardOptions{
+				SkipToolCallID:  resolved.ToolCallID,
+				SkipUserInputID: resolved.ID,
+			})
+		}
+		return emitApprovalAck(ctx, eventCh)
+	}
+	toolResult := sdk.ToolResultPart{
+		ToolCallID: resolved.ToolCallID,
+		ToolName:   resolved.ToolName,
+		Result:     s.limitToolResultValue(resolved.Result, resolved.ToolName),
+		IsError:    false,
+	}
+	continueFn := s.continueUserInputFn
+	if continueFn == nil {
+		continueFn = s.storeUserInputResultAndContinue
+	}
+	return continueFn(ctx, resolved, committed.input, toolResult, eventCh)
+}
+
 func (s *Service) PrepareUserInputResponse(ctx context.Context, input UserInputResponseInput) (runtimefence.PreservedDecision, error) {
 	return s.prepareUserInputResponseTarget(ctx, input, false)
 }
