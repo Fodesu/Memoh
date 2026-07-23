@@ -21,10 +21,12 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
+	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	"github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	chatview "github.com/memohai/memoh/internal/agent/view"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channel"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
@@ -362,8 +364,12 @@ func TestLocalChannelRuntimeContractForwardsInterruptedRunError(t *testing.T) {
 	if events[0]["type"] != "start" || events[1]["type"] != "message" || events[2]["type"] != "error" || events[3]["type"] != "end" {
 		t.Fatalf("unexpected interrupted event sequence: %#v", events)
 	}
-	if events[2]["message"] != "runtime interrupted" {
+	if events[2]["message"] != "The agent run failed." {
 		t.Fatalf("error event = %#v", events[2])
+	}
+	feedback, _ := events[2]["feedback"].(map[string]any)
+	if feedback["code"] != string(apperror.CodeSessionRuntimeRunFailed) {
+		t.Fatalf("error feedback = %#v", feedback)
 	}
 }
 
@@ -810,7 +816,8 @@ func TestLocalChannelRuntimeTerminalCommitSurvivesAssetLinkFailure(t *testing.T)
 		snapshot.CurrentRunView.Status != sessionruntime.RunStatusErrored ||
 		!snapshot.CurrentRunView.HistoryCommitted ||
 		snapshot.CurrentRunView.CanonicalReady ||
-		!strings.Contains(snapshot.CurrentRunView.Error, "injected asset link failure") {
+		snapshot.CurrentRunView.ErrorCode != sessionruntime.RuntimeErrorCodeRunFailed ||
+		snapshot.CurrentRunView.Error != "The agent run failed." {
 		t.Fatalf("terminal runtime snapshot after asset failure = %#v", snapshot.CurrentRunView)
 	}
 }
@@ -953,8 +960,8 @@ func TestLocalChannelStartWSStreamMarksRuntimeErroredAfterClientDisconnect(t *te
 	snapshot := waitHandlerRuntimeSnapshot(t, manager, func(snapshot sessionruntime.Snapshot) bool {
 		return snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Status == sessionruntime.RunStatusErrored
 	})
-	if snapshot.CurrentRunView.Error != "runner failed after client disconnected" {
-		t.Fatalf("runtime error = %q", snapshot.CurrentRunView.Error)
+	if snapshot.CurrentRunView.ErrorCode != sessionruntime.RuntimeErrorCodeRunFailed || snapshot.CurrentRunView.Error != "The agent run failed." {
+		t.Fatalf("runtime error = %#v", snapshot.CurrentRunView)
 	}
 }
 
@@ -1002,8 +1009,8 @@ func TestLocalChannelRuntimeUpdateFailureCancelsAndErrorsRun(t *testing.T) {
 	snapshot := waitHandlerRuntimeSnapshot(t, manager, func(snapshot sessionruntime.Snapshot) bool {
 		return snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Status == sessionruntime.RunStatusErrored
 	})
-	if !strings.Contains(snapshot.CurrentRunView.Error, "injected runtime update failure") {
-		t.Fatalf("runtime error = %q", snapshot.CurrentRunView.Error)
+	if snapshot.CurrentRunView.ErrorCode != sessionruntime.RuntimeErrorCodeRunFailed || snapshot.CurrentRunView.Error != "The agent run failed." {
+		t.Fatalf("runtime error = %#v", snapshot.CurrentRunView)
 	}
 	select {
 	case <-runnerCanceled:
@@ -2096,9 +2103,13 @@ func TestLocalChannelDistributedInactiveDurableResponseDoesNotReplaceActiveRun(t
 			case <-time.After(2 * time.Second):
 				t.Fatal("timed out waiting for response preparation")
 			}
-			errorEvent := readRuntimeContractEventUntil(t, client, func(event sessionruntime.Event) bool { return event.Type == "error" })
-			if !strings.Contains(errorEvent.Message, "already has an active runtime run") {
+			errorEvent := readRuntimeWireEventUntil(t, client, func(event runtimeWireEvent) bool { return event["type"] == "error" })
+			feedback, _ := errorEvent["feedback"].(map[string]any)
+			if errorEvent["message"] != "The agent run failed." || feedback["code"] != string(apperror.CodeSessionRuntimeRunFailed) {
 				t.Fatalf("collision error = %#v", errorEvent)
+			}
+			if strings.Contains(fmt.Sprint(errorEvent), "already has an active runtime run") {
+				t.Fatalf("collision error leaked private runtime detail: %#v", errorEvent)
 			}
 			select {
 			case stage := <-resolver.stages:
@@ -2729,7 +2740,7 @@ func TestLocalChannelHandleWebSocketAbortRequiresOwningSession(t *testing.T) {
 	errorEvent := readRuntimeContractEventUntil(t, client, func(event sessionruntime.Event) bool {
 		return event.Type == "error"
 	})
-	if !strings.Contains(errorEvent.Message, "stream does not belong") {
+	if errorEvent.Message != "The agent run is no longer active." {
 		t.Fatalf("abort error = %#v", errorEvent)
 	}
 	select {
@@ -2778,7 +2789,7 @@ func TestLocalChannelHandleWebSocketRuntimeAccessRejectsNonOwnerACPSession(t *te
 		t.Fatalf("write runtime_subscribe: %v", err)
 	}
 	subscribeError := readCommandEventUntil(t, client, "runtime-subscribe-owner-check")
-	if subscribeError.Type != "command_error" || subscribeError.Error == nil || !strings.Contains(subscribeError.Error.Message, "runtime_owner_mismatch") {
+	if subscribeError.Type != "command_error" || subscribeError.Error == nil || subscribeError.Error.Code != acpfeedback.CodeNoWorkspaceExec || subscribeError.Error.Message != "This ACP runtime belongs to another user." {
 		t.Fatalf("runtime_subscribe error = %#v, want ACP runtime owner mismatch", subscribeError)
 	}
 
@@ -2793,7 +2804,7 @@ func TestLocalChannelHandleWebSocketRuntimeAccessRejectsNonOwnerACPSession(t *te
 	errorEvent := readRuntimeContractEventUntil(t, client, func(event sessionruntime.Event) bool {
 		return event.Type == "error"
 	})
-	if !strings.Contains(errorEvent.Message, "runtime_owner_mismatch") {
+	if errorEvent.Message != "This ACP runtime belongs to another user." {
 		t.Fatalf("abort error = %#v, want ACP runtime owner mismatch", errorEvent)
 	}
 	select {
@@ -2819,7 +2830,7 @@ func TestLocalChannelHandleWebSocketRuntimeAccessRejectsNonOwnerACPSession(t *te
 	errorEvent = readRuntimeContractEventUntil(t, client, func(event sessionruntime.Event) bool {
 		return event.Type == "error"
 	})
-	if !strings.Contains(errorEvent.Message, "runtime_owner_mismatch") {
+	if errorEvent.Message != "This ACP runtime belongs to another user." {
 		t.Fatalf("steer error = %#v, want ACP runtime owner mismatch", errorEvent)
 	}
 	select {
@@ -3406,6 +3417,25 @@ func readRuntimeContractEventUntil(t *testing.T, client *websocket.Conn, pred fu
 		var event sessionruntime.Event
 		if err := client.ReadJSON(&event); err != nil {
 			t.Fatalf("read runtime ws event: %v; events=%#v", err, events)
+		}
+		events = append(events, event)
+		if pred(event) {
+			return event
+		}
+	}
+}
+
+func readRuntimeWireEventUntil(t *testing.T, client *websocket.Conn, pred func(runtimeWireEvent) bool) runtimeWireEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var events []runtimeWireEvent
+	for {
+		if err := client.SetReadDeadline(deadline); err != nil {
+			t.Fatalf("set read deadline: %v", err)
+		}
+		var event runtimeWireEvent
+		if err := client.ReadJSON(&event); err != nil {
+			t.Fatalf("read runtime wire event: %v; events=%#v", err, events)
 		}
 		events = append(events, event)
 		if pred(event) {
