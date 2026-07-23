@@ -98,7 +98,7 @@ type localChannelAgentService interface {
 	PrepareEditLatestMessageWS(ctx context.Context, input application.EditLatestMessageInput) (application.PreparedReplacementWS, error)
 	PrepareRetryLatestMessageWS(ctx context.Context, input application.RetryLatestMessageInput) (application.PreparedReplacementWS, error)
 	PrepareToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
-	PrepareUserInputResponse(ctx context.Context, input application.UserInputResponseInput) (runtimefence.PreservedDecision, error)
+	PrepareUserInputResponseTarget(ctx context.Context, input application.UserInputResponseInput) (runtimefence.PreservedDecision, error)
 	RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, eventCh chan<- application.WSStreamEvent) error
 	RespondUserInput(ctx context.Context, input turn.UserInputResponse, eventCh chan<- application.WSStreamEvent) error
 	DeferSessionCompaction(botID, sessionID, streamID string) func()
@@ -2478,7 +2478,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				ChatToken:              bearerToken,
 			}
 			deferred := func() {
-				preserved, err := h.agentService.PrepareUserInputResponse(streamBaseCtx, responseInput)
+				preserved, err := h.agentService.PrepareUserInputResponseTarget(streamBaseCtx, responseInput)
 				if err != nil {
 					h.sendWSSidebandResult(connCtx, writer, responseMsg, "user_input_response", err)
 					return

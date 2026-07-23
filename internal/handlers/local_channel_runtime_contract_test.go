@@ -1958,6 +1958,7 @@ func TestLocalChannelDistributedInactiveDurableResponseAdmission(t *testing.T) {
 		name      string
 		command   map[string]any
 		preserved runtimefence.PreservedDecision
+		canceled  bool
 	}{
 		{
 			name: "tool approval",
@@ -1968,13 +1969,24 @@ func TestLocalChannelDistributedInactiveDurableResponseAdmission(t *testing.T) {
 			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionToolApproval, ID: "33333333-3333-3333-3333-333333333333"},
 		},
 		{
-			name: "user input",
+			name: "user input submit",
 			command: map[string]any{
-				"type": "user_input_response", "stream_id": "input-deferred-stream", "session_id": runtimeContractSessionID,
+				"type": "user_input_response", "stream_id": "input-submit-deferred-stream", "session_id": runtimeContractSessionID,
 				"user_input_id": "44444444-4444-4444-4444-444444444444",
 				"answers":       []map[string]any{{"question_id": "q1", "option_ids": []string{"q1.o1"}}},
 			},
 			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "44444444-4444-4444-4444-444444444444"},
+		},
+		{
+			name: "user input cancel",
+			command: map[string]any{
+				"type": "user_input_response", "stream_id": "input-cancel-deferred-stream", "session_id": runtimeContractSessionID,
+				"user_input_id": "55555555-5555-5555-5555-555555555555",
+				"canceled":      true,
+				"reason":        "user_canceled",
+			},
+			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "55555555-5555-5555-5555-555555555555"},
+			canceled:  true,
 		},
 	}
 
@@ -2019,6 +2031,9 @@ func TestLocalChannelDistributedInactiveDurableResponseAdmission(t *testing.T) {
 					}
 					if stage.name == "respond" && (stage.fence != wantFence || stage.resolveOnly) {
 						t.Fatalf("response ran with fence:%#v resolveOnly:%v", stage.fence, stage.resolveOnly)
+					}
+					if stage.name == "respond" && tt.preserved.Kind == runtimefence.DecisionUserInput && stage.canceled != tt.canceled {
+						t.Fatalf("response canceled = %v, want %v", stage.canceled, tt.canceled)
 					}
 				case <-time.After(2 * time.Second):
 					t.Fatalf("timed out waiting for %s stage", wantStage)
@@ -2956,6 +2971,7 @@ type deferredResponseStage struct {
 	fence       runtimefence.Fence
 	options     runtimefence.ActivationOptions
 	resolveOnly bool
+	canceled    bool
 }
 
 type deferredResponseResolver struct {
@@ -2980,7 +2996,11 @@ func (r *deferredResponseResolver) PrepareToolApprovalResponse(context.Context, 
 	return r.preserved, r.prepareErr
 }
 
-func (r *deferredResponseResolver) PrepareUserInputResponse(context.Context, application.UserInputResponseInput) (runtimefence.PreservedDecision, error) {
+func (*deferredResponseResolver) PrepareUserInputResponse(context.Context, application.UserInputResponseInput) (runtimefence.PreservedDecision, error) {
+	return runtimefence.PreservedDecision{}, errors.New("pending-only user input preparation was called")
+}
+
+func (r *deferredResponseResolver) PrepareUserInputResponseTarget(context.Context, application.UserInputResponseInput) (runtimefence.PreservedDecision, error) {
 	r.stages <- deferredResponseStage{name: "prepare"}
 	return r.preserved, r.prepareErr
 }
@@ -2993,7 +3013,7 @@ func (r *deferredResponseResolver) RespondToolApproval(ctx context.Context, inpu
 
 func (r *deferredResponseResolver) RespondUserInput(ctx context.Context, input turn.UserInputResponse, _ chan<- application.WSStreamEvent) error {
 	fence, _ := runtimefence.FromContext(ctx)
-	r.stages <- deferredResponseStage{name: "respond", fence: fence, resolveOnly: input.ResolveOnly}
+	r.stages <- deferredResponseStage{name: "respond", fence: fence, resolveOnly: input.ResolveOnly, canceled: input.Canceled}
 	return nil
 }
 
