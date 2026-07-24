@@ -631,6 +631,7 @@ export const useChatStore = defineStore('chat', () => {
     return { botId: resolvedBotId!, sessionId: resolvedSessionId! }
   }
   const runtimeStateBySession = new Map<string, SessionRuntimeReducerState>()
+  const decisionBlockedSessions = reactive(new Set<string>())
   const runtimeResyncSessions = new Set<string>()
   const runtimeSubscriptionRetrySessions = new Set<string>()
   const runtimeRecoveryRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -1545,6 +1546,19 @@ export const useChatStore = defineStore('chat', () => {
     loading.value = isSessionStreaming(botId, targetSessionId)
   }
 
+  function isSessionDecisionBlocked(botId: string, targetSessionId: string): boolean {
+    const bid = botId.trim()
+    const sid = targetSessionId.trim()
+    if (!bid || !sid) return false
+    if (decisionBlockedSessions.has(acpRuntimeKey(bid, sid))) return true
+    return assistantStreamsForSession(bid, sid).some(stream => stream.abortRequested)
+  }
+
+  function isChatViewDecisionBlocked(target?: ChatViewTarget): boolean {
+    const resolved = normalizedChatViewTarget(target)
+    return isSessionDecisionBlocked(resolved.botId, resolved.sessionId ?? '')
+  }
+
   function isActiveSessionStreaming() {
     return isSessionStreaming(currentBotId.value, sessionId.value)
   }
@@ -2166,6 +2180,7 @@ export const useChatStore = defineStore('chat', () => {
     const runGeneration = (run?.generation ?? '').trim()
     const transcriptMessages = sessionTranscript(bid, sid).messages
     if (!run || !streamId) {
+      decisionBlockedSessions.delete(acpRuntimeKey(bid, sid))
       const rejected = rejectRuntimeStreamsForSession(bid, sid)
       loading.value = isSessionStreaming(currentBotId.value, sessionId.value)
       if (rejected && allowHistoryReplay) {
@@ -2179,6 +2194,11 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     const status = (run.status ?? '').trim().toLowerCase()
+    if (status === 'aborting' || status === 'aborted') {
+      decisionBlockedSessions.add(acpRuntimeKey(bid, sid))
+    } else {
+      decisionBlockedSessions.delete(acpRuntimeKey(bid, sid))
+    }
     const runtimeMessages = (run.messages ?? [])
       .map((message, index) => runtimeMessageToUIMessage(message, index))
       .filter((message): message is UIMessage => message !== null)
@@ -2636,7 +2656,7 @@ export const useChatStore = defineStore('chat', () => {
     let changed = false
     const approval = message.approval
     const approvalStatus = approval?.status?.trim().toLowerCase()
-    if (approval?.approval_id && (approvalStatus === 'approved' || approvalStatus === 'rejected')) {
+    if (approval?.approval_id && (approvalStatus === 'approved' || approvalStatus === 'rejected' || approvalStatus === 'cancelled' || approvalStatus === 'canceled')) {
       changed = transcript.markToolApprovalDecision(approval.approval_id, approvalStatus) || changed
       const committedResponses = pendingApprovalResponsesForSession(botId, targetSessionId)
         .filter(pending => pending.approvalId === approval.approval_id)
@@ -3148,6 +3168,7 @@ export const useChatStore = defineStore('chat', () => {
     pendingUserInputResponses.clear()
     terminalUserInputResponseIds.clear()
     runtimeStateBySession.clear()
+    decisionBlockedSessions.clear()
     runtimeResyncSessions.clear()
     runtimeSubscriptionRetrySessions.clear()
     for (const timer of runtimeRecoveryRetryTimers.values()) clearTimeout(timer)
@@ -3366,6 +3387,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     runtimeSubscriptions.delete(key)
     runtimeStateBySession.delete(key)
+    decisionBlockedSessions.delete(key)
     clearRuntimeResync(key)
     clearRuntimeSubscriptionRetry(key)
     for (const [invocationKey, invocation] of runtimeSubscriptionInvocations) {
@@ -4958,7 +4980,7 @@ export const useChatStore = defineStore('chat', () => {
     const sid = viewTarget.sessionId ?? ''
     const transcript = transcriptForTarget(viewTarget)
     const approvalId = approval.approval_id?.trim()
-    if (!bid || !sid || !approvalId) return false
+    if (!bid || !sid || !approvalId || isSessionDecisionBlocked(bid, sid)) return false
     if (approval.status !== 'pending' || approval.can_approve === false) return false
     if (hasPendingApprovalResponse(approvalId, bid, sid)) return false
     if (!ensureWebSocketConnected(bid)) {
@@ -5007,7 +5029,7 @@ export const useChatStore = defineStore('chat', () => {
     const sid = viewTarget.sessionId ?? ''
     const transcript = transcriptForTarget(viewTarget)
     const userInputId = userInput.user_input_id?.trim() ?? ''
-    if (!bid || !sid || !userInputId) return false
+    if (!bid || !sid || !userInputId || isSessionDecisionBlocked(bid, sid)) return false
     if (userInput.status !== 'pending' || userInput.can_respond === false) return false
     const pendingKey = sidebandResponseKey(bid, sid, userInputId)
     if (pendingUserInputResponses.has(pendingKey)) return false
@@ -5151,6 +5173,7 @@ export const useChatStore = defineStore('chat', () => {
     editLatestUser,
     respondToolApproval,
     respondUserInput,
+    isChatViewDecisionBlocked,
     loadOlderMessages,
     findMessageIdByExternalId,
     locateMessageByExternalId,

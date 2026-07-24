@@ -330,7 +330,7 @@
             </Transition>
             <ComposerDock
               ref="dockEl"
-              :approvals="pendingApprovals"
+              :approvals="decisionBlocked ? [] : pendingApprovals"
               :command-panel="composerCommandPanel"
               :error-message="composerError"
               :pending-user-input="pendingUserInput"
@@ -885,9 +885,10 @@ watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
 })
 
 const pendingDecision = computed(() => findLatestPendingChatDecision(messages.value))
-const hasPendingSessionDecision = computed(() => hasPendingChatDecision(messages.value))
+const decisionBlocked = computed(() => chatStore.isChatViewDecisionBlocked(paneTarget.value))
+const hasPendingSessionDecision = computed(() => !decisionBlocked.value && hasPendingChatDecision(messages.value))
 const pendingUserInput = computed<UIUserInput | null>(() => (
-  pendingDecision.value?.kind === 'user_input'
+  !decisionBlocked.value && pendingDecision.value?.kind === 'user_input'
     ? pendingDecision.value.userInput
     : null
 ))

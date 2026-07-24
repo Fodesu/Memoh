@@ -917,6 +917,7 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 func (m *Manager) finalizeRunState(ctx context.Context, handle RunHandle, outcome runFinalization) (bool, error) {
 	outcome = sanitizeRunFinalization(outcome)
 	admissionTerminal := false
+	var canceledDecisions []conversation.UIMessage
 	_, changed, err := m.releaseActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
 		run := snapshot.CurrentRunView
 		if !isActiveRunStatus(run.Status) {
@@ -962,13 +963,17 @@ func (m *Manager) finalizeRunState(ctx context.Context, handle RunHandle, outcom
 		}
 		run.OwnerLeaseExpiresAt = nil
 		rejectPendingSteerOnRunFinish(run, now)
+		if finalStatus == RunStatusAborted {
+			canceledDecisions = cancelPendingDecisions(run)
+		}
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
 		if admissionTerminal {
 			return RuntimeDelta{CurrentRunView: snapshot.CurrentRunView}
 		}
 		delta := runtimeRunPatch(snapshot, true, true, true, m.distributed != nil)
-		delta.MessageUpserts = resolvedUIMessageUpserts(snapshot.CurrentRunView, outcome.Messages)
+		requestedUpserts := append(append([]conversation.UIMessage(nil), outcome.Messages...), canceledDecisions...)
+		delta.MessageUpserts = resolvedUIMessageUpserts(snapshot.CurrentRunView, requestedUpserts)
 		return delta
 	})
 	return changed, err

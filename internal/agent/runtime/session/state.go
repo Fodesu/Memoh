@@ -390,6 +390,36 @@ func preserveTerminalDecision(existing, incoming chatview.UIMessage) chatview.UI
 	return incoming
 }
 
+func cancelPendingDecisions(run *CurrentRunView) []conversation.UIMessage {
+	if run == nil {
+		return nil
+	}
+	canceled := make([]conversation.UIMessage, 0, 2)
+	for i := range run.Messages {
+		message := &run.Messages[i]
+		changed := false
+		if message.UserInput != nil && strings.EqualFold(strings.TrimSpace(message.UserInput.Status), "pending") {
+			decision := *message.UserInput
+			decision.Status = "canceled"
+			decision.CanRespond = false
+			message.UserInput = &decision
+			changed = true
+		}
+		if message.Approval != nil && strings.EqualFold(strings.TrimSpace(message.Approval.Status), "pending") {
+			decision := *message.Approval
+			decision.Status = "cancelled"
+			decision.DecisionReason = "run aborted"
+			decision.CanApprove = false
+			message.Approval = &decision
+			changed = true
+		}
+		if changed {
+			canceled = append(canceled, *message)
+		}
+	}
+	return canceled
+}
+
 func terminalDecisionStatus(status string) bool {
 	status = strings.ToLower(strings.TrimSpace(status))
 	return status != "" && status != "pending"
