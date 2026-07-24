@@ -99,6 +99,15 @@ func TestSessionRuntimeWebSocketErrorsDoNotExposePrivateCauses(t *testing.T) {
 	}
 }
 
+func TestNewSessionRuntimeAppErrorMapsPendingDecision(t *testing.T) {
+	t.Parallel()
+
+	err := newSessionRuntimeAppError(application.ErrSessionDecisionPending, apperror.CodeSessionRuntimeRunFailed)
+	if got := apperror.CodeOf(err); got != apperror.CodeSessionRuntimeDecisionPending {
+		t.Fatalf("CodeOf() = %q, want %q", got, apperror.CodeSessionRuntimeDecisionPending)
+	}
+}
+
 type closeTrackingWSConnection struct {
 	closed      chan struct{}
 	once        sync.Once

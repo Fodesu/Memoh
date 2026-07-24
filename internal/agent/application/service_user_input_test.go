@@ -23,8 +23,10 @@ type fakeUserInputService struct {
 	target     userinput.Request
 	resolved   userinput.Request
 	getTarget  userinput.Request
+	pending    []userinput.Request
 	resolveErr error
 	getErr     error
+	pendingErr error
 
 	submitCalls   int
 	cancelCalls   int
@@ -45,6 +47,10 @@ func (*fakeUserInputService) AdvanceText(context.Context, userinput.AdvanceTextI
 func (f *fakeUserInputService) CreatePending(context.Context, userinput.CreatePendingInput) (userinput.Request, error) {
 	f.createCalls++
 	return userinput.Request{}, errors.New("unexpected CreatePending")
+}
+
+func (f *fakeUserInputService) ListPendingBySession(context.Context, string, string) ([]userinput.Request, error) {
+	return f.pending, f.pendingErr
 }
 
 func (f *fakeUserInputService) ResolveTarget(context.Context, userinput.ResolveInput) (userinput.Request, error) {

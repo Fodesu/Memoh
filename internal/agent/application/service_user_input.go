@@ -22,6 +22,7 @@ import (
 // fakes.
 type userInputService interface {
 	CreatePending(ctx context.Context, input userinput.CreatePendingInput) (userinput.Request, error)
+	ListPendingBySession(ctx context.Context, botID, sessionID string) ([]userinput.Request, error)
 	ResolveTarget(ctx context.Context, input userinput.ResolveInput) (userinput.Request, error)
 	AdvanceText(ctx context.Context, input userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error)
 	Submit(ctx context.Context, input userinput.SubmitInput) (userinput.Request, error)

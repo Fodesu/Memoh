@@ -42,6 +42,7 @@ const (
 	CodeSessionRuntimeTargetNotActive    Code = "session_runtime.target_not_active"
 	CodeSessionRuntimeCommandBusy        Code = "session_runtime.command_busy"
 	CodeSessionRuntimeCommandFailed      Code = "session_runtime.command_failed"
+	CodeSessionRuntimeDecisionPending    Code = "session_runtime.decision_pending"
 )
 
 // Definition is the single catalog entry for a public error contract.
@@ -182,6 +183,10 @@ var catalog = map[Code]Definition{
 	CodeSessionRuntimeCommandFailed: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "The runtime command could not be completed.",
+	},
+	CodeSessionRuntimeDecisionPending: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "Resolve the pending approval or question before sending another message.",
 	},
 }
 

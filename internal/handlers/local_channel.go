@@ -95,6 +95,7 @@ type localChannelAgentService interface {
 	ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req application.ChatRequest) (application.ChatRequest, messagepkg.Message, error)
 	LinkOutboundAssets(ctx context.Context, botID, sessionID string, assets []messagepkg.AssetRef) error
 	PrepareUserMessageWS(ctx context.Context, req application.ChatRequest) (application.ChatRequest, error)
+	EnsureSessionCanStartRun(ctx context.Context, botID, sessionID string) error
 	PrepareEditLatestMessageWS(ctx context.Context, input application.EditLatestMessageInput) (application.PreparedReplacementWS, error)
 	PrepareRetryLatestMessageWS(ctx context.Context, input application.RetryLatestMessageInput) (application.PreparedReplacementWS, error)
 	PrepareToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
@@ -611,6 +612,8 @@ func newSessionRuntimeAppError(err error, fallback apperror.Code) error {
 		code = apperror.CodeSessionRuntimeTargetNotActive
 	case errors.Is(err, sessionruntime.ErrCommandBusy):
 		code = apperror.CodeSessionRuntimeCommandBusy
+	case errors.Is(err, application.ErrSessionDecisionPending):
+		code = apperror.CodeSessionRuntimeDecisionPending
 	case errors.Is(err, sessionruntime.ErrManagerClosed),
 		errors.Is(err, sessionruntime.ErrCommandOwnerUnavailable),
 		errors.Is(err, sessionruntime.ErrBackendConflict),
@@ -2761,6 +2764,9 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				if err := ctx.Err(); err != nil {
 					return sessionruntime.RunAdmissionView{}, err
 				}
+				if err := h.agentService.EnsureSessionCanStartRun(ctx, botID, sessionID); err != nil {
+					return sessionruntime.RunAdmissionView{}, err
+				}
 				ingestedAttachments := h.ingestWSInboundAttachments(ctx, botID, chatAttachments)
 				if err := ctx.Err(); err != nil {
 					return sessionruntime.RunAdmissionView{}, err
@@ -2866,6 +2872,9 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			h.startWSStreamWithAdmissionBuilder(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws retry stream error", releaseReplacement, runtimefence.ActivationOptions{}, func(ctx context.Context) (sessionruntime.RunAdmissionView, error) {
+				if err := h.agentService.EnsureSessionCanStartRun(ctx, botID, sessionID); err != nil {
+					return sessionruntime.RunAdmissionView{}, err
+				}
 				if err := h.agentService.ValidatePreparedReplacementWS(ctx, prepared); err != nil {
 					return sessionruntime.RunAdmissionView{}, err
 				}
@@ -2947,6 +2956,9 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			h.startWSStreamWithAdmissionBuilder(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws edit stream error", releaseReplacement, runtimefence.ActivationOptions{}, func(ctx context.Context) (sessionruntime.RunAdmissionView, error) {
+				if err := h.agentService.EnsureSessionCanStartRun(ctx, botID, sessionID); err != nil {
+					return sessionruntime.RunAdmissionView{}, err
+				}
 				if err := h.agentService.ValidatePreparedReplacementWS(ctx, prepared); err != nil {
 					return sessionruntime.RunAdmissionView{}, err
 				}
