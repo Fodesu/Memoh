@@ -24,6 +24,7 @@ type Manager struct {
 	stateTTL       time.Duration
 	ownerLeaseTTL  time.Duration
 	commandAckTTL  time.Duration
+	abortGraceTTL  time.Duration
 	commandWorkers int
 	logger         *slog.Logger
 	newEpoch       func() string
@@ -83,6 +84,10 @@ type runControl struct {
 	admissionComplete bool
 	abortRequested    bool
 	abortFinalizing   bool
+	abortGraceOnce    sync.Once
+	abortGraceMu      sync.Mutex
+	abortGraceTimer   *time.Timer
+	abortGraceStopped bool
 	finalizeRetryOnce sync.Once
 	ownershipCancel   context.CancelCauseFunc
 	ownershipOnce     sync.Once
@@ -121,6 +126,7 @@ type Options struct {
 	StateTTL               time.Duration
 	OwnerLeaseTTL          time.Duration
 	CommandAckTTL          time.Duration
+	AbortGraceTimeout      time.Duration
 	CommandWorkerLimit     int
 	Logger                 *slog.Logger
 	EpochGenerator         func() string
@@ -129,6 +135,7 @@ type Options struct {
 
 const (
 	defaultCommandAckTTL        = 2 * time.Second
+	defaultAbortGraceTimeout    = 30 * time.Second
 	defaultCommandWorkerLimit   = 32
 	defaultCommandRejectBacklog = 256
 )
@@ -149,6 +156,10 @@ func NewManager(backend Backend, opts Options) *Manager {
 	commandAckTTL := opts.CommandAckTTL
 	if commandAckTTL <= 0 {
 		commandAckTTL = defaultCommandAckTTL
+	}
+	abortGraceTTL := opts.AbortGraceTimeout
+	if abortGraceTTL <= 0 {
+		abortGraceTTL = defaultAbortGraceTimeout
 	}
 	commandWorkers := opts.CommandWorkerLimit
 	if commandWorkers <= 0 {
@@ -179,6 +190,7 @@ func NewManager(backend Backend, opts Options) *Manager {
 		stateTTL:               stateTTL,
 		ownerLeaseTTL:          leaseTTL,
 		commandAckTTL:          commandAckTTL,
+		abortGraceTTL:          abortGraceTTL,
 		commandWorkers:         commandWorkers,
 		logger:                 log.With(slog.String("component", "session_runtime")),
 		newEpoch:               newEpoch,
