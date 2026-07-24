@@ -231,8 +231,6 @@ export function createTranscriptController({
   }
 
   function associateRuntimeError(turn: ChatAssistantTurn, error: EphemeralAssistantError) {
-    const retryTargetId = error.userServerId?.trim()
-    if (retryTargetId) turn.retryTargetId = retryTargetId
     const key = runtimeErrorIdentityKey(error)
     if (key) runtimeAssistantErrorIdentity.set(toRaw(turn), key)
   }
@@ -324,7 +322,6 @@ export function createTranscriptController({
       timestamp,
       streaming: false,
       __ephemeral: true,
-      retryTargetId: error.userServerId?.trim() || undefined,
     }
     associateRuntimeError(turn, error)
     return turn

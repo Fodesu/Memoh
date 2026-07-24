@@ -16,6 +16,7 @@ import {
 import {
   cloneRequestedSkills,
   createStreamId,
+  hasRetryableAssistantOutput,
   hasUserAttachments,
   isPendingBot,
   nextId,
@@ -2068,6 +2069,13 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     const runtimeError = runtimeStatusError(status, error || status, assistantTurn)
+    const abortedWithoutOutput = status === 'aborted'
+      && !runtimeMessages.some(message => message.type !== 'error')
+    if (abortedWithoutOutput) {
+      removeTurnFromSession(botId, targetSessionId, assistantTurn)
+      rejectAssistantStream(streamId, runtimeError, botId, targetSessionId)
+      return true
+    }
     if (!assistantTurn.messages.some(block => block.type === 'error')) {
       appendAssistantError(
         assistantTurn,
@@ -2189,10 +2197,13 @@ export const useChatStore = defineStore('chat', () => {
         ? assistantTurnForRuntimeError(sid, errorIdentity)
         : null
       if (replayedErrorTurn) {
-        if (runtimeMessages.length > 0) {
+        const hasRuntimeOutput = runtimeMessages.some(message => message.type !== 'error')
+        if (hasRuntimeOutput) {
           replayedErrorTurn.messages = []
           for (const message of runtimeMessages) upsertAssistantUIMessage(replayedErrorTurn, message)
           appendAssistantError(replayedErrorTurn, sid, terminalErrorMessage, false, errorIdentity)
+        } else if (status === 'aborted') {
+          removeTurnFromSession(bid, sid, replayedErrorTurn)
         }
         replayedErrorTurn.streaming = false
         loading.value = isSessionStreaming(bid, sid)
@@ -2338,6 +2349,7 @@ export const useChatStore = defineStore('chat', () => {
           && historyCommitted
           && !hadVisibleRuntimeOutput
           && Boolean(stream.runtimeReplacement?.applied)
+        const abortedWithoutOutput = status === 'aborted' && !hadVisibleRuntimeOutput
         const restoredReplacement = !completedEmptyReplacement
           && !historyCommitted
           && !hadVisibleRuntimeOutput
@@ -2345,14 +2357,18 @@ export const useChatStore = defineStore('chat', () => {
         if (completedEmptyReplacement) {
           removeTurnFromSession(bid, sid, stream.assistantTurn)
         } else if (!restoredReplacement) {
-          pruneEmptyAssistantTurnIfPending(streamId, bid, sid)
+          if (abortedWithoutOutput) {
+            removeTurnFromSession(bid, sid, stream.assistantTurn)
+          } else {
+            pruneEmptyAssistantTurnIfPending(streamId, bid, sid)
+          }
         }
         if (status === 'completed') {
           resolveAssistantStream(streamId, bid, sid)
         } else {
           if (!runtimeError) return
           const restoredAbort = restoredReplacement && runtimeError instanceof RuntimeAbortError
-          if (!uncommittedEmptyReplacement && !restoredAbort) {
+          if (!uncommittedEmptyReplacement && !restoredAbort && !abortedWithoutOutput) {
             projectRuntimeTerminalError(stream, bid, sid, runtimeError.message)
           }
           rejectAssistantStream(streamId, runtimeError, bid, sid)
@@ -4804,8 +4820,8 @@ export const useChatStore = defineStore('chat', () => {
     if (isChatViewStreaming(viewTarget) || transcript.loadingMessages.value || hasPendingChatDecision(transcript.messages)) return { ok: false, stage: 'startup' }
     const target = transcript.findTurnByServerId(targetID)
     const retryableTarget = target?.role === 'assistant'
-      ? transcript.isLatestVisibleAssistantTurn(target)
-      : target?.role === 'user' && transcript.isLatestVisibleUserTurn(target)
+      && transcript.isLatestVisibleAssistantTurn(target)
+      && hasRetryableAssistantOutput(target)
     if (!retryableTarget) return { ok: false, stage: 'startup' }
 
     const streamId = createStreamId()

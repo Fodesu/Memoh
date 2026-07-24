@@ -127,10 +127,8 @@ export interface ChatAssistantTurn {
   // See ChatUserTurn.__optimistic.
   __optimistic?: boolean
   // Client-only terminal feedback has no database message identity. An early
-  // abort may proxy retry to its canonical request, but never edit or fork.
+  // abort has no retry, edit, or fork target.
   __ephemeral?: boolean
-  /** Canonical request id used when an interrupted turn has no assistant row. */
-  retryTargetId?: string
 }
 
 export interface ChatSystemTurn {

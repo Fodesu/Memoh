@@ -153,9 +153,8 @@ func (s *Service) PrepareRetryLatestMessageWS(ctx context.Context, input RetryLa
 		return PreparedReplacementWS{}, err
 	}
 	targetRole := strings.ToLower(strings.TrimSpace(target.Role))
-	userOnlyTurn := targetRole == "user" && strings.TrimSpace(turn.RequestMessageID) == target.ID && strings.TrimSpace(turn.AssistantMessageID) == ""
-	if targetRole != "assistant" && !userOnlyTurn {
-		return PreparedReplacementWS{}, errors.New("only latest assistant messages or interrupted user-only turns can be retried")
+	if targetRole != "assistant" {
+		return PreparedReplacementWS{}, errors.New("only the latest assistant message can be retried")
 	}
 	if err := s.ensureLatestVisibleTurn(ctx, sessionID, turn.ID); err != nil {
 		return PreparedReplacementWS{}, errors.New("only the latest turn can be retried")

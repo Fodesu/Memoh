@@ -8791,9 +8791,7 @@ describe('chat-list store', () => {
       snapshot: runtimeSnapshotFromScript([], 'session-1', 'stream-reconnecting-abort', 'aborted', 2),
     } as UIStreamEvent)
     expect(store.streaming).toBe(false)
-    expect(store.messages.flatMap(turn =>
-      turn.role === 'assistant' ? turn.messages.filter(block => block.type === 'error') : [],
-    )).toContainEqual(expect.objectContaining({ content: 'Response stopped' }))
+    expect(store.messages.some(turn => turn.role === 'assistant')).toBe(false)
   })
 
   it('replays an unacknowledged abort after reconnect and removes it when retry replaces the turn', async () => {
@@ -10319,12 +10317,8 @@ describe('chat-list store', () => {
       text: kind === 'edit' ? 'edited prompt' : 'old prompt',
     })
     if (status === 'aborted') {
-      expect(store.messages).toHaveLength(2)
-      expect(store.messages.at(-1)).toMatchObject({
-        role: 'assistant',
-        streaming: false,
-        messages: [expect.objectContaining({ type: 'error' })],
-      })
+      expect(store.messages).toHaveLength(1)
+      expect(store.messages.some(turn => turn.role === 'assistant')).toBe(false)
       return
     }
     expect(store.messages.at(-1)).toMatchObject({
@@ -10623,11 +10617,8 @@ describe('chat-list store', () => {
       expect(store.messages.some(turn => turn.id === 'assistant-old')).toBe(false)
       expect(store.messages[0]?.serverId ?? store.messages[0]?.id).toBe('user-new')
       expect(store.messages[0]).toMatchObject({ role: 'user', text: replacementText })
-      expect(store.messages.at(-1)).toMatchObject({
-        role: 'assistant',
-        streaming: false,
-        messages: [expect.objectContaining({ type: 'error', content: 'Response stopped' })],
-      })
+      expect(store.messages).toHaveLength(1)
+      expect(store.messages.some(turn => turn.role === 'assistant')).toBe(false)
     })
   })
 
@@ -11561,7 +11552,6 @@ describe('chat-list store', () => {
       'old prompt',
       'old answer',
       'new prompt',
-      'Response stopped',
     ])
   })
 
@@ -12313,7 +12303,6 @@ describe('chat-list store', () => {
     expect(assistants).toHaveLength(1)
     expect(assistants[0]).toMatchObject({
       streaming: false,
-      retryTargetId: 'user-interrupted-server',
       messages: [
         expect.objectContaining({ type: 'text', content: 'partial output' }),
         expect.objectContaining({ type: 'error', content: 'The Agent run failed. Please try again.' }),
@@ -12322,11 +12311,11 @@ describe('chat-list store', () => {
     expect(assistants[0]?.serverId ?? assistants[0]?.id).toBe('assistant-interrupted-server')
 
     sendEvents = [{ type: 'error', message: 'retry rejected for test cleanup' } as UIStreamEvent]
-    await expect(store.retryLatestAssistant('user-interrupted-server')).resolves.toMatchObject({ ok: false })
+    await expect(store.retryLatestAssistant('assistant-interrupted-server')).resolves.toMatchObject({ ok: false })
     expect(sentWSMessages.at(-1)).toMatchObject({
       type: 'retry_message',
       session_id: 'session-1',
-      message_id: 'user-interrupted-server',
+      message_id: 'assistant-interrupted-server',
     })
   })
 
@@ -13745,18 +13734,11 @@ describe('chat-list store', () => {
     await expect(send).resolves.toMatchObject({ ok: false })
     await vi.waitFor(() => {
       expect(store.streaming).toBe(false)
-      expect(store.messages.find(turn => turn.role === 'assistant')).toMatchObject({
-        retryTargetId: 'user-aborted-server',
-      })
+      expect(store.messages.some(turn => turn.role === 'assistant')).toBe(false)
     })
 
-    sendEvents = [{ type: 'error', message: 'retry rejected for test cleanup' } as UIStreamEvent]
     await expect(store.retryLatestAssistant('user-aborted-server')).resolves.toMatchObject({ ok: false })
-    expect(sentWSMessages.at(-1)).toMatchObject({
-      type: 'retry_message',
-      session_id: 'session-1',
-      message_id: 'user-aborted-server',
-    })
+    expect(sentWSMessages.some(message => message.type === 'retry_message')).toBe(false)
   })
 
   it('isolates the same runtime stream id across two sessions', async () => {

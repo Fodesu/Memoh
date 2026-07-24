@@ -259,7 +259,7 @@ func TestPrepareRetryLatestMessageWSUsesCanonicalAssistantTurnAnchor(t *testing.
 	}
 }
 
-func TestPrepareRetryLatestMessageWSAcceptsInterruptedUserOnlyTurn(t *testing.T) {
+func TestPrepareRetryLatestMessageWSRejectsUserTarget(t *testing.T) {
 	t.Parallel()
 
 	messages := &replacementPreparationMessageService{
@@ -272,44 +272,13 @@ func TestPrepareRetryLatestMessageWSAcceptsInterruptedUserOnlyTurn(t *testing.T)
 		},
 	}
 	resolver := &Service{messageService: messages}
-	prepared, err := resolver.PrepareRetryLatestMessageWS(context.Background(), RetryLatestMessageInput{
-		BotID:     "bot-1",
-		SessionID: "session-1",
-		StreamID:  "stream-retry",
-		MessageID: "user-request",
-	})
-	if err != nil {
-		t.Fatalf("prepare user-only retry: %v", err)
-	}
-	if prepared.OldTurnID != "turn-interrupted" || prepared.RequestMessageID != "user-request" {
-		t.Fatalf("prepared replacement = %#v", prepared)
-	}
-	if prepared.Operation.Kind != "retry" || prepared.Operation.ReplaceFromMessageID != "user-request" {
-		t.Fatalf("operation = %#v", prepared.Operation)
-	}
-}
-
-func TestPrepareRetryLatestMessageWSRejectsUserTargetWhenTurnHasAssistant(t *testing.T) {
-	t.Parallel()
-
-	messages := &replacementPreparationMessageService{
-		messages: map[string]messagepkg.Message{
-			"user-request": {ID: "user-request", Role: "user", DisplayContent: "original prompt"},
-		},
-		turn: messagepkg.HistoryTurn{
-			ID:                 "turn-completed",
-			RequestMessageID:   "user-request",
-			AssistantMessageID: "assistant-response",
-		},
-	}
-	resolver := &Service{messageService: messages}
 	if _, err := resolver.PrepareRetryLatestMessageWS(context.Background(), RetryLatestMessageInput{
 		BotID:     "bot-1",
 		SessionID: "session-1",
 		StreamID:  "stream-retry",
 		MessageID: "user-request",
 	}); err == nil {
-		t.Fatal("user target for a turn with an assistant was accepted")
+		t.Fatal("user target was accepted for retry")
 	}
 }
 

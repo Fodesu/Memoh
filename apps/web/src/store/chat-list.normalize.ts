@@ -11,7 +11,7 @@ import type {
   UIUserInput,
   UIUserTurn,
 } from '@/composables/api/useChat'
-import type { ChatMessage, ChatUserTurn, ToolCallBlock } from './chat/types'
+import type { ChatAssistantTurn, ChatMessage, ChatUserTurn, ToolCallBlock } from './chat/types'
 
 // Stateless normalization/merge helpers shared by the chat store. Everything
 // here is pure with respect to the chat store — no refs, no maps, no session
@@ -245,6 +245,15 @@ export function cloneRequestedSkills(items: RequestedSkillSelection[]): Requeste
 
 export function serverMessageId(turn: ChatMessage): string {
   return (turn.serverId ?? turn.id).trim()
+}
+
+export function hasRetryableAssistantOutput(turn: ChatAssistantTurn): boolean {
+  return turn.messages.some((block) => {
+    if (block.type === 'error') return false
+    if (block.type === 'text' || block.type === 'reasoning') return block.content.trim().length > 0
+    if (block.type === 'attachments') return block.attachments.length > 0
+    return true
+  })
 }
 
 export function hasUserAttachments(turn: ChatMessage): turn is ChatUserTurn {
