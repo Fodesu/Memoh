@@ -6,12 +6,12 @@ import (
 	"github.com/memohai/memoh/internal/acl"
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
+	decisionruntime "github.com/memohai/memoh/internal/agent/decision/runtime"
 	audiopkg "github.com/memohai/memoh/internal/audio"
 	"github.com/memohai/memoh/internal/boot"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channelaccess"
 	"github.com/memohai/memoh/internal/chat/event"
-	"github.com/memohai/memoh/internal/decisionruntime"
 	"github.com/memohai/memoh/internal/fetchproviders"
 	"github.com/memohai/memoh/internal/heartbeat"
 	"github.com/memohai/memoh/internal/mcp"
@@ -104,7 +104,6 @@ func ServerModule() fx.Option {
 			provideMediaService,
 			provideAgent,
 			provideAgentService,
-			provideBaseTurnService,
 			provideTurnService,
 			provideScheduleTriggerer,
 			provideHeartbeatSessionCreator,

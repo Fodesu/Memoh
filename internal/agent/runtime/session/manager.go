@@ -917,7 +917,7 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 func (m *Manager) finalizeRunState(ctx context.Context, handle RunHandle, outcome runFinalization) (bool, error) {
 	outcome = sanitizeRunFinalization(outcome)
 	admissionTerminal := false
-	var canceledDecisions []conversation.UIMessage
+	var canceledDecisions []chatview.UIMessage
 	_, changed, err := m.releaseActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
 		run := snapshot.CurrentRunView
 		if !isActiveRunStatus(run.Status) {
@@ -972,7 +972,7 @@ func (m *Manager) finalizeRunState(ctx context.Context, handle RunHandle, outcom
 			return RuntimeDelta{CurrentRunView: snapshot.CurrentRunView}
 		}
 		delta := runtimeRunPatch(snapshot, true, true, true, m.distributed != nil)
-		requestedUpserts := append(append([]conversation.UIMessage(nil), outcome.Messages...), canceledDecisions...)
+		requestedUpserts := append(append([]chatview.UIMessage(nil), outcome.Messages...), canceledDecisions...)
 		delta.MessageUpserts = resolvedUIMessageUpserts(snapshot.CurrentRunView, requestedUpserts)
 		return delta
 	})

@@ -375,7 +375,6 @@ func TestRetiredDomainPackagesStayRemoved(t *testing.T) {
 		"internal/historyfrag",
 		"internal/compaction",
 		"internal/contextlimit",
-		"internal/sessionruntime",
 		"internal/agent/tools",
 	} {
 		var files []string

@@ -21,8 +21,9 @@ import (
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
+	decisionruntime "github.com/memohai/memoh/internal/agent/decision/runtime"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/agent/runtime/session"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	chatview "github.com/memohai/memoh/internal/agent/view"
 	"github.com/memohai/memoh/internal/apperror"
@@ -34,7 +35,6 @@ import (
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/command"
-	"github.com/memohai/memoh/internal/decisionruntime"
 	"github.com/memohai/memoh/internal/media"
 	"github.com/memohai/memoh/internal/runtimefence"
 	skillset "github.com/memohai/memoh/internal/skills"
@@ -112,60 +112,6 @@ type localChannelAgentService interface {
 }
 
 // NewLocalChannelHandler creates a local channel handler.
-func turnToolApprovalResponse(input application.ToolApprovalResponseInput) turn.ToolApprovalResponse {
-	return turn.ToolApprovalResponse{
-		BotID: input.BotID, ThreadID: input.ThreadID, ActorChannelIdentityID: input.ActorChannelIdentityID,
-		ActorUserID: input.ActorUserID, ApprovalID: input.ApprovalID, ExplicitID: input.ExplicitID,
-		ReplyExternalMessageID: input.ReplyExternalMessageID, Decision: input.Decision, Reason: input.Reason,
-		ChatToken: input.ChatToken, SuppressActivePromptAttach: input.SuppressActivePromptAttach,
-		ResolveOnly: input.ResolveOnly,
-	}
-}
-
-func applicationToolApprovalResponse(input turn.ToolApprovalResponse) application.ToolApprovalResponseInput {
-	return application.ToolApprovalResponseInput{
-		BotID: input.BotID, ThreadID: input.ThreadID, ActorChannelIdentityID: input.ActorChannelIdentityID,
-		ActorUserID: input.ActorUserID, ApprovalID: input.ApprovalID, ExplicitID: input.ExplicitID,
-		ReplyExternalMessageID: input.ReplyExternalMessageID, Decision: input.Decision, Reason: input.Reason,
-		ChatToken: input.ChatToken, SuppressActivePromptAttach: input.SuppressActivePromptAttach,
-		ResolveOnly: input.ResolveOnly,
-	}
-}
-
-func turnUserInputResponse(input application.UserInputResponseInput) turn.UserInputResponse {
-	answers := make([]turn.QuestionAnswer, len(input.Answers))
-	for i := range input.Answers {
-		answers[i] = turn.QuestionAnswer{
-			QuestionID: input.Answers[i].QuestionID, OptionIDs: input.Answers[i].OptionIDs,
-			CustomText: input.Answers[i].CustomText, Text: input.Answers[i].Text, Skipped: input.Answers[i].Skipped,
-		}
-	}
-	return turn.UserInputResponse{
-		BotID: input.BotID, ThreadID: input.ThreadID, ActorChannelIdentityID: input.ActorChannelIdentityID,
-		ActorUserID: input.ActorUserID, UserInputID: input.UserInputID, ExplicitID: input.ExplicitID,
-		ReplyExternalMessageID: input.ReplyExternalMessageID, Answers: answers, TextAnswer: input.TextAnswer,
-		Canceled: input.Canceled, Reason: input.Reason, ChatToken: input.ChatToken,
-		SuppressActivePromptAttach: input.SuppressActivePromptAttach, ResolveOnly: input.ResolveOnly,
-	}
-}
-
-func applicationUserInputResponse(input turn.UserInputResponse) application.UserInputResponseInput {
-	answers := make([]userinput.QuestionAnswer, len(input.Answers))
-	for i := range input.Answers {
-		answers[i] = userinput.QuestionAnswer{
-			QuestionID: input.Answers[i].QuestionID, OptionIDs: input.Answers[i].OptionIDs,
-			CustomText: input.Answers[i].CustomText, Text: input.Answers[i].Text, Skipped: input.Answers[i].Skipped,
-		}
-	}
-	return application.UserInputResponseInput{
-		BotID: input.BotID, ThreadID: input.ThreadID, ActorChannelIdentityID: input.ActorChannelIdentityID,
-		ActorUserID: input.ActorUserID, UserInputID: input.UserInputID, ExplicitID: input.ExplicitID,
-		ReplyExternalMessageID: input.ReplyExternalMessageID, Answers: answers, TextAnswer: input.TextAnswer,
-		Canceled: input.Canceled, Reason: input.Reason, ChatToken: input.ChatToken,
-		SuppressActivePromptAttach: input.SuppressActivePromptAttach, ResolveOnly: input.ResolveOnly,
-	}
-}
-
 func NewLocalChannelHandler(channelType channel.ChannelType, channelManager *channel.Manager, channelStore *channel.Store, routeHub *local.RouteHub, botService *bots.Service, accountService *accounts.Service, sessionService *sessionpkg.Service) *LocalChannelHandler {
 	return &LocalChannelHandler{
 		channelType:         channelType,
@@ -756,23 +702,6 @@ type wsClientMessage struct {
 	Reason            string                     `json:"reason,omitempty"`
 	Answers           []userinput.QuestionAnswer `json:"answers,omitempty"`
 	Canceled          bool                       `json:"canceled,omitempty"`
-}
-
-func turnQuestionAnswers(in []userinput.QuestionAnswer) []turn.QuestionAnswer {
-	if in == nil {
-		return nil
-	}
-	out := make([]turn.QuestionAnswer, len(in))
-	for i := range in {
-		out[i] = turn.QuestionAnswer{
-			QuestionID: in[i].QuestionID,
-			OptionIDs:  in[i].OptionIDs,
-			CustomText: in[i].CustomText,
-			Text:       in[i].Text,
-			Skipped:    in[i].Skipped,
-		}
-	}
-	return out
 }
 
 type webRequestedSkill struct {
@@ -2316,7 +2245,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					input := responseInput
 					input.SuppressActivePromptAttach = suppressActivePromptAttach
 					var commitErr error
-				committed, commitErr = h.agentService.CommitToolApprovalResponse(ctx, input)
+					committed, commitErr = h.agentService.CommitToolApprovalResponse(ctx, input)
 					if commitErr != nil {
 						return sessionruntime.RunAdmissionView{}, commitErr
 					}
@@ -2381,7 +2310,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					input := responseInput
 					input.SuppressActivePromptAttach = suppressActivePromptAttach
 					var commitErr error
-				committed, commitErr = h.agentService.CommitUserInputResponse(ctx, input)
+					committed, commitErr = h.agentService.CommitUserInputResponse(ctx, input)
 					if commitErr != nil {
 						return sessionruntime.RunAdmissionView{}, commitErr
 					}

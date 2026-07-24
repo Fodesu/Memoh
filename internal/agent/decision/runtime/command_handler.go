@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/memohai/memoh/internal/agent/application"
-	"github.com/memohai/memoh/internal/agent/runtime/session"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 )
 
 func (r *Router) bindCommandHandlers() {

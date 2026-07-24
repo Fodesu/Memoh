@@ -8,7 +8,7 @@ import (
 
 	"github.com/memohai/memoh/internal/agent/application"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/agent/runtime/session"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 )
 
 func (r *Router) consumeEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.WSStreamEvent, output chan<- application.WSStreamEvent, cancel context.CancelFunc) error {

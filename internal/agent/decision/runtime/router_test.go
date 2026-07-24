@@ -14,7 +14,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/application"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/agent/runtime/session"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	conversation "github.com/memohai/memoh/internal/agent/view"
 	"github.com/memohai/memoh/internal/runtimefence"

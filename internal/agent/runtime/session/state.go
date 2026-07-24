@@ -390,11 +390,11 @@ func preserveTerminalDecision(existing, incoming chatview.UIMessage) chatview.UI
 	return incoming
 }
 
-func cancelPendingDecisions(run *CurrentRunView) []conversation.UIMessage {
+func cancelPendingDecisions(run *CurrentRunView) []chatview.UIMessage {
 	if run == nil {
 		return nil
 	}
-	canceled := make([]conversation.UIMessage, 0, 2)
+	canceled := make([]chatview.UIMessage, 0, 2)
 	for i := range run.Messages {
 		message := &run.Messages[i]
 		changed := false

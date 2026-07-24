@@ -10,10 +10,8 @@ import (
 	"time"
 
 	"github.com/memohai/memoh/internal/agent/application"
-	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/agent/runtime/session"
-	"github.com/memohai/memoh/internal/agent/turn"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	conversation "github.com/memohai/memoh/internal/agent/view"
 	"github.com/memohai/memoh/internal/runtimefence"
 )
@@ -158,59 +156,6 @@ func (r *Router) RespondUserInput(ctx context.Context, input application.UserInp
 	}, func(runCtx context.Context, eventCh chan<- application.WSStreamEvent) error {
 		return r.resolver.ContinueCommittedUserInputResponse(runCtx, committed, eventCh)
 	})
-}
-
-func turnToolApprovalResponse(input application.ToolApprovalResponseInput) turn.ToolApprovalResponse {
-	return turn.ToolApprovalResponse{
-		BotID:                      input.BotID,
-		ThreadID:                   input.ThreadID,
-		ActorChannelIdentityID:     input.ActorChannelIdentityID,
-		ActorUserID:                input.ActorUserID,
-		ApprovalID:                 input.ApprovalID,
-		ExplicitID:                 input.ExplicitID,
-		ReplyExternalMessageID:     input.ReplyExternalMessageID,
-		Decision:                   input.Decision,
-		Reason:                     input.Reason,
-		ChatToken:                  input.ChatToken,
-		SuppressActivePromptAttach: input.SuppressActivePromptAttach,
-		ResolveOnly:                input.ResolveOnly,
-	}
-}
-
-func turnUserInputResponse(input application.UserInputResponseInput) turn.UserInputResponse {
-	return turn.UserInputResponse{
-		BotID:                      input.BotID,
-		ThreadID:                   input.ThreadID,
-		ActorChannelIdentityID:     input.ActorChannelIdentityID,
-		ActorUserID:                input.ActorUserID,
-		UserInputID:                input.UserInputID,
-		ExplicitID:                 input.ExplicitID,
-		ReplyExternalMessageID:     input.ReplyExternalMessageID,
-		Answers:                    questionAnswersToTurn(input.Answers),
-		TextAnswer:                 input.TextAnswer,
-		Canceled:                   input.Canceled,
-		Reason:                     input.Reason,
-		ChatToken:                  input.ChatToken,
-		SuppressActivePromptAttach: input.SuppressActivePromptAttach,
-		ResolveOnly:                input.ResolveOnly,
-	}
-}
-
-func questionAnswersToTurn(in []userinput.QuestionAnswer) []turn.QuestionAnswer {
-	if in == nil {
-		return nil
-	}
-	out := make([]turn.QuestionAnswer, len(in))
-	for i := range in {
-		out[i] = turn.QuestionAnswer{
-			QuestionID: in[i].QuestionID,
-			OptionIDs:  in[i].OptionIDs,
-			CustomText: in[i].CustomText,
-			Text:       in[i].Text,
-			Skipped:    in[i].Skipped,
-		}
-	}
-	return out
 }
 
 type continuation func(context.Context, chan<- application.WSStreamEvent) error

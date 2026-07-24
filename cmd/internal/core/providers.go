@@ -32,6 +32,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
+	decisionruntime "github.com/memohai/memoh/internal/agent/decision/runtime"
 	agentpayload "github.com/memohai/memoh/internal/agent/event/payload"
 	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
@@ -56,7 +57,6 @@ import (
 	pgvectordb "github.com/memohai/memoh/internal/db/pgvector"
 	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
 	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/decisionruntime"
 	emailpkg "github.com/memohai/memoh/internal/email"
 	"github.com/memohai/memoh/internal/fetchproviders"
 	"github.com/memohai/memoh/internal/handlers"
@@ -1023,17 +1023,13 @@ func (a *gatewayAssetLoaderAdapter) AccessPathForGateway(ctx context.Context, bo
 	return strings.TrimSpace(accessPath), nil
 }
 
-// provideBaseTurnService exposes the application service as Channel's base
-// Agent surface. Both chat and discuss turns run directly on the same service.
-func provideBaseTurnService(service *application.Service) *application.Service {
+// provideTurnService exposes the runtime-routed application service as
+// Channel's only Agent surface.
+func provideTurnService(service *application.Service, router *decisionruntime.Router) turn.Service {
 	// The self-hosted runtime binds its DB pool to the singleton team, so
 	// the service fails closed on any other TeamID (turn.ErrTeamNotServed).
 	service.SetAllowedTeam(team.DefaultTeamID)
-	return service
-}
-
-func provideTurnService(base *application.Service, router *decisionruntime.Router) turn.Service {
-	return decisionruntime.NewTurnService(base, router)
+	return decisionruntime.NewTurnService(service, router)
 }
 
 // applicationBotPermissionChecker duplicates the Channel module's inbound

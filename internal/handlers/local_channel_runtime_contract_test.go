@@ -23,7 +23,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/application"
 	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/agent/runtime/session"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	chatview "github.com/memohai/memoh/internal/agent/view"
 	"github.com/memohai/memoh/internal/apperror"
@@ -3072,18 +3072,6 @@ func (r *deferredResponseResolver) PrepareUserInputResponseTarget(context.Contex
 	return r.preserved, r.prepareErr
 }
 
-func (r *deferredResponseResolver) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, _ chan<- application.WSStreamEvent) error {
-	fence, _ := runtimefence.FromContext(ctx)
-	r.stages <- deferredResponseStage{name: "respond", fence: fence, resolveOnly: input.ResolveOnly}
-	return nil
-}
-
-func (r *deferredResponseResolver) RespondUserInput(ctx context.Context, input turn.UserInputResponse, _ chan<- application.WSStreamEvent) error {
-	fence, _ := runtimefence.FromContext(ctx)
-	r.stages <- deferredResponseStage{name: "respond", fence: fence, resolveOnly: input.ResolveOnly, canceled: input.Canceled}
-	return nil
-}
-
 func (r *deferredResponseResolver) CommitToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error) {
 	fence, _ := runtimefence.FromContext(ctx)
 	r.stages <- deferredResponseStage{name: "commit", fence: fence, resolveOnly: input.ResolveOnly}
@@ -3108,12 +3096,16 @@ func (r *deferredResponseResolver) ContinueCommittedUserInputResponse(ctx contex
 	return nil
 }
 
-func (r *sidebandResponseResolver) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, _ chan<- application.WSStreamEvent) error {
+func (r *sidebandResponseResolver) CommitToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error) {
 	if r.approvalFences != nil {
 		fence, _ := runtimefence.FromContext(ctx)
 		r.approvalFences <- fence
 	}
-	r.approvals <- applicationToolApprovalResponse(input)
+	r.approvals <- input
+	return application.CommittedToolApprovalResponse{}, nil
+}
+
+func (r *sidebandResponseResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, _ chan<- application.WSStreamEvent) error {
 	if r.approvalCalls != nil {
 		r.approvalCalls <- struct{}{}
 	}
@@ -3123,12 +3115,16 @@ func (r *sidebandResponseResolver) RespondToolApproval(ctx context.Context, inpu
 	return nil
 }
 
-func (r *sidebandResponseResolver) RespondUserInput(ctx context.Context, input turn.UserInputResponse, _ chan<- application.WSStreamEvent) error {
+func (r *sidebandResponseResolver) CommitUserInputResponse(ctx context.Context, input application.UserInputResponseInput) (application.CommittedUserInputResponse, error) {
 	if r.inputFences != nil {
 		fence, _ := runtimefence.FromContext(ctx)
 		r.inputFences <- fence
 	}
-	r.inputs <- applicationUserInputResponse(input)
+	r.inputs <- input
+	return application.CommittedUserInputResponse{}, nil
+}
+
+func (r *sidebandResponseResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, _ chan<- application.WSStreamEvent) error {
 	if r.inputCalls != nil {
 		r.inputCalls <- struct{}{}
 	}

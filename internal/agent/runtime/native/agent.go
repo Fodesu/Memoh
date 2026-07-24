@@ -50,7 +50,6 @@ func New(deps Deps) *Agent {
 	agent := &Agent{
 		client:         sdk.NewClient(),
 		bridgeProvider: deps.BridgeProvider,
-		hookService:    deps.HookService,
 		logger:         logger.With(slog.String("service", "agent/runtime/native")),
 		limits:         deps.Limits.Normalize(),
 	}
