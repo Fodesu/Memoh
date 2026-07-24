@@ -129,7 +129,8 @@
       "interrupted": "Agent 运行已中断。",
       "target_not_active": "该 Agent 运行已结束或不再可用。",
       "command_busy": "另一个运行时操作仍在处理中，请稍后重试。",
-      "command_failed": "运行时操作未能完成，请重试。"
+      "command_failed": "运行时操作未能完成，请重试。",
+      "decision_pending": "请先完成待处理的审批或问题，再发送新消息。"
     },
     "acp": {
       "runtime_not_found": "这个 Agent 运行实例已失效，将重新启动。",

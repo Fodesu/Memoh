@@ -437,7 +437,7 @@
                   v-model="inputText"
                   rows="1"
                   :placeholder="activeChatReadOnly ? $t('chat.readonlyHint') : $t('chat.inputPlaceholder')"
-                  :disabled="!currentBotId || activeChatReadOnly || loadingMessages"
+                  :disabled="!currentBotId || activeChatReadOnly || loadingMessages || hasPendingSessionDecision"
                   class="field-sizing-content resize-none break-words bg-transparent text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
                   :class="isMultiline
                     ? 'order-none w-full basis-full pl-2 pr-1 pt-2 pb-1.5 max-h-52'
@@ -658,7 +658,7 @@
                     <Button
                       type="button"
                       variant="brand"
-                      :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending)"
+                      :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending || hasPendingSessionDecision)"
                       :aria-label="streaming ? 'Stop generating response' : 'Send message'"
                       class="absolute inset-0 size-9 rounded-full transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] motion-reduce:transition-none"
                       :class="(sendButtonVisible || streaming) ? 'scale-100 opacity-100' : 'pointer-events-none scale-0 opacity-0'"
@@ -767,7 +767,7 @@ import { useACPRuntime } from '@/composables/useACPRuntime'
 import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, acpAgentIcon, findMissingRequiredManagedField, isACPAgentEnabled, isACPNoProject, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
-import { findLatestPendingChatDecision } from './chat-pending-decision'
+import { findLatestPendingChatDecision, hasPendingChatDecision } from './chat-pending-decision'
 
 const props = withDefaults(defineProps<{
   // Stable dockview panel id (e.g. `chat:3`). Used for per-tab composer drafts and
@@ -884,6 +884,7 @@ watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
 })
 
 const pendingDecision = computed(() => findLatestPendingChatDecision(messages.value))
+const hasPendingSessionDecision = computed(() => hasPendingChatDecision(messages.value))
 const pendingUserInput = computed<UIUserInput | null>(() => (
   pendingDecision.value?.kind === 'user_input'
     ? pendingDecision.value.userInput

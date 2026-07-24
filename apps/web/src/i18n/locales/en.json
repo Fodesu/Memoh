@@ -129,7 +129,8 @@
       "interrupted": "The Agent run was interrupted.",
       "target_not_active": "This Agent run is no longer active.",
       "command_busy": "Another runtime action is still being processed. Please try again shortly.",
-      "command_failed": "The runtime action could not be completed. Please try again."
+      "command_failed": "The runtime action could not be completed. Please try again.",
+      "decision_pending": "Resolve the pending approval or question before sending another message."
     },
     "acp": {
       "runtime_not_found": "That Agent runtime is no longer available. It will be started again.",

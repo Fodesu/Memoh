@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatAssistantTurn, ChatMessage, ToolCallBlock } from '@/store/chat-list'
-import { findLatestPendingChatDecision } from './chat-pending-decision'
+import { findLatestPendingChatDecision, hasPendingChatDecision } from './chat-pending-decision'
 
 function toolBlock(id: number, values: Partial<ToolCallBlock> = {}): ToolCallBlock {
   return {
@@ -85,5 +85,27 @@ describe('findLatestPendingChatDecision', () => {
     ])]
 
     expect(findLatestPendingChatDecision(messages)).toBeNull()
+  })
+})
+
+describe('hasPendingChatDecision', () => {
+  it('blocks a new request for a pending decision that this client cannot answer', () => {
+    const messages: ChatMessage[] = [assistantTurn('assistant-1', [
+      toolBlock(1, {
+        approval: { approval_id: 'approval-1', status: 'pending', can_approve: false },
+      }),
+    ])]
+
+    expect(hasPendingChatDecision(messages)).toBe(true)
+  })
+
+  it('does not block after the decision reaches a terminal state', () => {
+    const messages: ChatMessage[] = [assistantTurn('assistant-1', [
+      toolBlock(1, {
+        userInput: { user_input_id: 'input-1', status: 'submitted', can_respond: false },
+      }),
+    ])]
+
+    expect(hasPendingChatDecision(messages)).toBe(false)
   })
 })
