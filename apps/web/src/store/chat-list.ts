@@ -1985,6 +1985,7 @@ export const useChatStore = defineStore('chat', () => {
         ? [prepared.optimisticUserTurn, stream.assistantTurn]
         : [stream.assistantTurn],
     )
+    transcript.discardRuntimeAssistantErrorsForTurns(stream.sessionId, replacedTurns)
     if (existing) {
       existing.kind = prepared.kind
       existing.optimisticUserTurn = prepared.optimisticUserTurn

@@ -745,6 +745,23 @@ export function createTranscriptController({
     return replaced
   }
 
+  function discardRuntimeAssistantErrorsForTurns(targetSessionId: string, turns: ChatMessage[]) {
+    const sid = targetSessionId.trim()
+    const current = ephemeralAssistantErrors.get(sid)
+    if (!sid || !current?.length || !turns.length) return
+
+    const replacedRuntimeKeys = new Set(turns.flatMap((turn) => {
+      if (turn.role !== 'assistant') return []
+      const key = runtimeAssistantErrorIdentity.get(toRaw(turn))
+      return key ? [key] : []
+    }))
+    if (!replacedRuntimeKeys.size) return
+
+    const remaining = current.filter(error => !replacedRuntimeKeys.has(runtimeErrorIdentityKey(error)))
+    if (remaining.length > 0) ephemeralAssistantErrors.set(sid, remaining)
+    else ephemeralAssistantErrors.delete(sid)
+  }
+
   function restoreTailFromOptimistic(
     botId: string,
     targetSessionId: string,
@@ -1127,6 +1144,7 @@ export function createTranscriptController({
     removeFromView,
     removeTurnFromSession,
     replaceTailFromTurn,
+    discardRuntimeAssistantErrorsForTurns,
     restoreTailFromOptimistic,
     createOptimisticAssistantTurn,
     createOptimisticUserTurn,

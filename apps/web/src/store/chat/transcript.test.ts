@@ -311,6 +311,35 @@ describe('chat transcript controller', () => {
     expect(transcript.assistantTurnForRuntimeError('session-1', identityB)).toBe(errors[1])
   })
 
+  it('discards only runtime errors belonging to a replaced tail', () => {
+    const { transcript } = makeTranscript()
+    const userA = { ...rawUser('user-a', 'first prompt'), external_message_id: 'stream-a' }
+    const userB = { ...rawUser('user-b', 'second prompt', '2026-01-01T00:01:00.000Z'), external_message_id: 'stream-b' }
+    const identityA = { streamId: 'stream-a', generation: 'generation-a' }
+    const identityB = { streamId: 'stream-b', generation: 'generation-b' }
+
+    transcript.replaceMessages([userA], 'session-1')
+    const failedA = assistant('assistant-a')
+    transcript.appendToView(failedA)
+    transcript.appendAssistantError(failedA, 'session-1', 'Response stopped', true, identityA)
+
+    transcript.appendToView(transcript.normalizeTurn(userB))
+    const failedB = assistant('assistant-b')
+    transcript.appendToView(failedB)
+    transcript.appendAssistantError(failedB, 'session-1', 'Response stopped', true, identityB)
+
+    const replaced = transcript.replaceTailFromTurn(transcript.messages[2]!, [assistant('assistant-retry')])
+    transcript.discardRuntimeAssistantErrorsForTurns('session-1', replaced)
+    transcript.replaceMessages([userA, userB], 'session-1')
+
+    expect(transcript.assistantTurnForRuntimeError('session-1', identityA)).not.toBeNull()
+    expect(transcript.assistantTurnForRuntimeError('session-1', identityB)).toBeNull()
+    const stopped = transcript.messages.flatMap(turn => turn.role === 'assistant'
+      ? turn.messages.filter(block => block.type === 'error' && block.content === 'Response stopped')
+      : [])
+    expect(stopped).toHaveLength(1)
+  })
+
   it('does not accumulate identical terminal errors on one persisted assistant', () => {
     const { transcript } = makeTranscript()
     const user = { ...rawUser('user-1'), external_message_id: 'stream-reused' }

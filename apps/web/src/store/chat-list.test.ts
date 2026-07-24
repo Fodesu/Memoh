@@ -8773,7 +8773,7 @@ describe('chat-list store', () => {
     )).toContainEqual(expect.objectContaining({ content: 'Response stopped' }))
   })
 
-  it('replays an unacknowledged abort after reconnecting to the same generation', async () => {
+  it('replays an unacknowledged abort after reconnect and removes it when retry replaces the turn', async () => {
     sendEvents = []
     api.fetchSessions.mockResolvedValueOnce({
       items: [{ id: 'session-1', bot_id: 'bot-1', title: 'A', type: 'chat' }],
@@ -8831,6 +8831,34 @@ describe('chat-list store', () => {
         : [])
       expect(stopped).toHaveLength(1)
     })
+
+    const retrying = store.retryLatestAssistant('assistant-aborted-server')
+    await flushPromises()
+    const retryStreamId = lastStreamId
+    const operation: SessionruntimeRunOperationView = {
+      kind: 'retry',
+      replace_from_message_id: 'assistant-aborted-server',
+    }
+    streamHandler?.(runtimeReplacementSnapshot(
+      retryStreamId,
+      operation,
+      [{ id: 0, type: 'text', content: 'new partial answer' }],
+      'running',
+      4,
+    ))
+
+    expect(store.messages.flatMap(turn => turn.role === 'assistant'
+      ? turn.messages.filter(block => block.type === 'error' && block.content === 'Response stopped')
+      : [])).toEqual([])
+
+    streamHandler?.(runtimeReplacementSnapshot(
+      retryStreamId,
+      operation,
+      [{ id: 0, type: 'text', content: 'new partial answer' }],
+      'aborted',
+      5,
+    ))
+    await expect(retrying).resolves.toMatchObject({ ok: false })
   })
 
   it('reconciles committed aborted history in every subscribed store without message-created events', async () => {
