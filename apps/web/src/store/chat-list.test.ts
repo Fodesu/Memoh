@@ -4300,6 +4300,29 @@ describe('chat-list store', () => {
     expect(store.messages[0]?.serverId ?? store.messages[0]?.id).toBe('user-retry-canonical')
   })
 
+  it.each([
+    ['tool approval', approvalTurn({ approval_id: 'approval-pending', status: 'pending', can_approve: true })],
+    ['ask_user', askUserTurn(singleSelectUserInput('input-pending'))],
+  ])('blocks retry and edit while a %s decision is pending', async (_name, pendingTurn) => {
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce([
+      { id: 'user-1', role: 'user', text: 'hello', attachments: [], timestamp: '2026-05-17T08:00:00.000Z' },
+    ])
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    store.messages.push(pendingTurn)
+    const assistant = store.messages.find(message => message.role === 'assistant')
+    expect(assistant).toBeDefined()
+
+    await expect(store.retryLatestAssistant(assistant!.id)).resolves.toMatchObject({ ok: false, stage: 'startup' })
+    await expect(store.editLatestUser('user-1', 'edited')).resolves.toMatchObject({ ok: false, stage: 'startup' })
+    expect(sentWSMessages.some(message => message.type === 'retry_message' || message.type === 'edit_message')).toBe(false)
+  })
+
   it('keeps an initiating retry pending until runtime admission arrives', async () => {
     sendEvents = []
     api.fetchSessions.mockResolvedValueOnce({
@@ -12219,6 +12242,92 @@ describe('chat-list store', () => {
     expect(assistant.messages.some(block => block.type === 'text' && block.content === 'partial output')).toBe(true)
     expect(assistant.messages.some(block => block.type === 'error' && block.content === 'The Agent run failed. Please try again.')).toBe(true)
     expect(api.fetchMessagesUI).toHaveBeenCalledTimes(refreshCallsBefore)
+  })
+
+  it('reconnect contract: settles a running partial as retryable when the owner is lost', async () => {
+    api.fetchSessions.mockResolvedValueOnce({
+      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'A', type: 'chat' }],
+      nextCursor: null,
+    })
+    api.fetchMessagesUI.mockResolvedValueOnce([{
+      id: 'user-interrupted-server',
+      role: 'user',
+      text: 'Inspect the workspace',
+      attachments: [],
+      timestamp: '2026-07-10T00:00:00Z',
+      external_message_id: 'stream-interrupted',
+    }])
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+
+    const running = structuredClone(interruptedRunContractFixture.runtime_stream[0]!)
+    running.snapshot.current_run_view!.request_user_turn!.id = 'user-interrupted-server'
+    streamHandler?.(running as UIStreamEvent)
+    streamHandler?.(structuredClone(interruptedRunContractFixture.runtime_stream[1]!) as UIStreamEvent)
+    expect(store.streaming).toBe(true)
+
+    runtimeSubscribeMessages = []
+    const websocket = api.connectWebSocket.mock.results.at(-1)?.value as {
+      onClose?: (() => void) | null
+      onOpen?: (() => void) | null
+    }
+    websocket.onClose?.()
+    websocket.onOpen?.()
+    expect(runtimeSubscribeMessages).toEqual([
+      expect.objectContaining({ type: 'runtime_subscribe', session_id: 'session-1' }),
+    ])
+
+    const historyRefresh = deferred<UITurn[]>()
+    api.fetchMessagesUI.mockImplementationOnce(() => historyRefresh.promise)
+    _sessionMessageHandler?.({ type: 'dropped' } as SessionMessageStreamEvent)
+    await vi.waitFor(() => expect(api.fetchMessagesUI).toHaveBeenCalledTimes(2))
+    historyRefresh.resolve([
+      {
+        id: 'user-interrupted-server',
+        role: 'user',
+        text: 'Inspect the workspace',
+        attachments: [],
+        timestamp: '2026-07-10T00:00:00Z',
+        external_message_id: 'stream-interrupted',
+      },
+      {
+        id: 'assistant-interrupted-server',
+        role: 'assistant',
+        messages: [{ id: 0, type: 'text', content: 'partial output' }],
+        timestamp: '2026-07-10T00:00:01Z',
+      },
+    ])
+
+    const lost = structuredClone(interruptedRunContractFixture.runtime_snapshot)
+    lost.seq = 6
+    lost.snapshot.seq = 6
+    lost.snapshot.current_run_view!.status = 'lost'
+    lost.snapshot.current_run_view!.request_user_turn!.id = 'user-interrupted-server'
+    lost.snapshot.current_run_view!.history_committed = true
+    streamHandler?.(lost as UIStreamEvent)
+    await flushPromises()
+
+    expect(store.streaming).toBe(false)
+    const assistants = store.messages.filter(turn => turn.role === 'assistant')
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({
+      streaming: false,
+      retryTargetId: 'user-interrupted-server',
+      messages: [
+        expect.objectContaining({ type: 'text', content: 'partial output' }),
+        expect.objectContaining({ type: 'error', content: 'The Agent run failed. Please try again.' }),
+      ],
+    })
+    expect(assistants[0]?.serverId ?? assistants[0]?.id).toBe('assistant-interrupted-server')
+
+    sendEvents = [{ type: 'error', message: 'retry rejected for test cleanup' } as UIStreamEvent]
+    await expect(store.retryLatestAssistant('user-interrupted-server')).resolves.toMatchObject({ ok: false })
+    expect(sentWSMessages.at(-1)).toMatchObject({
+      type: 'retry_message',
+      session_id: 'session-1',
+      message_id: 'user-interrupted-server',
+    })
   })
 
   it('reconnect contract: empty runtime snapshot clears stale local pending streams', async () => {

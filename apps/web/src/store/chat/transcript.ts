@@ -231,6 +231,8 @@ export function createTranscriptController({
   }
 
   function associateRuntimeError(turn: ChatAssistantTurn, error: EphemeralAssistantError) {
+    const retryTargetId = error.userServerId?.trim()
+    if (retryTargetId) turn.retryTargetId = retryTargetId
     const key = runtimeErrorIdentityKey(error)
     if (key) runtimeAssistantErrorIdentity.set(toRaw(turn), key)
   }
@@ -338,6 +340,10 @@ export function createTranscriptController({
       const runtimeKey = runtimeErrorIdentityKey(error)
       if (!text || (!runtimeKey && hasAssistantError(items, text))) continue
       const anchorIndex = findAnchorUserIndex(items, error)
+      const anchorUser = anchorIndex >= 0 ? items[anchorIndex] : undefined
+      if (!error.userServerId && anchorUser?.role === 'user' && !anchorUser.__optimistic) {
+        error.userServerId = serverMessageId(anchorUser)
+      }
       const assistantTurn = anchorIndex >= 0
         ? findAssistantAfterAnchor(items, anchorIndex)
         : findAssistantTurnForEphemeralError(items, error.timestamp)
@@ -984,9 +990,6 @@ export function createTranscriptController({
       standalone,
       runtimeStreamId: identity?.streamId.trim() || undefined,
       runtimeGeneration: identity?.generation.trim() || undefined,
-    }
-    if (!hasVisibleAssistantBlocks(assistantTurn)) {
-      assistantTurn.retryTargetId = error.userServerId
     }
     ephemeralAssistantErrors.set(sid, [...current, error].slice(-5))
     associateRuntimeError(assistantTurn, error)

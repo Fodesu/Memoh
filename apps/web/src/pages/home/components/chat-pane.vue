@@ -912,7 +912,7 @@ const activeSupportsTurnReplacement = computed(() =>
 )
 
 const latestRetryableAssistantId = computed(() => {
-  if (streaming.value || loadingMessages.value || activeChatReadOnly.value) return ''
+  if (streaming.value || loadingMessages.value || activeChatReadOnly.value || hasPendingSessionDecision.value) return ''
   if (!activeSupportsTurnReplacement.value) return ''
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const message = messages.value[i]
@@ -927,7 +927,7 @@ const latestRetryableAssistantId = computed(() => {
 })
 
 const latestEditableUserId = computed(() => {
-  if (streaming.value || loadingMessages.value || activeChatReadOnly.value) return ''
+  if (streaming.value || loadingMessages.value || activeChatReadOnly.value || hasPendingSessionDecision.value) return ''
   if (!activeSupportsTurnReplacement.value) return ''
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const message = messages.value[i]

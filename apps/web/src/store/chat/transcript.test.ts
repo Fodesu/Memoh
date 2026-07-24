@@ -281,6 +281,68 @@ describe('chat transcript controller', () => {
     })
   })
 
+  it('recovers the retry target when canonical history arrives after the runtime error', () => {
+    const { transcript } = makeTranscript()
+    const optimisticUser: ChatUserTurn = {
+      id: 'runtime-user',
+      role: 'user',
+      text: 'hello',
+      attachments: [],
+      timestamp: '2026-01-01T00:00:00.000Z',
+      externalMessageId: 'stream-failed',
+      streaming: false,
+      isSelf: true,
+      __optimistic: true,
+    }
+    const failed = assistant('assistant-local')
+    transcript.appendToView(optimisticUser, failed)
+    transcript.appendAssistantError(failed, 'session-1', 'The Agent run failed. Please try again.', false, {
+      streamId: 'stream-failed',
+      generation: 'generation-failed',
+    })
+    expect(failed.retryTargetId).toBeUndefined()
+
+    transcript.replaceMessages([{
+      ...rawUser('user-failed'),
+      external_message_id: 'stream-failed',
+    }], 'session-1')
+
+    const replayed = transcript.messages.find((turn): turn is ChatAssistantTurn => turn.role === 'assistant')
+    expect(replayed).toMatchObject({
+      __ephemeral: true,
+      retryTargetId: 'user-failed',
+    })
+  })
+
+  it('keeps the canonical user as retry target when an interrupted turn has partial output', () => {
+    const { transcript } = makeTranscript()
+    transcript.replaceMessages([rawUser('user-interrupted')], 'session-1')
+    const failed = assistant('assistant-local')
+    failed.messages.push({ id: 0, type: 'text', content: 'partial output' })
+    transcript.appendToView(failed)
+
+    transcript.appendAssistantError(failed, 'session-1', 'The Agent run failed. Please try again.', false, {
+      streamId: 'stream-interrupted',
+      generation: 'generation-interrupted',
+    })
+
+    expect(failed.retryTargetId).toBe('user-interrupted')
+    transcript.replaceMessages([
+      rawUser('user-interrupted'),
+      rawAssistant('assistant-persisted', [{ id: 0, type: 'text', content: 'partial output' }]),
+    ], 'session-1')
+
+    const replayed = transcript.messages.find((turn): turn is ChatAssistantTurn => turn.role === 'assistant')
+    expect(replayed).toMatchObject({
+      id: 'assistant-persisted',
+      retryTargetId: 'user-interrupted',
+      messages: [
+        { id: 0, type: 'text', content: 'partial output' },
+        expect.objectContaining({ type: 'error', content: 'The Agent run failed. Please try again.' }),
+      ],
+    })
+  })
+
   it('keeps identical runtime errors distinct by stream generation across refreshes', () => {
     const { transcript } = makeTranscript()
     const userA = { ...rawUser('user-a', 'same prompt'), external_message_id: 'stream-reused' }

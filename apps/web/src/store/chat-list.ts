@@ -40,6 +40,7 @@ import { createAssistantStreamRegistry, type AssistantStream } from './chat/assi
 import { createChatRealtimeController } from './chat/realtime'
 import { createACPRuntimeRegistry } from './chat/acp-runtime-registry'
 import { createChatRefreshCoordinator } from './chat/refresh-coordinator'
+import { hasPendingChatDecision } from './chat/pending-decisions'
 import {
   createApprovalResponseTracker,
   type ApprovalResponse,
@@ -2350,11 +2351,11 @@ export const useChatStore = defineStore('chat', () => {
           resolveAssistantStream(streamId, bid, sid)
         } else {
           if (!runtimeError) return
-          rejectAssistantStream(streamId, runtimeError, bid, sid)
           const restoredAbort = restoredReplacement && runtimeError instanceof RuntimeAbortError
-          if (!uncommittedEmptyReplacement && !restoredAbort && (runtimeError instanceof RuntimeAbortError || !hadVisibleRuntimeOutput)) {
+          if (!uncommittedEmptyReplacement && !restoredAbort) {
             projectRuntimeTerminalError(stream, bid, sid, runtimeError.message)
           }
+          rejectAssistantStream(streamId, runtimeError, bid, sid)
         }
         keepRuntimeProjection = status !== 'completed' && hasVisibleAssistantBlocks(stream.assistantTurn)
       }
@@ -4800,7 +4801,7 @@ export const useChatStore = defineStore('chat', () => {
     const transcript = transcriptForTarget(viewTarget)
     const targetID = messageId.trim()
     if (!bid || !sid || !targetID || chatReadOnlyFor(viewTarget)) return { ok: false, stage: 'startup' }
-    if (isChatViewStreaming(viewTarget) || transcript.loadingMessages.value) return { ok: false, stage: 'startup' }
+    if (isChatViewStreaming(viewTarget) || transcript.loadingMessages.value || hasPendingChatDecision(transcript.messages)) return { ok: false, stage: 'startup' }
     const target = transcript.findTurnByServerId(targetID)
     const retryableTarget = target?.role === 'assistant'
       ? transcript.isLatestVisibleAssistantTurn(target)
@@ -4872,7 +4873,7 @@ export const useChatStore = defineStore('chat', () => {
     const transcript = transcriptForTarget(viewTarget)
     const targetID = messageId.trim()
     if (!bid || !sid || !targetID || !trimmed || chatReadOnlyFor(viewTarget)) return { ok: false, stage: 'startup' }
-    if (isChatViewStreaming(viewTarget) || transcript.loadingMessages.value) return { ok: false, stage: 'startup' }
+    if (isChatViewStreaming(viewTarget) || transcript.loadingMessages.value || hasPendingChatDecision(transcript.messages)) return { ok: false, stage: 'startup' }
     const target = transcript.findTurnByServerId(targetID)
     if (!target || !transcript.isLatestVisibleUserTurn(target)) return { ok: false, stage: 'startup' }
     if (hasUserAttachments(target)) return { ok: false, stage: 'startup' }
