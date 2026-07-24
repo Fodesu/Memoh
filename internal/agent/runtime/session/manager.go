@@ -32,8 +32,7 @@ type Manager struct {
 
 	mu                     sync.Mutex
 	controls               map[runControlKey]*runControl
-	commandHandler         func(context.Context, Command) error
-	commandReconciler      func(context.Context, Command) (bool, error)
+	commandRouter          *CommandRouter
 	pendingCommands        map[string]map[*commandWaiter]struct{}
 	inflightCommandTargets map[string]struct{}
 	commandExecutions      map[string]chan struct{}
@@ -183,7 +182,7 @@ func NewManager(backend Backend, opts Options) *Manager {
 	if newGeneration == nil {
 		newGeneration = uuid.NewString
 	}
-	return &Manager{
+	manager := &Manager{
 		backend:                backend,
 		runState:               runState,
 		distributed:            distributed,
@@ -197,6 +196,7 @@ func NewManager(backend Backend, opts Options) *Manager {
 		newEpoch:               newEpoch,
 		newGeneration:          newGeneration,
 		controls:               make(map[runControlKey]*runControl),
+		commandRouter:          NewCommandRouter(),
 		pendingCommands:        make(map[string]map[*commandWaiter]struct{}),
 		inflightCommandTargets: make(map[string]struct{}),
 		commandExecutions:      make(map[string]chan struct{}),
@@ -204,6 +204,9 @@ func NewManager(backend Backend, opts Options) *Manager {
 		closeCh:                make(chan struct{}),
 		shutdownDone:           make(chan struct{}),
 	}
+	_ = manager.commandRouter.Register(CommandAbort, manager.handleAbortCommand, nil)
+	_ = manager.commandRouter.Register(CommandSteer, manager.handleSteerCommand, nil)
+	return manager
 }
 
 // IsDistributed reports whether this manager coordinates owners through a
@@ -226,13 +229,13 @@ func (m *Manager) isClosed() bool {
 
 // SetCommandHandler installs the owner-local executor for routed runtime
 // commands whose domain behavior lives outside the sessionruntime package.
+// Production composition should register typed handlers; this fallback keeps
+// test and embedded setter wiring source-compatible.
 func (m *Manager) SetCommandHandler(handler func(context.Context, Command) error) {
 	if m == nil {
 		return
 	}
-	m.mu.Lock()
-	m.commandHandler = handler
-	m.mu.Unlock()
+	m.commandRouter.setFallbackHandler(handler)
 }
 
 // SetCommandReconciler installs a read-only domain result checker. Unlike the
@@ -242,9 +245,15 @@ func (m *Manager) SetCommandReconciler(reconciler func(context.Context, Command)
 	if m == nil {
 		return
 	}
-	m.mu.Lock()
-	m.commandReconciler = reconciler
-	m.mu.Unlock()
+	m.commandRouter.setFallbackReconciler(reconciler)
+}
+
+// RegisterCommandHandler installs one typed owner command route.
+func (m *Manager) RegisterCommandHandler(commandType string, handler CommandHandler, reconciler CommandReconciler) error {
+	if m == nil || m.commandRouter == nil {
+		return ErrCommandHandlerNotConfigured
+	}
+	return m.commandRouter.Register(commandType, handler, reconciler)
 }
 
 func (m *Manager) Start(ctx context.Context) error {

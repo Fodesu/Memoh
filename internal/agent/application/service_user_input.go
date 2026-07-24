@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/agent/decision"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	"github.com/memohai/memoh/internal/bots"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
@@ -172,19 +173,25 @@ func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, commit
 }
 
 func (s *Service) PrepareUserInputResponse(ctx context.Context, input UserInputResponseInput) (runtimefence.PreservedDecision, error) {
-	return s.prepareUserInputResponseTarget(ctx, input, false)
+	target, err := s.prepareUserInputResponseTarget(ctx, input, false)
+	return target.Decision, err
 }
 
 // PrepareUserInputResponseTarget validates a response and returns its
 // canonical scope even when the decision was already committed. Runtime
 // routers use that scope to replay or reconcile idempotent commands.
 func (s *Service) PrepareUserInputResponseTarget(ctx context.Context, input UserInputResponseInput) (runtimefence.PreservedDecision, error) {
+	target, err := s.prepareUserInputResponseTarget(ctx, input, true)
+	return target.Decision, err
+}
+
+func (s *Service) PrepareUserInputRuntimeTarget(ctx context.Context, input UserInputResponseInput) (RuntimeDecisionTarget, error) {
 	return s.prepareUserInputResponseTarget(ctx, input, true)
 }
 
-func (s *Service) prepareUserInputResponseTarget(ctx context.Context, input UserInputResponseInput, includeDecided bool) (runtimefence.PreservedDecision, error) {
+func (s *Service) prepareUserInputResponseTarget(ctx context.Context, input UserInputResponseInput, includeDecided bool) (RuntimeDecisionTarget, error) {
 	if s.userInput == nil {
-		return runtimefence.PreservedDecision{}, errors.New("user input service not configured")
+		return RuntimeDecisionTarget{}, errors.New("user input service not configured")
 	}
 	target, err := s.userInput.ResolveTarget(ctx, userinput.ResolveInput{
 		BotID:                  input.BotID,
@@ -205,14 +212,14 @@ func (s *Service) prepareUserInputResponseTarget(ctx context.Context, input User
 		}
 	}
 	if err != nil {
-		return runtimefence.PreservedDecision{}, err
+		return RuntimeDecisionTarget{}, err
 	}
 	if err := runtimefence.ValidateScope(ctx, target.BotID, target.SessionID); err != nil {
-		return runtimefence.PreservedDecision{}, err
+		return RuntimeDecisionTarget{}, err
 	}
 	if userinput.IsACPMCPRequest(target) {
 		if err := s.authorizeACPUserInputResponse(ctx, target, input); err != nil {
-			return runtimefence.PreservedDecision{}, err
+			return RuntimeDecisionTarget{}, err
 		}
 	}
 	if !input.Canceled {
@@ -220,18 +227,22 @@ func (s *Service) prepareUserInputResponseTarget(ctx context.Context, input User
 		if len(answers) == 0 && strings.TrimSpace(input.TextAnswer) != "" {
 			answers, err = userInputAnswersFromText(target.UIPayload, input.TextAnswer)
 			if err != nil {
-				return runtimefence.PreservedDecision{}, err
+				return RuntimeDecisionTarget{}, err
 			}
 		}
 		if err := userinput.ValidateAnswers(target.UIPayload, answers); err != nil {
-			return runtimefence.PreservedDecision{}, err
+			return RuntimeDecisionTarget{}, err
 		}
 	}
-	return runtimefence.PreservedDecision{
-		Kind:      runtimefence.DecisionUserInput,
-		ID:        target.ID,
-		BotID:     target.BotID,
-		SessionID: target.SessionID,
+	policy := decision.ResumePolicyNativeContinuation
+	if userinput.IsACPMCPRequest(target) {
+		policy = decision.ResumePolicyLiveWaiter
+	}
+	return RuntimeDecisionTarget{
+		Decision: runtimefence.PreservedDecision{
+			Kind: runtimefence.DecisionUserInput, ID: target.ID, BotID: target.BotID, SessionID: target.SessionID,
+		},
+		ResumePolicy: policy,
 	}, nil
 }
 

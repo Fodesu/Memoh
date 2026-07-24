@@ -167,7 +167,7 @@ func TestPostgresRuntimeFenceLocksBotBeforeSessionWrites(t *testing.T) {
 			}
 			_, err := txQueries.CreateToolApprovalRequest(ownerCtx, dbsqlc.CreateToolApprovalRequestParams{
 				BotID: botUUID, SessionID: sessionUUID, ToolCallID: "parent-lock-order", ToolName: "write",
-				Operation: toolapproval.OperationWrite, ToolInput: []byte(`{}`),
+				Operation: toolapproval.OperationWrite, ToolInput: []byte(`{}`), ResumePolicy: "native_continuation",
 				RuntimeFencingToken: pgtype.Int8{Int64: fence.Token, Valid: true},
 			})
 			return err

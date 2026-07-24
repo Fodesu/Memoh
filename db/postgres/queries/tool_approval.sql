@@ -24,6 +24,7 @@ INSERT INTO tool_approval_requests (
   tool_input,
   short_id,
   runtime_fencing_token,
+  resume_policy,
   requested_by_channel_identity_id,
   requested_message_id,
   source_platform,
@@ -41,6 +42,7 @@ INSERT INTO tool_approval_requests (
   sqlc.arg(tool_input),
   next_short_id.short_id,
   sqlc.narg(runtime_fencing_token),
+  sqlc.arg(resume_policy),
   sqlc.narg(requested_by_channel_identity_id),
   sqlc.narg(requested_message_id),
   sqlc.arg(source_platform),
@@ -56,6 +58,7 @@ WHERE tool_approval_requests.status = 'pending'
   AND tool_approval_requests.operation = EXCLUDED.operation
   AND tool_approval_requests.tool_input = EXCLUDED.tool_input
   AND tool_approval_requests.workspace_target_id = EXCLUDED.workspace_target_id
+  AND tool_approval_requests.resume_policy = EXCLUDED.resume_policy
 RETURNING *;
 
 -- name: GetToolApprovalRequest :one

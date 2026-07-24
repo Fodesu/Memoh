@@ -1506,6 +1506,10 @@ func runRuntimeManagerForcesAbortAfterGraceContract(t *testing.T, suite runtimeB
 	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != RunStatusAborted {
 		t.Fatalf("forced abort snapshot = %#v", snapshot.CurrentRunView)
 	}
+	cleanupDeadline := time.Now().Add(time.Second)
+	for manager.localControlForHandle(handle) != nil && time.Now().Before(cleanupDeadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if manager.localControlForHandle(handle) != nil {
 		t.Fatal("forced abort retained local owner control")
 	}

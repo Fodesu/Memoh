@@ -8,13 +8,42 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/memohai/memoh/internal/agent/application"
+	"github.com/memohai/memoh/internal/agent/decision"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	"github.com/memohai/memoh/internal/runtimefence"
 )
 
-func (r *Router) runContinuation(ctx context.Context, prepared runtimefence.PreservedDecision, commandType string, payload []byte, output chan<- application.WSStreamEvent, reconcile decisionReconciler, commit decisionCommit, run continuation) error {
+// NativeContinuationAdmission owns the runtime admission and event lifecycle
+// for a durable native Decision whose original run can no longer continue.
+type NativeContinuationAdmission struct {
+	logger   *slog.Logger
+	manager  runtimeManager
+	resolver resolver
+}
+
+func newNativeContinuationAdmission(logger *slog.Logger, manager runtimeManager, resolver resolver) *NativeContinuationAdmission {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &NativeContinuationAdmission{
+		logger:   logger.With(slog.String("service", "native_decision_continuation")),
+		manager:  manager,
+		resolver: resolver,
+	}
+}
+
+func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *PreparedDecision, output chan<- application.WSStreamEvent) error {
+	if a == nil || a.manager == nil || a.resolver == nil {
+		return errors.New("native decision continuation is not configured")
+	}
+	if prepared == nil {
+		return errors.New("prepared decision is required")
+	}
+	if prepared.resumePolicy != decision.ResumePolicyNativeContinuation {
+		return application.ErrRuntimeDecisionOwnerUnavailable
+	}
 	streamID := "decision-" + uuid.NewString()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -23,8 +52,8 @@ func (r *Router) runContinuation(ctx context.Context, prepared runtimefence.Pres
 
 	var fence runtimefence.Fence
 	var err error
-	if r.manager.IsDistributed() {
-		fence, err = r.resolver.AllocateRuntimePersistenceFence(runCtx, prepared.BotID, prepared.SessionID)
+	if a.manager.IsDistributed() {
+		fence, err = a.resolver.AllocateRuntimePersistenceFence(runCtx, prepared.target.BotID, prepared.target.SessionID)
 		if err != nil {
 			return err
 		}
@@ -38,13 +67,13 @@ func (r *Router) runContinuation(ctx context.Context, prepared runtimefence.Pres
 	runtimeCtx := application.WithTerminalHookAuthority(fencedCtx, agentpkg.TerminalHookAuthority{
 		Context: authorityCtx,
 		Validate: func(validateCtx context.Context) error {
-			return r.manager.ValidateRunOwnership(validateCtx, handle)
+			return a.manager.ValidateRunOwnership(validateCtx, handle)
 		},
 	})
 
-	handle, err = r.manager.StartRunWithOptions(runtimeCtx, sessionruntime.RunStartOptions{
-		BotID:           prepared.BotID,
-		SessionID:       prepared.SessionID,
+	handle, err = a.manager.StartRunWithOptions(runtimeCtx, sessionruntime.RunStartOptions{
+		BotID:           prepared.target.BotID,
+		SessionID:       prepared.target.SessionID,
 		StreamID:        streamID,
 		OwnershipCancel: revokeOwnership,
 		AbortCh:         abortCh,
@@ -54,21 +83,21 @@ func (r *Router) runContinuation(ctx context.Context, prepared runtimefence.Pres
 			if fence.Valid() {
 				admissionCtx = runtimefence.WithContext(admissionCtx, fence)
 			}
-			if err := r.manager.ValidateRunOwnership(admissionCtx, admitted); err != nil {
+			if err := a.manager.ValidateRunOwnership(admissionCtx, admitted); err != nil {
 				return sessionruntime.RunAdmissionView{}, err
 			}
 			if fence.Valid() {
-				if err := r.resolver.ActivateRuntimePersistenceFenceWithOptions(admissionCtx, fence, runtimefence.ActivationOptions{PreserveDecision: &prepared}); err != nil {
+				if err := a.resolver.ActivateRuntimePersistenceFenceWithOptions(admissionCtx, fence, runtimefence.ActivationOptions{PreserveDecision: &prepared.target}); err != nil {
 					return sessionruntime.RunAdmissionView{}, err
 				}
 			}
-			if err := r.manager.ValidateRunOwnership(admissionCtx, admitted); err != nil {
+			if err := a.manager.ValidateRunOwnership(admissionCtx, admitted); err != nil {
 				return sessionruntime.RunAdmissionView{}, err
 			}
-			if err := commit(admissionCtx); err != nil {
+			if err := prepared.commit(admissionCtx); err != nil {
 				return sessionruntime.RunAdmissionView{}, err
 			}
-			if decision := sessionruntime.ResolvedDecisionFromCommand(prepared.Kind, prepared.ID, commandType, payload); decision != nil {
+			if decision := sessionruntime.ResolvedDecisionFromCommand(prepared.target.Kind, prepared.target.ID, prepared.commandType, prepared.payload); decision != nil {
 				return sessionruntime.RunAdmissionView{ResolvedDecision: decision}, nil
 			}
 			return sessionruntime.RunAdmissionView{}, nil
@@ -77,50 +106,50 @@ func (r *Router) runContinuation(ctx context.Context, prepared runtimefence.Pres
 	if err != nil {
 		// A concurrent responder may have installed the active continuation after
 		// our first dispatch. Route to it before reporting the admission failure.
-		if handled, dispatchErr := r.manager.DispatchActiveCommand(ctx, prepared.BotID, prepared.SessionID, commandType, prepared.ID, payload); handled {
+		if handled, dispatchErr := a.manager.DispatchActiveCommand(ctx, prepared.target.BotID, prepared.target.SessionID, prepared.commandType, prepared.target.ID, prepared.payload); handled {
 			return dispatchErr
 		}
-		if reconcile != nil {
-			if reconciled, reconcileErr := reconcile(ctx); reconciled {
+		if prepared.reconcile != nil {
+			if reconciled, reconcileErr := prepared.reconcile(ctx); reconciled {
 				return reconcileErr
 			}
 		}
 		return err
 	}
-	releaseCompaction := r.resolver.DeferSessionCompaction(prepared.BotID, prepared.SessionID, streamID)
+	releaseCompaction := a.resolver.DeferSessionCompaction(prepared.target.BotID, prepared.target.SessionID, streamID)
 	defer releaseCompaction()
 
 	eventCh := make(chan application.WSStreamEvent, streamBufferSize)
 	forwardDone := make(chan error, 1)
 	go func() {
-		forwardDone <- r.consumeEvents(runtimeCtx, handle, eventCh, output, cancel)
+		forwardDone <- a.consumeEvents(runtimeCtx, handle, eventCh, output, cancel)
 	}()
 
 	runnerCtx := application.WithTerminalEventDeliveryTimeout(runtimeCtx, terminalFinalizationTimeout)
 	runnerCtx = application.WithPersistenceGuard(runnerCtx, func(guardCtx context.Context) error {
-		return r.manager.ValidateRunOwnership(guardCtx, handle)
+		return a.manager.ValidateRunOwnership(guardCtx, handle)
 	})
 	runErr := func() error {
 		defer close(eventCh)
-		return run(runnerCtx, eventCh)
+		return prepared.continueRun(runnerCtx, eventCh)
 	}()
 	if forwardErr := <-forwardDone; forwardErr != nil {
 		runErr = forwardErr
 	}
 	if errors.Is(runErr, sessionruntime.ErrTerminalCommitPending) {
-		r.logger.Warn("decision continuation terminal commit deferred for retry", slog.String("stream_id", streamID))
+		a.logger.Warn("decision continuation terminal commit deferred for retry", slog.String("stream_id", streamID))
 		return runErr
 	}
 
 	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(runtimeCtx), terminalFinalizationTimeout)
 	defer finishCancel()
 	if runErr != nil {
-		if finishErr := r.manager.FinishRun(finishCtx, handle, sessionruntime.RunStatusErrored, runErr.Error()); finishErr != nil && !errors.Is(finishErr, sessionruntime.ErrRunOwnershipLost) {
-			r.logger.Warn("finish decision continuation after error failed", slog.Any("error", finishErr), slog.String("stream_id", streamID))
+		if finishErr := a.manager.FinishRun(finishCtx, handle, sessionruntime.RunStatusErrored, runErr.Error()); finishErr != nil && !errors.Is(finishErr, sessionruntime.ErrRunOwnershipLost) {
+			a.logger.Warn("finish decision continuation after error failed", slog.Any("error", finishErr), slog.String("stream_id", streamID))
 		}
 		return runErr
 	}
-	if err := r.manager.FinishRun(finishCtx, handle, "", ""); err != nil && !errors.Is(err, sessionruntime.ErrRunOwnershipLost) {
+	if err := a.manager.FinishRun(finishCtx, handle, "", ""); err != nil && !errors.Is(err, sessionruntime.ErrRunOwnershipLost) {
 		return err
 	}
 	return nil

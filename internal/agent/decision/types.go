@@ -7,6 +7,23 @@ const (
 	KindUserInput = "user_input"
 )
 
+type ResumePolicy string
+
+const (
+	ResumePolicyUnknown            ResumePolicy = "unknown"
+	ResumePolicyNativeContinuation ResumePolicy = "native_continuation"
+	ResumePolicyLiveWaiter         ResumePolicy = "live_waiter"
+)
+
+func NormalizeResumePolicy(policy ResumePolicy) ResumePolicy {
+	switch policy {
+	case ResumePolicyNativeContinuation, ResumePolicyLiveWaiter, ResumePolicyUnknown:
+		return policy
+	default:
+		return ResumePolicyUnknown
+	}
+}
+
 // Request is the app-layer decision DTO. Storage remains owned by the
 // kind-specific services: toolapproval writes tool_approval_requests, and
 // userinput writes user_input_requests.

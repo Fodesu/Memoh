@@ -26,6 +26,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
+	"github.com/memohai/memoh/internal/agent/decision"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
@@ -1025,6 +1026,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 			ConversationType:             p.ConversationType,
 			WorkspaceTargeted:            isWorkspaceTargetTool(call.ToolName),
 			WorkspaceTargetID:            workspace.WorkspaceTargetFromContext(ctx),
+			ResumePolicy:                 decision.ResumePolicyNativeContinuation,
 		}
 		forcedApprovalReason, forcedApproval := native.HookForcedApprovalReason(ctx)
 		if s.toolApproval == nil {

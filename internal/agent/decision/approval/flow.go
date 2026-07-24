@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/memohai/memoh/internal/agent/decision"
 )
 
 // DefaultWaitTimeout bounds how long the approval flow waits for a decision
@@ -76,6 +78,7 @@ type FlowResult struct {
 // request, publish it, wait for the decision (rejecting on timeout), and
 // publish the terminal snapshot.
 func RunFlow(ctx context.Context, svc FlowService, flow FlowRequest) (FlowResult, error) {
+	flow.Input.ResumePolicy = decision.ResumePolicyLiveWaiter
 	eval, err := svc.EvaluatePolicy(ctx, flow.Input)
 	if err != nil {
 		return FlowResult{}, err

@@ -192,8 +192,8 @@ jobs:
           TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
             -run '^TestPostgresRuntimeFence' ./internal/chat/message
           TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
-            -run '^TestPostgresRuntimeFence' ./internal/agent/runtime/session
+            -run '^TestPostgresRuntimeFence' ./internal/agent/application
           TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
-            -run '^TestPostgresValkeyMultiprocessCrashReconcilesCommittedCommand$' ./internal/agent/runtime/session
+            -run '^TestPostgresValkeyMultiprocessCrashReconcilesCommittedCommand$' ./internal/agent/application
           TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
             -run '^TestPostgresRuntimeFence' ./internal/agent/runtime/acp

@@ -10,6 +10,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextlimit "github.com/memohai/memoh/internal/agent/context/limit"
+	"github.com/memohai/memoh/internal/agent/decision"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	"github.com/memohai/memoh/internal/bots"
@@ -39,7 +40,7 @@ type ToolApprovalResponseInput struct {
 type CommittedToolApprovalResponse struct {
 	request      toolapproval.Request
 	input        ToolApprovalResponseInput
-	isACP        bool
+	resumePolicy decision.ResumePolicy
 	activePrompt *acpActivePromptSubscription
 }
 
@@ -65,7 +66,12 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	if err != nil {
 		return CommittedToolApprovalResponse{}, err
 	}
-	if isACP && !s.toolApproval.CanRespond(target) {
+	hasLocalWaiter := s.toolApproval.CanRespond(target)
+	resumePolicy := toolApprovalResumePolicy(target, isACP, hasLocalWaiter)
+	if resumePolicy == decision.ResumePolicyUnknown {
+		return CommittedToolApprovalResponse{}, ErrRuntimeDecisionOwnerUnavailable
+	}
+	if resumePolicy == decision.ResumePolicyLiveWaiter && !hasLocalWaiter {
 		if target.RuntimeFenced {
 			return CommittedToolApprovalResponse{}, ErrRuntimeDecisionOwnerUnavailable
 		}
@@ -76,7 +82,7 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		if rejectErr == nil {
 			target = rejected
 		}
-		return CommittedToolApprovalResponse{request: target, input: input, isACP: true}, nil
+		return CommittedToolApprovalResponse{request: target, input: input, resumePolicy: resumePolicy}, nil
 	}
 
 	var activePrompt *acpActivePromptSubscription
@@ -100,7 +106,7 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		}
 		return CommittedToolApprovalResponse{}, err
 	}
-	return CommittedToolApprovalResponse{request: target, input: input, isACP: isACP, activePrompt: activePrompt}, nil
+	return CommittedToolApprovalResponse{request: target, input: input, resumePolicy: resumePolicy, activePrompt: activePrompt}, nil
 }
 
 // ContinueCommittedToolApprovalResponse executes the approved tool, when
@@ -110,7 +116,8 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 	if strings.TrimSpace(target.ID) == "" {
 		return errors.New("committed tool approval response is missing its request")
 	}
-	if committed.isACP {
+	switch committed.resumePolicy {
+	case decision.ResumePolicyLiveWaiter:
 		if committed.activePrompt != nil {
 			return forwardACPActivePrompt(ctx, committed.activePrompt, eventCh, acpActivePromptForwardOptions{
 				SkipToolCallID: target.ToolCallID,
@@ -118,6 +125,8 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 			})
 		}
 		return emitApprovalAck(ctx, eventCh)
+	case decision.ResumePolicyUnknown:
+		return ErrRuntimeDecisionOwnerUnavailable
 	}
 	ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
 	var toolResult sdk.ToolResultPart
@@ -142,19 +151,25 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 }
 
 func (s *Service) PrepareToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput) (runtimefence.PreservedDecision, error) {
-	return s.prepareToolApprovalResponseTarget(ctx, input, false)
+	target, err := s.prepareToolApprovalResponseTarget(ctx, input, false)
+	return target.Decision, err
 }
 
 // PrepareToolApprovalResponseTarget validates a response and returns its
 // canonical scope even when the decision was already committed. Runtime
 // routers use that scope to replay or reconcile idempotent commands.
 func (s *Service) PrepareToolApprovalResponseTarget(ctx context.Context, input ToolApprovalResponseInput) (runtimefence.PreservedDecision, error) {
+	target, err := s.prepareToolApprovalResponseTarget(ctx, input, true)
+	return target.Decision, err
+}
+
+func (s *Service) PrepareToolApprovalRuntimeTarget(ctx context.Context, input ToolApprovalResponseInput) (RuntimeDecisionTarget, error) {
 	return s.prepareToolApprovalResponseTarget(ctx, input, true)
 }
 
-func (s *Service) prepareToolApprovalResponseTarget(ctx context.Context, input ToolApprovalResponseInput, includeDecided bool) (runtimefence.PreservedDecision, error) {
+func (s *Service) prepareToolApprovalResponseTarget(ctx context.Context, input ToolApprovalResponseInput, includeDecided bool) (RuntimeDecisionTarget, error) {
 	if s.toolApproval == nil {
-		return runtimefence.PreservedDecision{}, errors.New("tool approval service not configured")
+		return RuntimeDecisionTarget{}, errors.New("tool approval service not configured")
 	}
 	target, err := s.toolApproval.ResolveTarget(ctx, toolapproval.ResolveInput{
 		BotID:                  input.BotID,
@@ -175,26 +190,40 @@ func (s *Service) prepareToolApprovalResponseTarget(ctx context.Context, input T
 		}
 	}
 	if err != nil {
-		return runtimefence.PreservedDecision{}, err
+		return RuntimeDecisionTarget{}, err
 	}
 	if err := runtimefence.ValidateScope(ctx, target.BotID, target.SessionID); err != nil {
-		return runtimefence.PreservedDecision{}, err
+		return RuntimeDecisionTarget{}, err
 	}
-	_, err = s.authorizeToolApprovalResponse(ctx, target, input)
+	isACP, err := s.authorizeToolApprovalResponse(ctx, target, input)
 	if err != nil {
-		return runtimefence.PreservedDecision{}, err
+		return RuntimeDecisionTarget{}, err
 	}
 	switch strings.ToLower(strings.TrimSpace(input.Decision)) {
 	case "approve", "approved", "reject", "rejected":
 	default:
-		return runtimefence.PreservedDecision{}, fmt.Errorf("unknown tool approval decision %q", input.Decision)
+		return RuntimeDecisionTarget{}, fmt.Errorf("unknown tool approval decision %q", input.Decision)
 	}
-	return runtimefence.PreservedDecision{
-		Kind:      runtimefence.DecisionToolApproval,
-		ID:        target.ID,
-		BotID:     target.BotID,
-		SessionID: target.SessionID,
+	return RuntimeDecisionTarget{
+		Decision: runtimefence.PreservedDecision{
+			Kind: runtimefence.DecisionToolApproval, ID: target.ID, BotID: target.BotID, SessionID: target.SessionID,
+		},
+		ResumePolicy: toolApprovalResumePolicy(target, isACP, s.toolApproval.CanRespond(target)),
 	}, nil
+}
+
+func toolApprovalResumePolicy(target toolapproval.Request, isACP, hasLocalWaiter bool) decision.ResumePolicy {
+	if hasLocalWaiter {
+		return decision.ResumePolicyLiveWaiter
+	}
+	policy := decision.NormalizeResumePolicy(target.ResumePolicy)
+	if policy == decision.ResumePolicyUnknown {
+		return policy
+	}
+	if isACP || policy == decision.ResumePolicyLiveWaiter {
+		return decision.ResumePolicyLiveWaiter
+	}
+	return policy
 }
 
 func (s *Service) respondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {

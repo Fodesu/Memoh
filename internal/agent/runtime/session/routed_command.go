@@ -253,7 +253,10 @@ func (m *Manager) applyCommand(ctx context.Context, cmd Command) {
 			_ = m.updateSteerStatus(context.WithoutCancel(ctx), runHandleForCommand(cmd), cmd.SteerID, SteerStatusRejected, RuntimeErrorCodeCommandFailed)
 			return
 		}
-		m.applySteerCommand(commandCtx, cmd)
+		if err := m.commandRouter.Handle(commandCtx, cmd); err != nil {
+			m.logger.Warn("route runtime steer command failed", slog.Any("error", err), slog.String("stream_id", cmd.StreamID))
+			_ = m.updateSteerStatus(context.WithoutCancel(ctx), runHandleForCommand(cmd), cmd.SteerID, SteerStatusRejected, RuntimeErrorCodeCommandFailed)
+		}
 		cancel()
 	case CommandResult:
 		m.completePendingCommand(cmd)
@@ -319,27 +322,44 @@ func (m *Manager) applyRoutedCommand(ctx context.Context, cmd Command) error {
 	if run.StreamID != ctrl.streamID || run.Generation != ctrl.generation || !m.runOwnerMatches(run) || !isActiveRunStatus(run.Status) {
 		return ErrCommandTargetNotActive
 	}
-	if strings.TrimSpace(cmd.Type) == CommandAbort {
-		_, err := m.abortLocal(commandCtx, ctrl)
+	if isDecisionCommand(cmd.Type) {
+		if !runtimeCommandTargetPresent(run, cmd.Type, cmd.TargetID) {
+			return ErrCommandTargetNotActive
+		}
+		if !m.beginCommandTarget(cmd) {
+			return ErrCommandBusy
+		}
+		defer m.endCommandTarget(cmd)
+	}
+	if err = m.commandRouter.Handle(commandCtx, cmd); err != nil {
 		return err
 	}
-	if !runtimeCommandTargetPresent(run, cmd.Type, cmd.TargetID) {
+	if isDecisionCommand(cmd.Type) {
+		m.projectCommandDecisionWithRetry(commandCtx, ctrl, handle, cmd)
+	}
+	return nil
+}
+
+func isDecisionCommand(commandType string) bool {
+	switch strings.TrimSpace(commandType) {
+	case CommandToolApprovalResponse, CommandUserInputResponse:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Manager) handleAbortCommand(ctx context.Context, cmd Command) error {
+	ctrl := m.localControlForScope(cmd.BotID, cmd.SessionID, cmd.StreamID)
+	if ctrl == nil || ctrl.generation != strings.TrimSpace(cmd.Generation) {
 		return ErrCommandTargetNotActive
 	}
-	m.mu.Lock()
-	handler := m.commandHandler
-	m.mu.Unlock()
-	if handler == nil {
-		return errors.New("runtime command handler is not configured")
-	}
-	if !m.beginCommandTarget(cmd) {
-		return ErrCommandBusy
-	}
-	defer m.endCommandTarget(cmd)
-	if err = handler(commandCtx, cmd); err != nil {
-		return err
-	}
-	m.projectCommandDecisionWithRetry(commandCtx, ctrl, handle, cmd)
+	_, err := m.abortLocal(ctx, ctrl)
+	return err
+}
+
+func (m *Manager) handleSteerCommand(ctx context.Context, cmd Command) error {
+	m.applySteerCommand(ctx, cmd)
 	return nil
 }
 
@@ -589,16 +609,10 @@ func (m *Manager) executeRoutedCommand(ctx context.Context, cmd Command) Command
 }
 
 func (m *Manager) reconcileRoutedCommand(ctx context.Context, cmd Command) (bool, error) {
-	if m == nil {
+	if m == nil || m.commandRouter == nil {
 		return false, nil
 	}
-	m.mu.Lock()
-	reconciler := m.commandReconciler
-	m.mu.Unlock()
-	if reconciler == nil {
-		return false, nil
-	}
-	return reconciler(ctx, cmd)
+	return m.commandRouter.Reconcile(ctx, cmd)
 }
 
 func newCommandResult(request Command, err error) Command {

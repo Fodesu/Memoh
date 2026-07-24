@@ -11,7 +11,7 @@ import (
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 )
 
-func (r *Router) consumeEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.WSStreamEvent, output chan<- application.WSStreamEvent, cancel context.CancelFunc) error {
+func (a *NativeContinuationAdmission) consumeEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.WSStreamEvent, output chan<- application.WSStreamEvent, cancel context.CancelFunc) error {
 	var pending *agentpkg.StreamEvent
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -32,7 +32,7 @@ func (r *Router) consumeEvents(ctx context.Context, handle sessionruntime.RunHan
 		if runtimeErr != nil {
 			return
 		}
-		if _, err := r.manager.HandleAgentEvent(ctx, handle, event); err != nil {
+		if _, err := a.manager.HandleAgentEvent(ctx, handle, event); err != nil {
 			runtimeErr = fmt.Errorf("update decision runtime: %w", err)
 			cancel()
 		}
@@ -85,7 +85,7 @@ func (r *Router) consumeEvents(ctx context.Context, handle sessionruntime.RunHan
 				flush()
 				if runtimeErr == nil {
 					finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), terminalFinalizationTimeout)
-					_, err := r.manager.FinalizeAgentEvent(finalizeCtx, handle, event, event.HistoryCommitted, "")
+					_, err := a.manager.FinalizeAgentEvent(finalizeCtx, handle, event, event.HistoryCommitted, "")
 					finalizeCancel()
 					if err != nil {
 						runtimeErr = fmt.Errorf("finalize decision runtime: %w", err)

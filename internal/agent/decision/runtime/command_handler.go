@@ -9,73 +9,73 @@ import (
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 )
 
-func (r *Router) bindCommandHandlers() {
-	if r == nil || r.manager == nil || r.resolver == nil {
-		return
+func (c *DecisionCoordinator) bindCommandHandlers(manager runtimeManager) error {
+	if c == nil || manager == nil || c.resolver == nil {
+		return nil
 	}
-	bindCommandHandlers(r.manager, r.resolver)
+	return bindCommandHandlers(manager, c.resolver)
 }
 
 // BindCommandHandlers installs the shared owner command decoder on a manager.
 // It remains exported for transports that assemble their dependencies through
 // setters, while Router owns the production application-level routing policy.
-func BindCommandHandlers(manager *sessionruntime.Manager, commandResolver CommandResolver) {
+func BindCommandHandlers(manager *sessionruntime.Manager, commandResolver CommandResolver) error {
 	if manager == nil || commandResolver == nil {
-		return
+		return nil
 	}
-	bindCommandHandlers(manager, commandResolver)
+	return bindCommandHandlers(manager, commandResolver)
 }
 
-func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver) {
-	manager.SetCommandHandler(func(ctx context.Context, command sessionruntime.Command) error {
-		switch command.Type {
-		case sessionruntime.CommandToolApprovalResponse:
-			input, err := decodeToolApprovalCommand(command)
-			if err != nil {
-				return err
-			}
-			committed, err := commandResolver.CommitToolApprovalResponse(ctx, input)
-			if err != nil {
-				return err
-			}
-			return commandResolver.ContinueCommittedToolApprovalResponse(ctx, committed, nil)
-		case sessionruntime.CommandUserInputResponse:
-			input, err := decodeUserInputCommand(command)
-			if err != nil {
-				return err
-			}
-			committed, err := commandResolver.CommitUserInputResponse(ctx, input)
-			if err != nil {
-				return err
-			}
-			return commandResolver.ContinueCommittedUserInputResponse(ctx, committed, nil)
-		default:
-			return fmt.Errorf("unsupported runtime command %q", command.Type)
-		}
-	})
-	reconciler, ok := commandResolver.(commandReconciler)
-	if !ok {
-		manager.SetCommandReconciler(nil)
-		return
+func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver) error {
+	if manager == nil || commandResolver == nil {
+		return nil
 	}
-	manager.SetCommandReconciler(func(ctx context.Context, command sessionruntime.Command) (bool, error) {
-		switch command.Type {
-		case sessionruntime.CommandToolApprovalResponse:
+	reconciler, ok := commandResolver.(commandReconciler)
+	var reconcileApproval sessionruntime.CommandReconciler
+	var reconcileInput sessionruntime.CommandReconciler
+	if ok {
+		reconcileApproval = func(ctx context.Context, command sessionruntime.Command) (bool, error) {
 			input, err := decodeToolApprovalCommand(command)
 			if err != nil {
 				return true, err
 			}
 			return reconciler.ReconcileToolApprovalResponse(ctx, input)
-		case sessionruntime.CommandUserInputResponse:
+		}
+		reconcileInput = func(ctx context.Context, command sessionruntime.Command) (bool, error) {
 			input, err := decodeUserInputCommand(command)
 			if err != nil {
 				return true, err
 			}
 			return reconciler.ReconcileUserInputResponse(ctx, input)
-		default:
-			return false, nil
 		}
-	})
+	}
+	if err := manager.RegisterCommandHandler(sessionruntime.CommandToolApprovalResponse, func(ctx context.Context, command sessionruntime.Command) error {
+		input, err := decodeToolApprovalCommand(command)
+		if err != nil {
+			return err
+		}
+		committed, err := commandResolver.CommitToolApprovalResponse(ctx, input)
+		if err != nil {
+			return err
+		}
+		return commandResolver.ContinueCommittedToolApprovalResponse(ctx, committed, nil)
+	}, reconcileApproval); err != nil {
+		return fmt.Errorf("register tool approval command handler: %w", err)
+	}
+	if err := manager.RegisterCommandHandler(sessionruntime.CommandUserInputResponse, func(ctx context.Context, command sessionruntime.Command) error {
+		input, err := decodeUserInputCommand(command)
+		if err != nil {
+			return err
+		}
+		committed, err := commandResolver.CommitUserInputResponse(ctx, input)
+		if err != nil {
+			return err
+		}
+		return commandResolver.ContinueCommittedUserInputResponse(ctx, committed, nil)
+	}, reconcileInput); err != nil {
+		return fmt.Errorf("register user input command handler: %w", err)
+	}
+	return nil
 }
 
 func decodeToolApprovalCommand(command sessionruntime.Command) (application.ToolApprovalResponseInput, error) {

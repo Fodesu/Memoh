@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/memohai/memoh/internal/agent/application"
+	"github.com/memohai/memoh/internal/agent/decision"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
@@ -39,6 +40,7 @@ type routerTestResolver struct {
 	reconcileCalls   int
 	commitErr        error
 	lifecycle        []string
+	runtimePolicy    decision.ResumePolicy
 }
 
 func (r *routerTestResolver) AllocateRuntimePersistenceFence(context.Context, string, string) (runtimefence.Fence, error) {
@@ -57,6 +59,21 @@ func (r *routerTestResolver) PrepareToolApprovalResponseTarget(context.Context, 
 
 func (r *routerTestResolver) PrepareUserInputResponseTarget(context.Context, application.UserInputResponseInput) (runtimefence.PreservedDecision, error) {
 	return r.prepared, nil
+}
+
+func (r *routerTestResolver) PrepareToolApprovalRuntimeTarget(context.Context, application.ToolApprovalResponseInput) (application.RuntimeDecisionTarget, error) {
+	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault()}, nil
+}
+
+func (r *routerTestResolver) PrepareUserInputRuntimeTarget(context.Context, application.UserInputResponseInput) (application.RuntimeDecisionTarget, error) {
+	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault()}, nil
+}
+
+func (r *routerTestResolver) runtimePolicyOrDefault() decision.ResumePolicy {
+	if r.runtimePolicy == "" {
+		return decision.ResumePolicyNativeContinuation
+	}
+	return r.runtimePolicy
 }
 
 func (r *routerTestResolver) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, eventCh chan<- application.WSStreamEvent) error {
@@ -141,36 +158,39 @@ func emitRouterTestEvents(eventCh chan<- application.WSStreamEvent, events []age
 }
 
 type routerTestManager struct {
-	distributed       bool
-	dispatchHandled   bool
-	dispatchErr       error
-	invokeHandler     bool
-	commandHandler    func(context.Context, sessionruntime.Command) error
-	commandReconciler func(context.Context, sessionruntime.Command) (bool, error)
-	starts            int
-	validations       int
-	handledEvents     []agentpkg.StreamEvent
-	finalizedEvents   []agentpkg.StreamEvent
-	canonicalReady    []bool
-	finalizeErr       error
-	finishes          int
-	ownershipCancel   context.CancelCauseFunc
-	admissions        []sessionruntime.RunAdmissionView
+	distributed        bool
+	dispatchHandled    bool
+	dispatchErr        error
+	invokeHandler      bool
+	commandHandlers    map[string]sessionruntime.CommandHandler
+	commandReconcilers map[string]sessionruntime.CommandReconciler
+	starts             int
+	validations        int
+	handledEvents      []agentpkg.StreamEvent
+	finalizedEvents    []agentpkg.StreamEvent
+	canonicalReady     []bool
+	finalizeErr        error
+	finishes           int
+	ownershipCancel    context.CancelCauseFunc
+	admissions         []sessionruntime.RunAdmissionView
 }
 
-func (m *routerTestManager) SetCommandHandler(handler func(context.Context, sessionruntime.Command) error) {
-	m.commandHandler = handler
-}
-
-func (m *routerTestManager) SetCommandReconciler(reconciler func(context.Context, sessionruntime.Command) (bool, error)) {
-	m.commandReconciler = reconciler
+func (m *routerTestManager) RegisterCommandHandler(commandType string, handler sessionruntime.CommandHandler, reconciler sessionruntime.CommandReconciler) error {
+	if m.commandHandlers == nil {
+		m.commandHandlers = make(map[string]sessionruntime.CommandHandler)
+		m.commandReconcilers = make(map[string]sessionruntime.CommandReconciler)
+	}
+	m.commandHandlers[commandType] = handler
+	m.commandReconcilers[commandType] = reconciler
+	return nil
 }
 
 func (m *routerTestManager) DispatchActiveCommand(ctx context.Context, botID, sessionID, commandType, targetID string, payload []byte) (bool, error) {
-	if !m.dispatchHandled || !m.invokeHandler || m.commandHandler == nil {
+	handler := m.commandHandlers[commandType]
+	if !m.dispatchHandled || !m.invokeHandler || handler == nil {
 		return m.dispatchHandled, m.dispatchErr
 	}
-	err := m.commandHandler(ctx, sessionruntime.Command{
+	err := handler(ctx, sessionruntime.Command{
 		Type: commandType, BotID: botID, SessionID: sessionID, StreamID: "active-stream",
 		Generation: "active-generation", TargetID: targetID, Payload: payload,
 	})
@@ -268,6 +288,34 @@ func TestRouterMemoryFallbackUsesRuntimeLifecycleWithoutFence(t *testing.T) {
 	}
 	if got := strings.Join(resolver.lifecycle, ","); got != "commit,continue" {
 		t.Fatalf("memory decision lifecycle = %q, want commit,continue", got)
+	}
+}
+
+func TestRouterDoesNotCreateContinuationForNonNativeDecision(t *testing.T) {
+	for _, policy := range []decision.ResumePolicy{
+		decision.ResumePolicyLiveWaiter,
+		decision.ResumePolicyUnknown,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			resolver := &routerTestResolver{
+				prepared: runtimefence.PreservedDecision{
+					Kind: runtimefence.DecisionToolApproval, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
+				},
+				runtimePolicy: policy,
+			}
+			manager := &routerTestManager{distributed: true}
+			router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
+
+			err := router.RespondToolApproval(context.Background(), application.ToolApprovalResponseInput{
+				ApprovalID: decisionTargetID, Decision: "approve",
+			}, nil)
+			if !errors.Is(err, application.ErrRuntimeDecisionOwnerUnavailable) {
+				t.Fatalf("RespondToolApproval() error = %v, want owner unavailable", err)
+			}
+			if manager.starts != 0 || resolver.allocated != 0 || len(resolver.lifecycle) != 0 {
+				t.Fatalf("non-native decision started work: starts:%d allocated:%d lifecycle:%v", manager.starts, resolver.allocated, resolver.lifecycle)
+			}
+		})
 	}
 }
 

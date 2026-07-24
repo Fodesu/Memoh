@@ -65,12 +65,16 @@ type runtimeSmokeResolver struct {
 	state *runtimeSmokeState
 }
 
-func (r *runtimeSmokeResolver) RespondToolApproval(_ context.Context, input turn.ToolApprovalResponse, _ chan<- application.WSStreamEvent) error {
+func (r *runtimeSmokeResolver) CommitToolApprovalResponse(_ context.Context, input application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error) {
 	r.state.mu.Lock()
 	r.state.approvalID = input.ApprovalID
 	r.state.approvalDecision = input.Decision
 	r.state.approvalResolvedByOwner = input.ResolveOnly
 	r.state.mu.Unlock()
+	return application.CommittedToolApprovalResponse{}, nil
+}
+
+func (*runtimeSmokeResolver) ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.WSStreamEvent) error {
 	return nil
 }
 

@@ -13,6 +13,7 @@ func TestSubagentForkHistoryMigrationRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	pool := freshMigratedDB(t)
 	dsn := teamMigrationDSN(t)
+	steps := countMigrationsFrom(t, "0119_subagent_fork_history.up.sql")
 
 	steps := countMigrationsFrom(t, "0119_subagent_fork_history.up.sql")
 

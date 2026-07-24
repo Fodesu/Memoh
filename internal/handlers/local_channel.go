@@ -186,7 +186,9 @@ func (h *LocalChannelHandler) bindSessionRuntimeCommandHandler() {
 	if h == nil {
 		return
 	}
-	decisionruntime.BindCommandHandlers(h.sessionRuntime, h.agentService)
+	if err := decisionruntime.BindCommandHandlers(h.sessionRuntime, h.agentService); err != nil && h.logger != nil {
+		h.logger.Warn("bind session runtime decision command handlers failed", slog.Any("error", err))
+	}
 }
 
 // SetAuthTokenConfig configures runtime token minting for ACP-backed local WS streams.

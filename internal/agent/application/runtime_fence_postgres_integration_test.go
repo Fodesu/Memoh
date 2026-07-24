@@ -24,7 +24,6 @@ import (
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
-	"github.com/memohai/memoh/internal/agent/turn"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	dbpkg "github.com/memohai/memoh/internal/db"
@@ -52,6 +51,23 @@ type crossBackendCrashEvent struct {
 	InputID    string                   `json:"input_id,omitempty"`
 	Generation string                   `json:"generation,omitempty"`
 	Answer     userinput.QuestionAnswer `json:"answer,omitempty"`
+}
+
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
 }
 
 var (
@@ -134,7 +150,7 @@ func TestPostgresValkeyMultiprocessCommandReconciliationChild(t *testing.T) {
 		defer outputMu.Unlock()
 		return encoder.Encode(event)
 	}
-	manager.SetCommandHandler(func(commandCtx context.Context, command sessionruntime.Command) error {
+	if err := manager.RegisterCommandHandler(sessionruntime.CommandUserInputResponse, func(commandCtx context.Context, command sessionruntime.Command) error {
 		var input application.UserInputResponseInput
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			return err
@@ -144,20 +160,16 @@ func TestPostgresValkeyMultiprocessCommandReconciliationChild(t *testing.T) {
 		input.UserInputID = command.TargetID
 		input.ExplicitID = command.TargetID
 		input.ResolveOnly = true
-		if err := resolver.RespondUserInput(commandCtx, turn.UserInputResponse{
-			BotID: input.BotID, ThreadID: input.ThreadID, ActorChannelIdentityID: input.ActorChannelIdentityID,
-			ActorUserID: input.ActorUserID, UserInputID: input.UserInputID, ExplicitID: input.ExplicitID,
-			ReplyExternalMessageID: input.ReplyExternalMessageID, Answers: turnQuestionAnswers(input.Answers), TextAnswer: input.TextAnswer,
-			Canceled: input.Canceled, Reason: input.Reason, ChatToken: input.ChatToken,
-			SuppressActivePromptAttach: input.SuppressActivePromptAttach,
-		}, nil); err != nil {
+		if _, err := resolver.CommitUserInputResponse(commandCtx, input); err != nil {
 			return err
 		}
 		if err := emit(crossBackendCrashEvent{Type: "committed", InputID: command.TargetID}); err != nil {
 			return err
 		}
 		select {}
-	})
+	}, nil); err != nil {
+		t.Fatalf("register child user input command handler: %v", err)
+	}
 	if err := emit(crossBackendCrashEvent{Type: "ready", InputID: request.ID, Generation: handle.Generation, Answer: answer}); err != nil {
 		t.Fatalf("emit child readiness: %v", err)
 	}
@@ -199,7 +211,7 @@ func TestPostgresValkeyMultiprocessCrashReconcilesCommittedCommand(t *testing.T)
 	if err != nil {
 		t.Fatalf("open child stdout: %v", err)
 	}
-	var stderr bytes.Buffer
+	var stderr synchronizedBuffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start crash owner child: %v", err)
@@ -1282,23 +1294,6 @@ func TestPostgresRuntimeFenceProtectsSessionUpdates(t *testing.T) {
 	if row.Title != "owner B title" || metadata["owner"] != "B" {
 		t.Fatalf("session after stale updates = title:%q metadata:%s", row.Title, row.Metadata)
 	}
-}
-
-func turnQuestionAnswers(in []userinput.QuestionAnswer) []turn.QuestionAnswer {
-	if in == nil {
-		return nil
-	}
-	out := make([]turn.QuestionAnswer, len(in))
-	for i := range in {
-		out[i] = turn.QuestionAnswer{
-			QuestionID: in[i].QuestionID,
-			OptionIDs:  in[i].OptionIDs,
-			CustomText: in[i].CustomText,
-			Text:       in[i].Text,
-			Skipped:    in[i].Skipped,
-		}
-	}
-	return out
 }
 
 func openCrossBackendPostgresPool(t *testing.T, ctx context.Context) *pgxpool.Pool {

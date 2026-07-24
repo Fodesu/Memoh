@@ -737,6 +737,7 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   short_id INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   runtime_fencing_token BIGINT,
+  resume_policy TEXT NOT NULL DEFAULT 'native_continuation',
   decision_reason TEXT NOT NULL DEFAULT '',
   requested_by_channel_identity_id UUID REFERENCES channel_identities(id) ON DELETE SET NULL,
   decided_by_channel_identity_id UUID REFERENCES channel_identities(id) ON DELETE SET NULL,
@@ -749,6 +750,7 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   decided_at TIMESTAMPTZ,
   CONSTRAINT tool_approval_operation_check CHECK (operation IN ('read', 'write', 'exec')),
+  CONSTRAINT tool_approval_resume_policy_check CHECK (resume_policy IN ('unknown', 'native_continuation', 'live_waiter')),
   CONSTRAINT tool_approval_status_check CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'cancelled')),
   CONSTRAINT tool_approval_short_id_unique UNIQUE (session_id, short_id),
   CONSTRAINT tool_approval_tool_call_unique UNIQUE (session_id, tool_call_id)

@@ -40,6 +40,7 @@ type liveApprovalQueries struct {
 	dbstore.Queries
 	row          sqlc.ToolApprovalRequest
 	approveCalls int
+	rejectCalls  int
 }
 
 type terminalReplayFailureQueries struct {
@@ -66,6 +67,13 @@ func (q *liveApprovalQueries) ApproveToolApprovalRequest(context.Context, sqlc.A
 	approved := q.row
 	approved.Status = toolapproval.StatusApproved
 	return approved, nil
+}
+
+func (q *liveApprovalQueries) RejectToolApprovalRequest(context.Context, sqlc.RejectToolApprovalRequestParams) (sqlc.ToolApprovalRequest, error) {
+	q.rejectCalls++
+	rejected := q.row
+	rejected.Status = toolapproval.StatusRejected
+	return rejected, nil
 }
 
 func TestRespondToolApprovalWithLiveWaiterOnlyResolvesDecision(t *testing.T) {
@@ -310,5 +318,71 @@ func TestRespondToolApprovalFencedACPRequestWithoutWaiterFailsClosed(t *testing.
 	}
 	if queries.approveCalls != 0 {
 		t.Fatalf("fenced orphan approved %d time(s)", queries.approveCalls)
+	}
+}
+
+func TestCommitToolApprovalUnknownResumePolicyFailsClosed(t *testing.T) {
+	approvalID := "67676767-6767-6767-6767-676767676767"
+	queries := &liveApprovalQueries{row: sqlc.ToolApprovalRequest{
+		ID:         flowTestUUID(approvalID),
+		BotID:      flowTestUUID(liveApprovalBotID),
+		SessionID:  flowTestUUID(liveApprovalSessionID),
+		ToolCallID: "call-legacy",
+		ToolName:   "exec",
+		ToolInput:  []byte(`{"command":"true"}`),
+		Status:     toolapproval.StatusPending,
+		// An empty value represents a row whose resume policy is unavailable.
+		ResumePolicy: "",
+	}}
+	resolver := &Service{}
+	resolver.SetToolApprovalService(toolapproval.NewService(slog.New(slog.DiscardHandler), queries, nil))
+	authorizeLiveApprovalResolver(resolver, liveApprovalActorID, bots.PermissionChat, bots.PermissionWorkspaceExec)
+
+	_, err := resolver.CommitToolApprovalResponse(context.Background(), ToolApprovalResponseInput{
+		BotID: liveApprovalBotID, ThreadID: liveApprovalSessionID,
+		ApprovalID: approvalID, Decision: "approve", ActorUserID: liveApprovalActorID,
+	})
+	if !errors.Is(err, ErrRuntimeDecisionOwnerUnavailable) {
+		t.Fatalf("CommitToolApprovalResponse() error = %v, want owner unavailable", err)
+	}
+	if queries.approveCalls != 0 || queries.rejectCalls != 0 {
+		t.Fatalf("unknown-policy approval transitions = approve:%d reject:%d, want none", queries.approveCalls, queries.rejectCalls)
+	}
+}
+
+func TestCommitToolApprovalUnknownACPResumePolicyFailsClosed(t *testing.T) {
+	approvalID := "68686868-6868-6868-6868-686868686868"
+	queries := &liveApprovalQueries{row: sqlc.ToolApprovalRequest{
+		ID:           flowTestUUID(approvalID),
+		BotID:        flowTestUUID(liveApprovalBotID),
+		SessionID:    flowTestUUID(liveApprovalSessionID),
+		ToolCallID:   "call-legacy-acp",
+		ToolName:     "exec",
+		ToolInput:    []byte(`{"command":"true"}`),
+		Status:       toolapproval.StatusPending,
+		ResumePolicy: "",
+	}}
+	resolver := &Service{}
+	resolver.SetToolApprovalService(toolapproval.NewService(slog.New(slog.DiscardHandler), queries, nil))
+	resolver.botPermissions = &fakeBotPermissionChecker{values: map[string]bool{
+		liveApprovalBotID + ":" + testACPUserInputOwnerID + ":" + bots.PermissionWorkspaceExec: true,
+	}}
+	resolver.sessionService = &fakeBackgroundSessionService{getFn: func(context.Context, string) (session.Thread, error) {
+		return session.Thread{
+			ID: liveApprovalSessionID, BotID: liveApprovalBotID,
+			Type: session.TypeACPAgent, RuntimeType: session.RuntimeACPAgent,
+			RuntimeMetadata: map[string]any{"runtime_owner_account_id": testACPUserInputOwnerID},
+		}, nil
+	}}
+
+	_, err := resolver.CommitToolApprovalResponse(context.Background(), ToolApprovalResponseInput{
+		BotID: liveApprovalBotID, ThreadID: liveApprovalSessionID,
+		ApprovalID: approvalID, Decision: "approve", ActorUserID: testACPUserInputOwnerID,
+	})
+	if !errors.Is(err, ErrRuntimeDecisionOwnerUnavailable) {
+		t.Fatalf("CommitToolApprovalResponse() error = %v, want owner unavailable", err)
+	}
+	if queries.approveCalls != 0 || queries.rejectCalls != 0 {
+		t.Fatalf("unknown ACP approval transitions = approve:%d reject:%d, want none", queries.approveCalls, queries.rejectCalls)
 	}
 }
