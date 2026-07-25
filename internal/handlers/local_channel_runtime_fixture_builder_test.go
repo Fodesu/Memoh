@@ -189,7 +189,7 @@ func buildRuntimeContractSnapshot(t *testing.T, streamID string, events []agentp
 	baselineEvent, client := captureRuntimeFixtureSnapshot(t, manager)
 
 	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager}
-	eventCh := make(chan application.WSStreamEvent, len(events))
+	eventCh := make(chan application.StreamEventPayload, len(events))
 	for _, event := range events {
 		eventCh <- rawRuntimeContractEvent(t, event)
 	}

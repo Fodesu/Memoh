@@ -164,7 +164,7 @@ func TestStreamPreparedReplacementWSRequiresAtomicPersistence(t *testing.T) {
 	resolver.streamReplacementFn = func(
 		ctx context.Context,
 		_ ChatRequest,
-		_ chan<- WSStreamEvent,
+		_ chan<- StreamEventPayload,
 		_ <-chan struct{},
 		preflight func(context.Context) error,
 		_ bool,
@@ -181,7 +181,7 @@ func TestStreamPreparedReplacementWSRequiresAtomicPersistence(t *testing.T) {
 		return persisted, nil
 	}
 
-	if err := resolver.StreamPreparedReplacementWS(context.Background(), prepared, make(chan WSStreamEvent, 1), make(chan struct{})); err != nil {
+	if err := resolver.StreamPreparedReplacementWS(context.Background(), prepared, make(chan StreamEventPayload, 1), make(chan struct{})); err != nil {
 		t.Fatalf("stream prepared retry: %v", err)
 	}
 }
@@ -211,7 +211,7 @@ func TestStreamPreparedReplacementWSKeepsOriginalWhenNothingWasPersisted(t *test
 	resolver.streamReplacementFn = func(
 		_ context.Context,
 		_ ChatRequest,
-		_ chan<- WSStreamEvent,
+		_ chan<- StreamEventPayload,
 		_ <-chan struct{},
 		_ func(context.Context) error,
 		_ bool,
@@ -219,7 +219,7 @@ func TestStreamPreparedReplacementWSKeepsOriginalWhenNothingWasPersisted(t *test
 		return nil, nil
 	}
 
-	if err := resolver.StreamPreparedReplacementWS(context.Background(), prepared, make(chan WSStreamEvent, 1), make(chan struct{})); err != nil {
+	if err := resolver.StreamPreparedReplacementWS(context.Background(), prepared, make(chan StreamEventPayload, 1), make(chan struct{})); err != nil {
 		t.Fatalf("empty replacement stream: %v", err)
 	}
 }

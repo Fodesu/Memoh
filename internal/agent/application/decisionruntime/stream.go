@@ -11,7 +11,7 @@ import (
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 )
 
-func (a *NativeContinuationAdmission) consumeEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.WSStreamEvent, output chan<- application.WSStreamEvent, cancel context.CancelFunc) error {
+func (a *NativeContinuationAdmission) consumeEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.StreamEventPayload, output chan<- application.StreamEventPayload, cancel context.CancelFunc) error {
 	var pending *agentpkg.StreamEvent
 	var timer *time.Timer
 	var timerC <-chan time.Time

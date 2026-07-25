@@ -100,13 +100,13 @@ type localChannelAgentService interface {
 	PrepareToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
 	PrepareUserInputResponseTarget(ctx context.Context, input application.UserInputResponseInput) (runtimefence.PreservedDecision, error)
 	CommitToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error)
-	ContinueCommittedToolApprovalResponse(ctx context.Context, committed application.CommittedToolApprovalResponse, eventCh chan<- application.WSStreamEvent) error
+	ContinueCommittedToolApprovalResponse(ctx context.Context, committed application.CommittedToolApprovalResponse, eventCh chan<- application.StreamEventPayload) error
 	CommitUserInputResponse(ctx context.Context, input application.UserInputResponseInput) (application.CommittedUserInputResponse, error)
-	ContinueCommittedUserInputResponse(ctx context.Context, committed application.CommittedUserInputResponse, eventCh chan<- application.WSStreamEvent) error
+	ContinueCommittedUserInputResponse(ctx context.Context, committed application.CommittedUserInputResponse, eventCh chan<- application.StreamEventPayload) error
 	DeferSessionCompaction(botID, sessionID, streamID string) func()
 	SessionTurnActive(botID, sessionID string) bool
-	StreamChatWS(ctx context.Context, req application.ChatRequest, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}) error
-	StreamPreparedReplacementWS(ctx context.Context, prepared application.PreparedReplacementWS, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}) error
+	StreamChatWS(ctx context.Context, req application.ChatRequest, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}) error
+	StreamPreparedReplacementWS(ctx context.Context, prepared application.PreparedReplacementWS, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}) error
 	ValidatePreparedReplacementWS(ctx context.Context, prepared application.PreparedReplacementWS) error
 	ValidateWorkspaceTarget(ctx context.Context, botID, targetID string) error
 }
@@ -1301,7 +1301,7 @@ func sendWSErrorFromError(ctx context.Context, writer *wsWriter, streamID, sessi
 	})
 }
 
-func (h *LocalChannelHandler) forwardWSStreamEvents(ctx, assetCtx context.Context, writer *wsWriter, botID, sessionID, streamID string, eventCh <-chan application.WSStreamEvent) {
+func (h *LocalChannelHandler) forwardWSStreamEvents(ctx, assetCtx context.Context, writer *wsWriter, botID, sessionID, streamID string, eventCh <-chan application.StreamEventPayload) {
 	_ = h.forwardWSStreamEventsResult(ctx, assetCtx, writer, botID, sessionID, streamID, eventCh)
 }
 
@@ -1347,7 +1347,7 @@ func legacyWSStreamForwarder(writer *wsWriter, streamID, sessionID string, gate 
 	}
 }
 
-func (h *LocalChannelHandler) forwardWSStreamEventsResult(ctx, assetCtx context.Context, writer *wsWriter, botID, sessionID, streamID string, eventCh <-chan application.WSStreamEvent) error {
+func (h *LocalChannelHandler) forwardWSStreamEventsResult(ctx, assetCtx context.Context, writer *wsWriter, botID, sessionID, streamID string, eventCh <-chan application.StreamEventPayload) error {
 	forwardLegacy := legacyWSStreamForwarder(writer, streamID, sessionID, nil)
 	if h.sessionRuntime != nil {
 		return errors.New("runtime-managed streams require the generation-aware runtime forwarder")
@@ -1471,7 +1471,7 @@ func retryRuntimeFinalization(ctx context.Context, operation func() error) error
 	return lastErr
 }
 
-func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx, assetCtx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.WSStreamEvent, cancel context.CancelFunc, forwardLegacy func(context.Context, native.StreamEvent)) error {
+func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx, assetCtx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.StreamEventPayload, cancel context.CancelFunc, forwardLegacy func(context.Context, native.StreamEvent)) error {
 	botID := handle.BotID
 	sessionID := handle.SessionID
 	streamID := handle.StreamID
@@ -1545,7 +1545,7 @@ func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx, assetCtx context
 			flush()
 		}
 	}
-	process := func(raw application.WSStreamEvent) { //nolint:contextcheck // Terminal processing intentionally switches to finalization contexts.
+	process := func(raw application.StreamEventPayload) { //nolint:contextcheck // Terminal processing intentionally switches to finalization contexts.
 		if runtimeErr != nil {
 			return
 		}
@@ -1620,7 +1620,7 @@ func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx, assetCtx context
 	return runtimeErr
 }
 
-type wsStreamRunner func(ctx context.Context, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}, injectCh <-chan turn.InjectMessage) error
+type wsStreamRunner func(ctx context.Context, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}, injectCh <-chan turn.InjectMessage) error
 
 func runtimeOperationFromPreparedReplacement(prepared application.PreparedReplacementWS) *sessionruntime.RunOperationView {
 	operation := prepared.Operation
@@ -1791,7 +1791,7 @@ func (h *LocalChannelHandler) startWSStreamWithAdmissionBuilder(baseCtx, connCtx
 			}
 		}
 
-		eventCh := make(chan application.WSStreamEvent, 64)
+		eventCh := make(chan application.StreamEventPayload, 64)
 		forwardDone := make(chan error, 1)
 		go func() {
 			if h.sessionRuntime != nil {
@@ -2253,7 +2253,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					}
 					return sessionruntime.ResolvedDecisionAdmission(preserved.Kind, preserved.ID, approvalStatus), nil
 				},
-					func(ctx context.Context, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
+					func(ctx context.Context, eventCh chan<- application.StreamEventPayload, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
 						return h.agentService.ContinueCommittedToolApprovalResponse(ctx, committed, eventCh)
 					},
 				)
@@ -2318,7 +2318,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					}
 					return sessionruntime.ResolvedDecisionAdmission(preserved.Kind, preserved.ID, userInputStatus), nil
 				},
-					func(ctx context.Context, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
+					func(ctx context.Context, eventCh chan<- application.StreamEventPayload, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
 						return h.agentService.ContinueCommittedUserInputResponse(ctx, committed, eventCh)
 					},
 				)
@@ -2632,7 +2632,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				}, nil
 			}
 			h.startWSStreamWithAdmissionBuilder(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, "ws stream error", releaseActiveWSTurn, runtimefence.ActivationOptions{}, admissionBuilder,
-				func(ctx context.Context, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}, injectCh <-chan turn.InjectMessage) error {
+				func(ctx context.Context, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}, injectCh <-chan turn.InjectMessage) error {
 					if preparedReq == nil {
 						return errors.New("runtime request was not prepared during admission")
 					}
@@ -2708,7 +2708,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					Operation:       runtimeOperationFromPreparedReplacement(prepared),
 				}, nil
 			},
-				func(ctx context.Context, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}, _ <-chan turn.InjectMessage) error {
+				func(ctx context.Context, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}, _ <-chan turn.InjectMessage) error {
 					return h.agentService.StreamPreparedReplacementWS(ctx, prepared, eventCh, abortCh)
 				},
 			)
@@ -2804,7 +2804,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					Operation:       runtimeOperationFromPreparedReplacement(prepared),
 				}, nil
 			},
-				func(ctx context.Context, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}, _ <-chan turn.InjectMessage) error {
+				func(ctx context.Context, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}, _ <-chan turn.InjectMessage) error {
 					return h.agentService.StreamPreparedReplacementWS(ctx, prepared, eventCh, abortCh)
 				},
 			)

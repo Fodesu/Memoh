@@ -73,7 +73,7 @@ func TestStreamChatWSRoutesACPAgentSessionToACPPool(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	eventCh := make(chan WSStreamEvent, 8)
+	eventCh := make(chan StreamEventPayload, 8)
 	if err := resolver.StreamChatWS(
 		context.Background(),
 		ChatRequest{
@@ -193,7 +193,7 @@ func TestStreamChatWSRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 			ThreadID: "session-1",
 			Query:    "inspect the app",
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	)
 	if err == nil {
@@ -255,7 +255,7 @@ func TestStreamChatWSRejectsConcurrentACPPromptForSameSession(t *testing.T) {
 		errCh <- resolver.StreamChatWS(
 			context.Background(),
 			ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "first"},
-			make(chan WSStreamEvent, 8),
+			make(chan StreamEventPayload, 8),
 			make(chan struct{}),
 		)
 	}()
@@ -272,7 +272,7 @@ func TestStreamChatWSRejectsConcurrentACPPromptForSameSession(t *testing.T) {
 				ContentHash: "busy-image",
 			}},
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	)
 	if err == nil {
@@ -469,7 +469,7 @@ func TestStreamACPAgentWSRechecksRuntimeOwnerWorkspaceExecBeforePrompt(t *testin
 			ThreadID: "session-1",
 			Query:    "inspect the app",
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	)
 	var feedback *acpfeedback.Error
@@ -622,7 +622,7 @@ func TestStreamChatWSPersistsACPUserInputProjectionBeforePromptReturns(t *testin
 			Query:          "inspect the app",
 			CurrentChannel: "web",
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	); err != nil {
 		t.Fatalf("StreamChatWS() error = %v", err)
@@ -743,7 +743,7 @@ func TestStreamChatWSPersistsACPApprovalProjectionTerminalState(t *testing.T) {
 			Query:          "write the review",
 			CurrentChannel: "web",
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	); err != nil {
 		t.Fatalf("StreamChatWS() error = %v", err)
@@ -936,7 +936,7 @@ func TestStreamACPAgentWSRequestsAutoTitle(t *testing.T) {
 			ThreadID: "session-1",
 			Query:    "inspect the app",
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	); err != nil {
 		t.Fatalf("streamACPAgentWS() error = %v", err)
@@ -1232,7 +1232,7 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	eventCh := make(chan WSStreamEvent, 8)
+	eventCh := make(chan StreamEventPayload, 8)
 	if err := resolver.streamACPAgentWS(
 		context.Background(),
 		ChatRequest{
@@ -1307,7 +1307,7 @@ func TestStreamACPAgentWSFeedbackErrorSkipsPersistence(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	eventCh := make(chan WSStreamEvent, 8)
+	eventCh := make(chan StreamEventPayload, 8)
 	err := resolver.streamACPAgentWS(
 		context.Background(),
 		ChatRequest{
@@ -1371,7 +1371,7 @@ func TestStreamACPAgentWSImageCapabilityErrorUsesStructuredFeedback(t *testing.T
 				Base64: "data:image/png;base64,aW1hZ2U=",
 			}},
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	)
 	var feedback *acpfeedback.Error
@@ -1482,7 +1482,7 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 			ThreadID: "session-1",
 			Query:    "inspect",
 		},
-		make(chan WSStreamEvent, 8),
+		make(chan StreamEventPayload, 8),
 		make(chan struct{}),
 	); err != nil {
 		t.Fatalf("streamACPAgentWS() error = %v", err)
@@ -1887,7 +1887,7 @@ func acpRuntimeSessionServiceForTest(runtimeOwnerAccountID string) *fakeBackgrou
 	}
 }
 
-func drainAgentEvents(t *testing.T, eventCh <-chan WSStreamEvent) []native.StreamEvent {
+func drainAgentEvents(t *testing.T, eventCh <-chan StreamEventPayload) []native.StreamEvent {
 	t.Helper()
 	events := make([]native.StreamEvent, 0, len(eventCh))
 	for len(eventCh) > 0 {

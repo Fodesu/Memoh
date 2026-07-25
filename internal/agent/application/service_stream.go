@@ -18,8 +18,10 @@ import (
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 )
 
-// WSStreamEvent represents a raw JSON event forwarded from the agent.
-type WSStreamEvent = json.RawMessage
+// StreamEventPayload is one raw JSON agent event as delivered to transports.
+// Every transport (WebSocket, internal gRPC, IM channels) consumes this
+// wire-ready form; the name is transport-neutral because the type is.
+type StreamEventPayload = json.RawMessage
 
 // terminalSnapshot captures the partial state extracted from a terminal
 // agent event. It is used both for the success-path persistence and for the
@@ -83,7 +85,7 @@ func WithTerminalEventDeliveryTimeout(ctx context.Context, timeout time.Duration
 	return context.WithValue(ctx, terminalEventDeliveryTimeoutContextKey{}, timeout)
 }
 
-func sendWSAgentEvent(ctx context.Context, eventCh chan<- WSStreamEvent, event native.StreamEvent, data json.RawMessage) bool {
+func sendWSAgentEvent(ctx context.Context, eventCh chan<- StreamEventPayload, event native.StreamEvent, data json.RawMessage) bool {
 	if eventCh == nil {
 		return false
 	}
@@ -345,7 +347,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 func (s *Service) StreamChatWS(
 	ctx context.Context,
 	req ChatRequest,
-	eventCh chan<- WSStreamEvent,
+	eventCh chan<- StreamEventPayload,
 	abortCh <-chan struct{},
 ) error {
 	_, err := s.streamChatWSResult(ctx, req, eventCh, abortCh)
@@ -404,7 +406,7 @@ func runPersistenceGuard(ctx context.Context) error {
 func (s *Service) streamChatWSResult(
 	ctx context.Context,
 	req ChatRequest,
-	eventCh chan<- WSStreamEvent,
+	eventCh chan<- StreamEventPayload,
 	abortCh <-chan struct{},
 ) ([]messagepkg.Message, error) {
 	return s.streamChatWSResultWithHooks(ctx, req, eventCh, abortCh, nil)
@@ -413,7 +415,7 @@ func (s *Service) streamChatWSResult(
 func (s *Service) streamChatWSResultWithHooks(
 	ctx context.Context,
 	req ChatRequest,
-	eventCh chan<- WSStreamEvent,
+	eventCh chan<- StreamEventPayload,
 	abortCh <-chan struct{},
 	preflight func(context.Context) error,
 ) ([]messagepkg.Message, error) {
@@ -423,7 +425,7 @@ func (s *Service) streamChatWSResultWithHooks(
 func (s *Service) streamChatWSResultWithHooksAndTurn(
 	ctx context.Context,
 	req ChatRequest,
-	eventCh chan<- WSStreamEvent,
+	eventCh chan<- StreamEventPayload,
 	abortCh <-chan struct{},
 	preflight func(context.Context) error,
 	sessionTurnHeld bool,

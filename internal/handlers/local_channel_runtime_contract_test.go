@@ -116,7 +116,7 @@ func receiveHandlerTestResult[T any](t *testing.T, label string, ch <-chan T) T 
 	}
 }
 
-func rawRuntimeContractEvent(t *testing.T, ev native.StreamEvent) application.WSStreamEvent {
+func rawRuntimeContractEvent(t *testing.T, ev native.StreamEvent) application.StreamEventPayload {
 	t.Helper()
 	data, err := json.Marshal(ev)
 	if err != nil {
@@ -125,10 +125,10 @@ func rawRuntimeContractEvent(t *testing.T, ev native.StreamEvent) application.WS
 	return data
 }
 
-func richActiveRunWSContractScript(t *testing.T) []application.WSStreamEvent {
+func richActiveRunWSContractScript(t *testing.T) []application.StreamEventPayload {
 	t.Helper()
 	events := richActiveRunAgentContractScript()
-	out := make([]application.WSStreamEvent, 0, len(events))
+	out := make([]application.StreamEventPayload, 0, len(events))
 	for _, event := range events {
 		out = append(out, rawRuntimeContractEvent(t, event))
 	}
@@ -205,10 +205,10 @@ func richActiveRunActiveAgentContractScript() []native.StreamEvent {
 	return events[:len(events)-1]
 }
 
-func interruptedRunWSContractScript(t *testing.T) []application.WSStreamEvent {
+func interruptedRunWSContractScript(t *testing.T) []application.StreamEventPayload {
 	t.Helper()
 	events := interruptedRunAgentContractScript()
-	out := make([]application.WSStreamEvent, 0, len(events))
+	out := make([]application.StreamEventPayload, 0, len(events))
 	for _, event := range events {
 		out = append(out, rawRuntimeContractEvent(t, event))
 	}
@@ -224,7 +224,7 @@ func interruptedRunAgentContractScript() []native.StreamEvent {
 	}
 }
 
-func collectRuntimeContractWSEvents(t *testing.T, script []application.WSStreamEvent, stopAt string) []map[string]any {
+func collectRuntimeContractWSEvents(t *testing.T, script []application.StreamEventPayload, stopAt string) []map[string]any {
 	t.Helper()
 
 	closeWriter := make(chan struct{})
@@ -239,7 +239,7 @@ func collectRuntimeContractWSEvents(t *testing.T, script []application.WSStreamE
 		defer func() { _ = conn.Close() }()
 
 		writer := newWSWriter(conn)
-		eventCh := make(chan application.WSStreamEvent, len(script))
+		eventCh := make(chan application.StreamEventPayload, len(script))
 		for _, event := range script {
 			eventCh <- event
 		}
@@ -393,7 +393,7 @@ func TestLocalChannelRuntimeManagedStreamDoesNotWriteLegacyFrames(t *testing.T) 
 	closeWriter := make(chan struct{})
 	var closeWriterOnce sync.Once
 	defer closeWriterOnce.Do(func() { close(closeWriter) })
-	events := []application.WSStreamEvent{
+	events := []application.StreamEventPayload{
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentStart}),
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "runtime only"}),
 	}
@@ -404,7 +404,7 @@ func TestLocalChannelRuntimeManagedStreamDoesNotWriteLegacyFrames(t *testing.T) 
 		}
 		defer func() { _ = conn.Close() }()
 		writer := newWSWriter(conn)
-		eventCh := make(chan application.WSStreamEvent, len(events))
+		eventCh := make(chan application.StreamEventPayload, len(events))
 		for _, event := range events {
 			eventCh <- event
 		}
@@ -473,7 +473,7 @@ func TestLocalChannelRuntimeContractAggregatesActiveRunSnapshot(t *testing.T) {
 
 	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager}
 	activeEvents := richActiveRunActiveAgentContractScript()
-	eventCh := make(chan application.WSStreamEvent, len(activeEvents))
+	eventCh := make(chan application.StreamEventPayload, len(activeEvents))
 	for _, event := range activeEvents {
 		eventCh <- rawRuntimeContractEvent(t, event)
 	}
@@ -512,7 +512,7 @@ func TestLocalChannelStartWSStreamDrainsBufferedRuntimeEventsBeforeFinish(t *tes
 	manager := startHandlerRuntimeManager(t, sessionruntime.NewMemoryBackend(), handlerRuntimeOptions("handler-drain-owner"))
 
 	const deltaCount = 128
-	script := make([]application.WSStreamEvent, 0, deltaCount+1)
+	script := make([]application.StreamEventPayload, 0, deltaCount+1)
 	script = append(script, rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentStart}))
 	for range deltaCount {
 		script = append(script, rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "x"}))
@@ -529,7 +529,7 @@ func TestLocalChannelStartWSStreamDrainsBufferedRuntimeEventsBeforeFinish(t *tes
 		runtimeContractStreamID,
 		"runtime drain contract",
 		nil,
-		func(_ context.Context, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
+		func(_ context.Context, eventCh chan<- application.StreamEventPayload, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
 			for _, event := range script {
 				eventCh <- event
 			}
@@ -568,7 +568,7 @@ func TestLocalChannelStartWSStreamFinalizesCommittedPartialAbortAfterExecutionCa
 		"stream-partial-abort",
 		"runtime partial abort contract",
 		nil,
-		func(ctx context.Context, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}, _ <-chan turn.InjectMessage) error {
+		func(ctx context.Context, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}, _ <-chan turn.InjectMessage) error {
 			eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentStart})
 			eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "partial answer"})
 			<-abortCh
@@ -624,7 +624,7 @@ func TestLocalChannelRuntimeTerminalUpdateSurvivesExecutionCancellationDuringCom
 	executionCtx, cancelExecution := context.WithCancel(context.Background())
 	defer cancelExecution()
 	backend.Arm()
-	eventCh := make(chan application.WSStreamEvent, 1)
+	eventCh := make(chan application.StreamEventPayload, 1)
 	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{
 		Type:             native.EventAgentAbort,
 		HistoryCommitted: true,
@@ -675,7 +675,7 @@ func TestLocalChannelRuntimeLegacyTerminalUsesFinalizationContext(t *testing.T) 
 
 	executionCtx, cancelExecution := context.WithCancel(context.Background())
 	defer cancelExecution()
-	eventCh := make(chan application.WSStreamEvent, 1)
+	eventCh := make(chan application.StreamEventPayload, 1)
 	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentAbort})
 	close(eventCh)
 	legacyCtx := make(chan context.Context, 1)
@@ -724,7 +724,7 @@ func TestLocalChannelRuntimeTerminalCommitsBeforeLegacyDelivery(t *testing.T) {
 	}
 	handle := requireHandlerRunHandle(t, manager, runtimeContractBotID, runtimeContractSessionID, "stream-terminal-before-legacy")
 
-	eventCh := make(chan application.WSStreamEvent, 1)
+	eventCh := make(chan application.StreamEventPayload, 1)
 	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{
 		Type:             native.EventAgentAbort,
 		HistoryCommitted: true,
@@ -792,7 +792,7 @@ func TestLocalChannelRuntimeTerminalCommitSurvivesAssetLinkFailure(t *testing.T)
 		sessionRuntime: manager,
 		agentService:   &failingAssetLinkResolver{Service: &application.Service{}, err: assetErr},
 	}
-	eventCh := make(chan application.WSStreamEvent, 2)
+	eventCh := make(chan application.StreamEventPayload, 2)
 	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{
 		Type: native.EventAttachment,
 		Attachments: []native.FileAttachment{{
@@ -837,7 +837,7 @@ func TestLocalChannelRuntimeWaitsForAssetLinkBeforeCanonicalTerminal(t *testing.
 	}
 	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager, agentService: resolver}
 	handle := requireHandlerRunHandle(t, manager, runtimeContractBotID, runtimeContractSessionID, "stream-asset-order")
-	eventCh := make(chan application.WSStreamEvent, 2)
+	eventCh := make(chan application.StreamEventPayload, 2)
 	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{
 		Type:        native.EventAttachment,
 		Attachments: []native.FileAttachment{{Type: "file", Name: "report.txt", ContentHash: "asset-order-hash"}},
@@ -876,7 +876,7 @@ func TestLocalChannelRuntimeRetriesCompleteTerminalOutcome(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	backend.FailNextUpdate()
-	eventCh := make(chan application.WSStreamEvent, 1)
+	eventCh := make(chan application.StreamEventPayload, 1)
 	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentEnd, HistoryCommitted: true})
 	close(eventCh)
 	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager, agentService: &application.Service{}}
@@ -952,7 +952,7 @@ func TestLocalChannelStartWSStreamMarksRuntimeErroredAfterClientDisconnect(t *te
 		runtimeContractStreamID,
 		"runtime disconnect error contract",
 		nil,
-		func(_ context.Context, _ chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
+		func(_ context.Context, _ chan<- application.StreamEventPayload, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
 			return errors.New("runner failed after client disconnected")
 		},
 	)
@@ -985,7 +985,7 @@ func TestLocalChannelRuntimeUpdateFailureCancelsAndErrorsRun(t *testing.T) {
 		"stream-update-failure",
 		"runtime update failure contract",
 		nil,
-		func(ctx context.Context, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
+		func(ctx context.Context, eventCh chan<- application.StreamEventPayload, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
 			close(runnerStarted)
 			select {
 			case <-emitEvent:
@@ -1030,7 +1030,7 @@ func TestLocalChannelRuntimeForwarderBatchesAdjacentTextDeltas(t *testing.T) {
 	}
 	baselineUpdates := backend.UpdateCount()
 
-	eventCh := make(chan application.WSStreamEvent, 100)
+	eventCh := make(chan application.StreamEventPayload, 100)
 	for range 100 {
 		eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "x"})
 	}
@@ -1069,7 +1069,7 @@ func TestLocalChannelPersistentRuntimePublishFailureReconcilesWithoutCancelingRu
 		"stream-publish-failure",
 		"runtime publish failure contract",
 		nil,
-		func(_ context.Context, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
+		func(_ context.Context, eventCh chan<- application.StreamEventPayload, _ <-chan struct{}, _ <-chan turn.InjectMessage) error {
 			eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "committed delta"})
 			close(runnerCompleted)
 			return nil
@@ -1470,7 +1470,7 @@ func TestLocalChannelHandleWebSocketReplacementCommandsUseRuntimeProtocolAfterSu
 			manager := startHandlerRuntimeManager(t, sessionruntime.NewMemoryBackend(), handlerRuntimeOptions("handler-command-"+tt.name))
 
 			handler := runtimeContractLocalChannelHandler(manager)
-			handler.agentService = newScriptedReplacementResolver(tt.name, []application.WSStreamEvent{
+			handler.agentService = newScriptedReplacementResolver(tt.name, []application.StreamEventPayload{
 				rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentStart}),
 				rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "replacement output"}),
 				rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentEnd}),
@@ -1538,7 +1538,7 @@ func TestLocalChannelHandleWebSocketLegacyClientReceivesFramesWithoutRuntimeSubs
 	manager := startHandlerRuntimeManager(t, sessionruntime.NewMemoryBackend(), handlerRuntimeOptions("handler-legacy-client"))
 
 	handler := runtimeContractLocalChannelHandler(manager)
-	handler.agentService = newScriptedReplacementResolver(sessionruntime.RunOperationRetry, []application.WSStreamEvent{
+	handler.agentService = newScriptedReplacementResolver(sessionruntime.RunOperationRetry, []application.StreamEventPayload{
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentStart}),
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "legacy output"}),
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentEnd}),
@@ -2948,7 +2948,7 @@ func (b *blockingRuntimeSubscribeBackend) Subscribe(ctx context.Context, _ sessi
 
 type scriptedReplacementResolver struct {
 	*application.Service
-	events []application.WSStreamEvent
+	events []application.StreamEventPayload
 }
 
 type scriptedOrdinaryResolver struct {
@@ -2994,7 +2994,7 @@ func (r *failingAssetLinkResolver) LinkOutboundAssets(context.Context, string, s
 	return r.err
 }
 
-func (*blockingAssetResolver) StreamChatWS(ctx context.Context, _ application.ChatRequest, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}) error {
+func (*blockingAssetResolver) StreamChatWS(ctx context.Context, _ application.ChatRequest, eventCh chan<- application.StreamEventPayload, _ <-chan struct{}) error {
 	event, err := json.Marshal(native.StreamEvent{
 		Type:        native.EventAttachment,
 		Attachments: []native.FileAttachment{{Type: "file", Name: "report.txt", Mime: "text/plain", ContentHash: "asset-link-cancel-hash"}},
@@ -3078,7 +3078,7 @@ func (r *deferredResponseResolver) CommitToolApprovalResponse(ctx context.Contex
 	return application.CommittedToolApprovalResponse{}, r.commitErr
 }
 
-func (r *deferredResponseResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, _ chan<- application.WSStreamEvent) error {
+func (r *deferredResponseResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, _ chan<- application.StreamEventPayload) error {
 	fence, _ := runtimefence.FromContext(ctx)
 	r.stages <- deferredResponseStage{name: "continue", fence: fence}
 	return nil
@@ -3090,7 +3090,7 @@ func (r *deferredResponseResolver) CommitUserInputResponse(ctx context.Context, 
 	return application.CommittedUserInputResponse{}, r.commitErr
 }
 
-func (r *deferredResponseResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, _ chan<- application.WSStreamEvent) error {
+func (r *deferredResponseResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, _ chan<- application.StreamEventPayload) error {
 	fence, _ := runtimefence.FromContext(ctx)
 	r.stages <- deferredResponseStage{name: "continue", fence: fence}
 	return nil
@@ -3105,7 +3105,7 @@ func (r *sidebandResponseResolver) CommitToolApprovalResponse(ctx context.Contex
 	return application.CommittedToolApprovalResponse{}, nil
 }
 
-func (r *sidebandResponseResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, _ chan<- application.WSStreamEvent) error {
+func (r *sidebandResponseResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, _ chan<- application.StreamEventPayload) error {
 	if r.approvalCalls != nil {
 		r.approvalCalls <- struct{}{}
 	}
@@ -3124,7 +3124,7 @@ func (r *sidebandResponseResolver) CommitUserInputResponse(ctx context.Context, 
 	return application.CommittedUserInputResponse{}, nil
 }
 
-func (r *sidebandResponseResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, _ chan<- application.WSStreamEvent) error {
+func (r *sidebandResponseResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, _ chan<- application.StreamEventPayload) error {
 	if r.inputCalls != nil {
 		r.inputCalls <- struct{}{}
 	}
@@ -3166,7 +3166,7 @@ func (r *scriptedOrdinaryResolver) PrepareUserMessageWS(ctx context.Context, req
 	return req, nil
 }
 
-func (r *scriptedOrdinaryResolver) StreamChatWS(ctx context.Context, req application.ChatRequest, _ chan<- application.WSStreamEvent, _ <-chan struct{}) error {
+func (r *scriptedOrdinaryResolver) StreamChatWS(ctx context.Context, req application.ChatRequest, _ chan<- application.StreamEventPayload, _ <-chan struct{}) error {
 	if r.streamFence != nil {
 		fence, _ := runtimefence.FromContext(ctx)
 		r.streamFence <- fence
@@ -3198,7 +3198,7 @@ type cancelBlockingReplacementResolver struct {
 	started chan struct{}
 }
 
-func (r *cancelBlockingReplacementResolver) StreamPreparedReplacementWS(ctx context.Context, _ application.PreparedReplacementWS, _ chan<- application.WSStreamEvent, _ <-chan struct{}) error {
+func (r *cancelBlockingReplacementResolver) StreamPreparedReplacementWS(ctx context.Context, _ application.PreparedReplacementWS, _ chan<- application.StreamEventPayload, _ <-chan struct{}) error {
 	close(r.started)
 	<-ctx.Done()
 	return ctx.Err()
@@ -3233,7 +3233,7 @@ func (s *replacementContractMessageService) GetLatestVisibleTurnBySession(contex
 	return s.turn, nil
 }
 
-func newScriptedReplacementResolver(kind string, events []application.WSStreamEvent) *scriptedReplacementResolver {
+func newScriptedReplacementResolver(kind string, events []application.StreamEventPayload) *scriptedReplacementResolver {
 	messages := &replacementContractMessageService{}
 	switch kind {
 	case sessionruntime.RunOperationEdit:
@@ -3252,7 +3252,7 @@ func newScriptedReplacementResolver(kind string, events []application.WSStreamEv
 	return &scriptedReplacementResolver{Service: resolver, events: events}
 }
 
-func (r *scriptedReplacementResolver) StreamPreparedReplacementWS(ctx context.Context, _ application.PreparedReplacementWS, eventCh chan<- application.WSStreamEvent, _ <-chan struct{}) error {
+func (r *scriptedReplacementResolver) StreamPreparedReplacementWS(ctx context.Context, _ application.PreparedReplacementWS, eventCh chan<- application.StreamEventPayload, _ <-chan struct{}) error {
 	for _, event := range r.events {
 		select {
 		case eventCh <- event:

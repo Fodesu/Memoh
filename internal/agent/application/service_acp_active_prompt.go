@@ -222,7 +222,7 @@ func (s *Service) subscribeACPActivePrompt(botID, sessionID string) (*acpActiveP
 	return hub.subscribe()
 }
 
-func forwardACPActivePrompt(ctx context.Context, sub *acpActivePromptSubscription, eventCh chan<- WSStreamEvent, opts acpActivePromptForwardOptions) error {
+func forwardACPActivePrompt(ctx context.Context, sub *acpActivePromptSubscription, eventCh chan<- StreamEventPayload, opts acpActivePromptForwardOptions) error {
 	if sub == nil || eventCh == nil {
 		return emitApprovalAck(ctx, eventCh)
 	}
@@ -279,7 +279,7 @@ func sameNonEmpty(a, b string) bool {
 	return a != "" && b != "" && a == b
 }
 
-func sendAgentStreamEvent(ctx context.Context, eventCh chan<- WSStreamEvent, ev native.StreamEvent) error {
+func sendAgentStreamEvent(ctx context.Context, eventCh chan<- StreamEventPayload, ev native.StreamEvent) error {
 	if eventCh == nil {
 		return nil
 	}

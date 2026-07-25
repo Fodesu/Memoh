@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/memohai/memoh/internal/agent/application"
@@ -31,9 +32,9 @@ type resolver interface {
 // CommandResolver applies owner-local decision commands after runtime routing.
 type CommandResolver interface {
 	CommitToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error)
-	ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.WSStreamEvent) error
+	ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.StreamEventPayload) error
 	CommitUserInputResponse(context.Context, application.UserInputResponseInput) (application.CommittedUserInputResponse, error)
-	ContinueCommittedUserInputResponse(context.Context, application.CommittedUserInputResponse, chan<- application.WSStreamEvent) error
+	ContinueCommittedUserInputResponse(context.Context, application.CommittedUserInputResponse, chan<- application.StreamEventPayload) error
 }
 
 type commandReconciler interface {
@@ -81,7 +82,30 @@ func newRouter(logger *slog.Logger, manager runtimeManager, decisionResolver res
 	return router
 }
 
-func (r *Router) RespondToolApproval(ctx context.Context, input application.ToolApprovalResponseInput, output chan<- application.WSStreamEvent) error {
+// RespondOptions carries transport-supplied parameters for one decision
+// response. The zero value keeps server-generated defaults, so existing
+// callers are unaffected.
+type RespondOptions struct {
+	// StreamID correlates a native continuation run with a transport-chosen
+	// stream identity. The WebSocket protocol lets the client pick the
+	// stream ID so its abort frames and event envelopes match the run;
+	// leaving it empty selects a server-generated identity.
+	StreamID string
+}
+
+func (o RespondOptions) normalized() RespondOptions {
+	o.StreamID = strings.TrimSpace(o.StreamID)
+	return o
+}
+
+func (r *Router) RespondToolApproval(ctx context.Context, input application.ToolApprovalResponseInput, output chan<- application.StreamEventPayload) error {
+	return r.RespondToolApprovalWithOptions(ctx, input, output, RespondOptions{})
+}
+
+// RespondToolApprovalWithOptions is the transport-neutral decision response
+// use case: every transport routes through the same ownership, reconcile,
+// and continuation semantics while supplying its own delivery parameters.
+func (r *Router) RespondToolApprovalWithOptions(ctx context.Context, input application.ToolApprovalResponseInput, output chan<- application.StreamEventPayload, opts RespondOptions) error {
 	if r == nil || r.coordinator == nil {
 		return errors.New("decision runtime router is not configured")
 	}
@@ -92,10 +116,16 @@ func (r *Router) RespondToolApproval(ctx context.Context, input application.Tool
 	if err != nil {
 		return err
 	}
-	return r.routeOrContinue(ctx, &prepared, output)
+	return r.routeOrContinue(ctx, &prepared, output, opts.normalized())
 }
 
-func (r *Router) RespondUserInput(ctx context.Context, input application.UserInputResponseInput, output chan<- application.WSStreamEvent) error {
+func (r *Router) RespondUserInput(ctx context.Context, input application.UserInputResponseInput, output chan<- application.StreamEventPayload) error {
+	return r.RespondUserInputWithOptions(ctx, input, output, RespondOptions{})
+}
+
+// RespondUserInputWithOptions mirrors RespondToolApprovalWithOptions for
+// ask_user decisions.
+func (r *Router) RespondUserInputWithOptions(ctx context.Context, input application.UserInputResponseInput, output chan<- application.StreamEventPayload, opts RespondOptions) error {
 	if r == nil || r.coordinator == nil {
 		return errors.New("decision runtime router is not configured")
 	}
@@ -106,10 +136,10 @@ func (r *Router) RespondUserInput(ctx context.Context, input application.UserInp
 	if err != nil {
 		return err
 	}
-	return r.routeOrContinue(ctx, &prepared, output)
+	return r.routeOrContinue(ctx, &prepared, output, opts.normalized())
 }
 
-func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision, output chan<- application.WSStreamEvent) error {
+func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision, output chan<- application.StreamEventPayload, opts RespondOptions) error {
 	if prepared == nil {
 		return errors.New("prepared decision is required")
 	}
@@ -143,5 +173,5 @@ func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision
 	if r.manager == nil {
 		return prepared.commitAndContinue(ctx, output)
 	}
-	return r.continuation.Admit(ctx, prepared, output)
+	return r.continuation.Admit(ctx, prepared, output, opts)
 }

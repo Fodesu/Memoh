@@ -58,7 +58,7 @@ func TestForwardACPActivePromptSkipsOnlyMatchingDecisionProjection(t *testing.T)
 		t.Fatal("subscribe failed")
 	}
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan StreamEventPayload, 4)
 	done := make(chan error, 1)
 	go func() {
 		done <- forwardACPActivePrompt(context.Background(), sub, eventCh, acpActivePromptForwardOptions{

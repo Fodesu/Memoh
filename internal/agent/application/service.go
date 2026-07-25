@@ -97,7 +97,7 @@ type workspaceTargetResolver interface {
 type wsStreamResultRunner func(
 	ctx context.Context,
 	req ChatRequest,
-	eventCh chan<- WSStreamEvent,
+	eventCh chan<- StreamEventPayload,
 	abortCh <-chan struct{},
 	preflight func(context.Context) error,
 	sessionTurnHeld bool,
@@ -133,7 +133,7 @@ type Service struct {
 	acpPromptHubs      map[string]*acpActivePromptHub
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
-	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
+	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- StreamEventPayload) error
 	// streamReplacementFn replaces only agent execution while retaining
 	// replacement validation and persistence. Test seam.
 	streamReplacementFn wsStreamResultRunner
@@ -789,7 +789,7 @@ func (s *Service) canDeliverUserInputStream() bool {
 	return s.userInput != nil
 }
 
-func (s *Service) canDeliverUserInputWS(eventCh chan<- WSStreamEvent) bool {
+func (s *Service) canDeliverUserInputWS(eventCh chan<- StreamEventPayload) bool {
 	return s.userInput != nil && eventCh != nil
 }
 

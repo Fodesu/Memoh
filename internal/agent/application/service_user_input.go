@@ -146,7 +146,7 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 
 // ContinueCommittedUserInputResponse resumes the parent turn without
 // resolving the ask_user decision a second time.
-func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, committed CommittedUserInputResponse, eventCh chan<- WSStreamEvent) error {
+func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, committed CommittedUserInputResponse, eventCh chan<- StreamEventPayload) error {
 	resolved := committed.request
 	if strings.TrimSpace(resolved.ID) == "" {
 		return errors.New("committed user input response is missing its request")
@@ -250,7 +250,7 @@ func (s *Service) prepareUserInputResponseTarget(ctx context.Context, input User
 	}, nil
 }
 
-func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseInput, eventCh chan<- StreamEventPayload) error {
 	if s.userInput == nil {
 		return errors.New("user input service not configured")
 	}
@@ -536,7 +536,7 @@ func splitUserInputAnswerText(text string) []string {
 	return parts
 }
 
-func (s *Service) storeUserInputResultAndContinue(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
+func (s *Service) storeUserInputResultAndContinue(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- StreamEventPayload) error {
 	req = withLocalWebUserInputReplyTarget(req)
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, req.WorkspaceTargetID)
@@ -562,7 +562,7 @@ func (s *Service) storeUserInputResultAndContinue(ctx context.Context, req useri
 	return s.continueUserInputSession(ctx, req, input, eventCh)
 }
 
-func (s *Service) continueUserInputSession(ctx context.Context, req userinput.Request, input UserInputResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) continueUserInputSession(ctx context.Context, req userinput.Request, input UserInputResponseInput, eventCh chan<- StreamEventPayload) error {
 	req = withLocalWebUserInputReplyTarget(req)
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	resolved, err := s.ResolveRunConfig(ctx,

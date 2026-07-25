@@ -127,7 +127,7 @@ func (prepared PreparedReplacementWS) WithAttachments(attachments []ChatAttachme
 	return prepared, nil
 }
 
-func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMessageInput, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) error {
+func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMessageInput, eventCh chan<- StreamEventPayload, abortCh <-chan struct{}) error {
 	prepared, err := s.PrepareRetryLatestMessageWS(ctx, input)
 	if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (s *Service) PrepareRetryLatestMessageWS(ctx context.Context, input RetryLa
 	}, nil
 }
 
-func (s *Service) EditLatestMessageWS(ctx context.Context, input EditLatestMessageInput, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) error {
+func (s *Service) EditLatestMessageWS(ctx context.Context, input EditLatestMessageInput, eventCh chan<- StreamEventPayload, abortCh <-chan struct{}) error {
 	prepared, err := s.PrepareEditLatestMessageWS(ctx, input)
 	if err != nil {
 		return err
@@ -295,7 +295,7 @@ func (s *Service) PrepareEditLatestMessageWS(ctx context.Context, input EditLate
 	}, nil
 }
 
-func (s *Service) StreamPreparedReplacementWS(ctx context.Context, prepared PreparedReplacementWS, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) error {
+func (s *Service) StreamPreparedReplacementWS(ctx context.Context, prepared PreparedReplacementWS, eventCh chan<- StreamEventPayload, abortCh <-chan struct{}) error {
 	if strings.TrimSpace(prepared.OldTurnID) == "" || strings.TrimSpace(prepared.Reason) == "" {
 		return errors.New("prepared replacement is invalid")
 	}
@@ -352,7 +352,7 @@ func (s *Service) streamReplacementWS(
 	oldTurnID string,
 	requestMessageID string,
 	reason string,
-	eventCh chan<- WSStreamEvent,
+	eventCh chan<- StreamEventPayload,
 	abortCh <-chan struct{},
 	sessionTurnHeld bool,
 ) error {

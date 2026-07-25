@@ -13,7 +13,7 @@ func (s *Service) prepareContinuationRunConfig(
 	base native.RunConfig,
 	fallback historyfrag.ScopeFallback,
 	summaryScope contextfrag.Scope,
-	eventCh chan<- WSStreamEvent,
+	eventCh chan<- StreamEventPayload,
 ) (native.RunConfig, error) {
 	loaded, err := s.loadHistoryRecords(ctx, fallback, summaryScope.SessionID, defaultMaxContextMinutes)
 	if err != nil {

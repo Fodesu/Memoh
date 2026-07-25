@@ -77,7 +77,7 @@ func (r *routerTestResolver) runtimePolicyOrDefault() decision.ResumePolicy {
 	return r.runtimePolicy
 }
 
-func (r *routerTestResolver) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, eventCh chan<- application.WSStreamEvent) error {
+func (r *routerTestResolver) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, eventCh chan<- application.StreamEventPayload) error {
 	r.respondApproval = append(r.respondApproval, application.ToolApprovalResponseInput{
 		BotID: input.BotID, ThreadID: input.ThreadID, ActorChannelIdentityID: input.ActorChannelIdentityID,
 		ActorUserID: input.ActorUserID, ApprovalID: input.ApprovalID, ExplicitID: input.ExplicitID,
@@ -88,7 +88,7 @@ func (r *routerTestResolver) RespondToolApproval(ctx context.Context, input turn
 	return emitRouterTestEvents(eventCh, r.respondEvents)
 }
 
-func (r *routerTestResolver) RespondUserInput(ctx context.Context, input turn.UserInputResponse, eventCh chan<- application.WSStreamEvent) error {
+func (r *routerTestResolver) RespondUserInput(ctx context.Context, input turn.UserInputResponse, eventCh chan<- application.StreamEventPayload) error {
 	answers := make([]userinput.QuestionAnswer, len(input.Answers))
 	for i := range input.Answers {
 		answers[i] = userinput.QuestionAnswer{
@@ -114,7 +114,7 @@ func (r *routerTestResolver) CommitToolApprovalResponse(ctx context.Context, inp
 	return application.CommittedToolApprovalResponse{}, r.commitErr
 }
 
-func (r *routerTestResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, eventCh chan<- application.WSStreamEvent) error {
+func (r *routerTestResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, eventCh chan<- application.StreamEventPayload) error {
 	r.respondFence, _ = runtimefence.FromContext(ctx)
 	r.lifecycle = append(r.lifecycle, "continue")
 	return emitRouterTestEvents(eventCh, r.respondEvents)
@@ -127,7 +127,7 @@ func (r *routerTestResolver) CommitUserInputResponse(ctx context.Context, input 
 	return application.CommittedUserInputResponse{}, r.commitErr
 }
 
-func (r *routerTestResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, eventCh chan<- application.WSStreamEvent) error {
+func (r *routerTestResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, eventCh chan<- application.StreamEventPayload) error {
 	r.respondFence, _ = runtimefence.FromContext(ctx)
 	r.lifecycle = append(r.lifecycle, "continue")
 	return emitRouterTestEvents(eventCh, r.respondEvents)
@@ -147,7 +147,7 @@ func (*routerTestResolver) DeferSessionCompaction(string, string, string) func()
 	return func() {}
 }
 
-func emitRouterTestEvents(eventCh chan<- application.WSStreamEvent, events []agentpkg.StreamEvent) error {
+func emitRouterTestEvents(eventCh chan<- application.StreamEventPayload, events []agentpkg.StreamEvent) error {
 	for _, event := range events {
 		raw, err := json.Marshal(event)
 		if err != nil {
@@ -166,6 +166,7 @@ type routerTestManager struct {
 	commandHandlers    map[string]sessionruntime.CommandHandler
 	commandReconcilers map[string]sessionruntime.CommandReconciler
 	starts             int
+	startStreamIDs     []string
 	validations        int
 	handledEvents      []agentpkg.StreamEvent
 	finalizedEvents    []agentpkg.StreamEvent
@@ -207,6 +208,7 @@ func (m *routerTestManager) ValidateRunOwnership(context.Context, sessionruntime
 
 func (m *routerTestManager) StartRunWithOptions(ctx context.Context, options sessionruntime.RunStartOptions) (sessionruntime.RunHandle, error) {
 	m.starts++
+	m.startStreamIDs = append(m.startStreamIDs, options.StreamID)
 	m.ownershipCancel = options.OwnershipCancel
 	handle := sessionruntime.RunHandle{
 		BotID: options.BotID, SessionID: options.SessionID, StreamID: options.StreamID, Generation: "generation-1",
@@ -428,7 +430,7 @@ func TestRouterDistributedFallbackClaimsFenceAndProjectsTerminal(t *testing.T) {
 	}
 	manager := &routerTestManager{distributed: true}
 	router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
-	output := make(chan application.WSStreamEvent, len(resolver.respondEvents))
+	output := make(chan application.StreamEventPayload, len(resolver.respondEvents))
 
 	if err := router.RespondToolApproval(context.Background(), application.ToolApprovalResponseInput{ApprovalID: decisionTargetID, Decision: "approve"}, output); err != nil {
 		t.Fatalf("RespondToolApproval() error = %v", err)
@@ -447,6 +449,37 @@ func TestRouterDistributedFallbackClaimsFenceAndProjectsTerminal(t *testing.T) {
 	}
 	if manager.finishes != 1 || len(output) != len(resolver.respondEvents) {
 		t.Fatalf("completion = finishes:%d output:%d", manager.finishes, len(output))
+	}
+}
+
+func TestRouterUsesTransportSuppliedStreamIdentity(t *testing.T) {
+	// The WS protocol lets the client choose the stream ID so its abort
+	// frames and event envelopes correlate with the continuation run; other
+	// transports leave it empty and get a server-generated identity.
+	resolver := &routerTestResolver{prepared: runtimefence.PreservedDecision{
+		Kind: runtimefence.DecisionToolApproval, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
+	}}
+	manager := &routerTestManager{distributed: true}
+	router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
+
+	if err := router.RespondToolApprovalWithOptions(context.Background(), application.ToolApprovalResponseInput{
+		ApprovalID: decisionTargetID, Decision: "approve",
+	}, nil, RespondOptions{StreamID: " client-stream-7 "}); err != nil {
+		t.Fatalf("RespondToolApprovalWithOptions() error = %v", err)
+	}
+	if len(manager.startStreamIDs) != 1 || manager.startStreamIDs[0] != "client-stream-7" {
+		t.Fatalf("continuation stream ids = %#v, want [client-stream-7]", manager.startStreamIDs)
+	}
+
+	generated := &routerTestManager{distributed: true}
+	generatedRouter := newRouter(slog.New(slog.DiscardHandler), generated, &routerTestResolver{prepared: resolver.prepared})
+	if err := generatedRouter.RespondToolApproval(context.Background(), application.ToolApprovalResponseInput{
+		ApprovalID: decisionTargetID, Decision: "approve",
+	}, nil); err != nil {
+		t.Fatalf("RespondToolApproval() error = %v", err)
+	}
+	if len(generated.startStreamIDs) != 1 || !strings.HasPrefix(generated.startStreamIDs[0], "decision-") {
+		t.Fatalf("generated stream ids = %#v, want decision- prefix", generated.startStreamIDs)
 	}
 }
 

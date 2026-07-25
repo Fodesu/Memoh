@@ -26,7 +26,7 @@ type runtimeTargetResolver interface {
 	PrepareUserInputRuntimeTarget(context.Context, application.UserInputResponseInput) (application.RuntimeDecisionTarget, error)
 }
 
-type continuation func(context.Context, chan<- application.WSStreamEvent) error
+type continuation func(context.Context, chan<- application.StreamEventPayload) error
 
 type decisionCommit func(context.Context) error
 
@@ -55,7 +55,7 @@ func (p PreparedDecision) validate() error {
 	return nil
 }
 
-func (p *PreparedDecision) commitAndContinue(ctx context.Context, output chan<- application.WSStreamEvent) error {
+func (p *PreparedDecision) commitAndContinue(ctx context.Context, output chan<- application.StreamEventPayload) error {
 	if p == nil {
 		return errors.New("prepared decision is required")
 	}
@@ -117,7 +117,7 @@ func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input app
 			committed, commitErr = c.resolver.CommitToolApprovalResponse(commitCtx, input)
 			return commitErr
 		},
-		continueRun: func(runCtx context.Context, eventCh chan<- application.WSStreamEvent) error {
+		continueRun: func(runCtx context.Context, eventCh chan<- application.StreamEventPayload) error {
 			return c.resolver.ContinueCommittedToolApprovalResponse(runCtx, committed, eventCh)
 		},
 	}
@@ -166,7 +166,7 @@ func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input applic
 			committed, commitErr = c.resolver.CommitUserInputResponse(commitCtx, input)
 			return commitErr
 		},
-		continueRun: func(runCtx context.Context, eventCh chan<- application.WSStreamEvent) error {
+		continueRun: func(runCtx context.Context, eventCh chan<- application.StreamEventPayload) error {
 			return c.resolver.ContinueCommittedUserInputResponse(runCtx, committed, eventCh)
 		},
 	}

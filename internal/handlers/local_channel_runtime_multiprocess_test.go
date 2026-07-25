@@ -74,7 +74,7 @@ func (r *runtimeSmokeResolver) CommitToolApprovalResponse(_ context.Context, inp
 	return application.CommittedToolApprovalResponse{}, nil
 }
 
-func (*runtimeSmokeResolver) ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.WSStreamEvent) error {
+func (*runtimeSmokeResolver) ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.StreamEventPayload) error {
 	return nil
 }
 

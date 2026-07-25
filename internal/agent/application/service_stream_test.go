@@ -28,7 +28,7 @@ func TestSendWSAgentEventWaitsForTerminalConsumerAfterExecutionCancellation(t *t
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = WithTerminalEventDeliveryTimeout(ctx, time.Second)
 	cancel()
-	eventCh := make(chan WSStreamEvent)
+	eventCh := make(chan StreamEventPayload)
 	event := native.StreamEvent{Type: native.EventAgentAbort, HistoryCommitted: true}
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestSendWSAgentEventBoundsTerminalDeliveryWithoutConsumer(t *testing.T) {
 		t.Fatalf("marshal terminal event: %v", err)
 	}
 	started := time.Now()
-	if sendWSAgentEvent(ctx, make(chan WSStreamEvent), event, data) {
+	if sendWSAgentEvent(ctx, make(chan StreamEventPayload), event, data) {
 		t.Fatal("terminal event unexpectedly reached a missing consumer")
 	}
 	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed > time.Second {

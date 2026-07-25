@@ -34,7 +34,7 @@ func newNativeContinuationAdmission(logger *slog.Logger, manager runtimeManager,
 	}
 }
 
-func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *PreparedDecision, output chan<- application.WSStreamEvent) error {
+func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *PreparedDecision, output chan<- application.StreamEventPayload, opts RespondOptions) error {
 	if a == nil || a.manager == nil || a.resolver == nil {
 		return errors.New("native decision continuation is not configured")
 	}
@@ -44,7 +44,10 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 	if prepared.resumePolicy != decision.ResumePolicyNativeContinuation {
 		return application.ErrRuntimeDecisionOwnerUnavailable
 	}
-	streamID := "decision-" + uuid.NewString()
+	streamID := opts.StreamID
+	if streamID == "" {
+		streamID = "decision-" + uuid.NewString()
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	abortCh := make(chan struct{}, 1)
@@ -119,7 +122,7 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 	releaseCompaction := a.resolver.DeferSessionCompaction(prepared.target.BotID, prepared.target.SessionID, streamID)
 	defer releaseCompaction()
 
-	eventCh := make(chan application.WSStreamEvent, streamBufferSize)
+	eventCh := make(chan application.StreamEventPayload, streamBufferSize)
 	forwardDone := make(chan error, 1)
 	go func() {
 		forwardDone <- a.consumeEvents(runtimeCtx, handle, eventCh, output, cancel)

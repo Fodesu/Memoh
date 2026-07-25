@@ -111,7 +111,7 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 
 // ContinueCommittedToolApprovalResponse executes the approved tool, when
 // applicable, and resumes the parent turn without updating the decision again.
-func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
+func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- StreamEventPayload) error {
 	target := committed.request
 	if strings.TrimSpace(target.ID) == "" {
 		return errors.New("committed tool approval response is missing its request")
@@ -228,7 +228,7 @@ func toolApprovalResumePolicy(target toolapproval.Request, isACP, hasLocalWaiter
 	return policy
 }
 
-func (s *Service) respondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) respondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- StreamEventPayload) error {
 	if s.toolApproval == nil {
 		return errors.New("tool approval service not configured")
 	}
@@ -340,11 +340,11 @@ func (s *Service) ReconcileToolApprovalResponse(ctx context.Context, input ToolA
 
 // A live waiter owns tool execution and continuation inside the active run.
 // The response path only resolves the decision so the waiter can resume.
-func (s *Service) respondLiveToolApproval(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) respondLiveToolApproval(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- StreamEventPayload) error {
 	return s.resolveToolApprovalDecision(ctx, target, input, eventCh)
 }
 
-func (s *Service) resolveToolApprovalDecision(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) resolveToolApprovalDecision(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- StreamEventPayload) error {
 	switch strings.ToLower(strings.TrimSpace(input.Decision)) {
 	case "approve", "approved":
 		if _, err := s.toolApproval.Approve(ctx, target.ID, input.ActorChannelIdentityID, input.Reason); err != nil {
@@ -384,7 +384,7 @@ func (s *Service) limitToolApprovalResult(result sdk.ToolApprovalResult, toolNam
 	return result
 }
 
-func (s *Service) respondACPToolApproval(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) respondACPToolApproval(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- StreamEventPayload) error {
 	if !s.toolApproval.CanRespond(target) {
 		if target.RuntimeFenced {
 			return ErrRuntimeDecisionOwnerUnavailable
@@ -552,7 +552,7 @@ func toolApprovalPermission(operation string) (string, bool) {
 	}
 }
 
-func emitApprovalAck(ctx context.Context, eventCh chan<- WSStreamEvent) error {
+func emitApprovalAck(ctx context.Context, eventCh chan<- StreamEventPayload) error {
 	if eventCh == nil {
 		return nil
 	}
@@ -589,7 +589,7 @@ func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Requ
 	})
 }
 
-func (s *Service) storeToolResultAndContinue(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
+func (s *Service) storeToolResultAndContinue(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, result sdk.ToolResultPart, eventCh chan<- StreamEventPayload) error {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, approval.WorkspaceTargetID)
@@ -615,7 +615,7 @@ func (s *Service) storeToolResultAndContinue(ctx context.Context, approval toola
 	return s.continueToolApprovalSession(ctx, approval, input, eventCh)
 }
 
-func (s *Service) continueToolApprovalSession(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) continueToolApprovalSession(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- StreamEventPayload) error {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	resolved, err := s.ResolveRunConfig(ctx,

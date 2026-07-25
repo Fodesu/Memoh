@@ -88,7 +88,7 @@ func (s *Service) isACPAgentSession(ctx context.Context, req ChatRequest) (bool,
 	return session.IsACPRuntime(sess), nil
 }
 
-func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) error {
+func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh chan<- StreamEventPayload, abortCh <-chan struct{}) error {
 	if s.acpPool == nil {
 		return errors.New("ACP session pool is not configured")
 	}
@@ -545,7 +545,7 @@ func mergeACPRuntimeMetadata(metadata, runtimeMetadata map[string]any) map[strin
 }
 
 func (s *Service) streamACPAgentChunks(ctx context.Context, req ChatRequest, chunkCh chan<- StreamChunk, errCh chan<- error) {
-	eventCh := make(chan WSStreamEvent)
+	eventCh := make(chan StreamEventPayload)
 	done := make(chan error, 1)
 	go func() {
 		defer close(eventCh)

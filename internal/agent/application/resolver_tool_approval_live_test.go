@@ -93,7 +93,7 @@ func TestRespondToolApprovalWithLiveWaiterOnlyResolvesDecision(t *testing.T) {
 	resolver := &Service{}
 	resolver.SetToolApprovalService(service)
 	authorizeLiveApprovalResolver(resolver, liveApprovalActorID, bots.PermissionChat, bots.PermissionWorkspaceExec)
-	events := make(chan WSStreamEvent, 2)
+	events := make(chan StreamEventPayload, 2)
 
 	if err := resolver.respondToolApproval(context.Background(), ToolApprovalResponseInput{
 		BotID:       liveApprovalBotID,

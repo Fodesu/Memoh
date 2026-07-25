@@ -233,7 +233,7 @@ func TestStreamChatWSRejectsACPRequestedSkillsBeforePool(t *testing.T) {
 	err := resolver.StreamChatWS(
 		context.Background(),
 		requestedSkillGuardRequest("session-1"),
-		make(chan WSStreamEvent, 1),
+		make(chan StreamEventPayload, 1),
 		make(chan struct{}),
 	)
 	var slashErr slash.Error

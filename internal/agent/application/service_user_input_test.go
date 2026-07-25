@@ -165,7 +165,7 @@ func TestUserInputContinuationHistoryClosesOlderPendingCall(t *testing.T) {
 	}
 }
 
-func collectAgentStreamEvents(t *testing.T, ch <-chan WSStreamEvent, count int) []native.StreamEvent {
+func collectAgentStreamEvents(t *testing.T, ch <-chan StreamEventPayload, count int) []native.StreamEvent {
 	t.Helper()
 	events := make([]native.StreamEvent, 0, count)
 	timeout := time.After(2 * time.Second)
@@ -310,7 +310,7 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 	var continued *sdk.ToolResultPart
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(_ context.Context, req userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart, _ chan<- WSStreamEvent) error {
+		continueUserInputFn: func(_ context.Context, req userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart, _ chan<- StreamEventPayload) error {
 			if req.ID != "input-1" {
 				t.Errorf("continued request = %#v", req)
 			}
@@ -319,7 +319,7 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 		},
 	}
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan StreamEventPayload, 4)
 	answers := []userinput.QuestionAnswer{{QuestionID: "q1", OptionIDs: []string{"q1.o1"}}}
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:    "bot-1",
@@ -360,7 +360,7 @@ func TestPrepareUserInputResponseDoesNotResolveOrContinue(t *testing.T) {
 	fake := &fakeUserInputService{target: target}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Fatal("prepare continued the session")
 			return nil
 		},
@@ -459,7 +459,7 @@ func TestRespondUserInputResolveOnlyWakesRemoteWaiterWithoutContinuation(t *test
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Fatal("resolve-only response started a second continuation")
 			return nil
 		},
@@ -552,7 +552,7 @@ func TestRespondUserInputLimitsChatToolResult(t *testing.T) {
 	resolver := &Service{
 		agent:     native.New(native.Deps{Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80}}),
 		userInput: fake,
-		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart, _ chan<- WSStreamEvent) error {
+		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart, _ chan<- StreamEventPayload) error {
 			continued = &result
 			return nil
 		},
@@ -606,14 +606,14 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Error("ACP request must not continue the chat session; the blocked waiter resumes it")
 			return nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan StreamEventPayload, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -647,14 +647,14 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Error("already-decided ACP request must not continue the chat session")
 			return nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan StreamEventPayload, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -689,14 +689,14 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Error("ACP request must not continue the session in this response handler")
 			return nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan StreamEventPayload, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -738,7 +738,7 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Error("ACP request must resume through the active ACP prompt")
 			return nil
 		},
@@ -750,7 +750,7 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	}
 	defer resolver.unregisterACPActivePrompt("bot-1", "session-1", hub)
 
-	eventCh := make(chan WSStreamEvent, 8)
+	eventCh := make(chan StreamEventPayload, 8)
 	done := make(chan error, 1)
 	go func() {
 		done <- resolver.respondUserInput(context.Background(), UserInputResponseInput{
@@ -824,7 +824,7 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Error("ACP request must not continue the chat session")
 			return nil
 		},
@@ -836,7 +836,7 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 	}
 	defer resolver.unregisterACPActivePrompt("bot-1", "session-1", hub)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan StreamEventPayload, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:                      "bot-1",
 		ThreadID:                   "session-1",
@@ -870,14 +870,14 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			t.Error("orphaned ACP request must not continue the chat session")
 			return nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan StreamEventPayload, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -938,7 +938,7 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 	continueCalls := 0
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- StreamEventPayload) error {
 			continueCalls++
 			return nil
 		},

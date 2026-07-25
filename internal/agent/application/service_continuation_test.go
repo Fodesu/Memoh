@@ -17,7 +17,7 @@ func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *
 	t.Parallel()
 
 	resolver := &Service{userInput: &userinput.Service{}}
-	eventCh := make(chan WSStreamEvent)
+	eventCh := make(chan StreamEventPayload)
 	base := native.RunConfig{
 		Query:    "stale query",
 		Messages: []sdk.Message{sdk.UserMessage("stale context")},
