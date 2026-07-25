@@ -38,6 +38,10 @@ type fakeUserInputService struct {
 	submitHook    func()
 	canRespond    bool
 	canRespondSet bool
+
+	cancelSessionCalls  []string
+	cancelSessionResult []userinput.Request
+	cancelSessionErr    error
 }
 
 func (*fakeUserInputService) AdvanceText(context.Context, userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error) {
@@ -80,6 +84,11 @@ func (f *fakeUserInputService) Cancel(_ context.Context, input userinput.CancelI
 		return userinput.Request{}, f.cancelErr
 	}
 	return f.resolved, nil
+}
+
+func (f *fakeUserInputService) CancelPendingForSession(_ context.Context, botID, sessionID, reason string) ([]userinput.Request, error) {
+	f.cancelSessionCalls = append(f.cancelSessionCalls, botID+"|"+sessionID+"|"+reason)
+	return f.cancelSessionResult, f.cancelSessionErr
 }
 
 func (f *fakeUserInputService) CanRespond(req userinput.Request) bool {

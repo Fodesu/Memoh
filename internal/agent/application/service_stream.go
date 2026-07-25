@@ -544,6 +544,7 @@ func (s *Service) streamChatWSResultWithHooksAndTurn(
 	modelID := rc.model.ID
 	stored := false
 	clientGone := false
+	runAborted := false
 	var lastSnapshot terminalSnapshot
 	var hasSnapshot bool
 	var toolCallCount int
@@ -566,6 +567,12 @@ func (s *Service) streamChatWSResultWithHooksAndTurn(
 				slog.String("model_id", modelID),
 				slog.String("error", event.Error),
 			)
+		}
+		if event.Type == native.EventAgentAbort {
+			// Tracked independently of the terminal snapshot: an abort that
+			// produced no messages never reaches extractTerminalSnapshot but
+			// must still close its pending decisions durably below.
+			runAborted = true
 		}
 		if hasVisibleAgentStreamOutput(event) {
 			hasVisibleOutput = true
@@ -662,6 +669,14 @@ func (s *Service) streamChatWSResultWithHooksAndTurn(
 				slog.String("chat_id", req.ChatID),
 			)
 		}
+	}
+
+	if runAborted {
+		// Durable twin of the runtime projection's abort-time decision
+		// cancel. Runs after persistence so retryability is settled first,
+		// and only on the abort path: errored or lost runs keep their
+		// decisions pending, matching finalizeRunState.
+		s.cancelPendingSessionDecisionsAfterAbort(context.WithoutCancel(ctx), req.BotID, req.ThreadID)
 	}
 
 	if idleCancel.DidFire() {

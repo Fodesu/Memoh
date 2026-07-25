@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+
+	"github.com/memohai/memoh/internal/runtimefence"
 )
 
 // ErrSessionDecisionPending means a session has a durable interactive decision
@@ -42,4 +45,47 @@ func (s *Service) EnsureSessionCanStartRun(ctx context.Context, botID, sessionID
 		}
 	}
 	return nil
+}
+
+// abortedRunDecisionReason matches the runtime projection wording so the
+// durable rows and the projected decision cards close with the same reason.
+const abortedRunDecisionReason = "run aborted"
+
+// cancelPendingSessionDecisionsAfterAbort durably closes decisions that an
+// aborted run left pending. It is the durable twin of the runtime
+// projection's cancelPendingDecisions: without it the composer gate keeps
+// blocking a session whose decision cards already show "cancelled". A fenced
+// context makes the cancel stale-safe — once a newer run activated its fence,
+// the cancel is rejected with ErrStale and skipped. Unfenced (in-process)
+// runtimes cancel unconditionally, mirroring the projection.
+func (s *Service) cancelPendingSessionDecisionsAfterAbort(ctx context.Context, botID, sessionID string) {
+	if s == nil {
+		return
+	}
+	log := s.logger
+	if log == nil {
+		log = slog.Default()
+	}
+	if s.toolApproval != nil {
+		cancelled, err := s.toolApproval.CancelPendingForSession(ctx, botID, sessionID, abortedRunDecisionReason)
+		switch {
+		case err != nil && !errors.Is(err, runtimefence.ErrStale):
+			log.Warn("cancel pending tool approvals after abort failed",
+				slog.String("session_id", sessionID), slog.Any("error", err))
+		case len(cancelled) > 0:
+			log.Info("cancelled pending tool approvals with aborted run",
+				slog.String("session_id", sessionID), slog.Int("count", len(cancelled)))
+		}
+	}
+	if s.userInput != nil {
+		cancelled, err := s.userInput.CancelPendingForSession(ctx, botID, sessionID, abortedRunDecisionReason)
+		switch {
+		case err != nil && !errors.Is(err, runtimefence.ErrStale):
+			log.Warn("cancel pending user inputs after abort failed",
+				slog.String("session_id", sessionID), slog.Any("error", err))
+		case len(cancelled) > 0:
+			log.Info("cancelled pending user inputs with aborted run",
+				slog.String("session_id", sessionID), slog.Int("count", len(cancelled)))
+		}
+	}
 }

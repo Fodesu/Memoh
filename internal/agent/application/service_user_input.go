@@ -28,6 +28,7 @@ type userInputService interface {
 	AdvanceText(ctx context.Context, input userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error)
 	Submit(ctx context.Context, input userinput.SubmitInput) (userinput.Request, error)
 	Cancel(ctx context.Context, input userinput.CancelInput) (userinput.Request, error)
+	CancelPendingForSession(ctx context.Context, botID, sessionID, reason string) ([]userinput.Request, error)
 	CanRespond(req userinput.Request) bool
 }
 
