@@ -61,6 +61,7 @@ type LocalChannelHandler struct {
 	accountService      *accounts.Service
 	sessionService      *sessionpkg.Service
 	sessionRuntime      *sessionruntime.Manager
+	decisionRouter      *decisionruntime.Router
 	agentService        localChannelAgentService
 	commandHandler      *command.Handler
 	skillResolver       runtimeSkillResolver
@@ -180,6 +181,13 @@ func (h *LocalChannelHandler) SetRuntimeSkillResolver(resolver runtimeSkillResol
 func (h *LocalChannelHandler) SetSessionRuntime(manager *sessionruntime.Manager) {
 	h.sessionRuntime = manager
 	h.bindSessionRuntimeCommandHandler()
+}
+
+// SetDecisionRouter installs the transport-neutral decision response use
+// case. When present, deferred WS approval and ask_user responses route
+// through it instead of a handler-owned continuation.
+func (h *LocalChannelHandler) SetDecisionRouter(router *decisionruntime.Router) {
+	h.decisionRouter = router
 }
 
 func (h *LocalChannelHandler) bindSessionRuntimeCommandHandler() {
@@ -1376,8 +1384,6 @@ func (h *LocalChannelHandler) forwardWSStreamEventsResult(ctx, assetCtx context.
 }
 
 const (
-	runtimeTextBatchWindow      = 20 * time.Millisecond
-	runtimeTextBatchBytes       = 4 * 1024
 	runtimeFinalizationTTL      = 10 * time.Second
 	runtimeFinalizationAttempts = 3
 )
@@ -1471,17 +1477,13 @@ func retryRuntimeFinalization(ctx context.Context, operation func() error) error
 	return lastErr
 }
 
-func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx, assetCtx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.StreamEventPayload, cancel context.CancelFunc, forwardLegacy func(context.Context, native.StreamEvent)) error {
-	botID := handle.BotID
-	sessionID := handle.SessionID
-	streamID := handle.StreamID
-	var pending *native.StreamEvent
-	var timer *time.Timer
-	var timerC <-chan time.Time
-	var runtimeErr error
-	outboundAssetRefs := make([]messagepkg.AssetRef, 0)
+// runtimeStreamHooks builds the WebSocket delivery hooks for the shared
+// runtime event pump: attachment ingestion, outbound asset linking with
+// canonical readiness, bounded finalization contexts, and legacy frame
+// forwarding. The returned cleanup must run after the pump ends.
+func (h *LocalChannelHandler) runtimeStreamHooks(ctx, assetCtx context.Context, botID, sessionID string, forwardLegacy func(context.Context, native.StreamEvent)) (decisionruntime.EventPumpHooks, func()) {
 	finalization := newWSRuntimeFinalization(ctx, assetCtx, runtimeFinalizationTTL)
-	defer finalization.close()
+	outboundAssetRefs := make([]messagepkg.AssetRef, 0)
 	linkOutboundAssets := func() error { //nolint:contextcheck // Finalization intentionally outlives execution cancellation.
 		if len(outboundAssetRefs) == 0 {
 			return nil
@@ -1492,132 +1494,42 @@ func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx, assetCtx context
 		outboundAssetRefs = nil
 		return nil
 	}
+	hooks := decisionruntime.EventPumpHooks{
+		Transform: func(raw application.StreamEventPayload) []application.StreamEventPayload { //nolint:contextcheck // Terminal processing intentionally switches to finalization contexts.
+			var rawEvent native.StreamEvent
+			if json.Unmarshal(raw, &rawEvent) == nil && rawEvent.IsTerminal() {
+				finalization.begin()
+			}
+			processed := h.processWSEvent(finalization.assetContext(), botID, raw)
+			for _, p := range processed {
+				if refs := extractAssetRefsFromProcessedEvent(p); len(refs) > 0 {
+					outboundAssetRefs = append(outboundAssetRefs, refs...)
+				}
+			}
+			return processed
+		},
+		CommitContext:   finalization.runtimeContext,
+		FinalizeContext: finalization.runtimeContext,
+		BeforeFinalize: func(terminal native.StreamEvent) (bool, error) { //nolint:contextcheck // Finalization intentionally outlives execution cancellation.
+			var assetErr error
+			if terminal.HistoryCommitted {
+				assetErr = retryRuntimeFinalization(finalization.assetContext(), linkOutboundAssets)
+			}
+			return terminal.HistoryCommitted && assetErr == nil, assetErr
+		},
+		AfterDrain: linkOutboundAssets,
+	}
+	if forwardLegacy != nil {
+		hooks.OnEvent = forwardLegacy
+		hooks.OnTerminal = forwardLegacy
+	}
+	return hooks, finalization.close
+}
 
-	stopTimer := func() {
-		if timer != nil && !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer = nil
-		timerC = nil
-	}
-	commit := func(event native.StreamEvent) { //nolint:contextcheck // Finalization intentionally outlives execution cancellation.
-		if runtimeErr != nil {
-			return
-		}
-		if _, err := h.sessionRuntime.HandleAgentEvent(finalization.runtimeContext(), handle, event); err != nil {
-			h.logger.Warn("runtime state update failed", slog.String("stage", string(event.Type)), slog.Any("error", err), slog.String("stream_id", streamID))
-			runtimeErr = fmt.Errorf("update session runtime: %w", err)
-			if cancel != nil {
-				cancel()
-			}
-		}
-	}
-	flush := func() {
-		if pending == nil {
-			return
-		}
-		commit(*pending)
-		pending = nil
-		stopTimer()
-	}
-	enqueue := func(event native.StreamEvent) {
-		batchable := event.Type == native.EventTextDelta || event.Type == native.EventReasoningDelta
-		if !batchable || event.Delta == "" {
-			flush()
-			commit(event)
-			return
-		}
-		if pending != nil && pending.Type != event.Type {
-			flush()
-		}
-		if pending == nil {
-			pendingEvent := event
-			pending = &pendingEvent
-			timer = time.NewTimer(runtimeTextBatchWindow)
-			timerC = timer.C
-		} else {
-			pending.Delta += event.Delta
-		}
-		if len(pending.Delta) >= runtimeTextBatchBytes {
-			flush()
-		}
-	}
-	process := func(raw application.StreamEventPayload) { //nolint:contextcheck // Terminal processing intentionally switches to finalization contexts.
-		if runtimeErr != nil {
-			return
-		}
-		var rawEvent native.StreamEvent
-		if json.Unmarshal(raw, &rawEvent) == nil && rawEvent.IsTerminal() {
-			finalization.begin()
-		}
-		for _, processed := range h.processWSEvent(finalization.assetContext(), botID, raw) {
-			if refs := extractAssetRefsFromProcessedEvent(processed); len(refs) > 0 {
-				outboundAssetRefs = append(outboundAssetRefs, refs...)
-			}
-			var streamEvent native.StreamEvent
-			if err := json.Unmarshal(processed, &streamEvent); err != nil {
-				continue
-			}
-			terminal := streamEvent.IsTerminal()
-			if terminal {
-				flush()
-				var assetErr error
-				if streamEvent.HistoryCommitted {
-					assetErr = retryRuntimeFinalization(finalization.assetContext(), linkOutboundAssets)
-				}
-				canonicalReady := streamEvent.HistoryCommitted && assetErr == nil
-				finalizationError := ""
-				if assetErr != nil {
-					finalizationError = assetErr.Error()
-				}
-				if _, err := h.sessionRuntime.FinalizeAgentEvent(finalization.runtimeContext(), handle, streamEvent, canonicalReady, finalizationError); err != nil {
-					runtimeErr = fmt.Errorf("finalize session runtime: %w", err)
-					if cancel != nil {
-						cancel()
-					}
-					return
-				}
-				if forwardLegacy != nil {
-					forwardLegacy(finalization.runtimeContext(), streamEvent)
-				}
-				if assetErr != nil {
-					runtimeErr = assetErr
-					if cancel != nil {
-						cancel()
-					}
-				}
-				return
-			}
-			enqueue(streamEvent)
-			if runtimeErr != nil {
-				return
-			}
-			if forwardLegacy != nil {
-				forwardLegacy(finalization.runtimeContext(), streamEvent)
-			}
-		}
-	}
-
-	for eventCh != nil {
-		select {
-		case event, ok := <-eventCh:
-			if !ok {
-				eventCh = nil
-				break
-			}
-			process(event)
-		case <-timerC:
-			flush()
-		}
-	}
-	flush()
-	if runtimeErr == nil {
-		runtimeErr = linkOutboundAssets()
-	}
-	return runtimeErr
+func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx, assetCtx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.StreamEventPayload, cancel context.CancelFunc, forwardLegacy func(context.Context, native.StreamEvent)) error {
+	hooks, closeHooks := h.runtimeStreamHooks(ctx, assetCtx, handle.BotID, handle.SessionID, forwardLegacy)
+	defer closeHooks()
+	return decisionruntime.PumpRunEvents(ctx, h.sessionRuntime, handle, eventCh, cancel, hooks)
 }
 
 type wsStreamRunner func(ctx context.Context, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}, injectCh <-chan turn.InjectMessage) error
@@ -1628,6 +1540,24 @@ func runtimeOperationFromPreparedReplacement(prepared application.PreparedReplac
 		Kind:                 strings.TrimSpace(operation.Kind),
 		ReplaceFromMessageID: strings.TrimSpace(operation.ReplaceFromMessageID),
 		ReplacementUserTurn:  operation.ReplacementUserTurn,
+	}
+}
+
+// respondDeferredDecisionViaRouter answers a decision with no locally active
+// run through the transport-neutral decision response use case, supplying the
+// WS delivery hooks and the client-chosen stream identity so continuation
+// events and abort frames stay correlated with the run.
+func (h *LocalChannelHandler) respondDeferredDecisionViaRouter(baseCtx, connCtx context.Context, activeStreams *wsStreamRegistry, writer *wsWriter, botID, sessionID, streamID string, respond func(ctx context.Context, opts decisionruntime.RespondOptions, suppressActivePromptAttach bool) error) {
+	suppressActivePromptAttach := activeStreams.hasSession(sessionID)
+	releaseWSMessageTurn := h.enterWSMessageTurn(botID, sessionID, streamID)
+	defer releaseWSMessageTurn()
+	hooks, closeHooks := h.runtimeStreamHooks(baseCtx, baseCtx, botID, sessionID, legacyWSStreamForwarder(writer, streamID, sessionID, func(forward func()) bool {
+		return activeStreams.forwardLegacyIfEnabled(sessionID, forward)
+	}))
+	defer closeHooks()
+	err := respond(baseCtx, decisionruntime.RespondOptions{StreamID: streamID, Hooks: hooks}, suppressActivePromptAttach)
+	if err != nil && connCtx.Err() == nil {
+		h.sendWSRuntimeError(connCtx, writer, streamID, sessionID, err, apperror.CodeSessionRuntimeRunFailed)
 	}
 }
 
@@ -2231,6 +2161,14 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				ChatToken:              bearerToken,
 			}
 			deferred := func() {
+				if h.decisionRouter != nil {
+					h.respondDeferredDecisionViaRouter(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, func(ctx context.Context, opts decisionruntime.RespondOptions, suppressActivePromptAttach bool) error {
+						input := responseInput
+						input.SuppressActivePromptAttach = suppressActivePromptAttach
+						return h.decisionRouter.RespondToolApprovalWithOptions(ctx, input, nil, opts)
+					})
+					return
+				}
 				preserved, err := h.agentService.PrepareToolApprovalResponse(streamBaseCtx, responseInput)
 				if err != nil {
 					h.sendWSSidebandResult(connCtx, writer, responseMsg, "tool_approval_response", err)
@@ -2296,6 +2234,14 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				ChatToken:              bearerToken,
 			}
 			deferred := func() {
+				if h.decisionRouter != nil {
+					h.respondDeferredDecisionViaRouter(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, func(ctx context.Context, opts decisionruntime.RespondOptions, suppressActivePromptAttach bool) error {
+						input := responseInput
+						input.SuppressActivePromptAttach = suppressActivePromptAttach
+						return h.decisionRouter.RespondUserInputWithOptions(ctx, input, nil, opts)
+					})
+					return
+				}
 				preserved, err := h.agentService.PrepareUserInputResponseTarget(streamBaseCtx, responseInput)
 				if err != nil {
 					h.sendWSSidebandResult(connCtx, writer, responseMsg, "user_input_response", err)

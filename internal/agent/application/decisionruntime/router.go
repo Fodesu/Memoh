@@ -91,6 +91,10 @@ type RespondOptions struct {
 	// stream ID so its abort frames and event envelopes match the run;
 	// leaving it empty selects a server-generated identity.
 	StreamID string
+	// Hooks attaches the transport's delivery behavior (attachment
+	// ingestion, asset linking, legacy frame forwarding) to the shared
+	// event pump of a native continuation run.
+	Hooks EventPumpHooks
 }
 
 func (o RespondOptions) normalized() RespondOptions {

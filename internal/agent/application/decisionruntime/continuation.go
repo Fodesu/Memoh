@@ -125,7 +125,7 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 	eventCh := make(chan application.StreamEventPayload, streamBufferSize)
 	forwardDone := make(chan error, 1)
 	go func() {
-		forwardDone <- a.consumeEvents(runtimeCtx, handle, eventCh, output, cancel)
+		forwardDone <- a.consumeEvents(runtimeCtx, handle, eventCh, output, cancel, opts.Hooks)
 	}()
 
 	runnerCtx := application.WithTerminalEventDeliveryTimeout(runtimeCtx, terminalFinalizationTimeout)
