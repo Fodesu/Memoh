@@ -167,6 +167,7 @@ type routerTestManager struct {
 	commandReconcilers map[string]sessionruntime.CommandReconciler
 	starts             int
 	startStreamIDs     []string
+	startContinuations []bool
 	validations        int
 	handledEvents      []agentpkg.StreamEvent
 	finalizedEvents    []agentpkg.StreamEvent
@@ -209,6 +210,7 @@ func (m *routerTestManager) ValidateRunOwnership(context.Context, sessionruntime
 func (m *routerTestManager) StartRunWithOptions(ctx context.Context, options sessionruntime.RunStartOptions) (sessionruntime.RunHandle, error) {
 	m.starts++
 	m.startStreamIDs = append(m.startStreamIDs, options.StreamID)
+	m.startContinuations = append(m.startContinuations, options.DecisionContinuation)
 	m.ownershipCancel = options.OwnershipCancel
 	handle := sessionruntime.RunHandle{
 		BotID: options.BotID, SessionID: options.SessionID, StreamID: options.StreamID, Generation: "generation-1",
@@ -469,6 +471,9 @@ func TestRouterUsesTransportSuppliedStreamIdentity(t *testing.T) {
 	}
 	if len(manager.startStreamIDs) != 1 || manager.startStreamIDs[0] != "client-stream-7" {
 		t.Fatalf("continuation stream ids = %#v, want [client-stream-7]", manager.startStreamIDs)
+	}
+	if len(manager.startContinuations) != 1 || !manager.startContinuations[0] {
+		t.Fatalf("continuation flag = %#v, want [true]", manager.startContinuations)
 	}
 
 	generated := &routerTestManager{distributed: true}

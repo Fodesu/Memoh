@@ -678,7 +678,7 @@ func (s *Service) streamChatWSResultWithHooksAndTurn(
 		// cancel. Runs after persistence so retryability is settled first,
 		// and only on the abort path: errored or lost runs keep their
 		// decisions pending, matching finalizeRunState.
-		s.cancelPendingSessionDecisionsAfterAbort(context.WithoutCancel(ctx), req.BotID, req.ThreadID)
+		s.CancelPendingSessionDecisionsAfterAbort(context.WithoutCancel(ctx), req.BotID, req.ThreadID)
 	}
 
 	if idleCancel.DidFire() {

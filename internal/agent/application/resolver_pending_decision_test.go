@@ -31,7 +31,7 @@ func TestCancelPendingSessionDecisionsAfterAbortCancelsDurably(t *testing.T) {
 	fake := &fakeUserInputService{cancelSessionResult: []userinput.Request{{ID: "input-1"}}}
 	service := &Service{userInput: fake}
 
-	service.cancelPendingSessionDecisionsAfterAbort(context.Background(), "bot-1", "session-1")
+	service.CancelPendingSessionDecisionsAfterAbort(context.Background(), "bot-1", "session-1")
 
 	if len(fake.cancelSessionCalls) != 1 {
 		t.Fatalf("cancel calls = %d, want 1", len(fake.cancelSessionCalls))
@@ -47,7 +47,7 @@ func TestCancelPendingSessionDecisionsAfterAbortToleratesStaleFence(t *testing.T
 	fake := &fakeUserInputService{cancelSessionErr: runtimefence.ErrStale}
 	service := &Service{userInput: fake}
 
-	service.cancelPendingSessionDecisionsAfterAbort(context.Background(), "bot-1", "session-1")
+	service.CancelPendingSessionDecisionsAfterAbort(context.Background(), "bot-1", "session-1")
 
 	if len(fake.cancelSessionCalls) != 1 {
 		t.Fatalf("cancel calls = %d, want 1", len(fake.cancelSessionCalls))

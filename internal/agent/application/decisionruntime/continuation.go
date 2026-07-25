@@ -75,13 +75,14 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 	})
 
 	handle, err = a.manager.StartRunWithOptions(runtimeCtx, sessionruntime.RunStartOptions{
-		BotID:           prepared.target.BotID,
-		SessionID:       prepared.target.SessionID,
-		StreamID:        streamID,
-		OwnershipCancel: revokeOwnership,
-		AbortCh:         abortCh,
-		Cancel:          cancel,
-		InjectCh:        injectCh,
+		BotID:                prepared.target.BotID,
+		SessionID:            prepared.target.SessionID,
+		StreamID:             streamID,
+		OwnershipCancel:      revokeOwnership,
+		AbortCh:              abortCh,
+		Cancel:               cancel,
+		InjectCh:             injectCh,
+		DecisionContinuation: true,
 		AdmissionBuilder: func(admissionCtx context.Context, admitted sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
 			if fence.Valid() {
 				admissionCtx = runtimefence.WithContext(admissionCtx, fence)

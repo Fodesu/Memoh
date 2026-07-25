@@ -50,10 +50,14 @@ func (m *Manager) abort(ctx context.Context, botID, sessionID, streamID, expecte
 		}
 	}
 	if m.distributed == nil {
+		m.recordAbortIntent(ctx, botID, sessionID)
 		return false, nil
 	}
 	ref, ok, err := m.distributed.LoadStreamRef(ctx, Key{BotID: botID, SessionID: sessionID}, streamID)
 	if err != nil || !ok || strings.TrimSpace(ref.OwnerID) == "" {
+		if err == nil {
+			m.recordAbortIntent(ctx, botID, sessionID)
+		}
 		return false, err
 	}
 	if ref.BotID != botID || ref.SessionID != sessionID {
@@ -80,6 +84,39 @@ func (m *Manager) abort(ctx context.Context, botID, sessionID, streamID, expecte
 		return false, err
 	}
 	return true, nil
+}
+
+// recordAbortIntent remembers, through the shared backend, an abort that
+// found no active runtime run. A decision continuation admitted inside the
+// intent window is rejected, closing the race where the user aborts before
+// the deferred continuation run exists. Any other successful claim clears the
+// intent, and it expires with the abort grace window. The write is
+// deliberately sequence-neutral: it is control-plane state that subscribers
+// never render.
+func (m *Manager) recordAbortIntent(ctx context.Context, botID, sessionID string) {
+	if m == nil || m.backend == nil {
+		return
+	}
+	now, err := m.backend.Now(ctx)
+	if err != nil {
+		m.logger.Warn("load runtime backend time for abort intent failed", slog.Any("error", err), slog.String("session_id", sessionID))
+		return
+	}
+	key := Key{BotID: botID, SessionID: sessionID}
+	if _, _, err := m.backend.Update(ctx, key, func(snapshot Snapshot, ok bool) (Snapshot, bool, error) {
+		if !ok {
+			snapshot = EmptySnapshot(botID, sessionID)
+		}
+		if snapshot.CurrentRunView != nil && isActiveRunStatus(snapshot.CurrentRunView.Status) {
+			// A live run appeared after all; the regular abort path owns it.
+			return snapshot, false, nil
+		}
+		snapshot.PendingAbort = &AbortIntentView{RequestedAt: now}
+		snapshot.UpdatedAt = now
+		return snapshot, true, nil
+	}); err != nil {
+		m.logger.Warn("record runtime abort intent failed", slog.Any("error", err), slog.String("session_id", sessionID))
+	}
 }
 
 func (m *Manager) abortLocal(ctx context.Context, ctrl *runControl) (bool, error) {

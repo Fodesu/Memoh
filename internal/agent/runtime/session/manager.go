@@ -507,10 +507,11 @@ func (m *Manager) StartRunWithOptions(ctx context.Context, options RunStartOptio
 		options.AbortCh,
 		options.Cancel,
 		options.InjectCh,
+		options.DecisionContinuation,
 	)
 }
 
-func (m *Manager) startRunWithAdmissionBuilder(ctx context.Context, botID, sessionID, streamID string, builder func(context.Context, RunHandle) (RunAdmissionView, error), ownershipCancel context.CancelCauseFunc, abortCh chan<- struct{}, cancel context.CancelFunc, injectCh chan<- turn.InjectMessage) (RunHandle, error) {
+func (m *Manager) startRunWithAdmissionBuilder(ctx context.Context, botID, sessionID, streamID string, builder func(context.Context, RunHandle) (RunAdmissionView, error), ownershipCancel context.CancelCauseFunc, abortCh chan<- struct{}, cancel context.CancelFunc, injectCh chan<- turn.InjectMessage, decisionContinuation bool) (RunHandle, error) {
 	if m == nil || m.backend == nil {
 		if ownershipCancel != nil {
 			ownershipCancel(ErrRunOwnershipLost)
@@ -603,6 +604,16 @@ func (m *Manager) startRunWithAdmissionBuilder(ctx context.Context, botID, sessi
 				return snapshot, false, fmt.Errorf("session %q already has an active runtime run", sessionID)
 			}
 			expiredRef = streamRefForRun(snapshot.BotID, snapshot.SessionID, snapshot.CurrentRunView)
+		}
+		if snapshot.PendingAbort != nil {
+			// An abort that raced the deferred admission window wins: the
+			// decision continuation is rejected as canceled. Every other
+			// successful claim clears the intent, and it expires with the
+			// abort grace window.
+			if decisionContinuation && now.Sub(snapshot.PendingAbort.RequestedAt) <= m.abortGraceTTL {
+				return snapshot, false, context.Canceled
+			}
+			snapshot.PendingAbort = nil
 		}
 		snapshot.BotID = botID
 		snapshot.SessionID = sessionID

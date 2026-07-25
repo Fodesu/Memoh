@@ -113,6 +113,16 @@ type Snapshot struct {
 	CurrentRunView *CurrentRunView `json:"current_run_view,omitempty"`
 	Queue          []QueuedRunView `json:"queue"`
 	UpdatedAt      time.Time       `json:"updated_at"`
+	// PendingAbort records an abort that found no active run. A decision
+	// continuation admitted inside its window is rejected, so an abort can
+	// never race a deferred admission; any other successful claim clears it.
+	PendingAbort *AbortIntentView `json:"pending_abort,omitempty"`
+}
+
+// AbortIntentView is the backend CAS record of an abort that arrived while
+// the session had no active runtime run.
+type AbortIntentView struct {
+	RequestedAt time.Time `json:"requested_at"`
 }
 
 // EmptySnapshot returns the canonical empty runtime snapshot for a session.
@@ -182,6 +192,10 @@ type RunStartOptions struct {
 	AbortCh          chan<- struct{}
 	Cancel           context.CancelFunc
 	InjectCh         chan<- turn.InjectMessage
+	// DecisionContinuation marks a run that resumes a durable decision. Its
+	// claim is rejected while the session carries a pending abort intent, so
+	// an abort issued before the continuation existed still wins the race.
+	DecisionContinuation bool
 }
 
 type RunOperationView struct {

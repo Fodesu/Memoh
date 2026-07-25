@@ -96,6 +96,7 @@ type localChannelAgentService interface {
 	LinkOutboundAssets(ctx context.Context, botID, sessionID string, assets []messagepkg.AssetRef) error
 	PrepareUserMessageWS(ctx context.Context, req application.ChatRequest) (application.ChatRequest, error)
 	EnsureSessionCanStartRun(ctx context.Context, botID, sessionID string) error
+	CancelPendingSessionDecisionsAfterAbort(ctx context.Context, botID, sessionID string) int
 	PrepareEditLatestMessageWS(ctx context.Context, input application.EditLatestMessageInput) (application.PreparedReplacementWS, error)
 	PrepareRetryLatestMessageWS(ctx context.Context, input application.RetryLatestMessageInput) (application.PreparedReplacementWS, error)
 	PrepareToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
@@ -2091,6 +2092,15 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					continue
 				}
 				if h.sessionRuntime != nil {
+					// No run was left to stop, but the abort still means "stop
+					// what this session is waiting on": durably close pending
+					// decisions so the composer gate, the decision cards, and
+					// the recorded abort intent agree. The runtime abort intent
+					// (recorded by the manager) rejects a continuation that
+					// already slipped past this cancel.
+					if h.agentService != nil && h.agentService.CancelPendingSessionDecisionsAfterAbort(streamBaseCtx, botID, sessionID) > 0 {
+						continue
+					}
 					h.sendWSRuntimeError(connCtx, writer, streamID, sessionID, sessionruntime.ErrCommandTargetMismatch, apperror.CodeSessionRuntimeTargetNotActive)
 				}
 			}

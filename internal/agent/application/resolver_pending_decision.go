@@ -51,17 +51,19 @@ func (s *Service) EnsureSessionCanStartRun(ctx context.Context, botID, sessionID
 // durable rows and the projected decision cards close with the same reason.
 const abortedRunDecisionReason = "run aborted"
 
-// cancelPendingSessionDecisionsAfterAbort durably closes decisions that an
-// aborted run left pending. It is the durable twin of the runtime
-// projection's cancelPendingDecisions: without it the composer gate keeps
-// blocking a session whose decision cards already show "cancelled". A fenced
-// context makes the cancel stale-safe — once a newer run activated its fence,
-// the cancel is rejected with ErrStale and skipped. Unfenced (in-process)
+// CancelPendingSessionDecisionsAfterAbort durably closes decisions that an
+// aborted run (or an abort with no run left to stop) left pending, returning
+// how many it cancelled. It is the durable twin of the runtime projection's
+// cancelPendingDecisions: without it the composer gate keeps blocking a
+// session whose decision cards already show "cancelled". A fenced context
+// makes the cancel stale-safe — once a newer run activated its fence, the
+// cancel is rejected with ErrStale and skipped. Unfenced (in-process)
 // runtimes cancel unconditionally, mirroring the projection.
-func (s *Service) cancelPendingSessionDecisionsAfterAbort(ctx context.Context, botID, sessionID string) {
+func (s *Service) CancelPendingSessionDecisionsAfterAbort(ctx context.Context, botID, sessionID string) int {
 	if s == nil {
-		return
+		return 0
 	}
+	total := 0
 	log := s.logger
 	if log == nil {
 		log = slog.Default()
@@ -73,6 +75,7 @@ func (s *Service) cancelPendingSessionDecisionsAfterAbort(ctx context.Context, b
 			log.Warn("cancel pending tool approvals after abort failed",
 				slog.String("session_id", sessionID), slog.Any("error", err))
 		case len(cancelled) > 0:
+			total += len(cancelled)
 			log.Info("cancelled pending tool approvals with aborted run",
 				slog.String("session_id", sessionID), slog.Int("count", len(cancelled)))
 		}
@@ -84,8 +87,10 @@ func (s *Service) cancelPendingSessionDecisionsAfterAbort(ctx context.Context, b
 			log.Warn("cancel pending user inputs after abort failed",
 				slog.String("session_id", sessionID), slog.Any("error", err))
 		case len(cancelled) > 0:
+			total += len(cancelled)
 			log.Info("cancelled pending user inputs with aborted run",
 				slog.String("session_id", sessionID), slog.Int("count", len(cancelled)))
 		}
 	}
+	return total
 }
