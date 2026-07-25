@@ -128,6 +128,16 @@ func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision
 		}
 	}
 	if prepared.resumePolicy != decision.ResumePolicyNativeContinuation {
+		// The commit layer owns the full non-native protocol: it wakes a live
+		// waiter blocked in this process and auto-closes unfenced orphans.
+		// Channel-originated runs never register runtime runs, so their
+		// waiters are only reachable through this delegation. Without a local
+		// waiter a distributed runtime must still fail closed — the waiter may
+		// be alive on another server, and this process cannot tell until
+		// waiter presence is shared across owners.
+		if prepared.hasLocalWaiter || r.manager == nil || !r.manager.IsDistributed() {
+			return prepared.commitAndContinue(ctx, output)
+		}
 		return application.ErrRuntimeDecisionOwnerUnavailable
 	}
 	if r.manager == nil {

@@ -204,11 +204,13 @@ func (s *Service) prepareToolApprovalResponseTarget(ctx context.Context, input T
 	default:
 		return RuntimeDecisionTarget{}, fmt.Errorf("unknown tool approval decision %q", input.Decision)
 	}
+	hasLocalWaiter := s.toolApproval.CanRespond(target)
 	return RuntimeDecisionTarget{
 		Decision: runtimefence.PreservedDecision{
 			Kind: runtimefence.DecisionToolApproval, ID: target.ID, BotID: target.BotID, SessionID: target.SessionID,
 		},
-		ResumePolicy: toolApprovalResumePolicy(target, isACP, s.toolApproval.CanRespond(target)),
+		ResumePolicy:   toolApprovalResumePolicy(target, isACP, hasLocalWaiter),
+		HasLocalWaiter: hasLocalWaiter,
 	}, nil
 }
 

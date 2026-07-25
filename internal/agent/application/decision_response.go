@@ -11,4 +11,9 @@ import (
 type RuntimeDecisionTarget struct {
 	Decision     runtimefence.PreservedDecision
 	ResumePolicy decision.ResumePolicy
+	// HasLocalWaiter reports that a live waiter for this decision is blocked
+	// in this process, so a durable commit wakes it without any runtime run
+	// or continuation. It reflects the prepare-time registry; the commit
+	// layer re-derives waiter presence before acting on it.
+	HasLocalWaiter bool
 }

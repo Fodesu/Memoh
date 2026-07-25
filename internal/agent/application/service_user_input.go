@@ -235,14 +235,17 @@ func (s *Service) prepareUserInputResponseTarget(ctx context.Context, input User
 		}
 	}
 	policy := decision.ResumePolicyNativeContinuation
+	hasLocalWaiter := false
 	if userinput.IsACPMCPRequest(target) {
 		policy = decision.ResumePolicyLiveWaiter
+		hasLocalWaiter = s.userInput.CanRespond(target)
 	}
 	return RuntimeDecisionTarget{
 		Decision: runtimefence.PreservedDecision{
 			Kind: runtimefence.DecisionUserInput, ID: target.ID, BotID: target.BotID, SessionID: target.SessionID,
 		},
-		ResumePolicy: policy,
+		ResumePolicy:   policy,
+		HasLocalWaiter: hasLocalWaiter,
 	}, nil
 }
 

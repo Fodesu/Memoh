@@ -41,6 +41,7 @@ type routerTestResolver struct {
 	commitErr        error
 	lifecycle        []string
 	runtimePolicy    decision.ResumePolicy
+	runtimeWaiter    bool
 }
 
 func (r *routerTestResolver) AllocateRuntimePersistenceFence(context.Context, string, string) (runtimefence.Fence, error) {
@@ -62,11 +63,11 @@ func (r *routerTestResolver) PrepareUserInputResponseTarget(context.Context, app
 }
 
 func (r *routerTestResolver) PrepareToolApprovalRuntimeTarget(context.Context, application.ToolApprovalResponseInput) (application.RuntimeDecisionTarget, error) {
-	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault()}, nil
+	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault(), HasLocalWaiter: r.runtimeWaiter}, nil
 }
 
 func (r *routerTestResolver) PrepareUserInputRuntimeTarget(context.Context, application.UserInputResponseInput) (application.RuntimeDecisionTarget, error) {
-	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault()}, nil
+	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault(), HasLocalWaiter: r.runtimeWaiter}, nil
 }
 
 func (r *routerTestResolver) runtimePolicyOrDefault() decision.ResumePolicy {
@@ -292,6 +293,9 @@ func TestRouterMemoryFallbackUsesRuntimeLifecycleWithoutFence(t *testing.T) {
 }
 
 func TestRouterDoesNotCreateContinuationForNonNativeDecision(t *testing.T) {
+	// Distributed runtime without a local waiter: the waiter may be alive on
+	// another server, so the response must fail closed without touching the
+	// durable decision.
 	for _, policy := range []decision.ResumePolicy{
 		decision.ResumePolicyLiveWaiter,
 		decision.ResumePolicyUnknown,
@@ -314,6 +318,72 @@ func TestRouterDoesNotCreateContinuationForNonNativeDecision(t *testing.T) {
 			}
 			if manager.starts != 0 || resolver.allocated != 0 || len(resolver.lifecycle) != 0 {
 				t.Fatalf("non-native decision started work: starts:%d allocated:%d lifecycle:%v", manager.starts, resolver.allocated, resolver.lifecycle)
+			}
+		})
+	}
+}
+
+func TestRouterCommitsLiveWaiterDecisionWithLocalWaiter(t *testing.T) {
+	// A live waiter blocked in this process accepts the response through the
+	// commit layer directly: no runtime run, no fence, no continuation. This
+	// is the only path that reaches channel-originated ACP/MCP waiters, which
+	// never register runtime runs.
+	for _, distributed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("distributed=%t", distributed), func(t *testing.T) {
+			resolver := &routerTestResolver{
+				prepared: runtimefence.PreservedDecision{
+					Kind: runtimefence.DecisionToolApproval, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
+				},
+				runtimePolicy: decision.ResumePolicyLiveWaiter,
+				runtimeWaiter: true,
+			}
+			manager := &routerTestManager{distributed: distributed}
+			router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
+
+			if err := router.RespondToolApproval(context.Background(), application.ToolApprovalResponseInput{
+				ApprovalID: decisionTargetID, Decision: "approve",
+			}, nil); err != nil {
+				t.Fatalf("RespondToolApproval() error = %v", err)
+			}
+			if got := strings.Join(resolver.lifecycle, ","); got != "commit,continue" {
+				t.Fatalf("local waiter lifecycle = %q, want commit,continue", got)
+			}
+			if manager.starts != 0 || resolver.allocated != 0 {
+				t.Fatalf("local waiter response started continuation: starts=%d allocated=%d", manager.starts, resolver.allocated)
+			}
+		})
+	}
+}
+
+func TestRouterDelegatesNonNativeDecisionToCommitInProcess(t *testing.T) {
+	// An in-process runtime has exactly one candidate process: no local waiter
+	// means the waiter is gone for good, so the response is delegated to the
+	// commit layer, which fails closed for unknown policies and auto-closes
+	// unfenced orphaned live_waiter decisions.
+	for _, policy := range []decision.ResumePolicy{
+		decision.ResumePolicyLiveWaiter,
+		decision.ResumePolicyUnknown,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			resolver := &routerTestResolver{
+				prepared: runtimefence.PreservedDecision{
+					Kind: runtimefence.DecisionUserInput, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
+				},
+				runtimePolicy: policy,
+			}
+			manager := &routerTestManager{}
+			router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
+
+			if err := router.RespondUserInput(context.Background(), application.UserInputResponseInput{
+				UserInputID: decisionTargetID, TextAnswer: "yes",
+			}, nil); err != nil {
+				t.Fatalf("RespondUserInput() error = %v", err)
+			}
+			if got := strings.Join(resolver.lifecycle, ","); got != "commit,continue" {
+				t.Fatalf("in-process delegation lifecycle = %q, want commit,continue", got)
+			}
+			if manager.starts != 0 || resolver.allocated != 0 {
+				t.Fatalf("in-process delegation started continuation: starts=%d allocated=%d", manager.starts, resolver.allocated)
 			}
 		})
 	}
