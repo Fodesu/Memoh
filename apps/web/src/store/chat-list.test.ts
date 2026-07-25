@@ -2628,6 +2628,7 @@ describe('chat-list store', () => {
 
     await store.respondUserInput(userInput, { answers: [{ question_id: 'q1', option_ids: ['q1.o1'] }] })
     await flushPromises()
+    expect(store.isChatViewStreaming({ botId: 'bot-1', sessionId: 'session-1', viewId: 'chat' })).toBe(true)
 
     expect(sentWSMessages.at(-1)).toMatchObject({
       type: 'user_input_response',
@@ -9452,6 +9453,7 @@ describe('chat-list store', () => {
     }
     store.messages.push(approvalTurn(structuredClone(approval)))
     expect(await store.respondToolApproval(approval, 'approve')).toBe(true)
+    expect(store.isChatViewStreaming({ botId: 'bot-1', sessionId: 'session-1', viewId: 'chat' })).toBe(true)
     const responseStreamId = String(sentWSMessages.find(message => message.type === 'tool_approval_response')?.stream_id ?? '')
     expect(responseStreamId).not.toBe('')
 
@@ -9487,6 +9489,7 @@ describe('chat-list store', () => {
     } as UIStreamEvent)
     await flushPromises()
     expect(assistantTurns[0]?.streaming).toBe(false)
+    expect(store.isChatViewStreaming({ botId: 'bot-1', sessionId: 'session-1', viewId: 'chat' })).toBe(false)
   })
 
   it('keeps runtime continuation appends after the approval block on the initiating client', async () => {
@@ -9509,6 +9512,7 @@ describe('chat-list store', () => {
     store.messages.push(turn)
 
     expect(await store.respondToolApproval(approval, 'approve')).toBe(true)
+    expect(store.isChatViewStreaming({ botId: 'bot-1', sessionId: 'session-1', viewId: 'chat' })).toBe(true)
     const responseStreamId = String(sentWSMessages.find(message => message.type === 'tool_approval_response')?.stream_id ?? '')
     expect(responseStreamId).not.toBe('')
 
@@ -9527,6 +9531,7 @@ describe('chat-list store', () => {
       terminal: true,
       result: { kind: 'ack' },
     } as UIStreamEvent)
+    expect(store.isChatViewStreaming({ botId: 'bot-1', sessionId: 'session-1', viewId: 'chat' })).toBe(true)
     expect(store.messages.filter(message => message.role === 'assistant')).toHaveLength(1)
     streamHandler?.({
       type: 'runtime_snapshot',

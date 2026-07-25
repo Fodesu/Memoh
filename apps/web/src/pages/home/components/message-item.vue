@@ -364,12 +364,11 @@
           </div>
         </div>
         <!-- Action bar hugs the answer (~9px), tighter than the inter-block
-             rhythm above, so it reads as belonging to this turn.
-             Visibility: only the LATEST turn keeps its bar always on (it is
-             the one being acted on); history turns reveal on hover within the
-             turn's hover scope, same as the user bubble's bar. Streaming
-             hides it entirely (handled inside MessageActions). -->
+             rhythm above, so it reads as belonging to this turn. It is mounted
+             only for terminal turns: pending Decisions and active
+             continuations must not reserve an empty action row. -->
         <MessageActions
+          v-if="showAssistantActions && hasVisibleAssistantBlocks"
           class="mt-2"
           role="assistant"
           :copy-text="assistantPlainText"
@@ -377,7 +376,6 @@
           :full-time="fullTimestamp"
           align="start"
           :persistent="isLastMessage"
-          :streaming="message.streaming"
           :on-retry="canRetryLatestAssistant ? handleRetry : undefined"
           :on-fork="canForkAssistantMessage && canForkAssistant ? handleFork : undefined"
         />
@@ -472,6 +470,7 @@ const props = defineProps<{
   canRetryLatestAssistant?: boolean
   canEditLatestUser?: boolean
   canForkAssistant?: boolean
+  showAssistantActions: boolean
   isScrolling: boolean
   isLastMessage?: boolean
 }>()

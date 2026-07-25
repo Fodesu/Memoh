@@ -110,6 +110,7 @@
                       :can-retry-latest-assistant="latestRetryableAssistantId === ((msg.serverId ?? msg.id).trim())"
                       :can-edit-latest-user="latestEditableUserId === ((msg.serverId ?? msg.id).trim())"
                       :can-fork-assistant="canForkAssistant"
+                      :show-assistant-actions="turn.assistantActionOwner === msg"
                       :is-scrolling="isScrolling"
                       :is-last-message="msg.id === lastMessageId"
                       @active="onMessageActive"
@@ -728,7 +729,7 @@ import {
   Server,
 } from 'lucide-vue-next'
 import { ScrollArea, Button, Popover, PopoverContent, PopoverTrigger, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuItem, DropdownMenuSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Spinner, toast } from '@felinic/ui'
-import { useChatStore, type ACPAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
+import { useChatStore, type ACPAgentSessionInput, type ChatAssistantTurn, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { storeToRefs } from 'pinia'
 import { useElementSize, useIntersectionObserver } from '@vueuse/core'
@@ -769,6 +770,7 @@ import { resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { hasRetryableAssistantOutput } from '@/store/chat-list.normalize'
 import { findLatestPendingChatDecision, hasPendingChatDecision } from './chat-pending-decision'
+import { assistantActionOwner } from './message-action-state'
 
 const props = withDefaults(defineProps<{
   // Stable dockview panel id (e.g. `chat:3`). Used for per-tab composer drafts and
@@ -886,7 +888,8 @@ watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
 
 const pendingDecision = computed(() => findLatestPendingChatDecision(messages.value))
 const decisionBlocked = computed(() => chatStore.isChatViewDecisionBlocked(paneTarget.value))
-const hasPendingSessionDecision = computed(() => !decisionBlocked.value && hasPendingChatDecision(messages.value))
+const hasUnresolvedSessionDecision = computed(() => hasPendingChatDecision(messages.value))
+const hasPendingSessionDecision = computed(() => !decisionBlocked.value && hasUnresolvedSessionDecision.value)
 const pendingUserInput = computed<UIUserInput | null>(() => (
   !decisionBlocked.value && pendingDecision.value?.kind === 'user_input'
     ? pendingDecision.value.userInput
@@ -897,11 +900,16 @@ const { items: pendingApprovals } = usePendingApprovals(messages)
 
 const hasPendingToolApproval = computed(() => pendingApprovals.value.length > 0)
 
+const turnRevisionActionsBlocked = computed(() =>
+  streaming.value
+  || loadingMessages.value
+  || activeChatReadOnly.value
+  || decisionBlocked.value
+  || hasUnresolvedSessionDecision.value,
+)
+
 const canForkAssistant = computed(() =>
-  !streaming.value
-  && !loadingMessages.value
-  && !activeChatReadOnly.value
-  && activeChatCanFork.value,
+  !turnRevisionActionsBlocked.value && activeChatCanFork.value,
 )
 
 // ACP has no rewind primitive: the external agent keeps its own in-process
@@ -914,7 +922,7 @@ const activeSupportsTurnReplacement = computed(() =>
 )
 
 const latestRetryableAssistantId = computed(() => {
-  if (streaming.value || loadingMessages.value || activeChatReadOnly.value || hasPendingSessionDecision.value) return ''
+  if (turnRevisionActionsBlocked.value) return ''
   if (!activeSupportsTurnReplacement.value) return ''
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const message = messages.value[i]
@@ -932,7 +940,7 @@ const latestRetryableAssistantId = computed(() => {
 })
 
 const latestEditableUserId = computed(() => {
-  if (streaming.value || loadingMessages.value || activeChatReadOnly.value || hasPendingSessionDecision.value) return ''
+  if (turnRevisionActionsBlocked.value) return ''
   if (!activeSupportsTurnReplacement.value) return ''
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const message = messages.value[i]
@@ -2147,14 +2155,21 @@ function setLastTurnEl(el: unknown) {
 // `start` is each turn's offset into the flat list, for the fork-source
 // dividers whose positions are flat-list indexes.
 const messageTurns = computed(() => {
-  const turns: { id: string, start: number, messages: ChatMessage[] }[] = []
+  const turns: { id: string, start: number, messages: ChatMessage[], assistantActionOwner: ChatAssistantTurn | null }[] = []
   messages.value.forEach((msg, index) => {
     const last = turns[turns.length - 1]
     if (msg.role === 'user' || !last) {
-      turns.push({ id: msg.id, start: index, messages: [msg] })
+      turns.push({ id: msg.id, start: index, messages: [msg], assistantActionOwner: null })
     } else {
       last.messages.push(msg)
     }
+  })
+  const lastTurnIndex = turns.length - 1
+  turns.forEach((turn, index) => {
+    const owner = assistantActionOwner(turn.messages, {
+      blocked: index === lastTurnIndex && streaming.value,
+    })
+    turn.assistantActionOwner = owner
   })
   return turns
 })

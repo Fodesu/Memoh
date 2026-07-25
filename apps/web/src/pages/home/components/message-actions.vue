@@ -1,10 +1,8 @@
 <template>
-  <!-- One reserved row under every turn. The height is always present so the
-       layout never jumps; only visibility toggles. While the turn is still
-       streaming the row stays fully hidden (no hover reveal) — actions on an
-       in-flight answer are meaningless. The latest FINISHED turn keeps it
-       visible; every other turn reveals it on pointer/focus within the turn's
-       hover scope (group/msg, set on the message content wrapper).
+  <!-- One action row under an eligible turn. Callers do not mount this
+       component for an unfinished assistant turn. The latest finished turn
+       keeps it visible; every other turn reveals it on pointer/focus within
+       the turn's hover scope (group/msg, set on the message content wrapper).
 
        Alignment differs by role on purpose:
        - assistant (`start`): the hover hit-area overflows the text's left edge
@@ -18,11 +16,9 @@
     class="chat-message-meta flex h-8 items-center gap-0.5 transition-opacity duration-150 motion-reduce:transition-none"
     :class="[
       align === 'end' ? 'justify-end' : 'justify-start -ml-1.5',
-      streaming
-        ? 'opacity-0 pointer-events-none'
-        : persistent
-          ? 'opacity-100'
-          : 'opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto',
+      persistent
+        ? 'opacity-100'
+        : 'opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto',
     ]"
   >
     <!-- The tooltip is owned entirely by its trigger (the icon button): moving
@@ -169,7 +165,6 @@ const props = defineProps<{
   menuTime?: string
   fullTime?: string
   persistent?: boolean
-  streaming?: boolean
   align?: 'start' | 'end'
   onRetry?: () => void
   onEdit?: () => void

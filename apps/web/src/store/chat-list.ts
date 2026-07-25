@@ -518,11 +518,15 @@ export const useChatStore = defineStore('chat', () => {
     clearStreamHistory,
   } = assistantStreams
   sessionStreamingProbe = isSessionStreaming
+  // A Decision ACK can arrive before its continuation frames. Keep the view
+  // busy across that gap so terminal-only actions cannot flash back in.
+  const decisionTransitionsBySession = reactive(new Map<string, Set<string>>())
 
   function isChatViewStreaming(target: ChatViewTarget, composerScope?: string): boolean {
     const resolved = normalizedChatViewTarget(target)
     return resolved.sessionId
       ? isSessionStreaming(resolved.botId, resolved.sessionId)
+        || decisionTransitionsBySession.has(acpRuntimeKey(resolved.botId, resolved.sessionId))
       : isUnboundComposerStreaming(
           resolved.botId,
           composerScope?.trim() || `${resolved.botId}:${resolved.viewId}`,
@@ -1559,6 +1563,32 @@ export const useChatStore = defineStore('chat', () => {
     return isSessionDecisionBlocked(resolved.botId, resolved.sessionId ?? '')
   }
 
+  function beginDecisionTransition(botId: string, targetSessionId: string, streamId: string) {
+    const key = acpRuntimeKey(botId, targetSessionId)
+    const id = streamId.trim()
+    if (!key || !id) return
+    const existing = decisionTransitionsBySession.get(key)
+    if (existing) {
+      existing.add(id)
+    } else {
+      decisionTransitionsBySession.set(key, new Set([id]))
+    }
+  }
+
+  function finishDecisionTransition(botId: string, targetSessionId: string, streamId = '') {
+    const key = acpRuntimeKey(botId, targetSessionId)
+    if (!key) return
+    const id = streamId.trim()
+    if (!id) {
+      decisionTransitionsBySession.delete(key)
+      return
+    }
+    const existing = decisionTransitionsBySession.get(key)
+    if (!existing) return
+    existing.delete(id)
+    if (existing.size === 0) decisionTransitionsBySession.delete(key)
+  }
+
   function isActiveSessionStreaming() {
     return isSessionStreaming(currentBotId.value, sessionId.value)
   }
@@ -2191,6 +2221,7 @@ export const useChatStore = defineStore('chat', () => {
     const transcriptMessages = sessionTranscript(bid, sid).messages
     if (!run || !streamId) {
       decisionBlockedSessions.delete(acpRuntimeKey(bid, sid))
+      finishDecisionTransition(bid, sid)
       const rejected = rejectRuntimeStreamsForSession(bid, sid)
       loading.value = isSessionStreaming(currentBotId.value, sessionId.value)
       if (rejected && allowHistoryReplay) {
@@ -2204,6 +2235,9 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     const status = (run.status ?? '').trim().toLowerCase()
+    if (isRuntimeTerminalStatus(status)) {
+      finishDecisionTransition(bid, sid)
+    }
     if (status === 'aborting' || status === 'aborted') {
       decisionBlockedSessions.add(acpRuntimeKey(bid, sid))
     } else {
@@ -2571,6 +2605,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleExpiredApprovalResponse(response: ApprovalResponse) {
+    finishDecisionTransition(response.botId, response.sessionId, response.streamId)
     abortWebSocketStream(response.streamId, response.botId, response.sessionId)
     const stream = getAssistantStream(response.streamId, response.botId, response.sessionId)
     if (stream) {
@@ -2907,6 +2942,7 @@ export const useChatStore = defineStore('chat', () => {
         const decisionConflict = event.type === 'command_error'
           && parseMemohError(event.error ?? event)?.code === 'session_runtime.decision_conflict'
         if (decisionConflict) {
+          finishDecisionTransition(commandBotId, commandSessionId, invocationId)
           settleApprovalResponse(invocationId, 'conflicted', commandBotId, commandSessionId)
           clearUserInputResponseStream(invocationId, commandBotId, commandSessionId)
           requestRuntimeResync(commandBotId, commandSessionId)
@@ -2930,6 +2966,7 @@ export const useChatStore = defineStore('chat', () => {
             )
             return
           }
+          finishDecisionTransition(commandBotId, commandSessionId, invocationId)
           settleApprovalResponse(invocationId, 'failed', commandBotId, commandSessionId)
           const userInputState = userInputResponseStreams.get(sidebandResponseKey(commandBotId, commandSessionId, invocationId))
           if (userInputState) restoreUserInputStates(userInputState)
@@ -3038,6 +3075,7 @@ export const useChatStore = defineStore('chat', () => {
         return
       }
       if (event.type === 'end' || event.type === 'error') {
+        finishDecisionTransition(bid, sid, streamId)
         const pending = getAssistantStream(streamId, bid, sid)
         if (event.type === 'error') {
           settleApprovalResponse(streamId, 'failed', bid, sid)
@@ -3202,6 +3240,7 @@ export const useChatStore = defineStore('chat', () => {
     terminalUserInputResponseIds.clear()
     runtimeStateBySession.clear()
     decisionBlockedSessions.clear()
+    decisionTransitionsBySession.clear()
     runtimeResyncSessions.clear()
     runtimeSubscriptionRetrySessions.clear()
     for (const timer of runtimeRecoveryRetryTimers.values()) clearTimeout(timer)
@@ -3421,6 +3460,7 @@ export const useChatStore = defineStore('chat', () => {
     runtimeSubscriptions.delete(key)
     runtimeStateBySession.delete(key)
     decisionBlockedSessions.delete(key)
+    decisionTransitionsBySession.delete(key)
     clearRuntimeResync(key)
     clearRuntimeSubscriptionRetry(key)
     for (const [invocationKey, invocation] of runtimeSubscriptionInvocations) {
@@ -5052,6 +5092,7 @@ export const useChatStore = defineStore('chat', () => {
       shortId: approval.short_id,
       rollback: () => transcript.restoreToolApprovalStates(previousApprovalStates),
     })) return false
+    beginDecisionTransition(bid, sid, streamId)
     transcript.markToolApprovalDecision(approvalId, decision === 'approve' ? 'approved' : 'rejected')
     try {
       if (!sendWebSocketMessage(bid, {
@@ -5063,6 +5104,7 @@ export const useChatStore = defineStore('chat', () => {
         decision,
       })) throw new Error('WebSocket is not connected')
     } catch (error) {
+      finishDecisionTransition(bid, sid, streamId)
       transcript.restoreToolApprovalStates(previousApprovalStates)
       settleApprovalResponse(streamId, 'canceled', bid, sid)
       refreshLoadingForSession(bid, sid)
@@ -5106,6 +5148,7 @@ export const useChatStore = defineStore('chat', () => {
       replaySent: false,
       replayFailed: false,
     })
+    beginDecisionTransition(bid, sid, streamId)
     transcript.markUserInputDecision(userInputId, payload.canceled ? 'canceled' : 'submitted')
 
     try {
@@ -5120,6 +5163,7 @@ export const useChatStore = defineStore('chat', () => {
         reason: payload.reason,
       })) throw new Error('WebSocket is not connected')
     } catch (error) {
+      finishDecisionTransition(bid, sid, streamId)
       restoreUserInputStates(previousUserInputStates)
       clearUserInputResponseStream(streamId, bid, sid)
       refreshLoadingForSession(bid, sid)
