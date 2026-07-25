@@ -352,7 +352,7 @@
                also types in (a stepped clip-path wipe) on entry; keyed by the hint
                so it replays once per turn. -->
           <div
-            v-if="message.streaming && !hasVisibleAssistantBlocks"
+            v-if="showEmptyStreamingIndicator"
             class="font-[400] text-[0.90625rem]"
           >
             <div class="flex items-center gap-1.5 py-px text-cop-title select-none">
@@ -417,6 +417,7 @@ import { finalizeReasoning, markReasoningSeen } from './reasoning-timing'
 import AttachmentBlock from './attachment-block.vue'
 import CollapsibleUserText from './collapsible-user-text.vue'
 import MessageActions from './message-actions.vue'
+import { hasVisibleAssistantBlock, shouldRenderChatMessage } from './message-action-state'
 import BackgroundTaskBlock from './background-task-block.vue'
 import HeartbeatTriggerBlock from './heartbeat-trigger-block.vue'
 import ScheduleTriggerBlock from './schedule-trigger-block.vue'
@@ -797,19 +798,19 @@ function isAssistantBlockStreaming(index: number): boolean {
 
 const hasVisibleAssistantBlocks = computed(() =>
   props.message.role === 'assistant'
-  && props.message.messages.some(isVisibleAssistantBlock),
+  && props.message.messages.some(hasVisibleAssistantBlock),
+)
+
+const showEmptyStreamingIndicator = computed(() =>
+  props.message.role === 'assistant'
+  && props.message.streaming
+  && props.message.__decisionContinuation !== true
+  && !hasVisibleAssistantBlocks.value,
 )
 
 const shouldRenderMessage = computed(() =>
-  props.message.role !== 'assistant' || hasVisibleAssistantBlocks.value || props.message.streaming,
+  shouldRenderChatMessage(props.message),
 )
-
-function isVisibleAssistantBlock(block: ContentBlock): boolean {
-  if (block.type === 'tool') return true
-  if (block.type === 'text' || block.type === 'error') return Boolean(block.content)
-  if (block.type === 'attachments') return block.attachments.length > 0
-  return true
-}
 
 // Project the flat assistant block list into render nodes.
 //  - A "process" node is a run of consecutive tool + reasoning blocks. It splits
@@ -828,7 +829,7 @@ const renderNodes = computed<RenderNode[]>(() => {
   const nodes: RenderNode[] = []
   let run: ProcessNode | null = null
   props.message.messages.forEach((block, index) => {
-    if (!isVisibleAssistantBlock(block)) return
+    if (!hasVisibleAssistantBlock(block)) return
     if (block.type === 'tool' || block.type === 'reasoning') {
       const cat = block.type === 'tool'
         ? toolSegmentCategoryForBlock(block as ToolCallBlockType)

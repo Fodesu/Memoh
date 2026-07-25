@@ -83,13 +83,14 @@
                   :key="msg.id"
                 >
                   <ForkSourceDivider
-                    v-if="showForkSourceDividerBefore(turn.start + msgIndex)"
+                    v-if="shouldRenderChatMessage(msg) && showForkSourceDividerBefore(turn.start + msgIndex)"
                     :title="forkSourceTitle"
                     :disabled="openingForkSource"
                     @open-source="handleForkSourceClick"
                   />
 
                   <div
+                    v-if="shouldRenderChatMessage(msg)"
                     :data-message-id="msg.id"
                     :data-external-message-id="(msg.role === 'user' || msg.role === 'assistant') ? msg.externalMessageId : undefined"
                     class="transition-[background-color] duration-500 scroll-mt-2 px-2 -mx-2"
@@ -120,7 +121,7 @@
                   </div>
 
                   <ForkSourceDivider
-                    v-if="showForkSourceDividerAfter(msg, turn.start + msgIndex)"
+                    v-if="shouldRenderChatMessage(msg) && showForkSourceDividerAfter(msg, turn.start + msgIndex)"
                     :title="forkSourceTitle"
                     :disabled="openingForkSource"
                     @open-source="handleForkSourceClick"
@@ -770,7 +771,7 @@ import { resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { hasRetryableAssistantOutput } from '@/store/chat-list.normalize'
 import { findLatestPendingChatDecision, hasPendingChatDecision } from './chat-pending-decision'
-import { assistantActionOwner } from './message-action-state'
+import { assistantActionOwner, shouldRenderChatMessage } from './message-action-state'
 
 const props = withDefaults(defineProps<{
   // Stable dockview panel id (e.g. `chat:3`). Used for per-tab composer drafts and

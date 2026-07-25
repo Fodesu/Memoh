@@ -5,10 +5,16 @@ export interface AssistantActionState {
   blocked: boolean
 }
 
-function hasVisibleAssistantBlock(block: ContentBlock): boolean {
+export function hasVisibleAssistantBlock(block: ContentBlock): boolean {
   if (block.type === 'text' || block.type === 'error') return Boolean(block.content)
   if (block.type === 'attachments') return block.attachments.length > 0
   return true
+}
+
+export function shouldRenderChatMessage(message: ChatMessage): boolean {
+  if (message.role !== 'assistant') return true
+  if (message.messages.some(hasVisibleAssistantBlock)) return true
+  return message.streaming && message.__decisionContinuation !== true
 }
 
 // Actions belong to a logical user turn, not to each assistant projection in

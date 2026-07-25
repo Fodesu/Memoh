@@ -9409,7 +9409,7 @@ describe('chat-list store', () => {
     const continuationStreamId = 'stream-ask-continuation'
     const continuation = runtimeStateSnapshot(
       continuationStreamId,
-      [{ id: 0, type: 'text', content: 'continuing after answer' }],
+      [],
       'running',
       20,
     )
@@ -9428,11 +9428,33 @@ describe('chat-list store', () => {
       expect(assistantTurns).toHaveLength(1)
       expect(assistantTurns[0]).toMatchObject({
         streaming: true,
+        __decisionContinuation: true,
         messages: [
           { type: 'tool', userInput: { user_input_id: 'input-1', status: 'submitted', can_respond: false } },
-          { type: 'text', content: 'continuing after answer' },
         ],
       })
+    }
+
+    const firstContinuationStep = {
+      type: 'runtime_delta',
+      bot_id: 'bot-1',
+      session_id: 'session-1',
+      epoch: 'epoch-session-1',
+      stream_id: continuationStreamId,
+      seq: 21,
+      delta: {
+        message_appends: [{ id: 0, type: 'text', content: 'continuing after answer' }],
+      },
+    } as UIStreamEvent
+    for (const handler of handlers) handler(structuredClone(firstContinuationStep))
+    await flushPromises()
+
+    for (const store of [second, first]) {
+      const assistantTurns = store.messages.filter(turn => turn.role === 'assistant')
+      expect(assistantTurns[0]?.messages).toMatchObject([
+        { type: 'tool', userInput: { user_input_id: 'input-1', status: 'submitted', can_respond: false } },
+        { type: 'text', content: 'continuing after answer' },
+      ])
     }
   })
 
@@ -9543,6 +9565,7 @@ describe('chat-list store', () => {
       snapshot: checkpoint,
     } as UIStreamEvent)
     expect(turn.streaming).toBe(true)
+    expect(turn.__decisionContinuation).toBe(true)
     streamHandler?.({
       type: 'runtime_delta',
       bot_id: 'bot-1',

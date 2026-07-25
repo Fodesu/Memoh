@@ -230,4 +230,20 @@ describe('message item assistant actions', () => {
     expect(el.children).toHaveLength(0)
     expect(el.querySelector('[data-message-actions]')).toBeNull()
   })
+
+  it('does not synthesize thinking while a Decision continuation awaits its first step', async () => {
+    const el = await mountTurn(assistantTurn([], {
+      streaming: true,
+      __decisionContinuation: true,
+    }))
+
+    expect(el.children).toHaveLength(0)
+    expect(el.textContent).not.toContain('Thinking')
+  })
+
+  it('keeps the initial thinking indicator for a new empty streaming turn', async () => {
+    const el = await mountTurn(assistantTurn([], { streaming: true }))
+
+    expect(el.textContent).toContain('Thinking')
+  })
 })

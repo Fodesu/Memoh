@@ -1714,16 +1714,19 @@ export const useChatStore = defineStore('chat', () => {
     const bid = botId.trim()
     const sid = targetSessionId.trim()
     if (!id || !bid || !sid) return null
-    const existing = getAssistantStream(id, bid, sid)
-    if (existing) return existing
-
-    const reusedGeneration = isReusedRuntimeGeneration(id, runtimeGeneration, bid, sid)
     const approvalId = (decisionAnchor?.approvalId ?? '').trim()
       || getApprovalResponse(id, bid, sid)?.approvalId
       || ''
     const userInputId = (decisionAnchor?.userInputId ?? '').trim()
       || userInputResponseStreams.get(sidebandResponseKey(bid, sid, id))?.[0]?.userInput.user_input_id
       || ''
+    const existing = getAssistantStream(id, bid, sid)
+    if (existing) {
+      markDecisionContinuation(existing.assistantTurn, approvalId, userInputId)
+      return existing
+    }
+
+    const reusedGeneration = isReusedRuntimeGeneration(id, runtimeGeneration, bid, sid)
     const transcript = sessionTranscript(bid, sid)
     const reusableTurn = reusedGeneration
       ? null
@@ -1736,6 +1739,7 @@ export const useChatStore = defineStore('chat', () => {
       : baseAssistantTurnID
     const assistantTurn = reusableTurn
       ?? transcript.createOptimisticAssistantTurn(assistantTurnID)
+    markDecisionContinuation(assistantTurn, approvalId, userInputId)
     if (runtimeGeneration.trim()) runtimeAssistantGenerations.set(assistantTurn, runtimeGeneration.trim())
     if (append && !hasTurn(assistantTurn)) appendTurnToSession(bid, sid, assistantTurn)
     void trackAssistantStream({ streamId: id, assistantTurn, botId: bid, sessionId: sid, runtimeGeneration }).catch((error: Error) => {
@@ -1743,6 +1747,14 @@ export const useChatStore = defineStore('chat', () => {
       finalizeStreamFailure(assistantTurn, bid, sid, error, runtimeAssistantErrorIdentityFor(id, runtimeGeneration, bid, sid))
     })
     return getAssistantStream(id, bid, sid) ?? null
+  }
+
+  function markDecisionContinuation(
+    turn: ChatAssistantTurn,
+    approvalId = '',
+    userInputId = '',
+  ) {
+    if (approvalId.trim() || userInputId.trim()) turn.__decisionContinuation = true
   }
 
   function runtimeDecisionAnchor(run: NonNullable<SessionruntimeSnapshot['current_run_view']>) {
@@ -2286,6 +2298,7 @@ export const useChatStore = defineStore('chat', () => {
     const operation = run.operation
     let stream: PendingAssistantStream | null | undefined = getAssistantStream(streamId, bid, sid)
     if (stream) {
+      markDecisionContinuation(stream.assistantTurn, decisionAnchor.approvalId, decisionAnchor.userInputId)
       markRuntimeStreamObserved(stream, run.generation ?? '')
       if (stream.runtimeGeneration) runtimeAssistantGenerations.set(stream.assistantTurn, stream.runtimeGeneration)
     }

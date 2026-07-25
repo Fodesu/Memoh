@@ -129,6 +129,9 @@ export interface ChatAssistantTurn {
   // Client-only terminal feedback has no database message identity. An early
   // abort has no retry, edit, or fork target.
   __ephemeral?: boolean
+  // A Decision continuation can be active before its first new block arrives.
+  // It must not synthesize another thinking step during that transport gap.
+  __decisionContinuation?: boolean
 }
 
 export interface ChatSystemTurn {
