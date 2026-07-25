@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/memohai/memoh/internal/agent/application"
+	"github.com/memohai/memoh/internal/agent/application/runprojection"
 	"github.com/memohai/memoh/internal/agent/decision"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
@@ -17,8 +18,6 @@ import (
 
 const (
 	streamBufferSize            = 64
-	textBatchWindow             = 20 * time.Millisecond
-	textBatchBytes              = 4 * 1024
 	terminalFinalizationTimeout = 10 * time.Second
 )
 
@@ -27,6 +26,18 @@ type resolver interface {
 	AllocateRuntimePersistenceFence(context.Context, string, string) (runtimefence.Fence, error)
 	ActivateRuntimePersistenceFenceWithOptions(context.Context, runtimefence.Fence, runtimefence.ActivationOptions) error
 	DeferSessionCompaction(botID, sessionID, streamID string) func()
+}
+
+// TransportResolver is the application surface a transport needs to wire the
+// decision response use case. *application.Service implements it; tests may
+// substitute stage-recording fakes that embed it.
+type TransportResolver = resolver
+
+// NewRouterForTransport builds the router over the transport-facing resolver
+// interface so transports and their tests can wire the production routing
+// policy around substituted application services.
+func NewRouterForTransport(logger *slog.Logger, manager *sessionruntime.Manager, resolver TransportResolver) *Router {
+	return newRouter(logger, manager, resolver)
 }
 
 // CommandResolver applies owner-local decision commands after runtime routing.
@@ -93,8 +104,9 @@ type RespondOptions struct {
 	StreamID string
 	// Hooks attaches the transport's delivery behavior (attachment
 	// ingestion, asset linking, legacy frame forwarding) to the shared
-	// event pump of a native continuation run.
-	Hooks EventPumpHooks
+	// event pump of a native continuation run. Hooks receive the pump's
+	// authority context; they never supply one.
+	Hooks runprojection.Hooks
 }
 
 func (o RespondOptions) normalized() RespondOptions {

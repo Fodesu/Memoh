@@ -21,6 +21,8 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
+	"github.com/memohai/memoh/internal/agent/application/runprojection"
+	"github.com/memohai/memoh/internal/agent/decision"
 	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
@@ -410,7 +412,7 @@ func TestLocalChannelRuntimeManagedStreamDoesNotWriteLegacyFrames(t *testing.T) 
 		}
 		close(eventCh)
 		handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager}
-		_ = handler.forwardRuntimeWSStreamEvents(r.Context(), r.Context(), handle, eventCh, nil, nil)
+		_ = handler.forwardRuntimeWSStreamEvents(r.Context(), handle, eventCh, nil, nil)
 		close(processed)
 		<-closeWriter
 		writer.Close()
@@ -478,7 +480,7 @@ func TestLocalChannelRuntimeContractAggregatesActiveRunSnapshot(t *testing.T) {
 		eventCh <- rawRuntimeContractEvent(t, event)
 	}
 	close(eventCh)
-	if err := handler.forwardRuntimeWSStreamEvents(context.Background(), context.Background(), handle, eventCh, nil, nil); err != nil {
+	if err := handler.forwardRuntimeWSStreamEvents(context.Background(), handle, eventCh, nil, nil); err != nil {
 		t.Fatalf("forward runtime events: %v", err)
 	}
 
@@ -633,7 +635,7 @@ func TestLocalChannelRuntimeTerminalUpdateSurvivesExecutionCancellationDuringCom
 	forwardDone := make(chan error, 1)
 	go func() {
 		handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager}
-		forwardDone <- handler.forwardRuntimeWSStreamEvents(executionCtx, executionCtx, handle, eventCh, nil, nil)
+		forwardDone <- handler.forwardRuntimeWSStreamEvents(executionCtx, handle, eventCh, nil, nil)
 	}()
 
 	select {
@@ -685,7 +687,6 @@ func TestLocalChannelRuntimeLegacyTerminalUsesFinalizationContext(t *testing.T) 
 		handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager}
 		forwardDone <- handler.forwardRuntimeWSStreamEvents(
 			executionCtx,
-			executionCtx,
 			handle,
 			eventCh,
 			nil,
@@ -736,7 +737,6 @@ func TestLocalChannelRuntimeTerminalCommitsBeforeLegacyDelivery(t *testing.T) {
 	go func() {
 		handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager}
 		forwardDone <- handler.forwardRuntimeWSStreamEvents(
-			context.Background(),
 			context.Background(),
 			handle,
 			eventCh,
@@ -804,7 +804,7 @@ func TestLocalChannelRuntimeTerminalCommitSurvivesAssetLinkFailure(t *testing.T)
 	})
 	close(eventCh)
 
-	err := handler.forwardRuntimeWSStreamEvents(context.Background(), context.Background(), handle, eventCh, nil, nil)
+	err := handler.forwardRuntimeWSStreamEvents(context.Background(), handle, eventCh, nil, nil)
 	if !errors.Is(err, assetErr) {
 		t.Fatalf("forward terminal with asset failure error = %v", err)
 	}
@@ -846,7 +846,7 @@ func TestLocalChannelRuntimeWaitsForAssetLinkBeforeCanonicalTerminal(t *testing.
 	close(eventCh)
 	done := make(chan error, 1)
 	go func() {
-		done <- handler.forwardRuntimeWSStreamEvents(context.Background(), context.Background(), handle, eventCh, nil, nil)
+		done <- handler.forwardRuntimeWSStreamEvents(context.Background(), handle, eventCh, nil, nil)
 	}()
 	receiveHandlerTestResult(t, "asset link start", resolver.started)
 	snapshot, err := manager.Snapshot(context.Background(), runtimeContractBotID, runtimeContractSessionID)
@@ -882,7 +882,6 @@ func TestLocalChannelRuntimeRetriesCompleteTerminalOutcome(t *testing.T) {
 	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager, agentService: &application.Service{}}
 	err := handler.forwardRuntimeWSStreamEvents(
 		context.Background(),
-		context.Background(),
 		requireHandlerRunHandle(t, manager, runtimeContractBotID, runtimeContractSessionID, "stream-terminal-retry"),
 		eventCh,
 		nil,
@@ -899,37 +898,69 @@ func TestLocalChannelRuntimeRetriesCompleteTerminalOutcome(t *testing.T) {
 	}
 }
 
-func TestWSRuntimeFinalizationPreservesFenceAndSharesDeadline(t *testing.T) {
+func TestWSRuntimeStreamHooksPreserveFenceAcrossExecutionCancellation(t *testing.T) {
 	t.Parallel()
 
+	// The persistence fence is the pump's authority: it must reach attachment
+	// ingestion and asset linking through the contexts the pump passes to the
+	// hooks, and survive both the terminal switch to bounded finalization and
+	// execution cancellation. Hooks never supply their own contexts.
 	fence := runtimefence.Fence{
 		BotID:     runtimeContractBotID,
 		SessionID: runtimeContractSessionID,
 		Token:     73,
 	}
-	runtimeSource, cancelRuntime := context.WithCancel(runtimefence.WithContext(context.Background(), fence))
-	assetSource, cancelAsset := context.WithCancel(runtimefence.WithContext(context.Background(), fence))
-	finalization := newWSRuntimeFinalization(runtimeSource, assetSource, time.Second)
-	finalization.begin()
-	defer finalization.close()
-	cancelRuntime()
-	cancelAsset()
+	manager := startHandlerRuntimeManager(t, sessionruntime.NewMemoryBackend(), handlerRuntimeOptions("handler-fenced-hooks-owner"))
+	if err := manager.StartRun(
+		context.Background(),
+		runtimeContractBotID,
+		runtimeContractSessionID,
+		"stream-fenced-hooks",
+		make(chan struct{}, 1),
+		func() {},
+		make(chan turn.InjectMessage, 1),
+	); err != nil {
+		t.Fatalf("start runtime run: %v", err)
+	}
+	handle := requireHandlerRunHandle(t, manager, runtimeContractBotID, runtimeContractSessionID, "stream-fenced-hooks")
 
-	runtimeCtx := finalization.runtimeContext()
-	assetCtx := finalization.assetContext()
-	if got, ok := runtimefence.FromContext(runtimeCtx); !ok || got != fence {
-		t.Fatalf("runtime finalization fence = %#v, %v", got, ok)
+	executionCtx, cancelExecution := context.WithCancel(runtimefence.WithContext(context.Background(), fence))
+	cancelExecution() // terminal work must not inherit execution cancellation
+
+	transformFences := make(chan runtimefence.Fence, 2)
+	finalizeFences := make(chan runtimefence.Fence, 1)
+	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager, agentService: &application.Service{}}
+	hooks := handler.runtimeStreamHooks(runtimeContractBotID, runtimeContractSessionID, nil)
+	baseTransform := hooks.Transform
+	hooks.Transform = func(ctx context.Context, raw json.RawMessage) []json.RawMessage {
+		got, _ := runtimefence.FromContext(ctx)
+		transformFences <- got
+		if ctx.Err() != nil {
+			t.Errorf("transform inherited execution cancellation: %v", ctx.Err())
+		}
+		return baseTransform(ctx, raw)
 	}
-	if got, ok := runtimefence.FromContext(assetCtx); !ok || got != fence {
-		t.Fatalf("asset finalization fence = %#v, %v", got, ok)
+	baseFinalize := hooks.BeforeFinalize
+	hooks.BeforeFinalize = func(ctx context.Context, terminal native.StreamEvent) (bool, error) {
+		got, _ := runtimefence.FromContext(ctx)
+		finalizeFences <- got
+		if ctx.Err() != nil {
+			t.Errorf("finalize inherited execution cancellation: %v", ctx.Err())
+		}
+		return baseFinalize(ctx, terminal)
 	}
-	if runtimeCtx.Err() != nil || assetCtx.Err() != nil {
-		t.Fatalf("finalization inherited source cancellation: runtime=%v asset=%v", runtimeCtx.Err(), assetCtx.Err())
+
+	eventCh := make(chan application.StreamEventPayload, 1)
+	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentAbort})
+	close(eventCh)
+	if err := runprojection.Pump(executionCtx, manager, handle, eventCh, nil, hooks); err != nil {
+		t.Fatalf("pump fenced terminal event: %v", err)
 	}
-	runtimeDeadline, runtimeOK := runtimeCtx.Deadline()
-	assetDeadline, assetOK := assetCtx.Deadline()
-	if !runtimeOK || !assetOK || !runtimeDeadline.Equal(assetDeadline) {
-		t.Fatalf("finalization deadlines = runtime:%v/%v asset:%v/%v", runtimeDeadline, runtimeOK, assetDeadline, assetOK)
+	if got := <-transformFences; got != fence {
+		t.Fatalf("transform fence = %#v, want %#v", got, fence)
+	}
+	if got := <-finalizeFences; got != fence {
+		t.Fatalf("finalize fence = %#v, want %#v", got, fence)
 	}
 }
 
@@ -1036,7 +1067,7 @@ func TestLocalChannelRuntimeForwarderBatchesAdjacentTextDeltas(t *testing.T) {
 	}
 	close(eventCh)
 	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: manager, agentService: &application.Service{}}
-	if err := handler.forwardRuntimeWSStreamEvents(context.Background(), context.Background(), requireHandlerRunHandle(t, manager, runtimeContractBotID, runtimeContractSessionID, runtimeContractStreamID), eventCh, nil, nil); err != nil {
+	if err := handler.forwardRuntimeWSStreamEvents(context.Background(), requireHandlerRunHandle(t, manager, runtimeContractBotID, runtimeContractSessionID, runtimeContractStreamID), eventCh, nil, nil); err != nil {
 		t.Fatalf("forward batched runtime deltas: %v", err)
 	}
 	if updates := backend.UpdateCount() - baselineUpdates; updates <= 0 || updates >= 100 {
@@ -1975,7 +2006,7 @@ func TestLocalChannelDistributedInactiveDurableResponseAdmission(t *testing.T) {
 				"type": "tool_approval_response", "stream_id": "approval-deferred-stream", "session_id": runtimeContractSessionID,
 				"approval_id": "33333333-3333-3333-3333-333333333333", "decision": "approve",
 			},
-			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionToolApproval, ID: "33333333-3333-3333-3333-333333333333"},
+			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionToolApproval, ID: "33333333-3333-3333-3333-333333333333", BotID: runtimeContractBotID, SessionID: runtimeContractSessionID},
 		},
 		{
 			name: "user input submit",
@@ -1984,7 +2015,7 @@ func TestLocalChannelDistributedInactiveDurableResponseAdmission(t *testing.T) {
 				"user_input_id": "44444444-4444-4444-4444-444444444444",
 				"answers":       []map[string]any{{"question_id": "q1", "option_ids": []string{"q1.o1"}}},
 			},
-			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "44444444-4444-4444-4444-444444444444"},
+			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "44444444-4444-4444-4444-444444444444", BotID: runtimeContractBotID, SessionID: runtimeContractSessionID},
 		},
 		{
 			name: "user input cancel",
@@ -1994,7 +2025,7 @@ func TestLocalChannelDistributedInactiveDurableResponseAdmission(t *testing.T) {
 				"canceled":      true,
 				"reason":        "user_canceled",
 			},
-			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "55555555-5555-5555-5555-555555555555"},
+			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "55555555-5555-5555-5555-555555555555", BotID: runtimeContractBotID, SessionID: runtimeContractSessionID},
 			canceled:  true,
 		},
 	}
@@ -2080,7 +2111,7 @@ func TestLocalChannelDistributedInactiveDurableResponseDoesNotReplaceActiveRun(t
 				"type": "tool_approval_response", "stream_id": "approval-collision-stream", "session_id": runtimeContractSessionID,
 				"approval_id": "55555555-5555-5555-5555-555555555555", "decision": "approve",
 			},
-			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionToolApproval, ID: "55555555-5555-5555-5555-555555555555"},
+			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionToolApproval, ID: "55555555-5555-5555-5555-555555555555", BotID: runtimeContractBotID, SessionID: runtimeContractSessionID},
 		},
 		{
 			name: "user input",
@@ -2089,7 +2120,7 @@ func TestLocalChannelDistributedInactiveDurableResponseDoesNotReplaceActiveRun(t
 				"user_input_id": "66666666-6666-6666-6666-666666666666",
 				"answers":       []map[string]any{{"question_id": "q1", "option_ids": []string{"q1.o1"}}},
 			},
-			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "66666666-6666-6666-6666-666666666666"},
+			preserved: runtimefence.PreservedDecision{Kind: runtimefence.DecisionUserInput, ID: "66666666-6666-6666-6666-666666666666", BotID: runtimeContractBotID, SessionID: runtimeContractSessionID},
 		},
 	}
 	for _, tt := range tests {
@@ -2208,6 +2239,7 @@ func TestLocalChannelDecisionCommitFailureDoesNotPublishOrContinue(t *testing.T)
 	resolver := &deferredResponseResolver{
 		preserved: runtimefence.PreservedDecision{
 			Kind: runtimefence.DecisionUserInput, ID: "88888888-8888-8888-8888-888888888888",
+			BotID: runtimeContractBotID, SessionID: runtimeContractSessionID,
 		},
 		commitErr: errors.New("durable decision commit failed"),
 		stages:    make(chan deferredResponseStage, 3),
@@ -3070,6 +3102,28 @@ func (*deferredResponseResolver) PrepareUserInputResponse(context.Context, appli
 func (r *deferredResponseResolver) PrepareUserInputResponseTarget(context.Context, application.UserInputResponseInput) (runtimefence.PreservedDecision, error) {
 	r.stages <- deferredResponseStage{name: "prepare"}
 	return r.preserved, r.prepareErr
+}
+
+func (r *deferredResponseResolver) PrepareToolApprovalRuntimeTarget(ctx context.Context, input application.ToolApprovalResponseInput) (application.RuntimeDecisionTarget, error) {
+	preserved, err := r.PrepareToolApprovalResponse(ctx, input)
+	return application.RuntimeDecisionTarget{Decision: preserved, ResumePolicy: decision.ResumePolicyNativeContinuation}, err
+}
+
+func (r *deferredResponseResolver) PrepareUserInputRuntimeTarget(ctx context.Context, input application.UserInputResponseInput) (application.RuntimeDecisionTarget, error) {
+	preserved, err := r.PrepareUserInputResponseTarget(ctx, input)
+	return application.RuntimeDecisionTarget{Decision: preserved, ResumePolicy: decision.ResumePolicyNativeContinuation}, err
+}
+
+func (*deferredResponseResolver) ReconcileToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (bool, error) {
+	return false, nil
+}
+
+func (*deferredResponseResolver) ReconcileUserInputResponse(context.Context, application.UserInputResponseInput) (bool, error) {
+	return false, nil
+}
+
+func (*deferredResponseResolver) DeferSessionCompaction(string, string, string) func() {
+	return func() {}
 }
 
 func (r *deferredResponseResolver) CommitToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error) {

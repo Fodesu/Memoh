@@ -196,7 +196,6 @@ func buildRuntimeContractSnapshot(t *testing.T, streamID string, events []agentp
 	close(eventCh)
 	if err := handler.forwardRuntimeWSStreamEvents(
 		context.Background(),
-		context.Background(),
 		handle,
 		eventCh,
 		nil,
