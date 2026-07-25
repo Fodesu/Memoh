@@ -165,6 +165,27 @@ func TestApplicationDoesNotDependOnChannel(t *testing.T) {
 	}
 }
 
+// TestDecisionDomainStaysBelowApplicationAndRuntime keeps durable Decision
+// state independent from use-case orchestration, execution implementations,
+// and delivery layers.
+func TestDecisionDomainStaysBelowApplicationAndRuntime(t *testing.T) {
+	root := repoRoot(t)
+	for _, file := range allGoFiles(t, root, "internal/agent/decision") {
+		for _, imp := range imports(t, root, file) {
+			switch {
+			case isPackageOrChild(imp, modulePrefix+"internal/agent/application"):
+				t.Errorf("%s imports %s: Agent decisions must not depend on application orchestration", file, imp)
+			case isPackageOrChild(imp, modulePrefix+"internal/agent/runtime"):
+				t.Errorf("%s imports %s: Agent decisions must not depend on runtime implementations", file, imp)
+			case isPackageOrChild(imp, modulePrefix+"internal/channel"):
+				t.Errorf("%s imports %s: Agent decisions must not depend on Channel delivery", file, imp)
+			case isPackageOrChild(imp, modulePrefix+"internal/handlers"):
+				t.Errorf("%s imports %s: Agent decisions must not depend on HTTP handlers", file, imp)
+			}
+		}
+	}
+}
+
 // TestAgentContextDoesNotDependOnExecutionOrDelivery keeps context assembly
 // reusable by application and runtimes without creating a reverse dependency.
 // Persistence-backed compaction is intentionally allowed to use db/sqlc until
@@ -375,6 +396,7 @@ func TestRetiredDomainPackagesStayRemoved(t *testing.T) {
 		"internal/historyfrag",
 		"internal/compaction",
 		"internal/contextlimit",
+		"internal/sessionruntime",
 		"internal/agent/tools",
 	} {
 		var files []string
