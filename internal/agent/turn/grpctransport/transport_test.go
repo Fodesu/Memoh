@@ -471,3 +471,43 @@ func TestUnknownControlFrameIgnored(t *testing.T) {
 		t.Fatalf("unexpected run error after unknown frame: %v", err)
 	}
 }
+
+// TestStreamContinuationDrainsDetachedRunAfterTransportDeath pins the
+// request/business lifecycle split: a decision continuation detached from the
+// dying transport must keep running to completion instead of blocking forever
+// on an event channel nobody reads.
+func TestStreamContinuationDrainsDetachedRunAfterTransportDeath(t *testing.T) {
+	server := NewServer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalEvents = 200 // well past the 64-slot event buffer
+	runDone := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- server.streamContinuation(ctx, func(*turnpb.EventResponse) error {
+			cancel() // transport dies after the first delivered event
+			return nil
+		}, func(ch chan<- json.RawMessage) error {
+			defer close(runDone)
+			for i := 0; i < totalEvents; i++ {
+				ch <- json.RawMessage(`{"type":"text_delta"}`)
+			}
+			return nil
+		})
+	}()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("streamContinuation error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("streamContinuation did not return after transport death")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached continuation blocked writing events after transport death")
+	}
+}

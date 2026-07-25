@@ -153,8 +153,13 @@ func (s *Server) RespondToolApproval(req *turnpb.JsonRequest, stream turnpb.Turn
 	if err := unmarshalToolApprovalResponse(req.GetJson(), &input); err != nil {
 		return status.Error(codes.InvalidArgument, "invalid tool approval payload")
 	}
+	// The response transport observes the continuation but must not own its
+	// lifetime: once the decision commits durably, a dropped stream must not
+	// cancel tool execution or the resumed turn mid-flight. The REST handler
+	// already detaches; this keeps the transports aligned.
+	runCtx := context.WithoutCancel(stream.Context())
 	return s.streamContinuation(stream.Context(), stream.Send, func(ch chan<- json.RawMessage) error {
-		return s.service.RespondToolApproval(stream.Context(), input, ch)
+		return s.service.RespondToolApproval(runCtx, input, ch)
 	})
 }
 
@@ -163,8 +168,9 @@ func (s *Server) RespondUserInput(req *turnpb.JsonRequest, stream turnpb.TurnSer
 	if err := unmarshalUserInputResponse(req.GetJson(), &input); err != nil {
 		return status.Error(codes.InvalidArgument, "invalid user input payload")
 	}
+	runCtx := context.WithoutCancel(stream.Context())
 	return s.streamContinuation(stream.Context(), stream.Send, func(ch chan<- json.RawMessage) error {
-		return s.service.RespondUserInput(stream.Context(), input, ch)
+		return s.service.RespondUserInput(runCtx, input, ch)
 	})
 }
 
@@ -197,6 +203,16 @@ func (s *Server) streamContinuation(ctx context.Context, send func(*turnpb.Event
 				runErr = err
 			}
 		case <-ctx.Done():
+			// The transport died but the run is detached from it (decision
+			// responses commit durably before continuing). Keep draining so
+			// the run never blocks writing events nobody reads; errCh is
+			// buffered, so the run goroutine always finishes.
+			if eventCh != nil {
+				go func(ch <-chan json.RawMessage) {
+					for range ch {
+					}
+				}(eventCh)
+			}
 			return ctx.Err()
 		}
 	}
