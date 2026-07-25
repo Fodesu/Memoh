@@ -1739,8 +1739,18 @@ export const useChatStore = defineStore('chat', () => {
     let changed = false
     if (kind === 'user_input' && (status === 'submitted' || status === 'canceled')) {
       changed = transcript.markUserInputDecision(id, status) || changed
+      for (const pending of pendingUserInputResponses.values()) {
+        if (pending.botId === botId && pending.sessionId === targetSessionId && pending.userInputId === id) {
+          clearUserInputResponseStream(pending.streamId, pending.botId, pending.sessionId)
+        }
+      }
     } else if (kind === 'tool_approval' && (status === 'approved' || status === 'rejected')) {
       changed = transcript.markToolApprovalDecision(id, status) || changed
+      const committedResponses = pendingApprovalResponsesForSession(botId, targetSessionId)
+        .filter(pending => pending.approvalId === id)
+      for (const pending of committedResponses) {
+        settleApprovalResponse(pending.streamId, 'succeeded', pending.botId, pending.sessionId)
+      }
     } else {
       return false
     }
@@ -2358,6 +2368,16 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (isRuntimeTerminalStatus(status)) {
+      if (status === 'aborted') {
+        for (const pending of pendingApprovalResponsesForSession(bid, sid)) {
+          settleApprovalResponse(pending.streamId, 'canceled', pending.botId, pending.sessionId)
+        }
+        for (const pending of pendingUserInputResponses.values()) {
+          if (pending.botId === bid && pending.sessionId === sid) {
+            clearUserInputResponseStream(pending.streamId, pending.botId, pending.sessionId)
+          }
+        }
+      }
       let keepRuntimeProjection = false
       if (stream) {
         const historyCommitted = run.history_committed === true
@@ -3639,29 +3659,49 @@ export const useChatStore = defineStore('chat', () => {
 
   function abort(target?: ChatViewTarget) {
     const resolved = normalizedChatViewTarget(target)
-    const approvalStreamIds = abortApprovalResponses(
-      pendingApprovalResponsesForSession(resolved.botId, resolved.sessionId ?? ''),
-      'failed',
-    )
-    const streamIds = resolved.sessionId
-      ? assistantStreamsForSession(resolved.botId, resolved.sessionId).map(stream => stream.streamId)
-      : activeUnboundStreamIds(
-          resolved.botId,
-          target ? `${resolved.botId}:${resolved.viewId}` : undefined,
-        )
-    for (const streamId of streamIds) {
-      if (!approvalStreamIds.has(sidebandResponseKey(resolved.botId, resolved.sessionId ?? '', streamId))) {
-        const stream = getAssistantStream(streamId, resolved.botId, resolved.sessionId ?? '')
-        if (stream) stream.abortRequested = true
-        if (stream && !stream.sessionId) continue
-        if (!abortWebSocketStream(streamId, stream?.botId, stream?.sessionId)) {
-          if (stream) {
-            stream.abortRequested = false
-            stream.abortSent = false
-            stream.abortSentGeneration = ''
-          }
-          toast.error('WebSocket is not connected')
+    const streamIds = new Set<string>()
+    if (resolved.sessionId) {
+      const runtimeRun = runtimeStateBySession
+        .get(acpRuntimeKey(resolved.botId, resolved.sessionId))
+        ?.snapshot
+        ?.current_run_view
+      const runtimeStreamId = (runtimeRun?.stream_id ?? '').trim()
+      if (runtimeStreamId && isRuntimeActiveStatus(runtimeRun?.status)) {
+        streamIds.add(runtimeStreamId)
+      } else {
+        for (const stream of assistantStreamsForSession(resolved.botId, resolved.sessionId)) {
+          streamIds.add(stream.streamId)
         }
+        for (const pending of pendingApprovalResponsesForSession(resolved.botId, resolved.sessionId)) {
+          streamIds.add(pending.streamId)
+        }
+        for (const pending of pendingUserInputResponses.values()) {
+          if (pending.botId === resolved.botId && pending.sessionId === resolved.sessionId) {
+            streamIds.add(pending.streamId)
+          }
+        }
+      }
+    } else {
+      for (const streamId of activeUnboundStreamIds(
+        resolved.botId,
+        target ? `${resolved.botId}:${resolved.viewId}` : undefined,
+      )) streamIds.add(streamId)
+    }
+    for (const streamId of streamIds) {
+      const stream = getAssistantStream(streamId, resolved.botId, resolved.sessionId ?? '')
+      if (stream) stream.abortRequested = true
+      if (stream && !stream.sessionId) continue
+      if (!abortWebSocketStream(
+        streamId,
+        stream?.botId ?? resolved.botId,
+        stream?.sessionId ?? resolved.sessionId ?? '',
+      )) {
+        if (stream) {
+          stream.abortRequested = false
+          stream.abortSent = false
+          stream.abortSentGeneration = ''
+        }
+        toast.error('WebSocket is not connected')
       }
     }
     loading.value = isActiveSessionStreaming()

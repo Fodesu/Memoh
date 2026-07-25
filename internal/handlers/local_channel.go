@@ -2025,6 +2025,9 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					}
 					if h.sessionRuntime == nil {
 						if activeStreams.abort(streamID, localSessionID) {
+							if h.agentService != nil {
+								h.agentService.CancelPendingSessionDecisionsAfterAbort(streamBaseCtx, botID, localSessionID)
+							}
 							continue
 						}
 					} else if activeStreams.generationlessAbortAllowed(streamID, localSessionID) {
@@ -2045,6 +2048,9 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 							// StartRun also checks the canceled context before registration.
 							if _, recheckErr := h.sessionRuntime.Abort(streamBaseCtx, botID, localSessionID, streamID); recheckErr != nil && !errors.Is(recheckErr, sessionruntime.ErrCommandTargetNotActive) {
 								h.sendWSRuntimeError(connCtx, writer, streamID, localSessionID, recheckErr, apperror.CodeSessionRuntimeCommandFailed)
+							}
+							if h.agentService != nil {
+								h.agentService.CancelPendingSessionDecisionsAfterAbort(streamBaseCtx, botID, localSessionID)
 							}
 							continue
 						}

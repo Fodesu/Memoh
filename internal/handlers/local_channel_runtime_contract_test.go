@@ -2287,6 +2287,47 @@ func TestLocalChannelDecisionCommitFailureDoesNotPublishOrContinue(t *testing.T)
 	}
 }
 
+func TestLocalChannelEarlyDecisionAbortCancelsPendingDecision(t *testing.T) {
+	manager := startHandlerRuntimeManager(t, sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+		OwnerID: "handler-early-decision-abort", StateTTL: time.Hour, OwnerLeaseTTL: time.Minute,
+	})
+	resolver := &abortBlockedDeferredResponseResolver{
+		deferredResponseResolver: &deferredResponseResolver{
+			preserved: runtimefence.PreservedDecision{
+				Kind: runtimefence.DecisionToolApproval, ID: "71717171-7171-7171-7171-717171717171",
+				BotID: runtimeContractBotID, SessionID: runtimeContractSessionID,
+			},
+			stages: make(chan deferredResponseStage, 1),
+		},
+		prepareStarted:   make(chan struct{}),
+		decisionCanceled: make(chan struct{}),
+	}
+	handler := runtimeContractLocalChannelHandler(manager)
+	handler.SetAgentService(resolver)
+	client := openLocalChannelTestWS(t, handler, runtimeContractBotID, runtimeContractUserID)
+	if err := client.WriteJSON(map[string]any{
+		"type": "tool_approval_response", "stream_id": "approval-early-abort", "session_id": runtimeContractSessionID,
+		"approval_id": "71717171-7171-7171-7171-717171717171", "decision": "approve",
+	}); err != nil {
+		t.Fatalf("write tool approval response: %v", err)
+	}
+	select {
+	case <-resolver.prepareStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred decision preparation did not start")
+	}
+	if err := client.WriteJSON(map[string]any{
+		"type": "abort", "stream_id": "approval-early-abort", "session_id": runtimeContractSessionID,
+	}); err != nil {
+		t.Fatalf("write early decision abort: %v", err)
+	}
+	select {
+	case <-resolver.decisionCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("early decision abort did not durably cancel the pending decision")
+	}
+}
+
 func TestLocalChannelSidebandResponseCanFinishRunWithoutDeferredStream(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -3079,6 +3120,23 @@ type deferredResponseResolver struct {
 	prepareErr error
 	commitErr  error
 	stages     chan deferredResponseStage
+}
+
+type abortBlockedDeferredResponseResolver struct {
+	*deferredResponseResolver
+	prepareStarted   chan struct{}
+	decisionCanceled chan struct{}
+}
+
+func (r *abortBlockedDeferredResponseResolver) PrepareToolApprovalRuntimeTarget(ctx context.Context, _ application.ToolApprovalResponseInput) (application.RuntimeDecisionTarget, error) {
+	close(r.prepareStarted)
+	<-ctx.Done()
+	return application.RuntimeDecisionTarget{}, ctx.Err()
+}
+
+func (r *abortBlockedDeferredResponseResolver) CancelPendingSessionDecisionsAfterAbort(context.Context, string, string) int {
+	close(r.decisionCanceled)
+	return 1
 }
 
 func (r *deferredResponseResolver) AllocateRuntimePersistenceFence(context.Context, string, string) (runtimefence.Fence, error) {

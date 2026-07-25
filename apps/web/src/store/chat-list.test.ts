@@ -1340,7 +1340,7 @@ describe('chat-list store', () => {
     await expect(sendPromise).resolves.toMatchObject({ ok: true })
   })
 
-  it('does not create a second active run for a visible approval response', async () => {
+  it('aborts an unadmitted approval response without reopening the approval', async () => {
     sendEvents = [{ type: 'start' } as UIStreamEvent]
     api.fetchSessions.mockResolvedValueOnce({ items: [
       { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
@@ -1361,24 +1361,68 @@ describe('chat-list store', () => {
     const ws = api.connectWebSocket.mock.results.at(-1)?.value as { abort: ReturnType<typeof vi.fn> }
 
     store.abort()
-    streamHandler?.({
-      type: 'command_error',
-      invocation_id: responseStreamId,
-      action_id: 'tool_approval_response',
-      terminal: true,
-      error: { code: 'runtime_response_failed', message: 'response failed' },
-    } as UIStreamEvent)
     await flushPromises()
 
-    expect(ws.abort).not.toHaveBeenCalled()
+    expect(ws.abort).toHaveBeenCalledOnce()
+    expect(ws.abort).toHaveBeenCalledWith(responseStreamId, 'session-1', '')
     expect(store.streaming).toBe(false)
     const block = store.messages[0]?.role === 'assistant' ? store.messages[0].messages[0] : null
     expect(block?.type).toBe('tool')
     if (block?.type !== 'tool' || !block.approval) throw new Error('approval block missing')
-    expect(block.approval).toMatchObject({ status: 'pending', can_approve: true })
+    expect(block.approval).toMatchObject({ status: 'approved', can_approve: false })
+    await expect(store.respondToolApproval(block.approval, 'approve')).resolves.toBe(false)
+  })
 
-    sendEvents = [{ type: 'command_result', action_id: 'tool_approval_response', terminal: true } as UIStreamEvent]
-    await expect(store.respondToolApproval(block.approval, 'approve')).resolves.toBe(true)
+  it('aborts an admitted approval continuation without reopening the committed approval', async () => {
+    sendEvents = []
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    const approval: UIToolApproval = {
+      approval_id: 'approval-abort-continuation',
+      short_id: 71,
+      status: 'pending',
+      can_approve: true,
+    }
+    store.messages.push(approvalTurn(approval))
+    await expect(store.respondToolApproval(approval, 'approve')).resolves.toBe(true)
+
+    const responseMessage = sentWSMessages.find(message => message.type === 'tool_approval_response')
+    const responseStreamId = responseMessage?.stream_id as string
+    const continuation = runtimeSnapshotFromScript([], 'session-1', responseStreamId, 'running', 10)
+    if (!continuation.current_run_view) throw new Error('continuation run missing')
+    continuation.current_run_view.resolved_decision = {
+      kind: 'tool_approval',
+      id: approval.approval_id,
+      status: 'approved',
+    }
+    streamHandler?.({
+      type: 'runtime_snapshot',
+      bot_id: 'bot-1',
+      session_id: 'session-1',
+      epoch: continuation.epoch,
+      stream_id: responseStreamId,
+      seq: 10,
+      snapshot: continuation,
+    } as UIStreamEvent)
+
+    const ws = api.connectWebSocket.mock.results.at(-1)?.value as { abort: ReturnType<typeof vi.fn> }
+    store.abort()
+
+    expect(ws.abort).toHaveBeenCalledOnce()
+    expect(ws.abort).toHaveBeenCalledWith(
+      responseStreamId,
+      'session-1',
+      `generation-${responseStreamId}`,
+    )
+    const block = store.messages[0]?.role === 'assistant' ? store.messages[0].messages[0] : null
+    expect(block?.type).toBe('tool')
+    if (block?.type !== 'tool' || !block.approval) throw new Error('approval block missing')
+    expect(block.approval).toMatchObject({ status: 'approved', can_approve: false })
+    await expect(store.respondToolApproval(block.approval, 'approve')).resolves.toBe(false)
   })
 
   it('aborts only the active run while an approval command is in flight', async () => {
@@ -1431,13 +1475,6 @@ describe('chat-list store', () => {
     } as UIStreamEvent)
     store.abort()
     streamHandler?.({
-      type: 'command_error',
-      invocation_id: responseStreamId,
-      action_id: 'tool_approval_response',
-      terminal: true,
-      error: { code: 'runtime_response_failed', message: 'run stopped' },
-    } as UIStreamEvent)
-    streamHandler?.({
       type: 'runtime_snapshot',
       bot_id: 'bot-1',
       session_id: 'session-1',
@@ -1450,7 +1487,7 @@ describe('chat-list store', () => {
 
     expect(ws.abort).toHaveBeenCalledTimes(1)
     expect(ws.abort).toHaveBeenCalledWith(originalStreamId, 'session-1', `generation-${originalStreamId}`)
-    expect(tool.approval).toMatchObject({ status: 'pending', can_approve: true })
+    expect(tool.approval).toMatchObject({ status: 'approved', can_approve: false })
     expect(store.messages).toHaveLength(messageCount)
 
     streamHandler?.({
