@@ -4,9 +4,9 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/memohai/memoh/internal/acl"
+	decisionruntime "github.com/memohai/memoh/internal/agent/application/decisionruntime"
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
-	decisionruntime "github.com/memohai/memoh/internal/agent/decision/runtime"
 	audiopkg "github.com/memohai/memoh/internal/audio"
 	"github.com/memohai/memoh/internal/boot"
 	"github.com/memohai/memoh/internal/bots"

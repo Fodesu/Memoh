@@ -20,8 +20,8 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
+	decisionruntime "github.com/memohai/memoh/internal/agent/application/decisionruntime"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
-	decisionruntime "github.com/memohai/memoh/internal/agent/decision/runtime"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"

@@ -76,6 +76,7 @@ Memoh/
 │   ├── agent/                  #   Agent bounded package; root is a namespace, not a Go package
 │   │   ├── adapter/            #     Adapters from lower-level domain ports to runtime implementations
 │   │   ├── application/        #     Turn orchestration: context, persistence, memory, approvals, runtime dispatch
+│   │   │   └── decisionruntime/ #      Decision command routing and native continuation admission
 │   │   ├── background/         #     Background task manager (spawned subagents, video tasks)
 │   │   ├── context/            #     Context fragments, history projection, compaction, and output limits
 │   │   ├── decision/           #     User input, tool approval, and stable user-facing feedback
@@ -331,6 +332,7 @@ PostgreSQL migrations live in `db/postgres/migrations/`:
 - The AI agent runs **in-process** within the Go server — there is no separate agent gateway service.
 - `internal/agent/` is a bounded-package namespace. It intentionally contains no root Go package.
 - `internal/agent/application/` owns turn orchestration: message assembly, history, memory, compaction, decisions, persistence, and runtime dispatch.
+- `internal/agent/application/decisionruntime/` coordinates durable Decision responses with owner command routing and native continuation admission.
 - The Twilight AI native runtime lives in `internal/agent/runtime/native/`; `agent.go` there provides `Stream()` (SSE streaming) and `Generate()` (non-streaming) methods.
 - `internal/agent/turn/` is the pure port used by Channel and by the authenticated in-process/gRPC transports. Internal code says Thread; compatibility adapters keep external `session_id` and existing gRPC fields stable.
 - Model/client types are defined in `internal/models/types.go`: `openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, `openai-codex`, `github-copilot`, `edge-speech`.

@@ -36,11 +36,11 @@ export MEMOH_TEST_DISTRIBUTED_REQUIRED=1
 export MEMOH_TEST_REDIS_URL="$runtime_url"
 
 go test -v -race -count=1 -timeout 90s \
-  ./internal/sessionruntime \
-  ./internal/decisionruntime \
+  ./internal/agent/runtime/session \
+  ./internal/agent/application/decisionruntime \
   ./internal/handlers \
   ./cmd/agent
 
 go test -v -race -count=1 -timeout 90s \
   -run '^TestACPWorkspaceEffectsRejectStaleRedisOwner$' \
-  ./internal/acpclient
+  ./internal/agent/runtime/acp/client
