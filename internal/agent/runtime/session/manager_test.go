@@ -162,6 +162,129 @@ func TestRuntimeCommandAdmissionDeduplicatesBeforeWorkerScheduling(t *testing.T)
 	}
 }
 
+func TestRuntimeDecisionCommandsReconcileActiveProjectionGapsAndHandlerErrors(t *testing.T) {
+	t.Run("missing projection", func(t *testing.T) {
+		manager := testRuntimeManager(t, NewMemoryBackend(), "reconcile-missing-projection")
+		if err := manager.StartRun(context.Background(), testBotID, testSessionID, testStreamID, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
+			t.Fatalf("start run: %v", err)
+		}
+		var handlerCalls, reconcileCalls int
+		if err := manager.RegisterCommandHandler(CommandToolApprovalResponse, func(context.Context, Command) error {
+			handlerCalls++
+			return nil
+		}, func(_ context.Context, command Command) (bool, error) {
+			reconcileCalls++
+			if command.TargetID != "approval-committed" || command.StreamID != testStreamID {
+				t.Fatalf("reconcile command = %#v", command)
+			}
+			return true, nil
+		}); err != nil {
+			t.Fatalf("register command route: %v", err)
+		}
+
+		handled, err := manager.DispatchActiveCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-committed", []byte(`{"decision":"approve"}`))
+		if err != nil || !handled {
+			t.Fatalf("dispatch = handled:%v err:%v", handled, err)
+		}
+		if handlerCalls != 0 || reconcileCalls != 1 {
+			t.Fatalf("calls = handler:%d reconcile:%d, want 0/1", handlerCalls, reconcileCalls)
+		}
+	})
+
+	for _, tt := range []struct {
+		name      string
+		reconcile error
+	}{
+		{name: "same payload"},
+		{name: "conflicting payload", reconcile: ErrCommandPayloadConflict},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := testRuntimeManager(t, NewMemoryBackend(), "reconcile-handler-error-"+strings.ReplaceAll(tt.name, " ", "-"))
+			if err := manager.StartRun(context.Background(), testBotID, testSessionID, testStreamID, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
+				t.Fatalf("start run: %v", err)
+			}
+			handle := requireRunHandle(t, manager, testBotID, testSessionID, testStreamID)
+			if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+				Type: native.EventToolApprovalRequest, ToolName: "exec", ToolCallID: "call-1", ApprovalID: "approval-1", Status: "pending",
+			}); err != nil {
+				t.Fatalf("project approval: %v", err)
+			}
+			var handlerCalls, reconcileCalls int
+			if err := manager.RegisterCommandHandler(CommandToolApprovalResponse, func(context.Context, Command) error {
+				handlerCalls++
+				return errors.New("owner callback failed after durable commit")
+			}, func(context.Context, Command) (bool, error) {
+				reconcileCalls++
+				return true, tt.reconcile
+			}); err != nil {
+				t.Fatalf("register command route: %v", err)
+			}
+
+			handled, err := manager.DispatchActiveCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-1", []byte(`{"decision":"approve"}`))
+			if !handled || !errors.Is(err, tt.reconcile) {
+				t.Fatalf("dispatch = handled:%v err:%v, want %v", handled, err, tt.reconcile)
+			}
+			if handlerCalls != 1 || reconcileCalls != 1 {
+				t.Fatalf("calls = handler:%d reconcile:%d, want 1/1", handlerCalls, reconcileCalls)
+			}
+			snapshot, snapshotErr := manager.Snapshot(context.Background(), testBotID, testSessionID)
+			if snapshotErr != nil {
+				t.Fatalf("load reconciled snapshot: %v", snapshotErr)
+			}
+			approvalStatus := ""
+			approvalActionable := false
+			if snapshot.CurrentRunView != nil {
+				for _, message := range snapshot.CurrentRunView.Messages {
+					if message.Approval != nil && message.Approval.ApprovalID == "approval-1" {
+						approvalStatus = message.Approval.Status
+						approvalActionable = message.Approval.CanApprove
+						break
+					}
+				}
+			}
+			if tt.reconcile == nil {
+				if approvalStatus != "approved" || approvalActionable {
+					t.Fatalf("reconciled approval = status:%q actionable:%v, want approved/false", approvalStatus, approvalActionable)
+				}
+			} else if approvalStatus != "pending" || !approvalActionable {
+				t.Fatalf("conflicting approval = status:%q actionable:%v, want pending/true", approvalStatus, approvalActionable)
+			}
+		})
+	}
+}
+
+func TestRuntimeDecisionCommandReconciliationOutlivesCanceledHandlerContext(t *testing.T) {
+	manager := testRuntimeManager(t, NewMemoryBackend(), "reconcile-canceled-handler")
+	if err := manager.StartRun(context.Background(), testBotID, testSessionID, testStreamID, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	handle := requireRunHandle(t, manager, testBotID, testSessionID, testStreamID)
+	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+		Type: native.EventToolApprovalRequest, ToolName: "exec", ToolCallID: "call-1", ApprovalID: "approval-1", Status: "pending",
+	}); err != nil {
+		t.Fatalf("project approval: %v", err)
+	}
+
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	if err := manager.RegisterCommandHandler(CommandToolApprovalResponse, func(ctx context.Context, _ Command) error {
+		cancelRequest()
+		<-ctx.Done()
+		return ctx.Err()
+	}, func(ctx context.Context, _ Command) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return true, fmt.Errorf("reconcile context was canceled: %w", err)
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatalf("register command route: %v", err)
+	}
+
+	handled, err := manager.DispatchActiveCommand(requestCtx, testBotID, testSessionID, CommandToolApprovalResponse, "approval-1", []byte(`{"decision":"approve"}`))
+	if err != nil || !handled {
+		t.Fatalf("dispatch = handled:%v err:%v", handled, err)
+	}
+}
+
 type distributedRuntimeBackendContractSuite struct {
 	newBackend        func(t *testing.T) DistributedBackend
 	newSharedBackends func(t *testing.T, count int) []DistributedBackend

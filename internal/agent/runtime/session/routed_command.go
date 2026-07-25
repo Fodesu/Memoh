@@ -40,13 +40,23 @@ func (m *Manager) DispatchActiveCommand(ctx context.Context, botID, sessionID, c
 	}
 	canonicalTargetID, targetPresent := runtimeCommandTargetID(run, commandType, targetID)
 	if !targetPresent {
-		return false, nil
+		canonicalTargetID = targetID
 	}
 	cmd := Command{
 		Type: commandType, ID: activeCommandID(botID, sessionID, run, commandType, canonicalTargetID),
 		BotID: botID, SessionID: sessionID, StreamID: strings.TrimSpace(run.StreamID),
 		Generation: strings.TrimSpace(run.Generation), TargetID: canonicalTargetID,
 		Payload: append([]byte(nil), payload...), PayloadHash: activeCommandPayloadHash(commandType, payload),
+	}
+	if !targetPresent {
+		if reconciled, reconcileErr := m.reconcileRoutedCommandDetached(ctx, cmd); reconciled {
+			if reconcileErr != nil {
+				return true, reconcileErr
+			}
+			result := m.persistCommandResult(ctx, cmd, nil)
+			return true, commandResultErrorFor(cmd, result)
+		}
+		return false, nil
 	}
 	timeout := m.commandTimeout()
 	if m.distributed != nil {
@@ -63,7 +73,7 @@ func (m *Manager) DispatchActiveCommand(ctx context.Context, botID, sessionID, c
 		}
 	}
 	if !isActiveRunStatus(run.Status) {
-		if reconciled, reconcileErr := m.reconcileRoutedCommand(ctx, cmd); reconciled {
+		if reconciled, reconcileErr := m.reconcileRoutedCommandDetached(ctx, cmd); reconciled {
 			if reconcileErr != nil {
 				return true, reconcileErr
 			}
@@ -82,9 +92,18 @@ func (m *Manager) DispatchActiveCommand(ctx context.Context, botID, sessionID, c
 		commandCtx, cancel, commandErr := m.activeCommandContext(ctx, cmd)
 		defer cancel()
 		if commandErr != nil {
+			if reconciled, reconcileErr := m.reconcileRoutedCommandDetached(ctx, cmd); reconciled {
+				return true, reconcileErr
+			}
 			return true, commandErr
 		}
-		return true, m.applyRoutedCommand(commandCtx, cmd)
+		commandErr = m.applyRoutedCommand(commandCtx, cmd)
+		if errors.Is(commandErr, ErrCommandTargetNotActive) {
+			if reconciled, reconcileErr := m.reconcileRoutedCommandDetached(ctx, cmd); reconciled {
+				return true, reconcileErr
+			}
+		}
+		return true, commandErr
 	}
 	ownerID := strings.TrimSpace(run.OwnerID)
 	if ownerID == "" {
@@ -96,7 +115,7 @@ func (m *Manager) DispatchActiveCommand(ctx context.Context, botID, sessionID, c
 	}
 	dispatchErr := m.dispatchRemoteCommand(ctx, ownerID, cmd)
 	if dispatchErr != nil {
-		if reconciled, reconcileErr := m.reconcileRoutedCommand(ctx, cmd); reconciled {
+		if reconciled, reconcileErr := m.reconcileRoutedCommandDetached(ctx, cmd); reconciled {
 			if reconcileErr != nil {
 				return true, reconcileErr
 			}
@@ -332,7 +351,16 @@ func (m *Manager) applyRoutedCommand(ctx context.Context, cmd Command) error {
 		defer m.endCommandTarget(cmd)
 	}
 	if err = m.commandRouter.Handle(commandCtx, cmd); err != nil {
-		return err
+		if !isDecisionCommand(cmd.Type) {
+			return err
+		}
+		reconciled, reconcileErr := m.reconcileRoutedCommandDetached(commandCtx, cmd)
+		if !reconciled {
+			return err
+		}
+		if reconcileErr != nil {
+			return reconcileErr
+		}
 	}
 	if isDecisionCommand(cmd.Type) {
 		m.projectCommandDecisionWithRetry(commandCtx, ctrl, handle, cmd)
@@ -591,19 +619,17 @@ func (m *Manager) executeRoutedCommand(ctx context.Context, cmd Command) Command
 		return m.replayStoredCommandProjection(ctx, cmd, result)
 	}
 	commandCtx, cancel, err := m.activeCommandContext(ctx, cmd)
-	reconciled := false
 	if err == nil {
 		err = m.applyRoutedCommand(commandCtx, cmd)
-		if errors.Is(err, ErrCommandTargetNotActive) {
-			if handled, reconcileErr := m.reconcileRoutedCommand(commandCtx, cmd); handled {
-				reconciled = true
-				err = reconcileErr
-			}
-		}
 	}
 	cancel()
-	if reconciled && err != nil {
-		return newCommandResult(cmd, err)
+	if errors.Is(err, ErrCommandTargetNotActive) {
+		if handled, reconcileErr := m.reconcileRoutedCommandDetached(ctx, cmd); handled {
+			if reconcileErr != nil {
+				return newCommandResult(cmd, reconcileErr)
+			}
+			return m.persistCommandResult(ctx, cmd, nil)
+		}
 	}
 	return m.persistCommandResult(ctx, cmd, err)
 }
@@ -613,6 +639,12 @@ func (m *Manager) reconcileRoutedCommand(ctx context.Context, cmd Command) (bool
 		return false, nil
 	}
 	return m.commandRouter.Reconcile(ctx, cmd)
+}
+
+func (m *Manager) reconcileRoutedCommandDetached(ctx context.Context, cmd Command) (bool, error) {
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.commandTimeout())
+	defer cancel()
+	return m.reconcileRoutedCommand(reconcileCtx, cmd)
 }
 
 func newCommandResult(request Command, err error) Command {

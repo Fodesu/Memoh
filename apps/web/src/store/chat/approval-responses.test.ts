@@ -33,21 +33,24 @@ describe('approval response tracker', () => {
     tracker.resetApprovalResponses()
   })
 
-  it('settles success, failure, and local cancellation through one transition', () => {
+  it('settles success, failure, conflict, and local cancellation through one transition', () => {
     const rollbackApproval = vi.fn()
     const tracker = createApprovalResponseTracker({ rollbackApproval })
     tracker.beginApprovalResponse(input('stream-success', 'approval-success'))
     tracker.beginApprovalResponse(input('stream-failure', 'approval-failure'))
+    tracker.beginApprovalResponse(input('stream-conflict', 'approval-conflict'))
     tracker.beginApprovalResponse(input('stream-canceled', 'approval-canceled'))
 
     expect(tracker.settleApprovalResponse('stream-success', 'succeeded')?.approvalId).toBe('approval-success')
     expect(tracker.settleApprovalResponse('stream-failure', 'failed')?.approvalId).toBe('approval-failure')
+    expect(tracker.settleApprovalResponse('stream-conflict', 'conflicted')?.approvalId).toBe('approval-conflict')
     expect(tracker.settleApprovalResponse('stream-canceled', 'canceled')?.approvalId).toBe('approval-canceled')
     expect(rollbackApproval).toHaveBeenCalledOnce()
     expect(rollbackApproval).toHaveBeenCalledWith('approval-failure')
     expect(tracker.getApprovalResponse('stream-success')).toBeUndefined()
     expect(tracker.isTerminalApprovalResponse('stream-success')).toBe(true)
     expect(tracker.isTerminalApprovalResponse('stream-failure')).toBe(true)
+    expect(tracker.isTerminalApprovalResponse('stream-conflict')).toBe(true)
     expect(tracker.isTerminalApprovalResponse('stream-canceled')).toBe(true)
     expect(tracker.settleApprovalResponse('stream-success', 'failed')).toBeUndefined()
     expect(rollbackApproval).toHaveBeenCalledOnce()

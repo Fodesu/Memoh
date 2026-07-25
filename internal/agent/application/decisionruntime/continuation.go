@@ -111,15 +111,21 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 		// A concurrent responder may have installed the active continuation after
 		// our first dispatch. Route to it before reporting the admission failure.
 		if handled, dispatchErr := a.manager.DispatchActiveCommand(ctx, prepared.target.BotID, prepared.target.SessionID, prepared.commandType, prepared.target.ID, prepared.payload); handled {
+			dispatchErr = normalizeDecisionResponseError(dispatchErr)
+			if dispatchErr == nil {
+				opts.decisionCommitted()
+			}
 			return dispatchErr
 		}
-		if prepared.reconcile != nil {
-			if reconciled, reconcileErr := prepared.reconcile(ctx); reconciled {
-				return reconcileErr
+		if reconciled, reconcileErr := prepared.reconcileAfterFailure(ctx); reconciled {
+			if reconcileErr == nil {
+				opts.decisionCommitted()
 			}
+			return reconcileErr
 		}
 		return err
 	}
+	opts.decisionCommitted()
 	releaseCompaction := a.resolver.DeferSessionCompaction(prepared.target.BotID, prepared.target.SessionID, streamID)
 	defer releaseCompaction()
 

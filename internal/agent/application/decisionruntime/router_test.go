@@ -279,7 +279,9 @@ func TestRouterMemoryFallbackUsesRuntimeLifecycleWithoutFence(t *testing.T) {
 	manager := &routerTestManager{}
 	router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
 
-	if err := router.RespondUserInput(context.Background(), application.UserInputResponseInput{UserInputID: decisionTargetID, TextAnswer: "yes"}, nil); err != nil {
+	if err := router.RespondUserInputWithOptions(context.Background(), application.UserInputResponseInput{UserInputID: decisionTargetID, TextAnswer: "yes"}, nil, RespondOptions{
+		OnDecisionCommitted: func() { resolver.lifecycle = append(resolver.lifecycle, "ack") },
+	}); err != nil {
 		t.Fatalf("RespondUserInput() error = %v", err)
 	}
 	if len(resolver.respondInput) != 1 || resolver.respondInput[0].ThreadID != decisionSessionID {
@@ -291,8 +293,8 @@ func TestRouterMemoryFallbackUsesRuntimeLifecycleWithoutFence(t *testing.T) {
 	if len(manager.admissions) != 1 || manager.admissions[0].ResolvedDecision == nil || manager.admissions[0].ResolvedDecision.Status != "submitted" {
 		t.Fatalf("memory continuation admission = %#v", manager.admissions)
 	}
-	if got := strings.Join(resolver.lifecycle, ","); got != "commit,continue" {
-		t.Fatalf("memory decision lifecycle = %q, want commit,continue", got)
+	if got := strings.Join(resolver.lifecycle, ","); got != "commit,ack,continue" {
+		t.Fatalf("memory decision lifecycle = %q, want commit,ack,continue", got)
 	}
 }
 
@@ -404,10 +406,11 @@ func TestRouterCommitFailureDoesNotPublishOrContinue(t *testing.T) {
 	manager := &routerTestManager{}
 	router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
 
-	err := router.RespondToolApproval(context.Background(), application.ToolApprovalResponseInput{
+	committedCalls := 0
+	err := router.RespondToolApprovalWithOptions(context.Background(), application.ToolApprovalResponseInput{
 		ApprovalID: decisionTargetID,
 		Decision:   "approve",
-	}, nil)
+	}, nil, RespondOptions{OnDecisionCommitted: func() { committedCalls++ }})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("RespondToolApproval() error = %v, want %v", err, wantErr)
 	}
@@ -416,6 +419,40 @@ func TestRouterCommitFailureDoesNotPublishOrContinue(t *testing.T) {
 	}
 	if len(manager.admissions) != 0 || len(manager.handledEvents) != 0 || len(manager.finalizedEvents) != 0 {
 		t.Fatalf("failed decision was projected: admissions=%#v handled=%#v finalized=%#v", manager.admissions, manager.handledEvents, manager.finalizedEvents)
+	}
+	if committedCalls != 0 {
+		t.Fatalf("failed commit acknowledgements = %d, want 0", committedCalls)
+	}
+}
+
+func TestPreparedDecisionReconcilesAmbiguousCommitAfterRequestCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	commitErr := errors.New("commit result was ambiguous")
+	continueCalls := 0
+	prepared := &PreparedDecision{
+		commit: func(context.Context) error {
+			cancel()
+			return commitErr
+		},
+		reconcile: func(reconcileCtx context.Context) (bool, error) {
+			if err := reconcileCtx.Err(); err != nil {
+				return true, fmt.Errorf("reconcile context was canceled: %w", err)
+			}
+			return true, nil
+		},
+		continueRun: func(context.Context, chan<- application.StreamEventPayload) error {
+			continueCalls++
+			return nil
+		},
+	}
+	committedCalls := 0
+
+	err := prepared.commitAndContinue(ctx, nil, func() { committedCalls++ })
+	if err != nil {
+		t.Fatalf("commitAndContinue() error = %v", err)
+	}
+	if committedCalls != 1 || continueCalls != 0 {
+		t.Fatalf("calls = committed:%d continue:%d, want 1/0", committedCalls, continueCalls)
 	}
 }
 
@@ -531,28 +568,33 @@ func TestRouterReconcilesCommittedDuplicateBeforeStartingContinuation(t *testing
 	manager := &routerTestManager{distributed: true}
 	router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
 
-	if err := router.RespondToolApproval(context.Background(), application.ToolApprovalResponseInput{ApprovalID: decisionTargetID, Decision: "approve"}, nil); err != nil {
+	committedCalls := 0
+	if err := router.RespondToolApprovalWithOptions(context.Background(), application.ToolApprovalResponseInput{ApprovalID: decisionTargetID, Decision: "approve"}, nil, RespondOptions{
+		OnDecisionCommitted: func() { committedCalls++ },
+	}); err != nil {
 		t.Fatalf("duplicate response error = %v", err)
 	}
 	if resolver.reconcileCalls != 1 || resolver.allocated != 0 || manager.starts != 0 || len(resolver.respondApproval) != 0 {
 		t.Fatalf("duplicate routing = reconcile:%d allocated:%d starts:%d responses:%d", resolver.reconcileCalls, resolver.allocated, manager.starts, len(resolver.respondApproval))
 	}
+	if committedCalls != 1 {
+		t.Fatalf("duplicate commit acknowledgements = %d, want 1", committedCalls)
+	}
 }
 
 func TestRouterReturnsCommittedPayloadConflict(t *testing.T) {
-	wantErr := errors.New("payload conflict")
 	resolver := &routerTestResolver{
 		prepared: runtimefence.PreservedDecision{
 			Kind: runtimefence.DecisionUserInput, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
 		},
 		reconcileHandled: true,
-		reconcileErr:     wantErr,
+		reconcileErr:     userinput.ErrAlreadyDecided,
 	}
 	router := newRouter(slog.New(slog.DiscardHandler), &routerTestManager{distributed: true}, resolver)
 
 	err := router.RespondUserInput(context.Background(), application.UserInputResponseInput{UserInputID: decisionTargetID, TextAnswer: "different"}, nil)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("conflicting duplicate error = %v, want %v", err, wantErr)
+	if !errors.Is(err, sessionruntime.ErrCommandPayloadConflict) {
+		t.Fatalf("conflicting duplicate error = %v, want payload conflict", err)
 	}
 }
 

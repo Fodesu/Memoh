@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,10 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/auth"
 )
 
@@ -61,5 +65,19 @@ func TestToolApprovalHTTPUsesJWTUserIDForPermissionActor(t *testing.T) {
 	}
 	if responder.input.ActorUserID == channelIdentityID {
 		t.Fatal("HTTP approval used channel identity id as the permission actor")
+	}
+}
+
+func TestToolApprovalHTTPMapsDecisionConflictsToProblemCode(t *testing.T) {
+	t.Parallel()
+
+	for _, cause := range []error{toolapproval.ErrAlreadyDecided, sessionruntime.ErrCommandPayloadConflict} {
+		err := toolApprovalHTTPError(cause)
+		if got := apperror.CodeOf(err); got != apperror.CodeSessionRuntimeDecisionConflict {
+			t.Fatalf("CodeOf(%v) = %q, want %q", cause, got, apperror.CodeSessionRuntimeDecisionConflict)
+		}
+		if got := apperror.CauseOf(err); !errors.Is(got, cause) {
+			t.Fatalf("CauseOf(%v) = %v", cause, got)
+		}
 	}
 }

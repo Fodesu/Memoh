@@ -23,6 +23,9 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
+	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
+	userinput "github.com/memohai/memoh/internal/agent/decision/input"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/apperror"
 	attachmentpkg "github.com/memohai/memoh/internal/attachment"
 	"github.com/memohai/memoh/internal/bots"
@@ -105,6 +108,21 @@ func TestNewSessionRuntimeAppErrorMapsPendingDecision(t *testing.T) {
 	err := newSessionRuntimeAppError(application.ErrSessionDecisionPending, apperror.CodeSessionRuntimeRunFailed)
 	if got := apperror.CodeOf(err); got != apperror.CodeSessionRuntimeDecisionPending {
 		t.Fatalf("CodeOf() = %q, want %q", got, apperror.CodeSessionRuntimeDecisionPending)
+	}
+}
+
+func TestNewSessionRuntimeAppErrorMapsDecisionConflicts(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{
+		sessionruntime.ErrCommandPayloadConflict,
+		toolapproval.ErrAlreadyDecided,
+		userinput.ErrAlreadyDecided,
+	} {
+		mapped := newSessionRuntimeAppError(err, apperror.CodeSessionRuntimeCommandFailed)
+		if got := apperror.CodeOf(mapped); got != apperror.CodeSessionRuntimeDecisionConflict {
+			t.Fatalf("CodeOf(%v) = %q, want %q", err, got, apperror.CodeSessionRuntimeDecisionConflict)
+		}
 	}
 }
 

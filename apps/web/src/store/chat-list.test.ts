@@ -3699,6 +3699,80 @@ describe('chat-list store', () => {
     }
   })
 
+  it('keeps an optimistic user-input decision closed when the durable response conflicts', async () => {
+    sendEvents = []
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    const userInput = singleSelectUserInput('input-conflict')
+    store.messages.push(askUserTurn(userInput, 'call-conflict'))
+    api.fetchMessagesUI.mockClear()
+    let finishRefresh!: (messages: ConversationUiMessage[]) => void
+    api.fetchMessagesUI.mockReturnValueOnce(new Promise(resolve => { finishRefresh = resolve }))
+
+    expect(await store.respondUserInput(userInput, { answers: [{ question_id: 'q1', option_ids: ['q1.o1'] }] })).toBe(true)
+    const responseStreamId = String(sentWSMessages.at(-1)?.stream_id ?? '')
+    streamHandler?.({
+      type: 'command_error',
+      invocation_id: responseStreamId,
+      session_id: 'session-1',
+      action_id: 'user_input_response',
+      terminal: true,
+      error: { code: 'session_runtime.decision_conflict', message: 'private conflict detail' },
+    } as UIStreamEvent)
+
+    const block = store.messages[0]?.role === 'assistant' ? store.messages[0].messages[0] : undefined
+    expect(block?.type === 'tool' ? block.userInput : undefined).toMatchObject({
+      status: 'submitted',
+      can_respond: false,
+    })
+    expect(api.fetchMessagesUI).toHaveBeenCalledOnce()
+    expect(toast.error).toHaveBeenCalledWith('This approval or question was already resolved with a different response.')
+    finishRefresh([])
+    await flushPromises()
+  })
+
+  it('keeps an optimistic approval closed when the durable response conflicts', async () => {
+    sendEvents = []
+    api.fetchSessions.mockResolvedValueOnce({ items: [
+      { id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' },
+    ], nextCursor: null })
+    const store = useChatStore()
+    await store.selectBot('bot-1')
+    await flushPromises()
+    const approval: UIToolApproval = {
+      approval_id: 'approval-conflict', short_id: 31, status: 'pending', can_approve: true,
+    }
+    store.messages.push(approvalTurn(approval))
+    api.fetchMessagesUI.mockClear()
+    let finishRefresh!: (messages: ConversationUiMessage[]) => void
+    api.fetchMessagesUI.mockReturnValueOnce(new Promise(resolve => { finishRefresh = resolve }))
+
+    expect(await store.respondToolApproval(approval, 'approve')).toBe(true)
+    const responseStreamId = String(sentWSMessages.at(-1)?.stream_id ?? '')
+    streamHandler?.({
+      type: 'command_error',
+      invocation_id: responseStreamId,
+      session_id: 'session-1',
+      action_id: 'tool_approval_response',
+      terminal: true,
+      error: { code: 'session_runtime.decision_conflict', message: 'private conflict detail' },
+    } as UIStreamEvent)
+
+    const block = store.messages[0]?.role === 'assistant' ? store.messages[0].messages[0] : undefined
+    expect(block?.type === 'tool' ? block.approval : undefined).toMatchObject({
+      status: 'approved',
+      can_approve: false,
+    })
+    expect(api.fetchMessagesUI).toHaveBeenCalledOnce()
+    expect(toast.error).toHaveBeenCalledWith('This approval or question was already resolved with a different response.')
+    finishRefresh([])
+    await flushPromises()
+  })
+
   it('isolates the same user-input response stream id across sessions', async () => {
     sendEvents = []
     api.fetchSessions.mockResolvedValueOnce({
@@ -9446,6 +9520,15 @@ describe('chat-list store', () => {
       status: 'approved',
     }
     streamHandler?.({
+      type: 'command_result',
+      invocation_id: responseStreamId,
+      session_id: 'session-1',
+      action_id: 'tool_approval_response',
+      terminal: true,
+      result: { kind: 'ack' },
+    } as UIStreamEvent)
+    expect(store.messages.filter(message => message.role === 'assistant')).toHaveLength(1)
+    streamHandler?.({
       type: 'runtime_snapshot',
       bot_id: 'bot-1',
       session_id: 'session-1',
@@ -9454,6 +9537,7 @@ describe('chat-list store', () => {
       seq: 1,
       snapshot: checkpoint,
     } as UIStreamEvent)
+    expect(turn.streaming).toBe(true)
     streamHandler?.({
       type: 'runtime_delta',
       bot_id: 'bot-1',

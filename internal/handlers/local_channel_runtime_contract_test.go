@@ -2287,6 +2287,55 @@ func TestLocalChannelDecisionCommitFailureDoesNotPublishOrContinue(t *testing.T)
 	}
 }
 
+func TestLocalChannelDeferredDecisionAcknowledgesCommitBeforeContinuationCompletes(t *testing.T) {
+	t.Parallel()
+
+	manager := startHandlerRuntimeManager(t, sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+		OwnerID: "handler-decision-commit-ack", StateTTL: time.Hour, OwnerLeaseTTL: time.Minute,
+	})
+	continueStarted := make(chan struct{})
+	continueRelease := make(chan struct{})
+	resolver := &deferredResponseResolver{
+		preserved: runtimefence.PreservedDecision{
+			Kind: runtimefence.DecisionToolApproval, ID: "89898989-8989-8989-8989-898989898989",
+			BotID: runtimeContractBotID, SessionID: runtimeContractSessionID,
+		},
+		continueErr:     errors.New("continuation failed after durable commit"),
+		continueStarted: continueStarted,
+		continueRelease: continueRelease,
+		stages:          make(chan deferredResponseStage, 3),
+	}
+	handler := runtimeContractLocalChannelHandler(manager)
+	handler.SetAgentService(resolver)
+	client := openLocalChannelTestWS(t, handler, runtimeContractBotID, runtimeContractUserID)
+	if err := client.WriteJSON(map[string]any{
+		"type": "tool_approval_response", "stream_id": "approval-commit-ack", "session_id": runtimeContractSessionID,
+		"approval_id": "89898989-8989-8989-8989-898989898989", "decision": "approve",
+	}); err != nil {
+		t.Fatalf("write tool approval response: %v", err)
+	}
+	select {
+	case <-continueStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("continuation did not start")
+	}
+	result := readCommandEventUntil(t, client, "approval-commit-ack")
+	if result.Type != "command_result" || result.ActionID != sessionruntime.CommandToolApprovalResponse {
+		t.Fatalf("commit acknowledgement = %#v", result)
+	}
+	snapshot, err := manager.Snapshot(context.Background(), runtimeContractBotID, runtimeContractSessionID)
+	if err != nil {
+		t.Fatalf("load continuation snapshot: %v", err)
+	}
+	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != sessionruntime.RunStatusRunning {
+		t.Fatalf("acknowledged continuation = %#v, want running", snapshot.CurrentRunView)
+	}
+	close(continueRelease)
+	waitHandlerRuntimeSnapshot(t, manager, func(snapshot sessionruntime.Snapshot) bool {
+		return snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Status == sessionruntime.RunStatusErrored
+	})
+}
+
 func TestLocalChannelEarlyDecisionAbortCancelsPendingDecision(t *testing.T) {
 	manager := startHandlerRuntimeManager(t, sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID: "handler-early-decision-abort", StateTTL: time.Hour, OwnerLeaseTTL: time.Minute,
@@ -3115,11 +3164,14 @@ type deferredResponseStage struct {
 
 type deferredResponseResolver struct {
 	*application.Service
-	fence      runtimefence.Fence
-	preserved  runtimefence.PreservedDecision
-	prepareErr error
-	commitErr  error
-	stages     chan deferredResponseStage
+	fence           runtimefence.Fence
+	preserved       runtimefence.PreservedDecision
+	prepareErr      error
+	commitErr       error
+	continueErr     error
+	continueStarted chan struct{}
+	continueRelease <-chan struct{}
+	stages          chan deferredResponseStage
 }
 
 type abortBlockedDeferredResponseResolver struct {
@@ -3193,7 +3245,17 @@ func (r *deferredResponseResolver) CommitToolApprovalResponse(ctx context.Contex
 func (r *deferredResponseResolver) ContinueCommittedToolApprovalResponse(ctx context.Context, _ application.CommittedToolApprovalResponse, _ chan<- application.StreamEventPayload) error {
 	fence, _ := runtimefence.FromContext(ctx)
 	r.stages <- deferredResponseStage{name: "continue", fence: fence}
-	return nil
+	if r.continueStarted != nil {
+		close(r.continueStarted)
+	}
+	if r.continueRelease != nil {
+		select {
+		case <-r.continueRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.continueErr
 }
 
 func (r *deferredResponseResolver) CommitUserInputResponse(ctx context.Context, input application.UserInputResponseInput) (application.CommittedUserInputResponse, error) {
@@ -3205,7 +3267,17 @@ func (r *deferredResponseResolver) CommitUserInputResponse(ctx context.Context, 
 func (r *deferredResponseResolver) ContinueCommittedUserInputResponse(ctx context.Context, _ application.CommittedUserInputResponse, _ chan<- application.StreamEventPayload) error {
 	fence, _ := runtimefence.FromContext(ctx)
 	r.stages <- deferredResponseStage{name: "continue", fence: fence}
-	return nil
+	if r.continueStarted != nil {
+		close(r.continueStarted)
+	}
+	if r.continueRelease != nil {
+		select {
+		case <-r.continueRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.continueErr
 }
 
 func (r *sidebandResponseResolver) CommitToolApprovalResponse(ctx context.Context, input application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error) {

@@ -39,14 +39,16 @@ func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver
 			if err != nil {
 				return true, err
 			}
-			return reconciler.ReconcileToolApprovalResponse(ctx, input)
+			handled, reconcileErr := reconciler.ReconcileToolApprovalResponse(ctx, input)
+			return handled, normalizeDecisionResponseError(reconcileErr)
 		}
 		reconcileInput = func(ctx context.Context, command sessionruntime.Command) (bool, error) {
 			input, err := decodeUserInputCommand(command)
 			if err != nil {
 				return true, err
 			}
-			return reconciler.ReconcileUserInputResponse(ctx, input)
+			handled, reconcileErr := reconciler.ReconcileUserInputResponse(ctx, input)
+			return handled, normalizeDecisionResponseError(reconcileErr)
 		}
 	}
 	if err := manager.RegisterCommandHandler(sessionruntime.CommandToolApprovalResponse, func(ctx context.Context, command sessionruntime.Command) error {
@@ -56,7 +58,7 @@ func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver
 		}
 		committed, err := commandResolver.CommitToolApprovalResponse(ctx, input)
 		if err != nil {
-			return err
+			return normalizeDecisionResponseError(err)
 		}
 		return commandResolver.ContinueCommittedToolApprovalResponse(ctx, committed, nil)
 	}, reconcileApproval); err != nil {
@@ -69,7 +71,7 @@ func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver
 		}
 		committed, err := commandResolver.CommitUserInputResponse(ctx, input)
 		if err != nil {
-			return err
+			return normalizeDecisionResponseError(err)
 		}
 		return commandResolver.ContinueCommittedUserInputResponse(ctx, committed, nil)
 	}, reconcileInput); err != nil {

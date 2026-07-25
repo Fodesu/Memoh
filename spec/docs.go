@@ -7829,6 +7829,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -7888,6 +7894,12 @@ const docTemplate = `{
                         "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "500": {
@@ -20857,6 +20869,14 @@ const docTemplate = `{
                 }
             }
         },
+        "sessionruntime.AbortIntentView": {
+            "type": "object",
+            "properties": {
+                "requested_at": {
+                    "type": "string"
+                }
+            }
+        },
         "sessionruntime.CurrentRunView": {
             "type": "object",
             "required": [
@@ -20994,6 +21014,14 @@ const docTemplate = `{
                 },
                 "epoch": {
                     "type": "string"
+                },
+                "pending_abort": {
+                    "description": "PendingAbort records an abort that found no active run. A decision\ncontinuation admitted inside its window is rejected, so an abort can\nnever race a deferred admission; any other successful claim clears it.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/sessionruntime.AbortIntentView"
+                        }
+                    ]
                 },
                 "queue": {
                     "type": "array",

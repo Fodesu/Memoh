@@ -1,4 +1,4 @@
-export type ApprovalResponseOutcome = 'succeeded' | 'failed' | 'canceled' | 'expired'
+export type ApprovalResponseOutcome = 'succeeded' | 'failed' | 'conflicted' | 'canceled' | 'expired'
 
 export interface ApprovalResponse {
   readonly streamId: string

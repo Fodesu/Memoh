@@ -9,6 +9,8 @@ import (
 
 	"github.com/memohai/memoh/internal/agent/application"
 	"github.com/memohai/memoh/internal/agent/decision"
+	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
+	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/runtimefence"
 )
@@ -55,14 +57,39 @@ func (p PreparedDecision) validate() error {
 	return nil
 }
 
-func (p *PreparedDecision) commitAndContinue(ctx context.Context, output chan<- application.StreamEventPayload) error {
+func (p *PreparedDecision) commitAndContinue(ctx context.Context, output chan<- application.StreamEventPayload, onCommitted func()) error {
 	if p == nil {
 		return errors.New("prepared decision is required")
 	}
 	if err := p.commit(ctx); err != nil {
-		return err
+		if reconciled, reconcileErr := p.reconcileAfterFailure(ctx); reconciled {
+			if reconcileErr == nil && onCommitted != nil {
+				onCommitted()
+			}
+			return reconcileErr
+		}
+		return normalizeDecisionResponseError(err)
+	}
+	if onCommitted != nil {
+		onCommitted()
 	}
 	return p.continueRun(ctx, output)
+}
+
+func (p *PreparedDecision) reconcileAfterFailure(ctx context.Context) (bool, error) {
+	if p == nil || p.reconcile == nil {
+		return false, nil
+	}
+	reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalFinalizationTimeout)
+	defer cancel()
+	return p.reconcile(reconcileCtx)
+}
+
+func normalizeDecisionResponseError(err error) error {
+	if errors.Is(err, toolapproval.ErrAlreadyDecided) || errors.Is(err, userinput.ErrAlreadyDecided) {
+		return sessionruntime.ErrCommandPayloadConflict
+	}
+	return err
 }
 
 // DecisionCoordinator owns validation, canonical command encoding, durable
@@ -110,12 +137,13 @@ func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input app
 		target: target, resumePolicy: runtimeTarget.ResumePolicy, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
 		commandType: sessionruntime.CommandToolApprovalResponse, payload: payload,
 		reconcile: func(reconcileCtx context.Context) (bool, error) {
-			return c.resolver.ReconcileToolApprovalResponse(reconcileCtx, routed)
+			handled, reconcileErr := c.resolver.ReconcileToolApprovalResponse(reconcileCtx, routed)
+			return handled, normalizeDecisionResponseError(reconcileErr)
 		},
 		commit: func(commitCtx context.Context) error {
 			var commitErr error
 			committed, commitErr = c.resolver.CommitToolApprovalResponse(commitCtx, input)
-			return commitErr
+			return normalizeDecisionResponseError(commitErr)
 		},
 		continueRun: func(runCtx context.Context, eventCh chan<- application.StreamEventPayload) error {
 			return c.resolver.ContinueCommittedToolApprovalResponse(runCtx, committed, eventCh)
@@ -159,12 +187,13 @@ func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input applic
 		target: target, resumePolicy: runtimeTarget.ResumePolicy, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
 		commandType: sessionruntime.CommandUserInputResponse, payload: payload,
 		reconcile: func(reconcileCtx context.Context) (bool, error) {
-			return c.resolver.ReconcileUserInputResponse(reconcileCtx, routed)
+			handled, reconcileErr := c.resolver.ReconcileUserInputResponse(reconcileCtx, routed)
+			return handled, normalizeDecisionResponseError(reconcileErr)
 		},
 		commit: func(commitCtx context.Context) error {
 			var commitErr error
 			committed, commitErr = c.resolver.CommitUserInputResponse(commitCtx, input)
-			return commitErr
+			return normalizeDecisionResponseError(commitErr)
 		},
 		continueRun: func(runCtx context.Context, eventCh chan<- application.StreamEventPayload) error {
 			return c.resolver.ContinueCommittedUserInputResponse(runCtx, committed, eventCh)

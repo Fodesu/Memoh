@@ -22,6 +22,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/application"
 	decisionruntime "github.com/memohai/memoh/internal/agent/application/decisionruntime"
 	"github.com/memohai/memoh/internal/agent/application/runprojection"
+	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
@@ -565,6 +566,10 @@ func newSessionRuntimeAppError(err error, fallback apperror.Code) error {
 	}
 	code := fallback
 	switch {
+	case errors.Is(err, sessionruntime.ErrCommandPayloadConflict),
+		errors.Is(err, toolapproval.ErrAlreadyDecided),
+		errors.Is(err, userinput.ErrAlreadyDecided):
+		code = apperror.CodeSessionRuntimeDecisionConflict
 	case errors.Is(err, sessionruntime.ErrCommandTargetNotActive),
 		errors.Is(err, sessionruntime.ErrCommandTargetMismatch),
 		errors.Is(err, sessionruntime.ErrRunOwnershipLost):
@@ -1524,12 +1529,26 @@ func (h *LocalChannelHandler) respondDeferredDecisionViaRouter(baseCtx, connCtx 
 		defer runCancel()
 		defer releaseWSMessageTurn()
 		defer activeStreams.finish(streamID, sessionID)
-		err := respond(runCtx, decisionruntime.RespondOptions{StreamID: streamID, Hooks: hooks}, suppressActivePromptAttach)
+		decisionCommitted := false
+		err := respond(runCtx, decisionruntime.RespondOptions{
+			StreamID: streamID,
+			Hooks:    hooks,
+			OnDecisionCommitted: func() {
+				decisionCommitted = true
+				if connCtx.Err() == nil {
+					h.sendWSSidebandResult(connCtx, writer, msg, actionID, nil)
+				}
+			},
+		}, suppressActivePromptAttach)
 		// Aborts and deferred terminal commits are not delivery failures:
 		// the runtime state machine already publishes their outcome.
 		if err == nil || connCtx.Err() != nil ||
 			errors.Is(err, context.Canceled) ||
 			errors.Is(err, sessionruntime.ErrTerminalCommitPending) {
+			return
+		}
+		if decisionCommitted {
+			h.sendWSRuntimeError(connCtx, writer, streamID, sessionID, err, apperror.CodeSessionRuntimeRunFailed)
 			return
 		}
 		// A failure before any run was admitted is a command-level rejection

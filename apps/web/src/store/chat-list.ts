@@ -2904,6 +2904,23 @@ export const useChatStore = defineStore('chat', () => {
             commandSessionId || undefined,
           )
         ) return
+        const decisionConflict = event.type === 'command_error'
+          && parseMemohError(event.error ?? event)?.code === 'session_runtime.decision_conflict'
+        if (decisionConflict) {
+          settleApprovalResponse(invocationId, 'conflicted', commandBotId, commandSessionId)
+          clearUserInputResponseStream(invocationId, commandBotId, commandSessionId)
+          requestRuntimeResync(commandBotId, commandSessionId)
+          void refreshCurrentSession(commandBotId, commandSessionId, { afterCurrent: true }).catch(error =>
+            console.error('Failed to reconcile conflicting decision response:', error),
+          )
+          toast.error(resolveApiErrorMessage(event.error ?? event, event.error?.message || 'runtime response conflicted'))
+          if (pending) {
+            pruneEmptyAssistantTurnIfPending(invocationId, commandBotId, commandSessionId)
+            discardAssistantStream(invocationId, commandBotId, commandSessionId)
+          }
+          loading.value = isSessionStreaming(currentBotId.value, sessionId.value)
+          return
+        }
         if (event.type === 'command_error') {
           const uncertainApproval = getApprovalResponse(invocationId, commandBotId, commandSessionId)
           if (uncertainApproval?.awaitingResync && markApprovalResponseReplayFailed(invocationId, commandBotId, commandSessionId)) {
@@ -2921,13 +2938,9 @@ export const useChatStore = defineStore('chat', () => {
           settleApprovalResponse(invocationId, 'succeeded', commandBotId, commandSessionId)
         }
         clearUserInputResponseStream(invocationId, commandBotId, commandSessionId)
-        if (pending) {
+        if (pending && event.type === 'command_error') {
           pruneEmptyAssistantTurnIfPending(invocationId, commandBotId, commandSessionId)
-          if (event.type === 'command_error') {
-            rejectAssistantStream(invocationId, new CommandStreamError(event.error?.message || 'runtime response failed'), commandBotId, commandSessionId)
-          } else {
-            resolveAssistantStream(invocationId, commandBotId, commandSessionId)
-          }
+          rejectAssistantStream(invocationId, new CommandStreamError(event.error?.message || 'runtime response failed'), commandBotId, commandSessionId)
         }
         loading.value = isSessionStreaming(currentBotId.value, sessionId.value)
         return

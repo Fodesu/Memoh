@@ -12,7 +12,9 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/auth"
 	"github.com/memohai/memoh/internal/bots"
 )
@@ -56,6 +58,7 @@ func (h *ToolApprovalHandler) Register(e *echo.Echo) {
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
+// @Failure 409 {object} apperror.Problem
 // @Failure 500 {object} ErrorResponse
 // @Router /bots/{bot_id}/tool-approvals/{approval_id}/approve [post].
 func (h *ToolApprovalHandler) Approve(c echo.Context) error {
@@ -71,6 +74,7 @@ func (h *ToolApprovalHandler) Approve(c echo.Context) error {
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
+// @Failure 409 {object} apperror.Problem
 // @Failure 500 {object} ErrorResponse
 // @Router /bots/{bot_id}/tool-approvals/{approval_id}/reject [post].
 func (h *ToolApprovalHandler) Reject(c echo.Context) error {
@@ -102,13 +106,15 @@ func (h *ToolApprovalHandler) respond(c echo.Context, decision string) error {
 	return c.JSON(http.StatusOK, map[string]string{"status": decision})
 }
 
-func toolApprovalHTTPError(err error) *echo.HTTPError {
+func toolApprovalHTTPError(err error) error {
 	switch {
 	case errors.Is(err, toolapproval.ErrForbidden):
 		return echo.NewHTTPError(http.StatusForbidden, err.Error())
 	case errors.Is(err, toolapproval.ErrNotFound):
 		return echo.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, toolapproval.ErrAlreadyDecided), errors.Is(err, toolapproval.ErrAmbiguous):
+	case errors.Is(err, toolapproval.ErrAlreadyDecided), errors.Is(err, sessionruntime.ErrCommandPayloadConflict):
+		return apperror.Wrap(apperror.CodeSessionRuntimeDecisionConflict, err, nil)
+	case errors.Is(err, toolapproval.ErrAmbiguous):
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	default:
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

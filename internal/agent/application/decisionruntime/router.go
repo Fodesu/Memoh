@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/memohai/memoh/internal/agent/application"
@@ -107,11 +108,28 @@ type RespondOptions struct {
 	// event pump of a native continuation run. Hooks receive the pump's
 	// authority context; they never supply one.
 	Hooks runprojection.Hooks
+	// OnDecisionCommitted is called after the response has been durably
+	// committed, including an idempotent replay confirmed by reconciliation.
+	// It does not imply that the agent continuation has completed.
+	OnDecisionCommitted func()
 }
 
 func (o RespondOptions) normalized() RespondOptions {
 	o.StreamID = strings.TrimSpace(o.StreamID)
+	if o.OnDecisionCommitted != nil {
+		onCommitted := o.OnDecisionCommitted
+		var once sync.Once
+		o.OnDecisionCommitted = func() {
+			once.Do(onCommitted)
+		}
+	}
 	return o
+}
+
+func (o RespondOptions) decisionCommitted() {
+	if o.OnDecisionCommitted != nil {
+		o.OnDecisionCommitted()
+	}
 }
 
 func (r *Router) RespondToolApproval(ctx context.Context, input application.ToolApprovalResponseInput, output chan<- application.StreamEventPayload) error {
@@ -165,11 +183,18 @@ func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision
 	if r.manager != nil {
 		handled, err := r.manager.DispatchActiveCommand(ctx, prepared.target.BotID, prepared.target.SessionID, prepared.commandType, prepared.target.ID, prepared.payload)
 		if handled {
+			err = normalizeDecisionResponseError(err)
+			if err == nil {
+				opts.decisionCommitted()
+			}
 			return err
 		}
 	}
 	if prepared.reconcile != nil {
 		if reconciled, err := prepared.reconcile(ctx); reconciled {
+			if err == nil {
+				opts.decisionCommitted()
+			}
 			return err
 		}
 	}
@@ -182,12 +207,12 @@ func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision
 		// be alive on another server, and this process cannot tell until
 		// waiter presence is shared across owners.
 		if prepared.hasLocalWaiter || r.manager == nil || !r.manager.IsDistributed() {
-			return prepared.commitAndContinue(ctx, output)
+			return prepared.commitAndContinue(ctx, output, opts.decisionCommitted)
 		}
 		return application.ErrRuntimeDecisionOwnerUnavailable
 	}
 	if r.manager == nil {
-		return prepared.commitAndContinue(ctx, output)
+		return prepared.commitAndContinue(ctx, output, opts.decisionCommitted)
 	}
 	return r.continuation.Admit(ctx, prepared, output, opts)
 }

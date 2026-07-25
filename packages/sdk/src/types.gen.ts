@@ -2787,6 +2787,10 @@ export type SessionSession = {
     updated_at?: string;
 };
 
+export type SessionruntimeAbortIntentView = {
+    requested_at?: string;
+};
+
 export type SessionruntimeCurrentRunView = {
     canonical_ready?: boolean;
     error?: string;
@@ -2832,6 +2836,12 @@ export type SessionruntimeSnapshot = {
     bot_id?: string;
     current_run_view?: SessionruntimeCurrentRunView;
     epoch?: string;
+    /**
+     * PendingAbort records an abort that found no active run. A decision
+     * continuation admitted inside its window is rejected, so an abort can
+     * never race a deferred admission; any other successful claim clears it.
+     */
+    pending_abort?: SessionruntimeAbortIntentView;
     queue?: Array<SessionruntimeQueuedRunView>;
     seq?: number;
     session_id?: string;
@@ -9451,6 +9461,10 @@ export type PostBotsByBotIdToolApprovalsByApprovalIdApproveErrors = {
      */
     403: HandlersErrorResponse;
     /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
      * Internal Server Error
      */
     500: HandlersErrorResponse;
@@ -9497,6 +9511,10 @@ export type PostBotsByBotIdToolApprovalsByApprovalIdRejectErrors = {
      * Forbidden
      */
     403: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */

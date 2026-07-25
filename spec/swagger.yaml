@@ -4694,6 +4694,11 @@ definitions:
       updated_at:
         type: string
     type: object
+  sessionruntime.AbortIntentView:
+    properties:
+      requested_at:
+        type: string
+    type: object
   sessionruntime.CurrentRunView:
     properties:
       canonical_ready:
@@ -4789,6 +4794,13 @@ definitions:
         $ref: '#/definitions/sessionruntime.CurrentRunView'
       epoch:
         type: string
+      pending_abort:
+        allOf:
+        - $ref: '#/definitions/sessionruntime.AbortIntentView'
+        description: |-
+          PendingAbort records an abort that found no active run. A decision
+          continuation admitted inside its window is rejected, so an abort can
+          never race a deferred admission; any other successful claim clears it.
       queue:
         items:
           $ref: '#/definitions/sessionruntime.QueuedRunView'
@@ -10364,6 +10376,10 @@ paths:
           description: Forbidden
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:
@@ -10404,6 +10420,10 @@ paths:
           description: Forbidden
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:

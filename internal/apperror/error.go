@@ -43,6 +43,7 @@ const (
 	CodeSessionRuntimeCommandBusy        Code = "session_runtime.command_busy"
 	CodeSessionRuntimeCommandFailed      Code = "session_runtime.command_failed"
 	CodeSessionRuntimeDecisionPending    Code = "session_runtime.decision_pending"
+	CodeSessionRuntimeDecisionConflict   Code = "session_runtime.decision_conflict"
 )
 
 // Definition is the single catalog entry for a public error contract.
@@ -187,6 +188,10 @@ var catalog = map[Code]Definition{
 	CodeSessionRuntimeDecisionPending: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "Resolve the pending approval or question before sending another message.",
+	},
+	CodeSessionRuntimeDecisionConflict: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "The approval or question was already resolved with a different response.",
 	},
 }
 
