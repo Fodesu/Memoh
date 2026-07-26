@@ -3,7 +3,7 @@
 
 import { createApp, defineComponent, h, nextTick, ref } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ChatAssistantTurn, ContentBlock, ToolCallBlock } from '@/store/chat-list'
+import type { ChatAssistantTurn, ChatMessage, ChatUserTurn, ContentBlock, ToolCallBlock } from '@/store/chat-list'
 import { assistantActionOwner, shouldBlockTurnRevisionActions } from './message-action-state'
 
 const SlotStub = defineComponent({
@@ -53,8 +53,15 @@ vi.mock('@/components/chat-list/channel-badge/index.vue', () => ({ default: Empt
 vi.mock('./message-actions.vue', () => ({
   default: defineComponent({
     name: 'MessageActionsStub',
-    setup() {
-      return () => h('div', { 'data-message-actions': '' })
+    props: {
+      role: { type: String, required: true },
+      onEdit: { type: Function, default: undefined },
+    },
+    setup(props) {
+      return () => h('div', {
+        'data-message-actions': props.role,
+        'data-has-edit': String(Boolean(props.onEdit)),
+      })
     },
   }),
 }))
@@ -111,6 +118,19 @@ function assistantTurn(messages: ContentBlock[], values: Partial<ChatAssistantTu
   }
 }
 
+function userTurn(values: Partial<ChatUserTurn> = {}): ChatUserTurn {
+  return {
+    id: 'user-1',
+    role: 'user',
+    text: 'Request',
+    attachments: [],
+    timestamp: '',
+    streaming: false,
+    isSelf: true,
+    ...values,
+  }
+}
+
 describe('message item assistant actions', () => {
   let app: ReturnType<typeof createApp> | undefined
   let root: HTMLDivElement | undefined
@@ -122,24 +142,32 @@ describe('message item assistant actions', () => {
     root = undefined
   })
 
-  async function mountTurn(
-    turn: ChatAssistantTurn,
-    state: { blocked?: boolean } = {},
+  async function mountMessage(
+    message: ChatMessage,
+    state: { blocked?: boolean, canEditLatestUser?: boolean } = {},
   ) {
     const MessageItem = (await import('./message-item.vue')).default
     root = document.createElement('div')
     document.body.append(root)
     app = createApp(MessageItem, {
-      message: turn,
-      showAssistantActions: assistantActionOwner([turn], {
+      message,
+      showAssistantActions: assistantActionOwner([message], {
         blocked: state.blocked ?? false,
-      }) === turn,
+      }) === message,
+      canEditLatestUser: state.canEditLatestUser ?? false,
       isScrolling: false,
       isLastMessage: true,
     })
     app.mount(root)
     await nextTick()
     return root
+  }
+
+  async function mountTurn(
+    turn: ChatAssistantTurn,
+    state: { blocked?: boolean } = {},
+  ) {
+    return mountMessage(turn, state)
   }
 
   it.each([
@@ -180,6 +208,22 @@ describe('message item assistant actions', () => {
     const el = await mountTurn(turn, { blocked })
     expect(el.querySelector('[data-message-actions]')).toBeNull()
     expect(el.querySelector('.chat-message-meta')).toBeNull()
+  })
+
+  it('keeps the request action row mounted while the turn is active without exposing edit', async () => {
+    const el = await mountMessage(userTurn(), { blocked: true, canEditLatestUser: false })
+    const actions = el.querySelector('[data-message-actions="user"]')
+
+    expect(actions).not.toBeNull()
+    expect(actions?.getAttribute('data-has-edit')).toBe('false')
+  })
+
+  it('enables request edit only after the turn reaches a terminal state', async () => {
+    const el = await mountMessage(userTurn(), { blocked: false, canEditLatestUser: true })
+    const actions = el.querySelector('[data-message-actions="user"]')
+
+    expect(actions).not.toBeNull()
+    expect(actions?.getAttribute('data-has-edit')).toBe('true')
   })
 
   it('mounts actions after the visible assistant turn reaches a terminal state', async () => {
