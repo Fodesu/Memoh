@@ -15,8 +15,6 @@ func TestSubagentForkHistoryMigrationRoundTrip(t *testing.T) {
 	dsn := teamMigrationDSN(t)
 	steps := countMigrationsFrom(t, "0119_subagent_fork_history.up.sql")
 
-	steps := countMigrationsFrom(t, "0119_subagent_fork_history.up.sql")
-
 	assertSubagentForkHistorySchema(t, ctx, pool, false, true)
 	stepDown(t, dsn, steps)
 	assertSubagentForkHistorySchema(t, ctx, pool, true, false)
