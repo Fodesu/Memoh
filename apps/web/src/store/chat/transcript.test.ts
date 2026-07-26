@@ -309,7 +309,7 @@ describe('chat transcript controller', () => {
     transcript.appendAssistantError(failedB, 'session-1', 'Response stopped', true, identityB)
 
     const replaced = transcript.replaceTailFromTurn(transcript.messages[2]!, [assistant('assistant-retry')])
-    transcript.discardRuntimeAssistantErrorsForTurns('session-1', replaced)
+    transcript.discardRuntimeAssistantErrorsForReplacement('session-1', 'user-b', replaced)
     transcript.replaceMessages([userA, userB], 'session-1')
 
     expect(transcript.assistantTurnForRuntimeError('session-1', identityA)).not.toBeNull()
@@ -318,6 +318,43 @@ describe('chat transcript controller', () => {
       ? turn.messages.filter(block => block.type === 'error' && block.content === 'Response stopped')
       : [])
     expect(stopped).toHaveLength(1)
+  })
+
+  it.each([
+    ['user', 'user-aborted'],
+    ['assistant', 'assistant-aborted'],
+  ])('discards a replaced runtime error by its original %s target after history refresh', (_kind, targetId) => {
+    const { transcript } = makeTranscript()
+    const identity = { streamId: 'stream-aborted', generation: 'generation-aborted' }
+
+    transcript.replaceMessages([
+      rawUser('user-aborted', 'original prompt'),
+      rawAssistant('assistant-aborted', [{ id: 0, type: 'text', content: 'partial answer' }]),
+    ], 'session-1')
+    const failed = transcript.messages[1]
+    if (failed?.role !== 'assistant') throw new Error('missing aborted assistant')
+    transcript.appendAssistantError(failed, 'session-1', 'Response stopped', false, identity)
+
+    transcript.replaceMessages([
+      rawUser('user-edited', 'edited prompt'),
+      rawAssistant('assistant-edited', [{ id: 0, type: 'text', content: 'replacement complete' }]),
+    ], 'session-1')
+    expect(transcript.messages[1]).toMatchObject({
+      role: 'assistant',
+      messages: [
+        { type: 'text', content: 'replacement complete' },
+        { type: 'error', content: 'Response stopped' },
+      ],
+    })
+
+    transcript.discardRuntimeAssistantErrorsForReplacement('session-1', targetId)
+
+    expect(transcript.messages).toHaveLength(2)
+    expect(transcript.messages[1]).toMatchObject({
+      role: 'assistant',
+      messages: [{ type: 'text', content: 'replacement complete' }],
+    })
+    expect(transcript.assistantTurnForRuntimeError('session-1', identity)).toBeNull()
   })
 
   it('does not accumulate identical terminal errors on one persisted assistant', () => {

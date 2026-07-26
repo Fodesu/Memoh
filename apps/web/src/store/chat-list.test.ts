@@ -8906,7 +8906,7 @@ describe('chat-list store', () => {
     await expect(retrying).resolves.toMatchObject({ ok: false })
   })
 
-  it('reconciles committed aborted history in every subscribed store without message-created events', async () => {
+  it('removes a committed abort error from every subscribed store when edit replaces the turn', async () => {
     const runtimeHandlers: UIStreamEventHandler[] = []
     api.connectWebSocket.mockImplementation((_botId: string, onStreamEvent: UIStreamEventHandler) => {
       runtimeHandlers.push(onStreamEvent)
@@ -9014,6 +9014,90 @@ describe('chat-list store', () => {
         : [])
       expect(stopped).toHaveLength(1)
     }
+
+    const editing = first.editLatestUser('user-aborted-server', 'edited prompt')
+    await flushPromises()
+    const editStreamId = lastStreamId
+    const editOperation: SessionruntimeRunOperationView = {
+      kind: 'edit',
+      replace_from_message_id: 'user-aborted-server',
+      replacement_user_turn: {
+        role: 'user',
+        text: 'edited prompt',
+        timestamp: '2026-07-26T10:00:00.000Z',
+        platform: 'local',
+        external_message_id: editStreamId,
+      },
+    }
+    api.fetchMessagesUI.mockResolvedValue([
+      {
+        id: 'user-edited-server',
+        role: 'user',
+        text: 'edited prompt',
+        attachments: [],
+        timestamp: '2026-07-26T10:00:00.000Z',
+        external_message_id: editStreamId,
+      },
+      {
+        id: 'assistant-edited-server',
+        role: 'assistant',
+        messages: [{ id: 0, type: 'text', content: 'replacement complete' }],
+        timestamp: '2026-07-26T10:00:01.000Z',
+      },
+    ])
+    const historyCallsBeforePassiveRefresh = api.fetchMessagesUI.mock.calls.length
+    _sessionMessageHandler?.({
+      type: 'message_created',
+      bot_id: 'bot-1',
+      message: {
+        id: 'assistant-edited-server',
+        bot_id: 'bot-1',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'replacement complete',
+        created_at: '2026-07-26T10:00:01.000Z',
+      },
+    } as SessionMessageStreamEvent)
+    await vi.waitFor(() => {
+      expect(api.fetchMessagesUI.mock.calls.length).toBeGreaterThan(historyCallsBeforePassiveRefresh)
+      expect(second.messages[0]).toMatchObject({ role: 'user', text: 'edited prompt' })
+    })
+
+    const editCompleted = runtimeReplacementSnapshot(
+      editStreamId,
+      editOperation,
+      [{ id: 0, type: 'text', content: 'replacement complete' }],
+      'completed',
+      3,
+      'session-1',
+      true,
+      true,
+    )
+    if (editCompleted.type !== 'runtime_snapshot' || !editCompleted.snapshot.current_run_view) {
+      throw new Error('expected completed edit runtime snapshot')
+    }
+    editCompleted.snapshot.current_run_view.request_user_turn = {
+      ...editOperation.replacement_user_turn,
+      id: 'user-edited-server',
+    }
+    editCompleted.snapshot.current_run_view.history_assistant_message_id = 'assistant-edited-server'
+    for (const handler of runtimeHandlers) handler(structuredClone(editCompleted))
+
+    await expect(editing).resolves.toMatchObject({ ok: true })
+    await vi.waitFor(() => {
+      for (const store of [first, second]) {
+        expect(store.messages).toHaveLength(2)
+        expect(store.messages[0]).toMatchObject({ role: 'user', text: 'edited prompt' })
+        expect(store.messages[1]).toMatchObject({
+          role: 'assistant',
+          streaming: false,
+          messages: [{ type: 'text', content: 'replacement complete' }],
+        })
+        expect(store.messages.flatMap(turn => turn.role === 'assistant'
+          ? turn.messages.filter(block => block.type === 'error' && block.content === 'Response stopped')
+          : [])).toEqual([])
+      }
+    })
   })
 
   it('keeps a run active after abort until the runtime publishes its terminal state', async () => {

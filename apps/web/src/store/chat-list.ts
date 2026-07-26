@@ -2053,7 +2053,11 @@ export const useChatStore = defineStore('chat', () => {
         ? [prepared.optimisticUserTurn, stream.assistantTurn]
         : [stream.assistantTurn],
     )
-    transcript.discardRuntimeAssistantErrorsForTurns(stream.sessionId, replacedTurns)
+    transcript.discardRuntimeAssistantErrorsForReplacement(
+      stream.sessionId,
+      serverMessageId(prepared.target),
+      replacedTurns,
+    )
     if (existing) {
       existing.kind = prepared.kind
       existing.optimisticUserTurn = prepared.optimisticUserTurn
@@ -2354,6 +2358,12 @@ export const useChatStore = defineStore('chat', () => {
         }
         loading.value = isRuntimeActiveStatus(status) || isSessionStreaming(bid, sid)
         return
+      }
+      if (!preparedReplacement && canProjectCommittedReplacementWithoutTarget) {
+        sessionTranscript(bid, sid).discardRuntimeAssistantErrorsForReplacement(
+          sid,
+          operation.replace_from_message_id ?? '',
+        )
       }
       if (preparedReplacement && !stream && isTerminalStream(streamId, runGeneration, bid, sid)) {
         if (status === 'completed' || runtimeMessages.length === 0) {

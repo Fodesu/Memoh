@@ -56,6 +56,8 @@ interface EphemeralAssistantError {
   userText?: string
   userId?: string
   userServerId?: string
+  assistantId?: string
+  assistantServerId?: string
   externalMessageId?: string
   externalMessageOrdinal?: number
   standalone?: boolean
@@ -748,21 +750,57 @@ export function createTranscriptController({
     return replaced
   }
 
-  function discardRuntimeAssistantErrorsForTurns(targetSessionId: string, turns: ChatMessage[]) {
+  function discardRuntimeAssistantErrorsForReplacement(
+    targetSessionId: string,
+    replaceFromMessageId: string,
+    turns: ChatMessage[] = [],
+  ) {
     const sid = targetSessionId.trim()
+    const targetId = replaceFromMessageId.trim()
     const current = ephemeralAssistantErrors.get(sid)
-    if (!sid || !current?.length || !turns.length) return
+    if (!sid || !current?.length || (!targetId && !turns.length)) return
 
     const replacedRuntimeKeys = new Set(turns.flatMap((turn) => {
       if (turn.role !== 'assistant') return []
       const key = runtimeAssistantErrorIdentity.get(toRaw(turn))
       return key ? [key] : []
     }))
-    if (!replacedRuntimeKeys.size) return
+    const discarded = current.filter((error) => {
+      const runtimeKey = runtimeErrorIdentityKey(error)
+      if (runtimeKey && replacedRuntimeKeys.has(runtimeKey)) return true
+      if (!targetId) return false
+      return [error.userServerId, error.userId, error.assistantServerId, error.assistantId]
+        .some(id => id?.trim() === targetId)
+    })
+    if (!discarded.length) return
 
-    const remaining = current.filter(error => !replacedRuntimeKeys.has(runtimeErrorIdentityKey(error)))
+    const discardedSet = new Set(discarded)
+    const remaining = current.filter(error => !discardedSet.has(error))
     if (remaining.length > 0) ephemeralAssistantErrors.set(sid, remaining)
     else ephemeralAssistantErrors.delete(sid)
+
+    const discardedErrorIds = new Set(discarded.map(error => ephemeralErrorId(sid, error)))
+    const discardedContentsByRuntimeKey = new Map<string, Set<string>>()
+    for (const error of discarded) {
+      const runtimeKey = runtimeErrorIdentityKey(error)
+      if (!runtimeKey) continue
+      const contents = discardedContentsByRuntimeKey.get(runtimeKey) ?? new Set<string>()
+      contents.add(error.content)
+      discardedContentsByRuntimeKey.set(runtimeKey, contents)
+    }
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const turn = messages[index]
+      if (turn?.role !== 'assistant') continue
+      const rawTurn = toRaw(turn)
+      const contents = discardedContentsByRuntimeKey.get(runtimeAssistantErrorIdentity.get(rawTurn) ?? '')
+      if (contents) {
+        turn.messages = turn.messages.filter(block => block.type !== 'error' || !contents.has(block.content))
+        runtimeAssistantErrorIdentity.delete(rawTurn)
+      }
+      if (turn.__ephemeral && (discardedErrorIds.has(turn.id) || turn.messages.length === 0)) {
+        messages.splice(index, 1)
+      }
+    }
   }
 
   function restoreTailFromOptimistic(
@@ -982,6 +1020,10 @@ export function createTranscriptController({
       userText: anchorUser?.text.trim() || undefined,
       userId: anchorUser?.id.trim() || undefined,
       userServerId: anchorUserServerId || undefined,
+      assistantId: assistantTurn.id.trim() || undefined,
+      assistantServerId: assistantTurn.serverId?.trim()
+        || (!assistantTurn.__optimistic ? assistantTurn.id.trim() : '')
+        || undefined,
       externalMessageId,
       externalMessageOrdinal,
       standalone,
@@ -1144,7 +1186,7 @@ export function createTranscriptController({
     removeFromView,
     removeTurnFromSession,
     replaceTailFromTurn,
-    discardRuntimeAssistantErrorsForTurns,
+    discardRuntimeAssistantErrorsForReplacement,
     restoreTailFromOptimistic,
     createOptimisticAssistantTurn,
     createOptimisticUserTurn,
