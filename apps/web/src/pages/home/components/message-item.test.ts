@@ -4,7 +4,7 @@
 import { createApp, defineComponent, h, nextTick, ref } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatAssistantTurn, ContentBlock, ToolCallBlock } from '@/store/chat-list'
-import { assistantActionOwner } from './message-action-state'
+import { assistantActionOwner, shouldBlockTurnRevisionActions } from './message-action-state'
 
 const SlotStub = defineComponent({
   name: 'SlotStub',
@@ -245,5 +245,27 @@ describe('message item assistant actions', () => {
     const el = await mountTurn(assistantTurn([], { streaming: true }))
 
     expect(el.textContent).toContain('Thinking')
+  })
+})
+
+describe('turn revision actions', () => {
+  const settled = {
+    streaming: false,
+    loadingMessages: false,
+    readOnly: false,
+    hasUnresolvedDecision: false,
+  }
+
+  it.each([
+    ['streaming', { streaming: true }],
+    ['message loading', { loadingMessages: true }],
+    ['read-only mode', { readOnly: true }],
+    ['an unresolved Decision', { hasUnresolvedDecision: true }],
+  ] as const)('blocks revisions during %s', (_name, activeState) => {
+    expect(shouldBlockTurnRevisionActions({ ...settled, ...activeState })).toBe(true)
+  })
+
+  it('allows revisions after an aborted run settles', () => {
+    expect(shouldBlockTurnRevisionActions(settled)).toBe(false)
   })
 })

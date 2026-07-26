@@ -5,6 +5,20 @@ export interface AssistantActionState {
   blocked: boolean
 }
 
+export interface TurnRevisionActionState {
+  streaming: boolean
+  loadingMessages: boolean
+  readOnly: boolean
+  hasUnresolvedDecision: boolean
+}
+
+export function shouldBlockTurnRevisionActions(state: TurnRevisionActionState): boolean {
+  return state.streaming
+    || state.loadingMessages
+    || state.readOnly
+    || state.hasUnresolvedDecision
+}
+
 export function hasVisibleAssistantBlock(block: ContentBlock): boolean {
   if (block.type === 'text' || block.type === 'error') return Boolean(block.content)
   if (block.type === 'attachments') return block.attachments.length > 0

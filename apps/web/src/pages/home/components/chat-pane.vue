@@ -332,7 +332,7 @@
             </Transition>
             <ComposerDock
               ref="dockEl"
-              :approvals="decisionBlocked ? [] : pendingApprovals"
+              :approvals="decisionInteractionBlocked ? [] : pendingApprovals"
               :command-panel="composerCommandPanel"
               :error-message="composerError"
               :pending-user-input="pendingUserInput"
@@ -771,7 +771,7 @@ import { resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { hasRetryableAssistantOutput } from '@/store/chat-list.normalize'
 import { findLatestPendingChatDecision, hasPendingChatDecision } from './chat-pending-decision'
-import { assistantActionOwner, shouldRenderChatMessage } from './message-action-state'
+import { assistantActionOwner, shouldBlockTurnRevisionActions, shouldRenderChatMessage } from './message-action-state'
 
 const props = withDefaults(defineProps<{
   // Stable dockview panel id (e.g. `chat:3`). Used for per-tab composer drafts and
@@ -888,11 +888,11 @@ watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
 })
 
 const pendingDecision = computed(() => findLatestPendingChatDecision(messages.value))
-const decisionBlocked = computed(() => chatStore.isChatViewDecisionBlocked(paneTarget.value))
+const decisionInteractionBlocked = computed(() => chatStore.isChatViewDecisionBlocked(paneTarget.value))
 const hasUnresolvedSessionDecision = computed(() => hasPendingChatDecision(messages.value))
-const hasPendingSessionDecision = computed(() => !decisionBlocked.value && hasUnresolvedSessionDecision.value)
+const hasPendingSessionDecision = computed(() => !decisionInteractionBlocked.value && hasUnresolvedSessionDecision.value)
 const pendingUserInput = computed<UIUserInput | null>(() => (
-  !decisionBlocked.value && pendingDecision.value?.kind === 'user_input'
+  !decisionInteractionBlocked.value && pendingDecision.value?.kind === 'user_input'
     ? pendingDecision.value.userInput
     : null
 ))
@@ -901,13 +901,14 @@ const { items: pendingApprovals } = usePendingApprovals(messages)
 
 const hasPendingToolApproval = computed(() => pendingApprovals.value.length > 0)
 
-const turnRevisionActionsBlocked = computed(() =>
-  streaming.value
-  || loadingMessages.value
-  || activeChatReadOnly.value
-  || decisionBlocked.value
-  || hasUnresolvedSessionDecision.value,
-)
+// Abort can keep Decision controls blocked on a terminal snapshot. That state
+// must not disable revisions of an already-committed canonical turn.
+const turnRevisionActionsBlocked = computed(() => shouldBlockTurnRevisionActions({
+  streaming: streaming.value,
+  loadingMessages: loadingMessages.value,
+  readOnly: activeChatReadOnly.value,
+  hasUnresolvedDecision: hasUnresolvedSessionDecision.value,
+}))
 
 const canForkAssistant = computed(() =>
   !turnRevisionActionsBlocked.value && activeChatCanFork.value,
