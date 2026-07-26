@@ -198,8 +198,8 @@ func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision
 			return err
 		}
 	}
-	if prepared.resumePolicy != decision.ResumePolicyNativeContinuation {
-		// The commit layer owns the full non-native protocol: it wakes a live
+	if prepared.continuationMode != decision.ContinuationModeDurable {
+		// The commit layer owns the non-durable modes: it wakes a local
 		// waiter blocked in this process and auto-closes unfenced orphans.
 		// Channel-originated runs never register runtime runs, so their
 		// waiters are only reachable through this delegation. Without a local

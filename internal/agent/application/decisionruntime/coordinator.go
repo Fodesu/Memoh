@@ -37,14 +37,14 @@ type decisionReconciler func(context.Context) (bool, error)
 // PreparedDecision is the canonical response operation shared by owner
 // routing and native continuation admission.
 type PreparedDecision struct {
-	target         runtimefence.PreservedDecision
-	resumePolicy   decision.ResumePolicy
-	hasLocalWaiter bool
-	commandType    string
-	payload        []byte
-	commit         decisionCommit
-	continueRun    continuation
-	reconcile      decisionReconciler
+	target           runtimefence.PreservedDecision
+	continuationMode decision.ContinuationMode
+	hasLocalWaiter   bool
+	commandType      string
+	payload          []byte
+	commit           decisionCommit
+	continueRun      continuation
+	reconcile        decisionReconciler
 }
 
 func (p PreparedDecision) validate() error {
@@ -112,7 +112,7 @@ func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input app
 		runtimeTarget, err = enriched.PrepareToolApprovalRuntimeTarget(ctx, input)
 	} else {
 		runtimeTarget.Decision, err = c.resolver.PrepareToolApprovalResponseTarget(ctx, input)
-		runtimeTarget.ResumePolicy = decision.ResumePolicyNativeContinuation
+		runtimeTarget.ContinuationMode = decision.ContinuationModeDurable
 	}
 	if err != nil {
 		return PreparedDecision{}, err
@@ -134,7 +134,7 @@ func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input app
 	}
 	var committed application.CommittedToolApprovalResponse
 	prepared := PreparedDecision{
-		target: target, resumePolicy: runtimeTarget.ResumePolicy, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
+		target: target, continuationMode: runtimeTarget.ContinuationMode, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
 		commandType: sessionruntime.CommandToolApprovalResponse, payload: payload,
 		reconcile: func(reconcileCtx context.Context) (bool, error) {
 			handled, reconcileErr := c.resolver.ReconcileToolApprovalResponse(reconcileCtx, routed)
@@ -162,7 +162,7 @@ func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input applic
 		runtimeTarget, err = enriched.PrepareUserInputRuntimeTarget(ctx, input)
 	} else {
 		runtimeTarget.Decision, err = c.resolver.PrepareUserInputResponseTarget(ctx, input)
-		runtimeTarget.ResumePolicy = decision.ResumePolicyNativeContinuation
+		runtimeTarget.ContinuationMode = decision.ContinuationModeDurable
 	}
 	if err != nil {
 		return PreparedDecision{}, err
@@ -184,7 +184,7 @@ func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input applic
 	}
 	var committed application.CommittedUserInputResponse
 	prepared := PreparedDecision{
-		target: target, resumePolicy: runtimeTarget.ResumePolicy, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
+		target: target, continuationMode: runtimeTarget.ContinuationMode, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
 		commandType: sessionruntime.CommandUserInputResponse, payload: payload,
 		reconcile: func(reconcileCtx context.Context) (bool, error) {
 			handled, reconcileErr := c.resolver.ReconcileUserInputResponse(reconcileCtx, routed)

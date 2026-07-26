@@ -78,7 +78,7 @@ type FlowResult struct {
 // request, publish it, wait for the decision (rejecting on timeout), and
 // publish the terminal snapshot.
 func RunFlow(ctx context.Context, svc FlowService, flow FlowRequest) (FlowResult, error) {
-	flow.Input.ResumePolicy = decision.ResumePolicyLiveWaiter
+	flow.Input.ContinuationMode = decision.ContinuationModeLocalWaiter
 	eval, err := svc.EvaluatePolicy(ctx, flow.Input)
 	if err != nil {
 		return FlowResult{}, err

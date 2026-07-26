@@ -41,7 +41,7 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 	if prepared == nil {
 		return errors.New("prepared decision is required")
 	}
-	if prepared.resumePolicy != decision.ResumePolicyNativeContinuation {
+	if prepared.continuationMode != decision.ContinuationModeDurable {
 		return application.ErrRuntimeDecisionOwnerUnavailable
 	}
 	streamID := opts.StreamID

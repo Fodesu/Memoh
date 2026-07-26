@@ -38,10 +38,10 @@ type ToolApprovalResponseInput struct {
 // CommittedToolApprovalResponse contains a durable approval decision and the
 // owner-local state needed to continue its parent turn.
 type CommittedToolApprovalResponse struct {
-	request      toolapproval.Request
-	input        ToolApprovalResponseInput
-	resumePolicy decision.ResumePolicy
-	activePrompt *acpActivePromptSubscription
+	request          toolapproval.Request
+	input            ToolApprovalResponseInput
+	continuationMode decision.ContinuationMode
+	activePrompt     *acpActivePromptSubscription
 }
 
 // CommitToolApprovalResponse durably resolves an approval without executing
@@ -67,11 +67,11 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		return CommittedToolApprovalResponse{}, err
 	}
 	hasLocalWaiter := s.toolApproval.CanRespond(target)
-	resumePolicy := toolApprovalResumePolicy(target, isACP, hasLocalWaiter)
-	if resumePolicy == decision.ResumePolicyUnknown {
+	continuationMode := toolApprovalContinuationMode(target, isACP, hasLocalWaiter)
+	if continuationMode == decision.ContinuationModeUnknown {
 		return CommittedToolApprovalResponse{}, ErrRuntimeDecisionOwnerUnavailable
 	}
-	if resumePolicy == decision.ResumePolicyLiveWaiter && !hasLocalWaiter {
+	if continuationMode == decision.ContinuationModeLocalWaiter && !hasLocalWaiter {
 		if target.RuntimeFenced {
 			return CommittedToolApprovalResponse{}, ErrRuntimeDecisionOwnerUnavailable
 		}
@@ -82,7 +82,7 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		if rejectErr == nil {
 			target = rejected
 		}
-		return CommittedToolApprovalResponse{request: target, input: input, resumePolicy: resumePolicy}, nil
+		return CommittedToolApprovalResponse{request: target, input: input, continuationMode: continuationMode}, nil
 	}
 
 	var activePrompt *acpActivePromptSubscription
@@ -106,7 +106,7 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		}
 		return CommittedToolApprovalResponse{}, err
 	}
-	return CommittedToolApprovalResponse{request: target, input: input, resumePolicy: resumePolicy, activePrompt: activePrompt}, nil
+	return CommittedToolApprovalResponse{request: target, input: input, continuationMode: continuationMode, activePrompt: activePrompt}, nil
 }
 
 // ContinueCommittedToolApprovalResponse executes the approved tool, when
@@ -116,8 +116,8 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 	if strings.TrimSpace(target.ID) == "" {
 		return errors.New("committed tool approval response is missing its request")
 	}
-	switch committed.resumePolicy {
-	case decision.ResumePolicyLiveWaiter:
+	switch committed.continuationMode {
+	case decision.ContinuationModeLocalWaiter:
 		if committed.activePrompt != nil {
 			return forwardACPActivePrompt(ctx, committed.activePrompt, eventCh, acpActivePromptForwardOptions{
 				SkipToolCallID: target.ToolCallID,
@@ -125,7 +125,7 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 			})
 		}
 		return emitApprovalAck(ctx, eventCh)
-	case decision.ResumePolicyUnknown:
+	case decision.ContinuationModeUnknown:
 		return ErrRuntimeDecisionOwnerUnavailable
 	}
 	ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
@@ -209,23 +209,23 @@ func (s *Service) prepareToolApprovalResponseTarget(ctx context.Context, input T
 		Decision: runtimefence.PreservedDecision{
 			Kind: runtimefence.DecisionToolApproval, ID: target.ID, BotID: target.BotID, SessionID: target.SessionID,
 		},
-		ResumePolicy:   toolApprovalResumePolicy(target, isACP, hasLocalWaiter),
-		HasLocalWaiter: hasLocalWaiter,
+		ContinuationMode: toolApprovalContinuationMode(target, isACP, hasLocalWaiter),
+		HasLocalWaiter:   hasLocalWaiter,
 	}, nil
 }
 
-func toolApprovalResumePolicy(target toolapproval.Request, isACP, hasLocalWaiter bool) decision.ResumePolicy {
+func toolApprovalContinuationMode(target toolapproval.Request, isACP, hasLocalWaiter bool) decision.ContinuationMode {
 	if hasLocalWaiter {
-		return decision.ResumePolicyLiveWaiter
+		return decision.ContinuationModeLocalWaiter
 	}
-	policy := decision.NormalizeResumePolicy(target.ResumePolicy)
-	if policy == decision.ResumePolicyUnknown {
-		return policy
+	mode := decision.NormalizeContinuationMode(target.ContinuationMode)
+	if mode == decision.ContinuationModeUnknown {
+		return mode
 	}
-	if isACP || policy == decision.ResumePolicyLiveWaiter {
-		return decision.ResumePolicyLiveWaiter
+	if isACP || mode == decision.ContinuationModeLocalWaiter {
+		return decision.ContinuationModeLocalWaiter
 	}
-	return policy
+	return mode
 }
 
 func (s *Service) respondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- StreamEventPayload) error {
@@ -338,7 +338,7 @@ func (s *Service) ReconcileToolApprovalResponse(ctx context.Context, input ToolA
 	return s.reconcileToolApprovalReplay(ctx, input)
 }
 
-// A live waiter owns tool execution and continuation inside the active run.
+// A local waiter owns tool execution and continuation inside the active run.
 // The response path only resolves the decision so the waiter can resume.
 func (s *Service) respondLiveToolApproval(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- StreamEventPayload) error {
 	return s.resolveToolApprovalDecision(ctx, target, input, eventCh)

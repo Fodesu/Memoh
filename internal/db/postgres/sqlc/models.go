@@ -805,7 +805,7 @@ type ToolApprovalRequest struct {
 	ShortID                      int32              `json:"short_id"`
 	Status                       string             `json:"status"`
 	RuntimeFencingToken          pgtype.Int8        `json:"runtime_fencing_token"`
-	ResumePolicy                 string             `json:"resume_policy"`
+	ContinuationMode             string             `json:"continuation_mode"`
 	DecisionReason               string             `json:"decision_reason"`
 	RequestedByChannelIdentityID pgtype.UUID        `json:"requested_by_channel_identity_id"`
 	DecidedByChannelIdentityID   pgtype.UUID        `json:"decided_by_channel_identity_id"`

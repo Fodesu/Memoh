@@ -3083,12 +3083,12 @@ func (r *deferredResponseResolver) PrepareUserInputResponseTarget(context.Contex
 
 func (r *deferredResponseResolver) PrepareToolApprovalRuntimeTarget(ctx context.Context, input application.ToolApprovalResponseInput) (application.RuntimeDecisionTarget, error) {
 	preserved, err := r.PrepareToolApprovalResponse(ctx, input)
-	return application.RuntimeDecisionTarget{Decision: preserved, ResumePolicy: decision.ResumePolicyNativeContinuation}, err
+	return application.RuntimeDecisionTarget{Decision: preserved, ContinuationMode: decision.ContinuationModeDurable}, err
 }
 
 func (r *deferredResponseResolver) PrepareUserInputRuntimeTarget(ctx context.Context, input application.UserInputResponseInput) (application.RuntimeDecisionTarget, error) {
 	preserved, err := r.PrepareUserInputResponseTarget(ctx, input)
-	return application.RuntimeDecisionTarget{Decision: preserved, ResumePolicy: decision.ResumePolicyNativeContinuation}, err
+	return application.RuntimeDecisionTarget{Decision: preserved, ContinuationMode: decision.ContinuationModeDurable}, err
 }
 
 func (*deferredResponseResolver) ReconcileToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (bool, error) {

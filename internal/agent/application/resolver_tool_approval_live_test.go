@@ -76,7 +76,7 @@ func (q *liveApprovalQueries) RejectToolApprovalRequest(context.Context, sqlc.Re
 	return rejected, nil
 }
 
-func TestRespondToolApprovalWithLiveWaiterOnlyResolvesDecision(t *testing.T) {
+func TestRespondToolApprovalWithLocalWaiterOnlyResolvesDecision(t *testing.T) {
 	approvalID := "33333333-3333-3333-3333-333333333333"
 	queries := &liveApprovalQueries{row: sqlc.ToolApprovalRequest{
 		ID:         flowTestUUID(approvalID),
@@ -321,7 +321,7 @@ func TestRespondToolApprovalFencedACPRequestWithoutWaiterFailsClosed(t *testing.
 	}
 }
 
-func TestCommitToolApprovalUnknownResumePolicyFailsClosed(t *testing.T) {
+func TestCommitToolApprovalUnknownContinuationModeFailsClosed(t *testing.T) {
 	approvalID := "67676767-6767-6767-6767-676767676767"
 	queries := &liveApprovalQueries{row: sqlc.ToolApprovalRequest{
 		ID:         flowTestUUID(approvalID),
@@ -331,8 +331,8 @@ func TestCommitToolApprovalUnknownResumePolicyFailsClosed(t *testing.T) {
 		ToolName:   "exec",
 		ToolInput:  []byte(`{"command":"true"}`),
 		Status:     toolapproval.StatusPending,
-		// An empty value represents a row whose resume policy is unavailable.
-		ResumePolicy: "",
+		// An empty value represents a row whose continuation mode is unavailable.
+		ContinuationMode: "",
 	}}
 	resolver := &Service{}
 	resolver.SetToolApprovalService(toolapproval.NewService(slog.New(slog.DiscardHandler), queries, nil))
@@ -350,17 +350,17 @@ func TestCommitToolApprovalUnknownResumePolicyFailsClosed(t *testing.T) {
 	}
 }
 
-func TestCommitToolApprovalUnknownACPResumePolicyFailsClosed(t *testing.T) {
+func TestCommitToolApprovalUnknownACPContinuationModeFailsClosed(t *testing.T) {
 	approvalID := "68686868-6868-6868-6868-686868686868"
 	queries := &liveApprovalQueries{row: sqlc.ToolApprovalRequest{
-		ID:           flowTestUUID(approvalID),
-		BotID:        flowTestUUID(liveApprovalBotID),
-		SessionID:    flowTestUUID(liveApprovalSessionID),
-		ToolCallID:   "call-legacy-acp",
-		ToolName:     "exec",
-		ToolInput:    []byte(`{"command":"true"}`),
-		Status:       toolapproval.StatusPending,
-		ResumePolicy: "",
+		ID:               flowTestUUID(approvalID),
+		BotID:            flowTestUUID(liveApprovalBotID),
+		SessionID:        flowTestUUID(liveApprovalSessionID),
+		ToolCallID:       "call-legacy-acp",
+		ToolName:         "exec",
+		ToolInput:        []byte(`{"command":"true"}`),
+		Status:           toolapproval.StatusPending,
+		ContinuationMode: "",
 	}}
 	resolver := &Service{}
 	resolver.SetToolApprovalService(toolapproval.NewService(slog.New(slog.DiscardHandler), queries, nil))

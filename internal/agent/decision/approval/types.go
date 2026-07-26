@@ -51,7 +51,7 @@ type CreatePendingInput struct {
 	ConversationType             string
 	WorkspaceTargeted            bool
 	ExecutionLocation            *ExecutionLocation
-	ResumePolicy                 decision.ResumePolicy
+	ContinuationMode             decision.ContinuationMode
 }
 
 type WorkspaceTargetPolicy struct {
@@ -88,27 +88,27 @@ type ResolveInput struct {
 }
 
 type Request struct {
-	ID                      string                `json:"id"`
-	BotID                   string                `json:"bot_id"`
-	SessionID               string                `json:"session_id"`
-	RouteID                 string                `json:"route_id,omitempty"`
-	ChannelIdentityID       string                `json:"channel_identity_id,omitempty"`
-	WorkspaceTargetID       string                `json:"workspace_target_id,omitempty"`
-	ToolCallID              string                `json:"tool_call_id"`
-	ToolName                string                `json:"tool_name"`
-	Operation               string                `json:"operation"`
-	ToolInput               map[string]any        `json:"tool_input,omitempty"`
-	ShortID                 int                   `json:"short_id"`
-	Status                  string                `json:"status"`
-	DecisionReason          string                `json:"decision_reason,omitempty"`
-	PromptExternalMessageID string                `json:"prompt_external_message_id,omitempty"`
-	SourcePlatform          string                `json:"source_platform,omitempty"`
-	ReplyTarget             string                `json:"reply_target,omitempty"`
-	ConversationType        string                `json:"conversation_type,omitempty"`
-	CreatedAt               time.Time             `json:"created_at"`
-	DecidedAt               *time.Time            `json:"decided_at,omitempty"`
-	DecidedByUser           bool                  `json:"decided_by_user,omitempty"`
-	ExecutionLocation       *ExecutionLocation    `json:"execution_location,omitempty"`
-	RuntimeFenced           bool                  `json:"-"`
-	ResumePolicy            decision.ResumePolicy `json:"-"`
+	ID                      string                    `json:"id"`
+	BotID                   string                    `json:"bot_id"`
+	SessionID               string                    `json:"session_id"`
+	RouteID                 string                    `json:"route_id,omitempty"`
+	ChannelIdentityID       string                    `json:"channel_identity_id,omitempty"`
+	WorkspaceTargetID       string                    `json:"workspace_target_id,omitempty"`
+	ToolCallID              string                    `json:"tool_call_id"`
+	ToolName                string                    `json:"tool_name"`
+	Operation               string                    `json:"operation"`
+	ToolInput               map[string]any            `json:"tool_input,omitempty"`
+	ShortID                 int                       `json:"short_id"`
+	Status                  string                    `json:"status"`
+	DecisionReason          string                    `json:"decision_reason,omitempty"`
+	PromptExternalMessageID string                    `json:"prompt_external_message_id,omitempty"`
+	SourcePlatform          string                    `json:"source_platform,omitempty"`
+	ReplyTarget             string                    `json:"reply_target,omitempty"`
+	ConversationType        string                    `json:"conversation_type,omitempty"`
+	CreatedAt               time.Time                 `json:"created_at"`
+	DecidedAt               *time.Time                `json:"decided_at,omitempty"`
+	DecidedByUser           bool                      `json:"decided_by_user,omitempty"`
+	ExecutionLocation       *ExecutionLocation        `json:"execution_location,omitempty"`
+	RuntimeFenced           bool                      `json:"-"`
+	ContinuationMode        decision.ContinuationMode `json:"-"`
 }

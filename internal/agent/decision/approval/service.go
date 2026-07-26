@@ -153,7 +153,7 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 		Operation:                    operation,
 		ToolInput:                    toolInput,
 		RuntimeFencingToken:          runtimeFencingToken(ctx),
-		ResumePolicy:                 string(resumePolicyForCreate(input.ResumePolicy)),
+		ContinuationMode:             string(continuationModeForCreate(input.ContinuationMode)),
 		RequestedByChannelIdentityID: requestedByID,
 		RequestedMessageID:           optionalUUID(input.RequestedMessageID),
 		SourcePlatform:               strings.TrimSpace(input.SourcePlatform),
@@ -720,7 +720,7 @@ func requestFromRow(row sqlc.ToolApprovalRequest) Request {
 		ConversationType:        strings.TrimSpace(row.ConversationType),
 		CreatedAt:               row.CreatedAt.Time,
 		RuntimeFenced:           row.RuntimeFencingToken.Valid,
-		ResumePolicy:            resumePolicyFromStorage(row.ResumePolicy),
+		ContinuationMode:        continuationModeFromStorage(row.ContinuationMode),
 	}
 	if req.Operation == "" {
 		req.Operation, _ = OperationForTool(req.ToolName)
@@ -741,16 +741,16 @@ func requestFromRow(row sqlc.ToolApprovalRequest) Request {
 	return req
 }
 
-func resumePolicyForCreate(policy decision.ResumePolicy) decision.ResumePolicy {
-	if strings.TrimSpace(string(policy)) == "" {
-		return decision.ResumePolicyNativeContinuation
+func continuationModeForCreate(mode decision.ContinuationMode) decision.ContinuationMode {
+	if strings.TrimSpace(string(mode)) == "" {
+		return decision.ContinuationModeDurable
 	}
-	return decision.NormalizeResumePolicy(policy)
+	return decision.NormalizeContinuationMode(mode)
 }
 
-func resumePolicyFromStorage(policy string) decision.ResumePolicy {
-	if strings.TrimSpace(policy) == "" {
-		return decision.ResumePolicyUnknown
+func continuationModeFromStorage(mode string) decision.ContinuationMode {
+	if strings.TrimSpace(mode) == "" {
+		return decision.ContinuationModeUnknown
 	}
-	return decision.NormalizeResumePolicy(decision.ResumePolicy(policy))
+	return decision.NormalizeContinuationMode(decision.ContinuationMode(mode))
 }

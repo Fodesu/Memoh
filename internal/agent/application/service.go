@@ -1026,7 +1026,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 			ConversationType:             p.ConversationType,
 			WorkspaceTargeted:            isWorkspaceTargetTool(call.ToolName),
 			WorkspaceTargetID:            workspace.WorkspaceTargetFromContext(ctx),
-			ResumePolicy:                 decision.ResumePolicyNativeContinuation,
+			ContinuationMode:             decision.ContinuationModeDurable,
 		}
 		forcedApprovalReason, forcedApproval := native.HookForcedApprovalReason(ctx)
 		if s.toolApproval == nil {

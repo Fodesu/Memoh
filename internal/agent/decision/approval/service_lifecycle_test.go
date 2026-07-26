@@ -41,16 +41,16 @@ func TestCreatePendingStoresOperationAndOriginalToolName(t *testing.T) {
 	t.Parallel()
 
 	queries := &lifecycleQueries{createRow: sqlc.ToolApprovalRequest{
-		ID:           mustTestUUID("33333333-3333-3333-3333-333333333333"),
-		BotID:        mustTestUUID("11111111-1111-1111-1111-111111111111"),
-		SessionID:    mustTestUUID("22222222-2222-2222-2222-222222222222"),
-		ToolCallID:   "call-1",
-		ToolName:     "apply_patch",
-		Operation:    OperationWrite,
-		ToolInput:    []byte(`{"patch":"*** Begin Patch\n*** End Patch"}`),
-		ShortID:      1,
-		Status:       StatusPending,
-		ResumePolicy: string(decision.ResumePolicyNativeContinuation),
+		ID:               mustTestUUID("33333333-3333-3333-3333-333333333333"),
+		BotID:            mustTestUUID("11111111-1111-1111-1111-111111111111"),
+		SessionID:        mustTestUUID("22222222-2222-2222-2222-222222222222"),
+		ToolCallID:       "call-1",
+		ToolName:         "apply_patch",
+		Operation:        OperationWrite,
+		ToolInput:        []byte(`{"patch":"*** Begin Patch\n*** End Patch"}`),
+		ShortID:          1,
+		Status:           StatusPending,
+		ContinuationMode: string(decision.ContinuationModeDurable),
 	}}
 	svc := NewService(slog.New(slog.DiscardHandler), queries, nil)
 
@@ -67,28 +67,28 @@ func TestCreatePendingStoresOperationAndOriginalToolName(t *testing.T) {
 	if queries.createArg.ToolName != "apply_patch" || queries.createArg.Operation != OperationWrite {
 		t.Fatalf("create args tool=%q operation=%q, want apply_patch/write", queries.createArg.ToolName, queries.createArg.Operation)
 	}
-	if queries.createArg.ResumePolicy != string(decision.ResumePolicyNativeContinuation) {
-		t.Fatalf("create resume policy = %q, want native continuation", queries.createArg.ResumePolicy)
+	if queries.createArg.ContinuationMode != string(decision.ContinuationModeDurable) {
+		t.Fatalf("create continuation mode = %q, want durable", queries.createArg.ContinuationMode)
 	}
 	if req.ToolName != "apply_patch" || req.Operation != OperationWrite {
 		t.Fatalf("request tool=%q operation=%q, want apply_patch/write", req.ToolName, req.Operation)
 	}
-	if req.ResumePolicy != decision.ResumePolicyNativeContinuation {
-		t.Fatalf("request resume policy = %q, want native continuation", req.ResumePolicy)
+	if req.ContinuationMode != decision.ContinuationModeDurable {
+		t.Fatalf("request continuation mode = %q, want durable", req.ContinuationMode)
 	}
 }
 
-func TestResumePolicyForCreateDefaultsOnlyWhenOmitted(t *testing.T) {
+func TestContinuationModeForCreateDefaultsOnlyWhenOmitted(t *testing.T) {
 	t.Parallel()
 
-	if got := resumePolicyForCreate(""); got != decision.ResumePolicyNativeContinuation {
-		t.Fatalf("empty resume policy = %q, want native continuation", got)
+	if got := continuationModeForCreate(""); got != decision.ContinuationModeDurable {
+		t.Fatalf("empty continuation mode = %q, want durable", got)
 	}
-	if got := resumePolicyForCreate(decision.ResumePolicyUnknown); got != decision.ResumePolicyUnknown {
-		t.Fatalf("unknown resume policy = %q, want unknown", got)
+	if got := continuationModeForCreate(decision.ContinuationModeUnknown); got != decision.ContinuationModeUnknown {
+		t.Fatalf("unknown continuation mode = %q, want unknown", got)
 	}
-	if got := resumePolicyForCreate(decision.ResumePolicy("invalid")); got != decision.ResumePolicyUnknown {
-		t.Fatalf("invalid resume policy = %q, want unknown", got)
+	if got := continuationModeForCreate(decision.ContinuationMode("invalid")); got != decision.ContinuationModeUnknown {
+		t.Fatalf("invalid continuation mode = %q, want unknown", got)
 	}
 }
 
@@ -200,18 +200,18 @@ func TestCreatePendingRejectsReusedTerminalRequest(t *testing.T) {
 	}
 }
 
-func TestCanRespondRequiresPendingLiveWaiter(t *testing.T) {
+func TestCanRespondRequiresPendingLocalWaiter(t *testing.T) {
 	t.Parallel()
 
 	svc := NewService(slog.New(slog.DiscardHandler), nil, nil)
 	req := Request{ID: "approval-1", Status: StatusPending}
 	if svc.CanRespond(req) {
-		t.Fatal("pending approval without a live waiter should not be answerable")
+		t.Fatal("pending approval without a local waiter should not be answerable")
 	}
 
 	release := svc.RegisterWaiter(req.ID)
 	if !svc.CanRespond(req) {
-		t.Fatal("pending approval with a live waiter should be answerable")
+		t.Fatal("pending approval with a local waiter should be answerable")
 	}
 	release()
 	if svc.CanRespond(req) {

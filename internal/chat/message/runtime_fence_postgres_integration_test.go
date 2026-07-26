@@ -353,7 +353,7 @@ func TestPostgresCanonicalReplacementStartsVisibleAndAppendsCompletedStep(t *tes
 	queries := dbsqlc.New(pool)
 	approval, err := queries.CreateToolApprovalRequest(ctx, dbsqlc.CreateToolApprovalRequestParams{
 		BotID: botID, SessionID: sessionID, ToolCallID: "superseded-approval", ToolName: "write",
-		Operation: "write", ToolInput: []byte(`{}`), ResumePolicy: "native_continuation",
+		Operation: "write", ToolInput: []byte(`{}`), ContinuationMode: "durable",
 	})
 	if err != nil {
 		t.Fatalf("create pending approval: %v", err)

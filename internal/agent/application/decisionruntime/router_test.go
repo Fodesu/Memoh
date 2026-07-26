@@ -40,7 +40,7 @@ type routerTestResolver struct {
 	reconcileCalls   int
 	commitErr        error
 	lifecycle        []string
-	runtimePolicy    decision.ResumePolicy
+	runtimeMode      decision.ContinuationMode
 	runtimeWaiter    bool
 }
 
@@ -63,18 +63,18 @@ func (r *routerTestResolver) PrepareUserInputResponseTarget(context.Context, app
 }
 
 func (r *routerTestResolver) PrepareToolApprovalRuntimeTarget(context.Context, application.ToolApprovalResponseInput) (application.RuntimeDecisionTarget, error) {
-	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault(), HasLocalWaiter: r.runtimeWaiter}, nil
+	return application.RuntimeDecisionTarget{Decision: r.prepared, ContinuationMode: r.runtimeModeOrDefault(), HasLocalWaiter: r.runtimeWaiter}, nil
 }
 
 func (r *routerTestResolver) PrepareUserInputRuntimeTarget(context.Context, application.UserInputResponseInput) (application.RuntimeDecisionTarget, error) {
-	return application.RuntimeDecisionTarget{Decision: r.prepared, ResumePolicy: r.runtimePolicyOrDefault(), HasLocalWaiter: r.runtimeWaiter}, nil
+	return application.RuntimeDecisionTarget{Decision: r.prepared, ContinuationMode: r.runtimeModeOrDefault(), HasLocalWaiter: r.runtimeWaiter}, nil
 }
 
-func (r *routerTestResolver) runtimePolicyOrDefault() decision.ResumePolicy {
-	if r.runtimePolicy == "" {
-		return decision.ResumePolicyNativeContinuation
+func (r *routerTestResolver) runtimeModeOrDefault() decision.ContinuationMode {
+	if r.runtimeMode == "" {
+		return decision.ContinuationModeDurable
 	}
-	return r.runtimePolicy
+	return r.runtimeMode
 }
 
 func (r *routerTestResolver) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, eventCh chan<- application.StreamEventPayload) error {
@@ -298,20 +298,20 @@ func TestRouterMemoryFallbackUsesRuntimeLifecycleWithoutFence(t *testing.T) {
 	}
 }
 
-func TestRouterDoesNotCreateContinuationForNonNativeDecision(t *testing.T) {
+func TestRouterDoesNotCreateContinuationForNonDurableDecision(t *testing.T) {
 	// Distributed runtime without a local waiter: the waiter may be alive on
 	// another server, so the response must fail closed without touching the
 	// durable decision.
-	for _, policy := range []decision.ResumePolicy{
-		decision.ResumePolicyLiveWaiter,
-		decision.ResumePolicyUnknown,
+	for _, mode := range []decision.ContinuationMode{
+		decision.ContinuationModeLocalWaiter,
+		decision.ContinuationModeUnknown,
 	} {
-		t.Run(string(policy), func(t *testing.T) {
+		t.Run(string(mode), func(t *testing.T) {
 			resolver := &routerTestResolver{
 				prepared: runtimefence.PreservedDecision{
 					Kind: runtimefence.DecisionToolApproval, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
 				},
-				runtimePolicy: policy,
+				runtimeMode: mode,
 			}
 			manager := &routerTestManager{distributed: true}
 			router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
@@ -323,14 +323,14 @@ func TestRouterDoesNotCreateContinuationForNonNativeDecision(t *testing.T) {
 				t.Fatalf("RespondToolApproval() error = %v, want owner unavailable", err)
 			}
 			if manager.starts != 0 || resolver.allocated != 0 || len(resolver.lifecycle) != 0 {
-				t.Fatalf("non-native decision started work: starts:%d allocated:%d lifecycle:%v", manager.starts, resolver.allocated, resolver.lifecycle)
+				t.Fatalf("non-durable decision started work: starts:%d allocated:%d lifecycle:%v", manager.starts, resolver.allocated, resolver.lifecycle)
 			}
 		})
 	}
 }
 
-func TestRouterCommitsLiveWaiterDecisionWithLocalWaiter(t *testing.T) {
-	// A live waiter blocked in this process accepts the response through the
+func TestRouterCommitsLocalWaiterDecisionWithLocalWaiter(t *testing.T) {
+	// A local waiter blocked in this process accepts the response through the
 	// commit layer directly: no runtime run, no fence, no continuation. This
 	// is the only path that reaches channel-originated ACP/MCP waiters, which
 	// never register runtime runs.
@@ -340,7 +340,7 @@ func TestRouterCommitsLiveWaiterDecisionWithLocalWaiter(t *testing.T) {
 				prepared: runtimefence.PreservedDecision{
 					Kind: runtimefence.DecisionToolApproval, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
 				},
-				runtimePolicy: decision.ResumePolicyLiveWaiter,
+				runtimeMode:   decision.ContinuationModeLocalWaiter,
 				runtimeWaiter: true,
 			}
 			manager := &routerTestManager{distributed: distributed}
@@ -361,21 +361,21 @@ func TestRouterCommitsLiveWaiterDecisionWithLocalWaiter(t *testing.T) {
 	}
 }
 
-func TestRouterDelegatesNonNativeDecisionToCommitInProcess(t *testing.T) {
+func TestRouterDelegatesNonDurableDecisionToCommitInProcess(t *testing.T) {
 	// An in-process runtime has exactly one candidate process: no local waiter
 	// means the waiter is gone for good, so the response is delegated to the
-	// commit layer, which fails closed for unknown policies and auto-closes
-	// unfenced orphaned live_waiter decisions.
-	for _, policy := range []decision.ResumePolicy{
-		decision.ResumePolicyLiveWaiter,
-		decision.ResumePolicyUnknown,
+	// commit layer, which fails closed for unknown modes and auto-closes
+	// unfenced orphaned local_waiter decisions.
+	for _, mode := range []decision.ContinuationMode{
+		decision.ContinuationModeLocalWaiter,
+		decision.ContinuationModeUnknown,
 	} {
-		t.Run(string(policy), func(t *testing.T) {
+		t.Run(string(mode), func(t *testing.T) {
 			resolver := &routerTestResolver{
 				prepared: runtimefence.PreservedDecision{
 					Kind: runtimefence.DecisionUserInput, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
 				},
-				runtimePolicy: policy,
+				runtimeMode: mode,
 			}
 			manager := &routerTestManager{}
 			router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)

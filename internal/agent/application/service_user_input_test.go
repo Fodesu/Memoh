@@ -672,7 +672,7 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	}
 }
 
-func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
+func TestRespondUserInputACPRequestSubmitsWithLocalWaiter(t *testing.T) {
 	t.Parallel()
 
 	resolved := chatResolvedRequest()

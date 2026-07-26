@@ -7,20 +7,20 @@ const (
 	KindUserInput = "user_input"
 )
 
-type ResumePolicy string
+type ContinuationMode string
 
 const (
-	ResumePolicyUnknown            ResumePolicy = "unknown"
-	ResumePolicyNativeContinuation ResumePolicy = "native_continuation"
-	ResumePolicyLiveWaiter         ResumePolicy = "live_waiter"
+	ContinuationModeUnknown     ContinuationMode = "unknown"
+	ContinuationModeDurable     ContinuationMode = "durable"
+	ContinuationModeLocalWaiter ContinuationMode = "local_waiter"
 )
 
-func NormalizeResumePolicy(policy ResumePolicy) ResumePolicy {
-	switch policy {
-	case ResumePolicyNativeContinuation, ResumePolicyLiveWaiter, ResumePolicyUnknown:
-		return policy
+func NormalizeContinuationMode(mode ContinuationMode) ContinuationMode {
+	switch mode {
+	case ContinuationModeDurable, ContinuationModeLocalWaiter, ContinuationModeUnknown:
+		return mode
 	default:
-		return ResumePolicyUnknown
+		return ContinuationModeUnknown
 	}
 }
 

@@ -191,8 +191,8 @@ func TestRunFlowApprovedEmitsPendingAndDecision(t *testing.T) {
 	if svc.createdInput.ExecutionLocation != location || emitted[0].ExecutionLocation != location || emitted[1].ExecutionLocation != location {
 		t.Fatalf("execution location was not preserved: input=%+v emitted=%+v", svc.createdInput.ExecutionLocation, emitted)
 	}
-	if svc.createdInput.ResumePolicy != decision.ResumePolicyLiveWaiter {
-		t.Fatalf("created resume policy = %q, want live waiter", svc.createdInput.ResumePolicy)
+	if svc.createdInput.ContinuationMode != decision.ContinuationModeLocalWaiter {
+		t.Fatalf("created continuation mode = %q, want local waiter", svc.createdInput.ContinuationMode)
 	}
 	if svc.waiters != 0 {
 		t.Fatalf("waiter count after RunFlow = %d, want released", svc.waiters)
