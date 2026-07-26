@@ -1212,8 +1212,14 @@ func (w *wsWriter) SendContext(ctx context.Context, data []byte) bool {
 	case <-request.accepted:
 		return true
 	case <-w.stop:
-		return false
 	case <-ctx.Done():
+	}
+	// A failed write closes stop immediately after accepting its request.
+	// Recheck acceptance so simultaneous readiness reports the accepted write.
+	select {
+	case <-request.accepted:
+		return true
+	default:
 		return false
 	}
 }
