@@ -13,7 +13,6 @@ import (
 	coremodule "github.com/memohai/memoh/cmd/internal/core"
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
-	decisionruntime "github.com/memohai/memoh/internal/agent/application/decisionruntime"
 	"github.com/memohai/memoh/internal/agent/background"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
@@ -103,7 +102,7 @@ func provideProviderOAuthHandler(providersService *providers.Service, acpCodexOA
 	return handler
 }
 
-func provideWebHandler(channelManager *channel.Manager, channelStore *channel.Store, hub *local.RouteHub, botService *bots.Service, accountService *accounts.Service, sessionService *sessionpkg.Service, resolver *application.Service, mediaService *media.Service, audioService *audiopkg.Service, settingsService *settings.Service, rc *boot.RuntimeConfig, commandHandler *command.Handler, containerdHandler *handlers.ContainerdHandler, runtimeManager *sessionruntime.Manager, decisionRouter *decisionruntime.Router) *handlers.LocalChannelHandler {
+func provideWebHandler(channelManager *channel.Manager, channelStore *channel.Store, hub *local.RouteHub, botService *bots.Service, accountService *accounts.Service, sessionService *sessionpkg.Service, resolver *application.Service, mediaService *media.Service, audioService *audiopkg.Service, settingsService *settings.Service, rc *boot.RuntimeConfig, commandHandler *command.Handler, containerdHandler *handlers.ContainerdHandler, runtimeManager *sessionruntime.Manager, decisionRouter *application.DecisionRouter) *handlers.LocalChannelHandler {
 	h := handlers.NewLocalChannelHandler(local.WebType, channelManager, channelStore, hub, botService, accountService, sessionService)
 	h.SetAgentService(resolver)
 	h.SetCommandHandler(commandHandler)

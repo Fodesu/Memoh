@@ -141,7 +141,7 @@ jobs:
         run: |
           env "$RUNTIME_ENV_NAME=$RUNTIME_URL" \
             go test -v -race -count=1 -timeout 90s \
-            ./internal/agent/runtime/session ./internal/agent/application/decisionruntime ./internal/handlers ./cmd/agent
+            ./internal/agent/runtime/session ./internal/agent/application ./internal/handlers ./cmd/agent
           env "$RUNTIME_ENV_NAME=$RUNTIME_URL" \
             go test -v -race -count=1 -timeout 90s \
             -run '^TestACPWorkspaceEffectsRejectStaleRedisOwner$' ./internal/agent/runtime/acp/client

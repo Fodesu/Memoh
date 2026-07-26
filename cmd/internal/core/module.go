@@ -4,7 +4,7 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/memohai/memoh/internal/acl"
-	decisionruntime "github.com/memohai/memoh/internal/agent/application/decisionruntime"
+	"github.com/memohai/memoh/internal/agent/application"
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	audiopkg "github.com/memohai/memoh/internal/audio"
@@ -62,7 +62,7 @@ func ServerModule() fx.Option {
 		fx.Provide(
 			boot.ProvideRuntimeConfig,
 			provideSessionRuntime,
-			decisionruntime.NewRouter,
+			application.NewDecisionRouter,
 			provideContainerService,
 			provideOverlayProviderRegistry,
 			provideNetworkService,

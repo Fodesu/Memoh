@@ -1,32 +1,31 @@
-package decisionruntime
+package application
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/memohai/memoh/internal/agent/application"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 )
 
-func (c *DecisionCoordinator) bindCommandHandlers(manager runtimeManager) error {
+func (c *DecisionCoordinator) bindDecisionCommandHandlers(manager runtimeManager) error {
 	if c == nil || manager == nil || c.resolver == nil {
 		return nil
 	}
-	return bindCommandHandlers(manager, c.resolver)
+	return bindDecisionCommandHandlers(manager, c.resolver)
 }
 
-// BindCommandHandlers installs the shared owner command decoder on a manager.
+// BindDecisionCommandHandlers installs the shared owner command decoder on a manager.
 // It remains exported for transports that assemble their dependencies through
-// setters, while Router owns the production application-level routing policy.
-func BindCommandHandlers(manager *sessionruntime.Manager, commandResolver CommandResolver) error {
+// setters, while DecisionRouter owns the production application-level routing policy.
+func BindDecisionCommandHandlers(manager *sessionruntime.Manager, commandResolver DecisionCommandResolver) error {
 	if manager == nil || commandResolver == nil {
 		return nil
 	}
-	return bindCommandHandlers(manager, commandResolver)
+	return bindDecisionCommandHandlers(manager, commandResolver)
 }
 
-func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver) error {
+func bindDecisionCommandHandlers(manager runtimeManager, commandResolver DecisionCommandResolver) error {
 	if manager == nil || commandResolver == nil {
 		return nil
 	}
@@ -80,8 +79,8 @@ func bindCommandHandlers(manager runtimeManager, commandResolver CommandResolver
 	return nil
 }
 
-func decodeToolApprovalCommand(command sessionruntime.Command) (application.ToolApprovalResponseInput, error) {
-	var input application.ToolApprovalResponseInput
+func decodeToolApprovalCommand(command sessionruntime.Command) (ToolApprovalResponseInput, error) {
+	var input ToolApprovalResponseInput
 	if err := json.Unmarshal(command.Payload, &input); err != nil {
 		return input, fmt.Errorf("decode tool approval response: %w", err)
 	}
@@ -96,8 +95,8 @@ func decodeToolApprovalCommand(command sessionruntime.Command) (application.Tool
 	return input, nil
 }
 
-func decodeUserInputCommand(command sessionruntime.Command) (application.UserInputResponseInput, error) {
-	var input application.UserInputResponseInput
+func decodeUserInputCommand(command sessionruntime.Command) (UserInputResponseInput, error) {
+	var input UserInputResponseInput
 	if err := json.Unmarshal(command.Payload, &input); err != nil {
 		return input, fmt.Errorf("decode user input response: %w", err)
 	}

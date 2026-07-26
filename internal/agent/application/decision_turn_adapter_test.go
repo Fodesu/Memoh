@@ -1,4 +1,4 @@
-package decisionruntime
+package application
 
 import (
 	"context"
@@ -32,14 +32,14 @@ func (b *turnServiceTestBase) AdvancePlainTextUserInput(context.Context, userinp
 	return userinput.AdvanceTextResult{}, nil
 }
 
-func TestTurnServiceRoutesDecisionAndDelegatesPlainTextLookup(t *testing.T) {
+func TestDecisionTurnAdapterRoutesDecisionAndDelegatesPlainTextLookup(t *testing.T) {
 	resolver := &routerTestResolver{prepared: runtimefence.PreservedDecision{
 		Kind: runtimefence.DecisionToolApproval, ID: decisionTargetID, BotID: decisionBotID, SessionID: decisionSessionID,
 	}}
 	manager := &routerTestManager{dispatchHandled: true, invokeHandler: true}
-	router := newRouter(slog.New(slog.DiscardHandler), manager, resolver)
+	router := newDecisionRouter(slog.New(slog.DiscardHandler), manager, resolver)
 	base := &turnServiceTestBase{}
-	service := NewTurnService(base, router)
+	service := NewDecisionTurnAdapter(base, router)
 
 	err := service.RespondToolApproval(context.Background(), turn.ToolApprovalResponse{
 		BotID: decisionBotID, ApprovalID: decisionTargetID, Decision: "approve", ChatToken: "secret",

@@ -1,4 +1,4 @@
-package decisionruntime
+package application
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/memohai/memoh/internal/agent/application"
 	"github.com/memohai/memoh/internal/agent/decision"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
@@ -16,19 +15,19 @@ import (
 )
 
 type decisionResolver interface {
-	CommandResolver
-	PrepareToolApprovalResponseTarget(context.Context, application.ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
-	PrepareUserInputResponseTarget(context.Context, application.UserInputResponseInput) (runtimefence.PreservedDecision, error)
-	ReconcileToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (bool, error)
-	ReconcileUserInputResponse(context.Context, application.UserInputResponseInput) (bool, error)
+	DecisionCommandResolver
+	PrepareToolApprovalResponseTarget(context.Context, ToolApprovalResponseInput) (runtimefence.PreservedDecision, error)
+	PrepareUserInputResponseTarget(context.Context, UserInputResponseInput) (runtimefence.PreservedDecision, error)
+	ReconcileToolApprovalResponse(context.Context, ToolApprovalResponseInput) (bool, error)
+	ReconcileUserInputResponse(context.Context, UserInputResponseInput) (bool, error)
 }
 
 type runtimeTargetResolver interface {
-	PrepareToolApprovalRuntimeTarget(context.Context, application.ToolApprovalResponseInput) (application.RuntimeDecisionTarget, error)
-	PrepareUserInputRuntimeTarget(context.Context, application.UserInputResponseInput) (application.RuntimeDecisionTarget, error)
+	PrepareToolApprovalRuntimeTarget(context.Context, ToolApprovalResponseInput) (RuntimeDecisionTarget, error)
+	PrepareUserInputRuntimeTarget(context.Context, UserInputResponseInput) (RuntimeDecisionTarget, error)
 }
 
-type continuation func(context.Context, chan<- application.StreamEventPayload) error
+type continuation func(context.Context, chan<- StreamEventPayload) error
 
 type decisionCommit func(context.Context) error
 
@@ -57,7 +56,7 @@ func (p PreparedDecision) validate() error {
 	return nil
 }
 
-func (p *PreparedDecision) commitAndContinue(ctx context.Context, output chan<- application.StreamEventPayload, onCommitted func()) error {
+func (p *PreparedDecision) commitAndContinue(ctx context.Context, output chan<- StreamEventPayload, onCommitted func()) error {
 	if p == nil {
 		return errors.New("prepared decision is required")
 	}
@@ -102,11 +101,11 @@ func newDecisionCoordinator(resolver decisionResolver) *DecisionCoordinator {
 	return &DecisionCoordinator{resolver: resolver}
 }
 
-func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input application.ToolApprovalResponseInput) (PreparedDecision, error) {
+func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input ToolApprovalResponseInput) (PreparedDecision, error) {
 	if c == nil || c.resolver == nil {
 		return PreparedDecision{}, errors.New("decision coordinator is not configured")
 	}
-	var runtimeTarget application.RuntimeDecisionTarget
+	var runtimeTarget RuntimeDecisionTarget
 	var err error
 	if enriched, ok := c.resolver.(runtimeTargetResolver); ok {
 		runtimeTarget, err = enriched.PrepareToolApprovalRuntimeTarget(ctx, input)
@@ -132,7 +131,7 @@ func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input app
 	if err != nil {
 		return PreparedDecision{}, fmt.Errorf("encode tool approval response: %w", err)
 	}
-	var committed application.CommittedToolApprovalResponse
+	var committed CommittedToolApprovalResponse
 	prepared := PreparedDecision{
 		target: target, continuationMode: runtimeTarget.ContinuationMode, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
 		commandType: sessionruntime.CommandToolApprovalResponse, payload: payload,
@@ -145,18 +144,18 @@ func (c *DecisionCoordinator) PrepareToolApproval(ctx context.Context, input app
 			committed, commitErr = c.resolver.CommitToolApprovalResponse(commitCtx, input)
 			return normalizeDecisionResponseError(commitErr)
 		},
-		continueRun: func(runCtx context.Context, eventCh chan<- application.StreamEventPayload) error {
+		continueRun: func(runCtx context.Context, eventCh chan<- StreamEventPayload) error {
 			return c.resolver.ContinueCommittedToolApprovalResponse(runCtx, committed, eventCh)
 		},
 	}
 	return prepared, prepared.validate()
 }
 
-func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input application.UserInputResponseInput) (PreparedDecision, error) {
+func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input UserInputResponseInput) (PreparedDecision, error) {
 	if c == nil || c.resolver == nil {
 		return PreparedDecision{}, errors.New("decision coordinator is not configured")
 	}
-	var runtimeTarget application.RuntimeDecisionTarget
+	var runtimeTarget RuntimeDecisionTarget
 	var err error
 	if enriched, ok := c.resolver.(runtimeTargetResolver); ok {
 		runtimeTarget, err = enriched.PrepareUserInputRuntimeTarget(ctx, input)
@@ -182,7 +181,7 @@ func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input applic
 	if err != nil {
 		return PreparedDecision{}, fmt.Errorf("encode user input response: %w", err)
 	}
-	var committed application.CommittedUserInputResponse
+	var committed CommittedUserInputResponse
 	prepared := PreparedDecision{
 		target: target, continuationMode: runtimeTarget.ContinuationMode, hasLocalWaiter: runtimeTarget.HasLocalWaiter,
 		commandType: sessionruntime.CommandUserInputResponse, payload: payload,
@@ -195,7 +194,7 @@ func (c *DecisionCoordinator) PrepareUserInput(ctx context.Context, input applic
 			committed, commitErr = c.resolver.CommitUserInputResponse(commitCtx, input)
 			return normalizeDecisionResponseError(commitErr)
 		},
-		continueRun: func(runCtx context.Context, eventCh chan<- application.StreamEventPayload) error {
+		continueRun: func(runCtx context.Context, eventCh chan<- StreamEventPayload) error {
 			return c.resolver.ContinueCommittedUserInputResponse(runCtx, committed, eventCh)
 		},
 	}

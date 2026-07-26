@@ -21,7 +21,6 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
-	"github.com/memohai/memoh/internal/agent/application/runprojection"
 	"github.com/memohai/memoh/internal/agent/decision"
 	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
@@ -820,7 +819,7 @@ func TestWSRuntimeStreamHooksPreserveFenceAcrossExecutionCancellation(t *testing
 	eventCh := make(chan application.StreamEventPayload, 1)
 	eventCh <- rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentAbort})
 	close(eventCh)
-	if err := runprojection.Pump(executionCtx, manager, handle, eventCh, nil, hooks); err != nil {
+	if err := application.PumpRunEvents(executionCtx, manager, handle, eventCh, nil, hooks); err != nil {
 		t.Fatalf("pump fenced terminal event: %v", err)
 	}
 	if got := <-transformFences; got != fence {

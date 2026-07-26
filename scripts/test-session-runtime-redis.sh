@@ -37,7 +37,7 @@ export MEMOH_TEST_REDIS_URL="$runtime_url"
 
 go test -v -race -count=1 -timeout 90s \
   ./internal/agent/runtime/session \
-  ./internal/agent/application/decisionruntime \
+  ./internal/agent/application \
   ./internal/handlers \
   ./cmd/agent
 

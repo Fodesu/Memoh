@@ -1,4 +1,4 @@
-package decisionruntime
+package application
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/memohai/memoh/internal/agent/application"
 	"github.com/memohai/memoh/internal/agent/decision"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
@@ -15,26 +14,26 @@ import (
 	"github.com/memohai/memoh/internal/runtimefence"
 )
 
-// NativeContinuationAdmission owns the runtime admission and event lifecycle
+// DecisionContinuationAdmission owns the runtime admission and event lifecycle
 // for a durable native Decision whose original run can no longer continue.
-type NativeContinuationAdmission struct {
+type DecisionContinuationAdmission struct {
 	logger   *slog.Logger
 	manager  runtimeManager
 	resolver resolver
 }
 
-func newNativeContinuationAdmission(logger *slog.Logger, manager runtimeManager, resolver resolver) *NativeContinuationAdmission {
+func newDecisionContinuationAdmission(logger *slog.Logger, manager runtimeManager, resolver resolver) *DecisionContinuationAdmission {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &NativeContinuationAdmission{
+	return &DecisionContinuationAdmission{
 		logger:   logger.With(slog.String("service", "native_decision_continuation")),
 		manager:  manager,
 		resolver: resolver,
 	}
 }
 
-func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *PreparedDecision, output chan<- application.StreamEventPayload, opts RespondOptions) error {
+func (a *DecisionContinuationAdmission) Admit(ctx context.Context, prepared *PreparedDecision, output chan<- StreamEventPayload, opts DecisionRespondOptions) error {
 	if a == nil || a.manager == nil || a.resolver == nil {
 		return errors.New("native decision continuation is not configured")
 	}
@@ -42,7 +41,7 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 		return errors.New("prepared decision is required")
 	}
 	if prepared.continuationMode != decision.ContinuationModeDurable {
-		return application.ErrRuntimeDecisionOwnerUnavailable
+		return ErrRuntimeDecisionOwnerUnavailable
 	}
 	streamID := opts.StreamID
 	if streamID == "" {
@@ -67,7 +66,7 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 	}
 	authorityCtx, revokeOwnership := context.WithCancelCause(context.WithoutCancel(fencedCtx))
 	var handle sessionruntime.RunHandle
-	runtimeCtx := application.WithTerminalHookAuthority(fencedCtx, agentpkg.TerminalHookAuthority{
+	runtimeCtx := WithTerminalHookAuthority(fencedCtx, agentpkg.TerminalHookAuthority{
 		Context: authorityCtx,
 		Validate: func(validateCtx context.Context) error {
 			return a.manager.ValidateRunOwnership(validateCtx, handle)
@@ -129,14 +128,14 @@ func (a *NativeContinuationAdmission) Admit(ctx context.Context, prepared *Prepa
 	releaseCompaction := a.resolver.DeferSessionCompaction(prepared.target.BotID, prepared.target.SessionID, streamID)
 	defer releaseCompaction()
 
-	eventCh := make(chan application.StreamEventPayload, streamBufferSize)
+	eventCh := make(chan StreamEventPayload, streamBufferSize)
 	forwardDone := make(chan error, 1)
 	go func() {
 		forwardDone <- a.consumeEvents(runtimeCtx, handle, eventCh, output, cancel, opts.Hooks)
 	}()
 
-	runnerCtx := application.WithTerminalEventDeliveryTimeout(runtimeCtx, terminalFinalizationTimeout)
-	runnerCtx = application.WithPersistenceGuard(runnerCtx, func(guardCtx context.Context) error {
+	runnerCtx := WithTerminalEventDeliveryTimeout(runtimeCtx, terminalFinalizationTimeout)
+	runnerCtx = WithPersistenceGuard(runnerCtx, func(guardCtx context.Context) error {
 		return a.manager.ValidateRunOwnership(guardCtx, handle)
 	})
 	runErr := func() error {

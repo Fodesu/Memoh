@@ -1,16 +1,14 @@
-package decisionruntime
+package application
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/memohai/memoh/internal/agent/application"
-	"github.com/memohai/memoh/internal/agent/application/runprojection"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 )
 
-func (a *NativeContinuationAdmission) consumeEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.StreamEventPayload, output chan<- application.StreamEventPayload, cancel context.CancelFunc, transport runprojection.Hooks) error {
+func (a *DecisionContinuationAdmission) consumeEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan StreamEventPayload, output chan<- StreamEventPayload, cancel context.CancelFunc, transport RunEventPumpHooks) error {
 	hooks := transport
 	if hooks.OnDecodeError == nil {
 		hooks.OnDecodeError = func(err error) error {
@@ -34,5 +32,5 @@ func (a *NativeContinuationAdmission) consumeEvents(ctx context.Context, handle 
 			}
 		}
 	}
-	return runprojection.Pump(ctx, a.manager, handle, eventCh, cancel, hooks)
+	return PumpRunEvents(ctx, a.manager, handle, eventCh, cancel, hooks)
 }

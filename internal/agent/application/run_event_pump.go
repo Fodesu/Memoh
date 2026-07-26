@@ -1,10 +1,8 @@
-// Package runprojection owns the single agent-event pump behind every
-// transport: text-delta batching, runtime projection commits, and terminal
-// finalization. Transports attach delivery behavior through Hooks; every hook
-// receives the pump's authority context and never supplies one, so a
-// transport can observe, encode, and deliver events but cannot decide what
-// authority runtime commits or asset work run under.
-package runprojection
+// The run event pump is shared by every transport. It batches text deltas,
+// commits runtime projections, and finalizes terminal events. Transports may
+// observe and transform events through hooks, but the pump owns commit
+// authority.
+package application
 
 import (
 	"context"
@@ -23,16 +21,16 @@ const (
 	finalizationTimeout = 10 * time.Second
 )
 
-// Manager is the slice of the session runtime manager the pump commits
-// through.
-type Manager interface {
+// RunEventProjector is the part of the session runtime manager used by the
+// event pump.
+type RunEventProjector interface {
 	HandleAgentEvent(context.Context, sessionruntime.RunHandle, agentpkg.StreamEvent) ([]conversation.UIMessage, error)
 	FinalizeAgentEvent(context.Context, sessionruntime.RunHandle, agentpkg.StreamEvent, bool, string) ([]conversation.UIMessage, error)
 }
 
-// Hooks attach one transport's delivery behavior to the pump. Every hook is
-// optional; the zero value reproduces the plain decision-continuation pump.
-type Hooks struct {
+// RunEventPumpHooks attach one transport's delivery behavior to the pump.
+// Every hook is optional.
+type RunEventPumpHooks struct {
 	// Transform preprocesses one raw event into zero or more replacement
 	// events before projection and delivery (the WS transport ingests
 	// attachments here). Nil keeps the raw event as-is.
@@ -61,25 +59,25 @@ type Hooks struct {
 	AfterDrain func(ctx context.Context) error
 }
 
-// authority owns the pump's commit context: the run's (fenced) execution
+// runEventPumpAuthority owns the pump's commit context: the run's fenced execution
 // context while it lives, switched once to a bounded detached copy — which
 // keeps context values such as the persistence fence — when the stream turns
 // terminal or execution is cancelled, so terminal work outlives cancellation
-// without ever changing whose authority it runs under.
-type authority struct {
+// without changing the run authority.
+type runEventPumpAuthority struct {
 	source context.Context
 	bound  context.Context
 	cancel context.CancelFunc
 }
 
-func (a *authority) begin() {
+func (a *runEventPumpAuthority) begin() {
 	if a.bound != nil {
 		return
 	}
 	a.bound, a.cancel = context.WithTimeout(context.WithoutCancel(a.source), finalizationTimeout)
 }
 
-func (a *authority) current() context.Context {
+func (a *runEventPumpAuthority) current() context.Context {
 	if a.bound == nil && a.source.Err() != nil {
 		a.begin()
 	}
@@ -89,19 +87,19 @@ func (a *authority) current() context.Context {
 	return a.source
 }
 
-func (a *authority) close() {
+func (a *runEventPumpAuthority) close() {
 	if a.cancel != nil {
 		a.cancel()
 	}
 }
 
-// Pump drives agent events into the session runtime with text-delta batching
+// PumpRunEvents drives agent events into the session runtime with text-delta batching
 // and terminal finalization, reporting the first failure after cancelling
 // execution. It is the single implementation behind every transport.
 //
-//nolint:contextcheck // Commit and terminal work intentionally run under the pump's authority context, which detaches from execution cancellation at terminal time.
-func Pump(ctx context.Context, manager Manager, handle sessionruntime.RunHandle, eventCh <-chan json.RawMessage, cancel context.CancelFunc, hooks Hooks) error {
-	auth := &authority{source: ctx}
+//nolint:contextcheck // Terminal work retains run authority while detaching from execution cancellation.
+func PumpRunEvents(ctx context.Context, manager RunEventProjector, handle sessionruntime.RunHandle, eventCh <-chan json.RawMessage, cancel context.CancelFunc, hooks RunEventPumpHooks) error {
+	auth := &runEventPumpAuthority{source: ctx}
 	defer auth.close()
 
 	var pending *agentpkg.StreamEvent

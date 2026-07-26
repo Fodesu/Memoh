@@ -1,32 +1,31 @@
-package decisionruntime
+package application
 
 import (
 	"context"
 	"encoding/json"
 
-	"github.com/memohai/memoh/internal/agent/application"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	"github.com/memohai/memoh/internal/agent/turn"
 )
 
-// TurnService keeps decision routing behind the Channel-owned turn boundary.
+// DecisionTurnAdapter keeps decision routing behind the Channel-owned turn boundary.
 // Ordinary turns and plain-text decision lookup stay delegated to the base
 // service; approval and ask_user responses use the runtime owner router.
-type TurnService struct {
+type DecisionTurnAdapter struct {
 	base   turn.Service
-	router *Router
+	router *DecisionRouter
 }
 
-func NewTurnService(base turn.Service, router *Router) turn.Service {
-	return &TurnService{base: base, router: router}
+func NewDecisionTurnAdapter(base turn.Service, router *DecisionRouter) turn.Service {
+	return &DecisionTurnAdapter{base: base, router: router}
 }
 
-func (s *TurnService) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
+func (s *DecisionTurnAdapter) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
 	return s.base.StartTurn(ctx, cmd)
 }
 
-func (s *TurnService) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, output chan<- json.RawMessage) error {
-	return s.router.RespondToolApproval(ctx, application.ToolApprovalResponseInput{
+func (s *DecisionTurnAdapter) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, output chan<- json.RawMessage) error {
+	return s.router.RespondToolApproval(ctx, ToolApprovalResponseInput{
 		BotID:                      input.BotID,
 		ThreadID:                   input.ThreadID,
 		ActorChannelIdentityID:     input.ActorChannelIdentityID,
@@ -42,8 +41,8 @@ func (s *TurnService) RespondToolApproval(ctx context.Context, input turn.ToolAp
 	}, output)
 }
 
-func (s *TurnService) RespondUserInput(ctx context.Context, input turn.UserInputResponse, output chan<- json.RawMessage) error {
-	return s.router.RespondUserInput(ctx, application.UserInputResponseInput{
+func (s *DecisionTurnAdapter) RespondUserInput(ctx context.Context, input turn.UserInputResponse, output chan<- json.RawMessage) error {
+	return s.router.RespondUserInput(ctx, UserInputResponseInput{
 		BotID:                      input.BotID,
 		ThreadID:                   input.ThreadID,
 		ActorChannelIdentityID:     input.ActorChannelIdentityID,
@@ -78,6 +77,6 @@ func questionAnswersToInput(in []turn.QuestionAnswer) []userinput.QuestionAnswer
 	return out
 }
 
-func (s *TurnService) AdvancePlainTextUserInput(ctx context.Context, input userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error) {
+func (s *DecisionTurnAdapter) AdvancePlainTextUserInput(ctx context.Context, input userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error) {
 	return s.base.AdvancePlainTextUserInput(ctx, input)
 }

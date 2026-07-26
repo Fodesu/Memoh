@@ -20,8 +20,6 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
-	decisionruntime "github.com/memohai/memoh/internal/agent/application/decisionruntime"
-	"github.com/memohai/memoh/internal/agent/application/runprojection"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
@@ -63,7 +61,7 @@ type LocalChannelHandler struct {
 	accountService      *accounts.Service
 	sessionService      *sessionpkg.Service
 	sessionRuntime      *sessionruntime.Manager
-	decisionRouter      *decisionruntime.Router
+	decisionRouter      *application.DecisionRouter
 	decisionRouterMu    sync.Mutex
 	agentService        localChannelAgentService
 	commandHandler      *command.Handler
@@ -190,7 +188,7 @@ func (h *LocalChannelHandler) SetSessionRuntime(manager *sessionruntime.Manager)
 // SetDecisionRouter installs the transport-neutral decision response use
 // case. When present, deferred WS approval and ask_user responses route
 // through it instead of a handler-owned continuation.
-func (h *LocalChannelHandler) SetDecisionRouter(router *decisionruntime.Router) {
+func (h *LocalChannelHandler) SetDecisionRouter(router *application.DecisionRouter) {
 	h.decisionRouter = router
 }
 
@@ -198,7 +196,7 @@ func (h *LocalChannelHandler) bindSessionRuntimeCommandHandler() {
 	if h == nil {
 		return
 	}
-	if err := decisionruntime.BindCommandHandlers(h.sessionRuntime, h.agentService); err != nil && h.logger != nil {
+	if err := application.BindDecisionCommandHandlers(h.sessionRuntime, h.agentService); err != nil && h.logger != nil {
 		h.logger.Warn("bind session runtime decision command handlers failed", slog.Any("error", err))
 	}
 }
@@ -1428,7 +1426,7 @@ func retryRuntimeFinalization(ctx context.Context, operation func() error) error
 // canonical readiness, and legacy frame forwarding. Hooks receive the pump's
 // authority context (which carries the persistence fence); they never supply
 // their own.
-func (h *LocalChannelHandler) runtimeStreamHooks(botID, sessionID string, forwardLegacy func(context.Context, native.StreamEvent)) runprojection.Hooks {
+func (h *LocalChannelHandler) runtimeStreamHooks(botID, sessionID string, forwardLegacy func(context.Context, native.StreamEvent)) application.RunEventPumpHooks {
 	outboundAssetRefs := make([]messagepkg.AssetRef, 0)
 	linkOutboundAssets := func(ctx context.Context) error {
 		if len(outboundAssetRefs) == 0 {
@@ -1440,7 +1438,7 @@ func (h *LocalChannelHandler) runtimeStreamHooks(botID, sessionID string, forwar
 		outboundAssetRefs = nil
 		return nil
 	}
-	hooks := runprojection.Hooks{
+	hooks := application.RunEventPumpHooks{
 		Transform: func(ctx context.Context, raw json.RawMessage) []json.RawMessage {
 			processed := h.processWSEvent(ctx, botID, raw)
 			for _, p := range processed {
@@ -1467,7 +1465,7 @@ func (h *LocalChannelHandler) runtimeStreamHooks(botID, sessionID string, forwar
 }
 
 func (h *LocalChannelHandler) forwardRuntimeWSStreamEvents(ctx context.Context, handle sessionruntime.RunHandle, eventCh <-chan application.StreamEventPayload, cancel context.CancelFunc, forwardLegacy func(context.Context, native.StreamEvent)) error {
-	return runprojection.Pump(ctx, h.sessionRuntime, handle, eventCh, cancel, h.runtimeStreamHooks(handle.BotID, handle.SessionID, forwardLegacy))
+	return application.PumpRunEvents(ctx, h.sessionRuntime, handle, eventCh, cancel, h.runtimeStreamHooks(handle.BotID, handle.SessionID, forwardLegacy))
 }
 
 type wsStreamRunner func(ctx context.Context, eventCh chan<- application.StreamEventPayload, abortCh <-chan struct{}, injectCh <-chan turn.InjectMessage) error
@@ -1484,17 +1482,17 @@ func runtimeOperationFromPreparedReplacement(prepared application.PreparedReplac
 // deferredDecisionRouter returns the shared decision response use case,
 // lazily built over the configured agent service when production wiring did
 // not inject one (tests substitute stage-recording resolvers this way).
-func (h *LocalChannelHandler) deferredDecisionRouter() *decisionruntime.Router {
+func (h *LocalChannelHandler) deferredDecisionRouter() *application.DecisionRouter {
 	h.decisionRouterMu.Lock()
 	defer h.decisionRouterMu.Unlock()
 	if h.decisionRouter != nil {
 		return h.decisionRouter
 	}
-	resolver, ok := h.agentService.(decisionruntime.TransportResolver)
+	resolver, ok := h.agentService.(application.DecisionTransportResolver)
 	if !ok || h.sessionRuntime == nil {
 		return nil
 	}
-	h.decisionRouter = decisionruntime.NewRouterForTransport(h.logger, h.sessionRuntime, resolver)
+	h.decisionRouter = application.NewDecisionRouterForTransport(h.logger, h.sessionRuntime, resolver)
 	return h.decisionRouter
 }
 
@@ -1504,7 +1502,7 @@ func (h *LocalChannelHandler) deferredDecisionRouter() *decisionruntime.Router {
 // command slot is a request resource, not a run resource — while the
 // client-chosen stream identity keeps continuation events and abort frames
 // correlated with the run.
-func (h *LocalChannelHandler) respondDeferredDecisionViaRouter(baseCtx, connCtx context.Context, activeStreams *wsStreamRegistry, writer *wsWriter, botID, sessionID, streamID, actionID string, msg wsClientMessage, respond func(ctx context.Context, opts decisionruntime.RespondOptions, suppressActivePromptAttach bool) error) {
+func (h *LocalChannelHandler) respondDeferredDecisionViaRouter(baseCtx, connCtx context.Context, activeStreams *wsStreamRegistry, writer *wsWriter, botID, sessionID, streamID, actionID string, msg wsClientMessage, respond func(ctx context.Context, opts application.DecisionRespondOptions, suppressActivePromptAttach bool) error) {
 	if h.deferredDecisionRouter() == nil {
 		h.sendWSSidebandResult(connCtx, writer, msg, actionID, errors.New("decision routing is not configured"))
 		return
@@ -1530,7 +1528,7 @@ func (h *LocalChannelHandler) respondDeferredDecisionViaRouter(baseCtx, connCtx 
 		defer releaseWSMessageTurn()
 		defer activeStreams.finish(streamID, sessionID)
 		decisionCommitted := false
-		err := respond(runCtx, decisionruntime.RespondOptions{
+		err := respond(runCtx, application.DecisionRespondOptions{
 			StreamID: streamID,
 			Hooks:    hooks,
 			OnDecisionCommitted: func() {
@@ -2183,7 +2181,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				ChatToken:              bearerToken,
 			}
 			deferred := func() {
-				h.respondDeferredDecisionViaRouter(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, sessionruntime.CommandToolApprovalResponse, responseMsg, func(ctx context.Context, opts decisionruntime.RespondOptions, suppressActivePromptAttach bool) error {
+				h.respondDeferredDecisionViaRouter(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, sessionruntime.CommandToolApprovalResponse, responseMsg, func(ctx context.Context, opts application.DecisionRespondOptions, suppressActivePromptAttach bool) error {
 					input := responseInput
 					input.SuppressActivePromptAttach = suppressActivePromptAttach
 					return h.deferredDecisionRouter().RespondToolApprovalWithOptions(ctx, input, nil, opts)
@@ -2227,7 +2225,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				ChatToken:              bearerToken,
 			}
 			deferred := func() {
-				h.respondDeferredDecisionViaRouter(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, sessionruntime.CommandUserInputResponse, responseMsg, func(ctx context.Context, opts decisionruntime.RespondOptions, suppressActivePromptAttach bool) error {
+				h.respondDeferredDecisionViaRouter(streamBaseCtx, connCtx, activeStreams, writer, botID, sessionID, streamID, sessionruntime.CommandUserInputResponse, responseMsg, func(ctx context.Context, opts application.DecisionRespondOptions, suppressActivePromptAttach bool) error {
 					input := responseInput
 					input.SuppressActivePromptAttach = suppressActivePromptAttach
 					return h.deferredDecisionRouter().RespondUserInputWithOptions(ctx, input, nil, opts)

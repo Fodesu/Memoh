@@ -28,7 +28,6 @@ import (
 	channelmessagingadapter "github.com/memohai/memoh/internal/agent/adapter/channelmessaging"
 	channelthreadadapter "github.com/memohai/memoh/internal/agent/adapter/channelthread"
 	"github.com/memohai/memoh/internal/agent/application"
-	decisionruntime "github.com/memohai/memoh/internal/agent/application/decisionruntime"
 	"github.com/memohai/memoh/internal/agent/background"
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
@@ -1025,11 +1024,11 @@ func (a *gatewayAssetLoaderAdapter) AccessPathForGateway(ctx context.Context, bo
 
 // provideTurnService exposes the runtime-routed application service as
 // Channel's only Agent surface.
-func provideTurnService(service *application.Service, router *decisionruntime.Router) turn.Service {
+func provideTurnService(service *application.Service, router *application.DecisionRouter) turn.Service {
 	// The self-hosted runtime binds its DB pool to the singleton team, so
 	// the service fails closed on any other TeamID (turn.ErrTeamNotServed).
 	service.SetAllowedTeam(team.DefaultTeamID)
-	return decisionruntime.NewTurnService(service, router)
+	return application.NewDecisionTurnAdapter(service, router)
 }
 
 // applicationBotPermissionChecker duplicates the Channel module's inbound

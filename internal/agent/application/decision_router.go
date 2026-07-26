@@ -1,4 +1,4 @@
-package decisionruntime
+package application
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/memohai/memoh/internal/agent/application"
-	"github.com/memohai/memoh/internal/agent/application/runprojection"
 	"github.com/memohai/memoh/internal/agent/decision"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
@@ -29,29 +27,29 @@ type resolver interface {
 	DeferSessionCompaction(botID, sessionID, streamID string) func()
 }
 
-// TransportResolver is the application surface a transport needs to wire the
-// decision response use case. *application.Service implements it; tests may
+// DecisionTransportResolver is the application surface a transport needs to wire the
+// decision response use case. *Service implements it; tests may
 // substitute stage-recording fakes that embed it.
-type TransportResolver = resolver
+type DecisionTransportResolver = resolver
 
-// NewRouterForTransport builds the router over the transport-facing resolver
+// NewDecisionRouterForTransport builds the router over the transport-facing resolver
 // interface so transports and their tests can wire the production routing
 // policy around substituted application services.
-func NewRouterForTransport(logger *slog.Logger, manager *sessionruntime.Manager, resolver TransportResolver) *Router {
-	return newRouter(logger, manager, resolver)
+func NewDecisionRouterForTransport(logger *slog.Logger, manager *sessionruntime.Manager, resolver DecisionTransportResolver) *DecisionRouter {
+	return newDecisionRouter(logger, manager, resolver)
 }
 
-// CommandResolver applies owner-local decision commands after runtime routing.
-type CommandResolver interface {
-	CommitToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (application.CommittedToolApprovalResponse, error)
-	ContinueCommittedToolApprovalResponse(context.Context, application.CommittedToolApprovalResponse, chan<- application.StreamEventPayload) error
-	CommitUserInputResponse(context.Context, application.UserInputResponseInput) (application.CommittedUserInputResponse, error)
-	ContinueCommittedUserInputResponse(context.Context, application.CommittedUserInputResponse, chan<- application.StreamEventPayload) error
+// DecisionCommandResolver applies owner-local decision commands after runtime routing.
+type DecisionCommandResolver interface {
+	CommitToolApprovalResponse(context.Context, ToolApprovalResponseInput) (CommittedToolApprovalResponse, error)
+	ContinueCommittedToolApprovalResponse(context.Context, CommittedToolApprovalResponse, chan<- StreamEventPayload) error
+	CommitUserInputResponse(context.Context, UserInputResponseInput) (CommittedUserInputResponse, error)
+	ContinueCommittedUserInputResponse(context.Context, CommittedUserInputResponse, chan<- StreamEventPayload) error
 }
 
 type commandReconciler interface {
-	ReconcileToolApprovalResponse(context.Context, application.ToolApprovalResponseInput) (bool, error)
-	ReconcileUserInputResponse(context.Context, application.UserInputResponseInput) (bool, error)
+	ReconcileToolApprovalResponse(context.Context, ToolApprovalResponseInput) (bool, error)
+	ReconcileUserInputResponse(context.Context, UserInputResponseInput) (bool, error)
 }
 
 type runtimeManager interface {
@@ -65,39 +63,39 @@ type runtimeManager interface {
 	FinishRun(context.Context, sessionruntime.RunHandle, string, string) error
 }
 
-// Router gives every decision-response transport the same runtime ownership
+// DecisionRouter gives every decision-response transport the same runtime ownership
 // semantics. It routes responses to an active owner and creates a fenced
 // continuation only when no active run can accept the decision.
-type Router struct {
+type DecisionRouter struct {
 	manager      runtimeManager
 	coordinator  *DecisionCoordinator
-	continuation *NativeContinuationAdmission
+	continuation *DecisionContinuationAdmission
 	initErr      error
 }
 
-// NewRouter constructs the shared decision-response application service.
-func NewRouter(logger *slog.Logger, manager *sessionruntime.Manager, resolver *application.Service) *Router {
-	return newRouter(logger, manager, resolver)
+// NewDecisionRouter constructs the shared decision-response application service.
+func NewDecisionRouter(logger *slog.Logger, manager *sessionruntime.Manager, resolver *Service) *DecisionRouter {
+	return newDecisionRouter(logger, manager, resolver)
 }
 
-func newRouter(logger *slog.Logger, manager runtimeManager, decisionResolver resolver) *Router {
+func newDecisionRouter(logger *slog.Logger, manager runtimeManager, decisionResolver resolver) *DecisionRouter {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	coordinator := newDecisionCoordinator(decisionResolver)
-	router := &Router{
+	router := &DecisionRouter{
 		manager:      manager,
 		coordinator:  coordinator,
-		continuation: newNativeContinuationAdmission(logger, manager, decisionResolver),
+		continuation: newDecisionContinuationAdmission(logger, manager, decisionResolver),
 	}
-	router.initErr = coordinator.bindCommandHandlers(manager)
+	router.initErr = coordinator.bindDecisionCommandHandlers(manager)
 	return router
 }
 
-// RespondOptions carries transport-supplied parameters for one decision
+// DecisionRespondOptions carries transport-supplied parameters for one decision
 // response. The zero value keeps server-generated defaults, so existing
 // callers are unaffected.
-type RespondOptions struct {
+type DecisionRespondOptions struct {
 	// StreamID correlates a native continuation run with a transport-chosen
 	// stream identity. The WebSocket protocol lets the client pick the
 	// stream ID so its abort frames and event envelopes match the run;
@@ -107,14 +105,14 @@ type RespondOptions struct {
 	// ingestion, asset linking, legacy frame forwarding) to the shared
 	// event pump of a native continuation run. Hooks receive the pump's
 	// authority context; they never supply one.
-	Hooks runprojection.Hooks
+	Hooks RunEventPumpHooks
 	// OnDecisionCommitted is called after the response has been durably
 	// committed, including an idempotent replay confirmed by reconciliation.
 	// It does not imply that the agent continuation has completed.
 	OnDecisionCommitted func()
 }
 
-func (o RespondOptions) normalized() RespondOptions {
+func (o DecisionRespondOptions) normalized() DecisionRespondOptions {
 	o.StreamID = strings.TrimSpace(o.StreamID)
 	if o.OnDecisionCommitted != nil {
 		onCommitted := o.OnDecisionCommitted
@@ -126,22 +124,22 @@ func (o RespondOptions) normalized() RespondOptions {
 	return o
 }
 
-func (o RespondOptions) decisionCommitted() {
+func (o DecisionRespondOptions) decisionCommitted() {
 	if o.OnDecisionCommitted != nil {
 		o.OnDecisionCommitted()
 	}
 }
 
-func (r *Router) RespondToolApproval(ctx context.Context, input application.ToolApprovalResponseInput, output chan<- application.StreamEventPayload) error {
-	return r.RespondToolApprovalWithOptions(ctx, input, output, RespondOptions{})
+func (r *DecisionRouter) RespondToolApproval(ctx context.Context, input ToolApprovalResponseInput, output chan<- StreamEventPayload) error {
+	return r.RespondToolApprovalWithOptions(ctx, input, output, DecisionRespondOptions{})
 }
 
 // RespondToolApprovalWithOptions is the transport-neutral decision response
 // use case: every transport routes through the same ownership, reconcile,
 // and continuation semantics while supplying its own delivery parameters.
-func (r *Router) RespondToolApprovalWithOptions(ctx context.Context, input application.ToolApprovalResponseInput, output chan<- application.StreamEventPayload, opts RespondOptions) error {
+func (r *DecisionRouter) RespondToolApprovalWithOptions(ctx context.Context, input ToolApprovalResponseInput, output chan<- StreamEventPayload, opts DecisionRespondOptions) error {
 	if r == nil || r.coordinator == nil {
-		return errors.New("decision runtime router is not configured")
+		return errors.New("decision response router is not configured")
 	}
 	if r.initErr != nil {
 		return r.initErr
@@ -153,15 +151,15 @@ func (r *Router) RespondToolApprovalWithOptions(ctx context.Context, input appli
 	return r.routeOrContinue(ctx, &prepared, output, opts.normalized())
 }
 
-func (r *Router) RespondUserInput(ctx context.Context, input application.UserInputResponseInput, output chan<- application.StreamEventPayload) error {
-	return r.RespondUserInputWithOptions(ctx, input, output, RespondOptions{})
+func (r *DecisionRouter) RespondUserInput(ctx context.Context, input UserInputResponseInput, output chan<- StreamEventPayload) error {
+	return r.RespondUserInputWithOptions(ctx, input, output, DecisionRespondOptions{})
 }
 
 // RespondUserInputWithOptions mirrors RespondToolApprovalWithOptions for
 // ask_user decisions.
-func (r *Router) RespondUserInputWithOptions(ctx context.Context, input application.UserInputResponseInput, output chan<- application.StreamEventPayload, opts RespondOptions) error {
+func (r *DecisionRouter) RespondUserInputWithOptions(ctx context.Context, input UserInputResponseInput, output chan<- StreamEventPayload, opts DecisionRespondOptions) error {
 	if r == nil || r.coordinator == nil {
-		return errors.New("decision runtime router is not configured")
+		return errors.New("decision response router is not configured")
 	}
 	if r.initErr != nil {
 		return r.initErr
@@ -173,7 +171,7 @@ func (r *Router) RespondUserInputWithOptions(ctx context.Context, input applicat
 	return r.routeOrContinue(ctx, &prepared, output, opts.normalized())
 }
 
-func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision, output chan<- application.StreamEventPayload, opts RespondOptions) error {
+func (r *DecisionRouter) routeOrContinue(ctx context.Context, prepared *PreparedDecision, output chan<- StreamEventPayload, opts DecisionRespondOptions) error {
 	if prepared == nil {
 		return errors.New("prepared decision is required")
 	}
@@ -209,7 +207,7 @@ func (r *Router) routeOrContinue(ctx context.Context, prepared *PreparedDecision
 		if prepared.hasLocalWaiter || r.manager == nil || !r.manager.IsDistributed() {
 			return prepared.commitAndContinue(ctx, output, opts.decisionCommitted)
 		}
-		return application.ErrRuntimeDecisionOwnerUnavailable
+		return ErrRuntimeDecisionOwnerUnavailable
 	}
 	if r.manager == nil {
 		return prepared.commitAndContinue(ctx, output, opts.decisionCommitted)
