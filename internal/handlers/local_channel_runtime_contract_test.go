@@ -984,8 +984,19 @@ func TestLocalChannelPersistentRuntimePublishFailureReconcilesWithoutCancelingRu
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime publish failure blocked runner completion")
 	}
-	if _, ok, err := manager.StreamRef(context.Background(), runtimeContractBotID, runtimeContractSessionID, "stream-publish-failure"); err != nil || ok {
-		t.Fatalf("terminalized publish failure stream ref = ok:%v err:%v", ok, err)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, ok, err := manager.StreamRef(context.Background(), runtimeContractBotID, runtimeContractSessionID, "stream-publish-failure")
+		if err != nil {
+			t.Fatalf("load terminalized publish failure stream ref: %v", err)
+		}
+		if !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminalized publish failure stream ref was not cleaned")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
