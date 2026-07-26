@@ -7,7 +7,9 @@ import {
   type SessionRuntimeReducerState,
 } from '@memohai/sdk/session-runtime'
 import {
-  parseRuntimeContract,
+  generationReuseContractFixture,
+  interruptedRunContractFixture,
+  replacementOperationsContractFixture,
   richActiveRunContractFixture as runtimeStateMachineContractFixture,
   runtimeRecoveryContractFixture,
 } from './runtime-contract-fixtures.test-support'
@@ -43,6 +45,42 @@ function runningSnapshot(seq = 1, epoch = ''): SessionruntimeSnapshot {
 }
 
 describe('session runtime reducer', () => {
+  it('replays every Go-generated runtime contract fixture', () => {
+    const rich = reduceContractStream([
+      ...runtimeStateMachineContractFixture.runtime_stream,
+      ...(runtimeStateMachineContractFixture.runtime_terminal_stream ?? []),
+    ])
+    expect(rich.snapshot?.current_run_view).toMatchObject({
+      stream_id: 'stream-rich',
+      status: 'completed',
+    })
+
+    const interrupted = reduceContractStream(interruptedRunContractFixture.runtime_stream)
+    expect(interrupted.snapshot?.current_run_view).toMatchObject({
+      stream_id: 'stream-interrupted',
+      status: 'errored',
+    })
+    const aborted = reduceContractStream(interruptedRunContractFixture.runtime_abort_stream ?? [])
+    expect(aborted.snapshot?.current_run_view).toMatchObject({
+      stream_id: 'stream-interrupted',
+      status: 'aborted',
+    })
+
+    for (const event of [
+      replacementOperationsContractFixture.retry_snapshot,
+      replacementOperationsContractFixture.edit_snapshot,
+    ]) {
+      expect(reduceSessionRuntimeSnapshot({}, event.snapshot, event.seq, event.epoch).kind).toBe('applied')
+    }
+
+    const reused = reduceContractStream(generationReuseContractFixture.runtime_stream)
+    expect(reused.snapshot?.current_run_view).toMatchObject({
+      stream_id: 'stream-generation-reuse',
+      generation: 'generation-b',
+      status: 'running',
+    })
+  })
+
   it('replays the Go-generated gap, delayed delta, checkpoint, and recovery delta', () => {
     const fixture = structuredClone(runtimeRecoveryContractFixture)
     const baseline = reduceSessionRuntimeSnapshot(
@@ -659,36 +697,6 @@ describe('session runtime reducer', () => {
     }, 'bot-1', 'session-1')
 
     expect(result).toMatchObject({ kind: 'resync', reason: 'sequence_gap', state: { seq: 0, phase: 'awaiting_checkpoint' } })
-  })
-
-  it('rejects malformed sequence values in generated wire fixtures', () => {
-    const malformed = structuredClone(runtimeStateMachineContractFixture) as unknown as {
-      runtime_stream: Array<{ seq: unknown }>
-    }
-    malformed.runtime_stream[0]!.seq = '2'
-
-    expect(() => parseRuntimeContract(malformed, 'rich_active_run'))
-      .toThrow('runtime_stream[0].seq must be a non-negative safe integer')
-  })
-
-  it('rejects empty epochs in generated wire fixtures', () => {
-    const malformed = structuredClone(runtimeStateMachineContractFixture) as unknown as {
-      runtime_snapshot: { epoch: unknown }
-    }
-    malformed.runtime_snapshot.epoch = ''
-
-    expect(() => parseRuntimeContract(malformed, 'rich_active_run'))
-      .toThrow('rich_active_run.runtime_snapshot.epoch must be a non-empty string')
-  })
-
-  it('rejects a generated wire stream that changes session target', () => {
-    const malformed = structuredClone(runtimeStateMachineContractFixture) as unknown as {
-      runtime_stream: Array<{ session_id: string }>
-    }
-    malformed.runtime_stream[1]!.session_id = 'session-other'
-
-    expect(() => parseRuntimeContract(malformed, 'rich_active_run'))
-      .toThrow('runtime_stream[1] target does not match the contract target')
   })
 
   it('resyncs when a delta target differs from its hydrated snapshot', () => {

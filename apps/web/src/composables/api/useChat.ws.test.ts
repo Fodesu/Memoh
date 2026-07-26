@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { client } from '@memohai/sdk/client'
-import {
-  reduceSessionRuntimeDelta,
-  reduceSessionRuntimeSnapshot,
-  type SessionRuntimeDeltaEvent,
-  type SessionRuntimeReducerState,
-} from '@memohai/sdk/session-runtime'
+import type { SessionRuntimeDeltaEvent } from '@memohai/sdk/session-runtime'
 import { richActiveRunContractFixture, runtimeRecoveryContractFixture } from '../../store/runtime-contract-fixtures.test-support'
 import { connectWebSocket } from './useChat.ws'
 
@@ -175,7 +170,7 @@ describe('useChat.ws', () => {
     expect(secondHandler).toHaveBeenCalledWith({ type: 'message', stream_id: 'stream-b', session_id: 'session-2', data: { id: 0, type: 'text', content: 'hello' } })
   })
 
-  it('parses the Go-generated runtime contract through the websocket transport', () => {
+  it('passes Go-generated runtime and recovery frames through the websocket transport', () => {
     const handler = vi.fn()
     connectWebSocket('bot-1', handler)
     const socket = MockWebSocket.instances[0]!
@@ -184,6 +179,11 @@ describe('useChat.ws', () => {
     const events = structuredClone([
       ...richActiveRunContractFixture.runtime_stream,
       ...(richActiveRunContractFixture.runtime_terminal_stream ?? []),
+      runtimeRecoveryContractFixture.runtime_snapshot,
+      runtimeRecoveryContractFixture.gap_delta,
+      runtimeRecoveryContractFixture.delayed_delta,
+      runtimeRecoveryContractFixture.runtime_checkpoint,
+      runtimeRecoveryContractFixture.post_recovery_delta,
     ])
     for (const event of events) socket.emit(event)
 
@@ -205,56 +205,6 @@ describe('useChat.ws', () => {
 
     expect(handler).not.toHaveBeenCalled()
     expect(socket.readyState).toBe(MockWebSocket.CLOSED)
-    ws.close()
-  })
-
-  it('feeds the Go-generated wire stream through transport parsing and the runtime reducer', () => {
-    let state: SessionRuntimeReducerState = {}
-    connectWebSocket('bot-1', (event) => {
-      if (event.type === 'runtime_snapshot' && event.snapshot) {
-        const reduction = reduceSessionRuntimeSnapshot(state, event.snapshot, event.seq, event.epoch)
-        if (reduction.kind === 'applied') state = reduction.state
-      } else if (event.type === 'runtime_delta') {
-        const reduction = reduceSessionRuntimeDelta(state, event, event.bot_id, event.session_id)
-        if (reduction.kind === 'applied') state = reduction.state
-      }
-    })
-    const socket = MockWebSocket.instances[0]!
-    socket.open()
-
-    for (const event of structuredClone([
-      ...richActiveRunContractFixture.runtime_stream,
-      ...(richActiveRunContractFixture.runtime_terminal_stream ?? []),
-    ])) socket.emit(event)
-
-    expect(state.snapshot?.current_run_view).toMatchObject({
-      stream_id: 'stream-rich',
-      status: 'completed',
-    })
-    expect(state.snapshot?.current_run_view?.messages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'text', content: 'I will check the current state.' }),
-      expect.objectContaining({ type: 'reasoning', content: 'I need to inspect the workspace.' }),
-    ]))
-  })
-
-  it('parses every Go-generated recovery frame through the websocket transport', () => {
-    const handler = vi.fn()
-    const ws = connectWebSocket('bot-1', handler)
-    const socket = MockWebSocket.instances[0]!
-    socket.open()
-    const fixture = structuredClone(runtimeRecoveryContractFixture)
-    const events = [
-      fixture.runtime_snapshot,
-      fixture.gap_delta,
-      fixture.delayed_delta,
-      fixture.runtime_checkpoint,
-      fixture.post_recovery_delta,
-    ]
-
-    for (const event of events) socket.emit(event)
-
-    expect(handler.mock.calls.map(call => call[0])).toEqual(events)
-    expect(socket.readyState).toBe(MockWebSocket.OPEN)
     ws.close()
   })
 

@@ -22,7 +22,6 @@ const api = vi.hoisted(() => ({
   fetchSessions: vi.fn(),
   fetchBots: vi.fn(),
   fetchMessagesUI: vi.fn(),
-  fetchSessionRuntime: vi.fn(),
   sendLocalChannelMessage: vi.fn(),
   executeQuickAction: vi.fn(),
   fetchSafeSkillCatalog: vi.fn(),
@@ -279,10 +278,6 @@ function runtimeStateSnapshot(
   } as UIStreamEvent
 }
 
-function richActiveRunRuntimeSnapshot(): SessionruntimeSnapshot {
-  return structuredClone(richActiveRunContractFixture.runtime_snapshot.snapshot)
-}
-
 describe('chat-list store', () => {
   let streamHandler: UIStreamEventHandler | null
   // Captured but not driven by any test body yet; keep the capture so future
@@ -440,12 +435,6 @@ describe('chat-list store', () => {
     })
     api.closeACPRuntime.mockResolvedValue(undefined)
     api.fetchMessagesUI.mockResolvedValue([])
-    api.fetchSessionRuntime.mockImplementation((botId: string, sessionId: string) => Promise.resolve({
-      bot_id: botId,
-      session_id: sessionId,
-      seq: 0,
-      queue: [],
-    }))
     api.executeQuickAction.mockResolvedValue(null)
     api.fetchSafeSkillCatalog.mockResolvedValue([])
     sdk.getBotsByBotIdSettings.mockResolvedValue({ data: { chat_runtime: 'model' } })
@@ -6105,7 +6094,6 @@ describe('chat-list store', () => {
       session_id: 'session-1',
       invocation_id: expect.any(String),
     })])
-    expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
     streamHandler?.({
       type: 'runtime_snapshot',
       bot_id: 'bot-1',
@@ -8524,51 +8512,6 @@ describe('chat-list store', () => {
     await flushPromises()
   })
 
-  it('uses the websocket checkpoint without requesting REST runtime hydration', async () => {
-    api.fetchSessions.mockResolvedValueOnce({
-      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'A', type: 'chat' }],
-      nextCursor: null,
-    })
-    const store = useChatStore()
-    await store.selectBot('bot-1')
-    await flushPromises()
-
-    expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
-    expect(runtimeSubscribeMessages).toContainEqual(expect.objectContaining({
-      type: 'runtime_subscribe', session_id: 'session-1',
-    }))
-
-    streamHandler?.({
-      type: 'runtime_snapshot',
-      bot_id: 'bot-1',
-      session_id: 'session-1',
-      stream_id: 'stream-new-epoch',
-      seq: 1,
-      snapshot: runtimeSnapshotFromScript(
-        [{ type: 'message', data: { id: 0, type: 'text', content: 'new epoch' } }],
-        'session-1',
-        'stream-new-epoch',
-        'running',
-        1,
-      ),
-    } as UIStreamEvent)
-
-    streamHandler?.({
-      type: 'runtime_delta',
-      bot_id: 'bot-1',
-      session_id: 'session-1',
-      epoch: 'epoch-session-1',
-      stream_id: 'stream-new-epoch',
-      seq: 2,
-      delta: { message_appends: [{ id: 0, type: 'text', content: ' continued' }] },
-    } as UIStreamEvent)
-    const assistant = store.messages.find(turn => turn.role === 'assistant')
-    expect(assistant?.role === 'assistant' ? assistant.messages : []).toContainEqual(expect.objectContaining({
-      type: 'text',
-      content: 'new epoch continued',
-    }))
-  })
-
   it('does not fail an active assistant when runtime subscription setup fails', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     api.fetchSessions.mockResolvedValueOnce({
@@ -8739,7 +8682,6 @@ describe('chat-list store', () => {
         seq: 1, stream_id: 'stream-ws-recovered', snapshot: checkpoint,
       } as UIStreamEvent)
       expect(store.messages.some(turn => turn.id === 'runtime-stream-ws-recovered')).toBe(true)
-      expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
     } finally {
       consoleError.mockRestore()
       vi.useRealTimers()
@@ -8815,36 +8757,6 @@ describe('chat-list store', () => {
     expect(runtimeUnsubscribeMessages).toEqual([
       expect.objectContaining({ type: 'runtime_unsubscribe', session_id: 'session-1' }),
     ])
-  })
-
-  it('does not request REST runtime hydration while switching between a draft and session', async () => {
-    api.fetchSessions.mockResolvedValueOnce({
-      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'A', type: 'chat' }],
-      nextCursor: null,
-    })
-    api.connectWebSocket.mockImplementationOnce((_botId: string, onStreamEvent: UIStreamEventHandler) => {
-      streamHandler = onStreamEvent
-      return {
-        get connected() {
-          return false
-        },
-        send: vi.fn(),
-        abort: vi.fn(),
-        close: vi.fn(),
-        onOpen: null,
-        onClose: null,
-      }
-    })
-    const store = useChatStore()
-    await store.selectBot('bot-1')
-    await flushPromises()
-    expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
-
-    store.selectDraft({ explicitSelection: true })
-    await store.selectSession('session-1')
-    await flushPromises()
-
-    expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
   })
 
   it('does not queue an abort while reconnecting and keeps the run active', async () => {
@@ -11297,7 +11209,6 @@ describe('chat-list store', () => {
     expect(runtimeSubscribeMessages).toHaveLength(1)
     expect(runtimeSubscribeMessages[0]?.invocation_id).toEqual(expect.any(String))
     expect(runtimeSubscribeMessages[0]?.invocation_id).not.toBe('')
-    expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
 
     streamHandler?.({
       type: 'runtime_snapshot',
@@ -11311,60 +11222,6 @@ describe('chat-list store', () => {
       },
     } as UIStreamEvent)
     expect(await send).toEqual({ ok: true })
-  })
-
-  it('reconnect contract: hydrates rich active-run state from runtime snapshot', async () => {
-    api.fetchSessions.mockResolvedValueOnce({
-      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'A', type: 'chat' }],
-      nextCursor: null,
-    })
-    const store = useChatStore()
-    await store.selectBot('bot-1')
-    await flushPromises()
-
-    streamHandler?.({
-      type: 'runtime_snapshot',
-      bot_id: 'bot-1',
-      session_id: 'session-1',
-      seq: 10,
-      snapshot: richActiveRunRuntimeSnapshot(),
-    } as UIStreamEvent)
-
-    expect(store.streaming).toBe(true)
-    expect(store.messages[0]).toMatchObject({
-      role: 'user',
-      text: 'Inspect the workspace',
-      externalMessageId: 'stream-rich',
-      attachments: [{ name: 'notes.txt', content_hash: 'sha256:notes' }],
-    })
-    const assistant = store.messages.find(turn => turn.role === 'assistant')
-    expect(assistant?.role).toBe('assistant')
-    if (assistant?.role !== 'assistant') throw new Error('missing assistant turn')
-
-    expect(assistant.messages.find(block => block.type === 'reasoning')).toMatchObject({
-      content: 'I need to inspect the workspace.',
-    })
-    expect(assistant.messages.find(block => block.type === 'text')).toMatchObject({
-      content: 'I will check the current state.',
-    })
-    expect(assistant.messages.find(block => block.type === 'tool' && block.toolCallId === 'call-exec')).toMatchObject({
-      type: 'tool',
-      toolName: 'exec',
-      done: true,
-      running: false,
-    })
-    expect(assistant.messages.find(block => block.type === 'tool' && block.toolCallId === 'call-approval')).toMatchObject({
-      approval: {
-        approval_id: 'approval-1',
-        status: 'pending',
-      },
-    })
-    expect(assistant.messages.find(block => block.type === 'tool' && block.toolCallId === 'call-ask')).toMatchObject({
-      userInput: {
-        user_input_id: 'input-1',
-        status: 'pending',
-      },
-    })
   })
 
   it('does not carry an abort request into a reused stream id with a new generation', async () => {
@@ -12709,7 +12566,6 @@ describe('chat-list store', () => {
       type: 'runtime_subscribe',
       session_id: 'session-1',
     })])
-    expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
     const assistant = store.messages.find(turn => turn.role === 'assistant' && turn.id === 'runtime-stream-current')
     expect(assistant?.role === 'assistant' ? assistant.messages : []).toEqual([])
   })
@@ -12868,58 +12724,6 @@ describe('chat-list store', () => {
       expect.objectContaining({ type: 'runtime_subscribe', session_id: 'session-1' }),
     ])
     consoleError.mockRestore()
-  })
-
-  it('applies runtime snapshots for running and completed state through the store reducer', async () => {
-    api.fetchSessions.mockResolvedValueOnce({
-      items: [{ id: 'session-1', bot_id: 'bot-1', title: 'A', type: 'chat' }],
-      nextCursor: null,
-    })
-    const store = useChatStore()
-    await store.selectBot('bot-1')
-    await flushPromises()
-
-    const streamId = 'stream-runtime-delta'
-    streamHandler?.({
-      type: 'runtime_snapshot',
-      bot_id: 'bot-1',
-      session_id: 'session-1',
-      seq: 11,
-      snapshot: runtimeSnapshotFromScript(richActiveRunStoreScript('session-1', streamId), 'session-1', streamId, 'running', 11),
-    } as UIStreamEvent)
-
-    expect(store.streaming).toBe(true)
-    const assistant = store.messages.find(turn => turn.role === 'assistant')
-    expect(assistant?.role).toBe('assistant')
-    if (assistant?.role !== 'assistant') throw new Error('missing assistant turn')
-    expect(assistant.streaming).toBe(true)
-    expect(assistant.messages.find(block => block.type === 'text')).toMatchObject({
-      content: 'I will check the current state.',
-    })
-    expect(assistant.messages.find(block => block.type === 'tool' && block.toolCallId === 'call-approval')).toMatchObject({
-      approval: {
-        approval_id: 'approval-1',
-        status: 'pending',
-      },
-    })
-
-    let resolveRefresh: ((turns: unknown[]) => void) | undefined
-    api.fetchMessagesUI.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => {
-      resolveRefresh = resolve
-    }))
-    streamHandler?.({
-      type: 'runtime_snapshot',
-      bot_id: 'bot-1',
-      session_id: 'session-1',
-      seq: 12,
-      snapshot: runtimeSnapshotFromScript(richActiveRunStoreScript('session-1', streamId), 'session-1', streamId, 'completed', 12),
-    } as UIStreamEvent)
-
-    expect(store.streaming).toBe(false)
-    expect(assistant.streaming).toBe(false)
-    expect(assistant.messages.some(block => block.type === 'error')).toBe(false)
-    resolveRefresh?.([])
-    await flushPromises()
   })
 
   it('ignores out-of-order runtime state for the active session', async () => {
@@ -13295,7 +13099,6 @@ describe('chat-list store', () => {
     for (const event of stream.slice(2, 5)) streamHandler?.(event)
 
     expect(runtimeSubscribeMessages).toEqual([expect.objectContaining({ type: 'runtime_subscribe', session_id: 'session-1' })])
-    expect(api.fetchSessionRuntime).not.toHaveBeenCalled()
     const beforeRecovery = store.messages.find(turn => turn.role === 'assistant')
     expect(beforeRecovery?.role === 'assistant' ? beforeRecovery.messages : []).toEqual([])
 
