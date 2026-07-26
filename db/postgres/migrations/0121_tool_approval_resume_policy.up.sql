@@ -1,4 +1,4 @@
--- 0120_tool_approval_resume_policy
+-- 0121_tool_approval_resume_policy
 -- Distinguish durable native continuations from process-local approval waiters.
 
 ALTER TABLE public.tool_approval_requests

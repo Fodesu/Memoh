@@ -1,4 +1,4 @@
--- 0120_tool_approval_resume_policy
+-- 0121_tool_approval_resume_policy
 -- Remove the persisted approval resume policy.
 
 ALTER TABLE public.tool_approval_requests

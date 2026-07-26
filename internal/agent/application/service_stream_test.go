@@ -198,27 +198,26 @@ func TestStreamChatWSResultRejectsTurnReplacementForACP(t *testing.T) {
 		logger:         slog.New(slog.DiscardHandler),
 	}
 	preflightCalled := false
-	postPersistCalled := false
+	ctx := context.WithValue(context.Background(), replacementPersistenceContextKey{}, &replacementPersistenceState{
+		oldTurnID: "turn-1",
+		reason:    "retry",
+	})
 
 	_, err := resolver.streamChatWSResultWithHooks(
-		context.Background(),
+		ctx,
 		ChatRequest{BotID: "bot-1", ThreadID: "session-1"},
-		make(chan WSStreamEvent, 1),
+		make(chan StreamEventPayload, 1),
 		make(chan struct{}),
 		func(context.Context) error {
 			preflightCalled = true
-			return nil
-		},
-		func(context.Context, []messagepkg.Message) error {
-			postPersistCalled = true
 			return nil
 		},
 	)
 	if got := apperror.CodeOf(err); got != apperror.CodeACPTurnReplacementUnsupported {
 		t.Fatalf("error code = %q, want %q", got, apperror.CodeACPTurnReplacementUnsupported)
 	}
-	if preflightCalled || postPersistCalled {
-		t.Fatalf("replacement hooks ran for ACP: preflight=%v postPersist=%v", preflightCalled, postPersistCalled)
+	if preflightCalled {
+		t.Fatal("replacement preflight ran for ACP")
 	}
 }
 

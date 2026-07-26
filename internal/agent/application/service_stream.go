@@ -448,10 +448,9 @@ func (s *Service) streamChatWSResultWithHooksAndTurn(
 		if err := rejectACPWorkspaceTarget(req); err != nil {
 			return nil, err
 		}
-		// Hooks currently mean retry/edit turn replacement. ACP runtimes have
-		// no rewind primitive, so running the turn would leave their in-process
-		// context inconsistent with the visible history.
-		if preflight != nil || postPersist != nil {
+		// ACP runtimes have no rewind primitive, so running a replacement turn
+		// would leave their in-process context inconsistent with visible history.
+		if replacementPersistenceFromContext(ctx) != nil {
 			return nil, apperror.New(apperror.CodeACPTurnReplacementUnsupported, nil)
 		}
 		return nil, s.streamACPAgentWS(ctx, req, eventCh, abortCh)
