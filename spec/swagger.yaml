@@ -3307,8 +3307,12 @@ definitions:
     properties:
       content:
         type: string
+      deletable:
+        type: boolean
       description:
         type: string
+      editable:
+        type: boolean
       managed:
         type: boolean
       metadata:
@@ -3360,7 +3364,9 @@ definitions:
           type: string
         type: array
       source_path:
-        description: Existing SKILL.md path when editing a single skill.
+        description: |-
+          SourcePath is the existing SKILL.md being edited when saving a single skill.
+          Empty means create (or overwrite by frontmatter name under /data/skills/<name>/).
         type: string
     type: object
   handlers.SnapshotInfo:
@@ -8220,6 +8226,10 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:
@@ -8288,10 +8298,14 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "503":
           description: Service Unavailable
           schema:
@@ -8326,6 +8340,10 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:
@@ -11305,11 +11323,19 @@ paths:
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "502":
           description: Bad Gateway
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
       summary: Install skill from supermarket to bot workspace
       tags:
       - supermarket
