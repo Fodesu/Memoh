@@ -127,6 +127,7 @@
 
           <div class="flex items-center gap-1">
             <Button
+              v-if="skill.editable"
               variant="ghost"
               size="icon-sm"
               :aria-label="!skill.managed ? $t('bots.skills.overrideTitle') : $t('common.edit')"
@@ -174,7 +175,7 @@
             </Button>
 
             <ConfirmPopover
-              v-if="skill.managed"
+              v-if="skill.deletable"
               :message="$t('bots.skills.deleteConfirm')"
               :cancel-text="$t('common.cancel')"
               :confirm-text="$t('common.confirm')"
@@ -346,7 +347,7 @@
 
 <script setup lang="ts">
 import { ArrowDownToLine, Eye, EyeOff, Plus, SlidersHorizontal, SquarePen, Trash2 } from 'lucide-vue-next'
-import { computed, ref, watch } from 'vue'
+import { computed, onActivated, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ConfirmPopover, FieldStack, FormStack, InlineLoadingRow, PageShell, SettingsRow, SettingsSection, toast } from '@felinic/ui'
 import { useQuery, useQueryCache } from '@pinia/colada'
@@ -613,6 +614,8 @@ function sourceKindLabel(kind?: string) {
       return t('bots.skills.compatBadge')
     case 'plugin':
       return t('bots.skills.pluginBadge')
+    case 'registry':
+      return t('bots.skills.registryBadge')
     default:
       return t('bots.skills.managedBadge')
   }
@@ -767,6 +770,15 @@ watch(() => props.botId, () => {
   syncDiscoveryRoots(DEFAULT_DISCOVERY_ROOTS)
   void fetchSkills()
 }, { immediate: true })
+
+let hasActivated = false
+onActivated(() => {
+  if (!hasActivated) {
+    hasActivated = true
+    return
+  }
+  if (props.botId) void fetchSkills()
+})
 
 watch(bot, (value) => {
   if (!value) return

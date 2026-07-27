@@ -1960,7 +1960,9 @@ export type HandlersSessionInfoResponse = {
 
 export type HandlersSkillItem = {
     content?: string;
+    deletable?: boolean;
     description?: string;
+    editable?: boolean;
     managed?: boolean;
     metadata?: {
         [key: string]: unknown;
@@ -1994,7 +1996,8 @@ export type HandlersSkillsResponse = {
 export type HandlersSkillsUpsertRequest = {
     skills?: Array<string>;
     /**
-     * Existing SKILL.md path when editing a single skill.
+     * SourcePath is the existing SKILL.md being edited when saving a single skill.
+     * Empty means create (or overwrite by frontmatter name under /data/skills/<name>/).
      */
     source_path?: string;
 };
@@ -6547,6 +6550,10 @@ export type DeleteBotsByBotIdContainerSkillsErrors = {
      */
     404: HandlersErrorResponse;
     /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
      * Internal Server Error
      */
     500: HandlersErrorResponse;
@@ -6634,9 +6641,13 @@ export type PostBotsByBotIdContainerSkillsErrors = {
      */
     404: HandlersErrorResponse;
     /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ApperrorProblem;
     /**
      * Service Unavailable
      */
@@ -6678,6 +6689,10 @@ export type PostBotsByBotIdContainerSkillsActionsErrors = {
      * Not Found
      */
     404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -10274,11 +10289,19 @@ export type PostBotsByBotIdSupermarketInstallSkillErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ApperrorProblem;
 };
 
 export type PostBotsByBotIdSupermarketInstallSkillError = PostBotsByBotIdSupermarketInstallSkillErrors[keyof PostBotsByBotIdSupermarketInstallSkillErrors];

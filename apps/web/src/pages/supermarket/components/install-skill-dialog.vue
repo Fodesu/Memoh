@@ -76,7 +76,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-
 const selectedBotId = ref('')
 const installing = ref(false)
 

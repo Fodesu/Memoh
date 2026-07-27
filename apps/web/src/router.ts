@@ -233,6 +233,11 @@ const routes = [
             },
           },
           {
+            name: 'supermarket-skill-detail-legacy',
+            path: 'skills/:skillId',
+            redirect: { name: 'supermarket' },
+          },
+          {
             name: 'supermarket-skill-detail',
             path: 'skills/:registryId/:packageId/:skillId',
             component: () => import('@/pages/supermarket/skill-detail.vue'),
