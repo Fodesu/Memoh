@@ -13379,90 +13379,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/supermarket/catalog/skills": {
-            "get": {
-                "tags": [
-                    "supermarket"
-                ],
-                "summary": "Search Skills across supermarket Registries",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Search query",
-                        "name": "q",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Registry ID",
-                        "name": "registry",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Package ID",
-                        "name": "package",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Category ID",
-                        "name": "category",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Exact tag",
-                        "name": "tag",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Target OS",
-                        "name": "os",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Page number",
-                        "name": "page",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Items per page",
-                        "name": "limit",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Sort order",
-                        "name": "sort",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketCatalogSkillListResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/supermarket/plugins": {
             "get": {
                 "tags": [
@@ -13718,7 +13634,7 @@ const docTemplate = `{
                 "tags": [
                     "supermarket"
                 ],
-                "summary": "List skills from supermarket",
+                "summary": "List Skills across supermarket Registries",
                 "parameters": [
                     {
                         "type": "string",
@@ -13728,8 +13644,32 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Filter by tag",
+                        "description": "Registry ID",
+                        "name": "registry",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Package ID",
+                        "name": "package",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Category ID",
+                        "name": "category",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact tag",
                         "name": "tag",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Target OS",
+                        "name": "os",
                         "in": "query"
                     },
                     {
@@ -13743,48 +13683,23 @@ const docTemplate = `{
                         "description": "Items per page",
                         "name": "limit",
                         "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketSkillListResponse"
-                        }
                     },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/supermarket/skills/{id}": {
-            "get": {
-                "tags": [
-                    "supermarket"
-                ],
-                "summary": "Get skill detail from supermarket",
-                "parameters": [
                     {
                         "type": "string",
-                        "description": "Skill ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
+                        "description": "Sort order",
+                        "name": "sort",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketSkillEntry"
+                            "$ref": "#/definitions/handlers.SupermarketCatalogSkillListResponse"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -20500,32 +20415,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SupermarketSkillEntry": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "files": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "id": {
-                    "type": "string"
-                },
-                "metadata": {
-                    "$ref": "#/definitions/handlers.SupermarketSkillMetadata"
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.SupermarketSkillIcon": {
             "type": "object",
             "properties": {
@@ -20557,43 +20446,6 @@ const docTemplate = `{
                 },
                 "size": {
                     "type": "integer"
-                }
-            }
-        },
-        "handlers.SupermarketSkillListResponse": {
-            "type": "object",
-            "properties": {
-                "data": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketSkillEntry"
-                    }
-                },
-                "limit": {
-                    "type": "integer"
-                },
-                "page": {
-                    "type": "integer"
-                },
-                "total": {
-                    "type": "integer"
-                }
-            }
-        },
-        "handlers.SupermarketSkillMetadata": {
-            "type": "object",
-            "properties": {
-                "author": {
-                    "$ref": "#/definitions/handlers.SupermarketAuthor"
-                },
-                "homepage": {
-                    "type": "string"
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
                 }
             }
         },

@@ -2099,15 +2099,6 @@ export type HandlersSupermarketSkillCategoryListResponse = {
     data?: Array<HandlersSupermarketSkillCategory>;
 };
 
-export type HandlersSupermarketSkillEntry = {
-    content?: string;
-    description?: string;
-    files?: Array<string>;
-    id?: string;
-    metadata?: HandlersSupermarketSkillMetadata;
-    name?: string;
-};
-
 export type HandlersSupermarketSkillIcon = {
     brand_color?: string;
     card?: HandlersSupermarketSkillImage;
@@ -2120,19 +2111,6 @@ export type HandlersSupermarketSkillImage = {
     digest?: string;
     download_url?: string;
     size?: number;
-};
-
-export type HandlersSupermarketSkillListResponse = {
-    data?: Array<HandlersSupermarketSkillEntry>;
-    limit?: number;
-    page?: number;
-    total?: number;
-};
-
-export type HandlersSupermarketSkillMetadata = {
-    author?: HandlersSupermarketAuthor;
-    homepage?: string;
-    tags?: Array<string>;
 };
 
 export type HandlersSupermarketSkillRuntimeRequirements = {
@@ -14300,72 +14278,6 @@ export type GetSpeechProvidersByIdModelsResponses = {
 
 export type GetSpeechProvidersByIdModelsResponse = GetSpeechProvidersByIdModelsResponses[keyof GetSpeechProvidersByIdModelsResponses];
 
-export type GetSupermarketCatalogSkillsData = {
-    body?: never;
-    path?: never;
-    query?: {
-        /**
-         * Search query
-         */
-        q?: string;
-        /**
-         * Registry ID
-         */
-        registry?: string;
-        /**
-         * Package ID
-         */
-        package?: string;
-        /**
-         * Category ID
-         */
-        category?: string;
-        /**
-         * Exact tag
-         */
-        tag?: string;
-        /**
-         * Target OS
-         */
-        os?: string;
-        /**
-         * Page number
-         */
-        page?: number;
-        /**
-         * Items per page
-         */
-        limit?: number;
-        /**
-         * Sort order
-         */
-        sort?: string;
-    };
-    url: '/supermarket/catalog/skills';
-};
-
-export type GetSupermarketCatalogSkillsErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
-};
-
-export type GetSupermarketCatalogSkillsError = GetSupermarketCatalogSkillsErrors[keyof GetSupermarketCatalogSkillsErrors];
-
-export type GetSupermarketCatalogSkillsResponses = {
-    /**
-     * OK
-     */
-    200: HandlersSupermarketCatalogSkillListResponse;
-};
-
-export type GetSupermarketCatalogSkillsResponse = GetSupermarketCatalogSkillsResponses[keyof GetSupermarketCatalogSkillsResponses];
-
 export type GetSupermarketPluginsData = {
     body?: never;
     path?: never;
@@ -14596,9 +14508,25 @@ export type GetSupermarketSkillsData = {
          */
         q?: string;
         /**
-         * Filter by tag
+         * Registry ID
+         */
+        registry?: string;
+        /**
+         * Package ID
+         */
+        package?: string;
+        /**
+         * Category ID
+         */
+        category?: string;
+        /**
+         * Exact tag
          */
         tag?: string;
+        /**
+         * Target OS
+         */
+        os?: string;
         /**
          * Page number
          */
@@ -14607,11 +14535,19 @@ export type GetSupermarketSkillsData = {
          * Items per page
          */
         limit?: number;
+        /**
+         * Sort order
+         */
+        sort?: string;
     };
     url: '/supermarket/skills';
 };
 
 export type GetSupermarketSkillsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
     /**
      * Bad Gateway
      */
@@ -14624,44 +14560,10 @@ export type GetSupermarketSkillsResponses = {
     /**
      * OK
      */
-    200: HandlersSupermarketSkillListResponse;
+    200: HandlersSupermarketCatalogSkillListResponse;
 };
 
 export type GetSupermarketSkillsResponse = GetSupermarketSkillsResponses[keyof GetSupermarketSkillsResponses];
-
-export type GetSupermarketSkillsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Skill ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/supermarket/skills/{id}';
-};
-
-export type GetSupermarketSkillsByIdErrors = {
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
-};
-
-export type GetSupermarketSkillsByIdError = GetSupermarketSkillsByIdErrors[keyof GetSupermarketSkillsByIdErrors];
-
-export type GetSupermarketSkillsByIdResponses = {
-    /**
-     * OK
-     */
-    200: HandlersSupermarketSkillEntry;
-};
-
-export type GetSupermarketSkillsByIdResponse = GetSupermarketSkillsByIdResponses[keyof GetSupermarketSkillsByIdResponses];
 
 export type GetSupermarketTagsData = {
     body?: never;
