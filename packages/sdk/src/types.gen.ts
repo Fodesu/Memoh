@@ -1835,6 +1835,7 @@ export type HandlersHooksEventsResponse = {
 
 export type HandlersInstallPluginRequest = {
     plugin_id?: string;
+    release_revision?: string;
     variables?: {
         [key: string]: string;
     };
@@ -1852,6 +1853,7 @@ export type HandlersInstallRegistrySkillResponse = {
 };
 
 export type HandlersInstallSkillRequest = {
+    artifact_digest?: string;
     package_id?: string;
     registry_id?: string;
     skill_id?: string;
@@ -2053,11 +2055,48 @@ export type HandlersSupermarketCatalogSkillListResponse = {
     total?: number;
 };
 
+export type HandlersSupermarketPluginEntry = {
+    auth_requirements?: Array<PluginsAuthRequirement>;
+    author?: PluginsAuthor;
+    capabilities?: Array<string>;
+    description?: string;
+    homepage?: string;
+    icon?: PluginsIcon;
+    id?: string;
+    install?: Array<string>;
+    mcps?: Array<PluginsMcpResource>;
+    name?: string;
+    release?: HandlersSupermarketPluginRelease;
+    schema_version?: string;
+    skills?: Array<PluginsSkillReference>;
+    tags?: Array<string>;
+    variables?: Array<PluginsConfigVar>;
+    version?: string;
+};
+
 export type HandlersSupermarketPluginListResponse = {
-    data?: Array<PluginsManifest>;
+    data?: Array<HandlersSupermarketPluginEntry>;
     limit?: number;
     page?: number;
     total?: number;
+};
+
+export type HandlersSupermarketPluginRelease = {
+    artifact?: HandlersSupermarketSkillArtifact;
+    published_at?: string;
+    revision?: string;
+    skills?: Array<HandlersSupermarketPluginResolvedSkill>;
+};
+
+export type HandlersSupermarketPluginResolvedSkill = {
+    artifact?: HandlersSupermarketSkillArtifact;
+    install_id?: string;
+    package_id?: string;
+    registry_id?: string;
+    registry_revision?: string;
+    runtime_requirements?: HandlersSupermarketSkillRuntimeRequirements;
+    skill_id?: string;
+    source_revision?: string;
 };
 
 export type HandlersSupermarketRegistry = {
@@ -14367,7 +14406,7 @@ export type GetSupermarketPluginsByIdResponses = {
     /**
      * OK
      */
-    200: PluginsManifest;
+    200: HandlersSupermarketPluginEntry;
 };
 
 export type GetSupermarketPluginsByIdResponse = GetSupermarketPluginsByIdResponses[keyof GetSupermarketPluginsByIdResponses];
