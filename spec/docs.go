@@ -19778,6 +19778,16 @@ const docTemplate = `{
         },
         "handlers.InstallRegistrySkillResponse": {
             "type": "object",
+            "required": [
+                "artifact_digest",
+                "files_written",
+                "install_id",
+                "ok",
+                "package_id",
+                "registry_id",
+                "skill_id",
+                "workspace_target_id"
+            ],
             "properties": {
                 "artifact_digest": {
                     "type": "string"
@@ -19807,6 +19817,12 @@ const docTemplate = `{
         },
         "handlers.InstallSkillRequest": {
             "type": "object",
+            "required": [
+                "artifact_digest",
+                "package_id",
+                "registry_id",
+                "skill_id"
+            ],
             "properties": {
                 "artifact_digest": {
                     "type": "string"
@@ -20222,6 +20238,10 @@ const docTemplate = `{
         },
         "handlers.SupermarketAuthor": {
             "type": "object",
+            "required": [
+                "email",
+                "name"
+            ],
             "properties": {
                 "email": {
                     "type": "string"
@@ -20233,6 +20253,22 @@ const docTemplate = `{
         },
         "handlers.SupermarketCatalogSkill": {
             "type": "object",
+            "required": [
+                "artifact",
+                "author",
+                "category",
+                "category_name",
+                "description",
+                "files",
+                "install_id",
+                "name",
+                "package_id",
+                "registry_id",
+                "schema_version",
+                "skill_id",
+                "source",
+                "tags"
+            ],
             "properties": {
                 "artifact": {
                     "$ref": "#/definitions/handlers.SupermarketSkillArtifact"
@@ -20298,6 +20334,12 @@ const docTemplate = `{
         },
         "handlers.SupermarketCatalogSkillListResponse": {
             "type": "object",
+            "required": [
+                "data",
+                "limit",
+                "page",
+                "total"
+            ],
             "properties": {
                 "data": {
                     "type": "array",
@@ -20474,7 +20516,6 @@ const docTemplate = `{
                 "package_id",
                 "registry_id",
                 "registry_revision",
-                "runtime_requirements",
                 "skill_id",
                 "source_revision"
             ],
@@ -20507,41 +20548,58 @@ const docTemplate = `{
         },
         "handlers.SupermarketRegistry": {
             "type": "object",
+            "required": [
+                "adapter",
+                "category_count",
+                "enabled",
+                "id",
+                "name",
+                "package_count",
+                "priority",
+                "skill_count",
+                "skipped_package_count"
+            ],
             "properties": {
+                "adapter": {
+                    "type": "string"
+                },
+                "category_count": {
+                    "type": "integer"
+                },
                 "enabled": {
                     "type": "boolean"
                 },
                 "id": {
                     "type": "string"
                 },
-                "last_error": {
-                    "type": "string"
-                },
                 "name": {
                     "type": "string"
                 },
-                "next_refresh_at": {
-                    "type": "string"
+                "package_count": {
+                    "type": "integer"
                 },
                 "priority": {
                     "type": "integer"
                 },
-                "refresh_interval_seconds": {
-                    "type": "integer"
+                "published_at": {
+                    "type": "string"
                 },
                 "revision": {
                     "type": "string"
                 },
-                "status": {
-                    "type": "string"
+                "skill_count": {
+                    "type": "integer"
                 },
-                "synced_at": {
-                    "type": "string"
+                "skipped_package_count": {
+                    "type": "integer"
                 }
             }
         },
         "handlers.SupermarketRegistryListResponse": {
             "type": "object",
+            "required": [
+                "data"
+            ],
             "properties": {
                 "data": {
                     "type": "array",
@@ -20584,23 +20642,56 @@ const docTemplate = `{
         },
         "handlers.SupermarketSkillCategory": {
             "type": "object",
+            "required": [
+                "count",
+                "id",
+                "name",
+                "registries"
+            ],
             "properties": {
+                "count": {
+                    "type": "integer"
+                },
                 "id": {
                     "type": "string"
                 },
                 "name": {
                     "type": "string"
+                },
+                "registries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketSkillCategoryRegistry"
+                    }
                 }
             }
         },
         "handlers.SupermarketSkillCategoryListResponse": {
             "type": "object",
+            "required": [
+                "data"
+            ],
             "properties": {
                 "data": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/handlers.SupermarketSkillCategory"
                     }
+                }
+            }
+        },
+        "handlers.SupermarketSkillCategoryRegistry": {
+            "type": "object",
+            "required": [
+                "count",
+                "id"
+            ],
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
                 }
             }
         },
@@ -20623,6 +20714,11 @@ const docTemplate = `{
         },
         "handlers.SupermarketSkillIconAsset": {
             "type": "object",
+            "required": [
+                "content_type",
+                "digest",
+                "size"
+            ],
             "properties": {
                 "content_type": {
                     "type": "string"
@@ -20637,6 +20733,9 @@ const docTemplate = `{
         },
         "handlers.SupermarketSkillRuntimeRequirements": {
             "type": "object",
+            "required": [
+                "os"
+            ],
             "properties": {
                 "os": {
                     "type": "array",
@@ -20648,6 +20747,11 @@ const docTemplate = `{
         },
         "handlers.SupermarketSkillSource": {
             "type": "object",
+            "required": [
+                "path",
+                "revision",
+                "type"
+            ],
             "properties": {
                 "path": {
                     "type": "string"
