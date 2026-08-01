@@ -3099,6 +3099,9 @@ definitions:
     type: object
   handlers.InstallPluginRequest:
     properties:
+      expected_installed_revision:
+        type: string
+        x-nullable: true
       plugin_id:
         type: string
       release_revision:
@@ -3107,6 +3110,10 @@ definitions:
         additionalProperties:
           type: string
         type: object
+    required:
+    - expected_installed_revision
+    - plugin_id
+    - release_revision
     type: object
   handlers.InstallRegistrySkillResponse:
     properties:
@@ -3514,6 +3521,8 @@ definitions:
         type: array
       version:
         type: string
+    required:
+    - release
     type: object
   handlers.SupermarketPluginListResponse:
     properties:
@@ -3540,6 +3549,11 @@ definitions:
         items:
           $ref: '#/definitions/handlers.SupermarketPluginResolvedSkill'
         type: array
+    required:
+    - artifact
+    - published_at
+    - revision
+    - skills
     type: object
   handlers.SupermarketPluginResolvedSkill:
     properties:
@@ -3559,6 +3573,15 @@ definitions:
         type: string
       source_revision:
         type: string
+    required:
+    - artifact
+    - install_id
+    - package_id
+    - registry_id
+    - registry_revision
+    - runtime_requirements
+    - skill_id
+    - source_revision
     type: object
   handlers.SupermarketRegistry:
     properties:
@@ -3602,6 +3625,12 @@ definitions:
         type: string
       size:
         type: integer
+    required:
+    - content_type
+    - digest
+    - download_url
+    - format
+    - size
     type: object
   handlers.SupermarketSkillCategory:
     properties:
@@ -11297,6 +11326,14 @@ paths:
             $ref: '#/definitions/handlers.ErrorResponse'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
         "502":
