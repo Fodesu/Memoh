@@ -20144,7 +20144,7 @@ const docTemplate = `{
                     }
                 },
                 "source_path": {
-                    "description": "SourcePath is the existing SKILL.md being edited when saving a single skill.\nEmpty means create (or overwrite by frontmatter name under /data/skills/\u003cname\u003e/).",
+                    "description": "SourcePath is the existing SKILL.md being edited when saving a single skill.\nEmpty means create (or overwrite by frontmatter name under\n/data/skills/user/personal/\u003cname\u003e/).",
                     "type": "string"
                 }
             }
@@ -21900,12 +21900,6 @@ const docTemplate = `{
                 "author": {
                     "$ref": "#/definitions/plugins.Author"
                 },
-                "bundled_skills": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.SkillEntry"
-                    }
-                },
                 "capabilities": {
                     "type": "array",
                     "items": {
@@ -21945,7 +21939,7 @@ const docTemplate = `{
                 "skills": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/plugins.SkillResource"
+                        "$ref": "#/definitions/plugins.SkillReference"
                     }
                 },
                 "tags": {
@@ -22003,43 +21997,16 @@ const docTemplate = `{
                 }
             }
         },
-        "plugins.SkillEntry": {
+        "plugins.SkillReference": {
             "type": "object",
             "properties": {
-                "content": {
+                "package_id": {
                     "type": "string"
                 },
-                "description": {
+                "registry_id": {
                     "type": "string"
                 },
-                "files": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "id": {
-                    "type": "string"
-                },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
-        "plugins.SkillResource": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "path": {
+                "skill_id": {
                     "type": "string"
                 }
             }
