@@ -1834,6 +1834,7 @@ export type HandlersHooksEventsResponse = {
 };
 
 export type HandlersInstallPluginRequest = {
+    expected_installation_updated_at: string | null;
     expected_installed_revision: string | null;
     plugin_id: string;
     release_revision: string;
@@ -2127,9 +2128,11 @@ export type HandlersSupermarketRegistryListResponse = {
 };
 
 export type HandlersSupermarketSkillArtifact = {
+    archive_size: number;
     content_type: string;
     digest: string;
     download_url: string;
+    file_count: number;
     format: string;
     size: number;
     uncompressed_size: number;

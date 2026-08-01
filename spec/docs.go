@@ -19753,11 +19753,16 @@ const docTemplate = `{
         "handlers.InstallPluginRequest": {
             "type": "object",
             "required": [
+                "expected_installation_updated_at",
                 "expected_installed_revision",
                 "plugin_id",
                 "release_revision"
             ],
             "properties": {
+                "expected_installation_updated_at": {
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "expected_installed_revision": {
                     "type": "string",
                     "x-nullable": true
@@ -20612,14 +20617,19 @@ const docTemplate = `{
         "handlers.SupermarketSkillArtifact": {
             "type": "object",
             "required": [
+                "archive_size",
                 "content_type",
                 "digest",
                 "download_url",
+                "file_count",
                 "format",
                 "size",
                 "uncompressed_size"
             ],
             "properties": {
+                "archive_size": {
+                    "type": "integer"
+                },
                 "content_type": {
                     "type": "string"
                 },
@@ -20628,6 +20638,9 @@ const docTemplate = `{
                 },
                 "download_url": {
                     "type": "string"
+                },
+                "file_count": {
+                    "type": "integer"
                 },
                 "format": {
                     "type": "string"
