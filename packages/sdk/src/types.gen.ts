@@ -2042,7 +2042,6 @@ export type HandlersSupermarketCatalogSkill = {
     name: string;
     package_id: string;
     registry_id: string;
-    runtime_requirements?: HandlersSupermarketSkillRuntimeRequirements;
     schema_version: string;
     skill_id: string;
     source: HandlersSupermarketSkillSource;
@@ -2104,7 +2103,6 @@ export type HandlersSupermarketPluginResolvedSkill = {
     package_id: string;
     registry_id: string;
     registry_revision: string;
-    runtime_requirements?: HandlersSupermarketSkillRuntimeRequirements;
     skill_id: string;
     source_revision: string;
 };
@@ -2165,10 +2163,6 @@ export type HandlersSupermarketSkillIconAsset = {
     content_type: string;
     digest: string;
     size: number;
-};
-
-export type HandlersSupermarketSkillRuntimeRequirements = {
-    os: Array<string>;
 };
 
 export type HandlersSupermarketSkillSource = {
@@ -14573,10 +14567,6 @@ export type GetSupermarketSkillsData = {
          * Exact tag
          */
         tag?: string;
-        /**
-         * Target OS
-         */
-        os?: string;
         /**
          * Page number
          */
