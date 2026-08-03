@@ -99,6 +99,7 @@ async function handleInstall() {
     toast.success(t('supermarket.installSuccess'))
     emit('update:open', false)
     emit('installed')
+    emit('update:open', false)
   } catch (error) {
     toast.error(resolveApiErrorMessage(error, t('supermarket.installFailed')))
   } finally {
