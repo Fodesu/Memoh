@@ -180,8 +180,8 @@ func TestRegistryUpstreamErrorsUseStableContracts(t *testing.T) {
 		status int
 	}{
 		{code: CodeRegistryUnavailable, status: http.StatusBadGateway},
-		{code: CodeRegistrySkillNotFound, status: http.StatusNotFound},
-		{code: CodeRegistrySkillInvalid, status: http.StatusBadGateway},
+		{code: CodeRegistryPackageNotFound, status: http.StatusNotFound},
+		{code: CodeRegistryPackageInvalid, status: http.StatusBadGateway},
 	}
 	for _, test := range tests {
 		definition, ok := Lookup(test.code)
@@ -197,15 +197,15 @@ func TestRegistryUpstreamErrorsUseStableContracts(t *testing.T) {
 	}
 }
 
-func TestRegistrySkillInstallFailedUsesPrivateServerErrorContract(t *testing.T) {
-	definition, ok := Lookup(CodeRegistrySkillInstallFailed)
+func TestRegistryPackageInstallFailedUsesPrivateServerErrorContract(t *testing.T) {
+	definition, ok := Lookup(CodeRegistryPackageInstallFailed)
 	if !ok {
-		t.Fatal("registry.skill_install_failed missing from catalog")
+		t.Fatal("registry.package_install_failed missing from catalog")
 	}
 	if definition.HTTPStatus != http.StatusInternalServerError {
-		t.Fatalf("registry.skill_install_failed status = %d, want 500", definition.HTTPStatus)
+		t.Fatalf("registry.package_install_failed status = %d, want 500", definition.HTTPStatus)
 	}
 	if strings.TrimSpace(definition.Detail) == "" {
-		t.Fatal("registry.skill_install_failed has empty fallback detail")
+		t.Fatal("registry.package_install_failed has empty fallback detail")
 	}
 }
