@@ -2086,9 +2086,9 @@ export type HandlersSupermarketPluginEntry = {
     install?: Array<string>;
     mcps?: Array<PluginsMcpResource>;
     name?: string;
+    packages?: Array<PluginsPackageReference>;
     release: HandlersSupermarketPluginRelease;
     schema_version?: string;
-    skills?: Array<PluginsSkillReference>;
     tags?: Array<string>;
     variables?: Array<PluginsConfigVar>;
     version?: string;
@@ -2103,19 +2103,15 @@ export type HandlersSupermarketPluginListResponse = {
 
 export type HandlersSupermarketPluginRelease = {
     artifact: HandlersSupermarketPluginArtifact;
+    packages: Array<HandlersSupermarketPluginResolvedPackage>;
     published_at: string;
     revision: string;
-    skills: Array<HandlersSupermarketPluginResolvedSkill>;
 };
 
-export type HandlersSupermarketPluginResolvedSkill = {
-    artifact: HandlersSupermarketSkillArtifact;
-    install_id: string;
+export type HandlersSupermarketPluginResolvedPackage = {
     package_id: string;
     registry_id: string;
-    registry_revision: string;
-    skill_id: string;
-    source_revision: string;
+    revision: string;
 };
 
 export type HandlersSupermarketRegistry = {
@@ -2189,12 +2185,11 @@ export type HandlersSupermarketSkillPackageDescriptor = {
     name: string;
     package_id: string;
     registry_id: string;
-    release_url: string;
+    release_url?: string;
     revision: string;
     schema_version: string;
     skill_count: number;
     skills: Array<HandlersSupermarketCatalogSkill>;
-    source_revision: string;
     tags: Array<string>;
 };
 
@@ -2831,8 +2826,8 @@ export type PluginsManifest = {
     install?: Array<string>;
     mcps?: Array<PluginsMcpResource>;
     name?: string;
+    packages?: Array<PluginsPackageReference>;
     schema_version?: string;
-    skills?: Array<PluginsSkillReference>;
     tags?: Array<string>;
     variables?: Array<PluginsConfigVar>;
     version?: string;
@@ -2840,6 +2835,11 @@ export type PluginsManifest = {
 
 export type PluginsOAuthAuthorizeRequest = {
     callback_url?: string;
+};
+
+export type PluginsPackageReference = {
+    package_id: string;
+    registry_id: string;
 };
 
 export type PluginsResource = {
@@ -2853,12 +2853,6 @@ export type PluginsResource = {
     resource_type?: string;
     status?: string;
     updated_at?: string;
-};
-
-export type PluginsSkillReference = {
-    package_id?: string;
-    registry_id?: string;
-    skill_id?: string;
 };
 
 export type ProvidersCountResponse = {
