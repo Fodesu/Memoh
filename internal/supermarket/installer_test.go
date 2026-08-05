@@ -121,6 +121,9 @@ func TestValidatePackageRejectsIdentityCountAndDuplicates(t *testing.T) {
 		"registry identity": func(pkg *SkillPackageDescriptor) { pkg.RegistryID = "other" },
 		"member count":      func(pkg *SkillPackageDescriptor) { pkg.SkillCount = 2 },
 		"member package":    func(pkg *SkillPackageDescriptor) { pkg.Skills[0].PackageID = "other" },
+		"unsafe postinstall": func(pkg *SkillPackageDescriptor) {
+			pkg.Postinstall = []PackagePostinstallCommand{{Command: "sh", Args: []string{"-c", "exit 1"}}}
+		},
 		"duplicate member": func(pkg *SkillPackageDescriptor) {
 			pkg.Skills = append(pkg.Skills, pkg.Skills[0])
 			pkg.SkillCount = 2

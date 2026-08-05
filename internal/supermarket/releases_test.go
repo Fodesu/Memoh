@@ -15,6 +15,7 @@ func TestFetchPackageReleaseHydratesArtifactURLs(t *testing.T) {
 	release := SkillPackageRelease{
 		SchemaVersion: "1", RegistryID: "openai", PackageID: "docs",
 		Name: "Docs", Description: "Docs", Tags: []string{},
+		Postinstall: []PackagePostinstallCommand{{Command: "npm", Args: []string{"install", "--global", "opencli"}}},
 		Skills: []SkillPackageReleaseSkill{{
 			SchemaVersion: "1", RegistryID: "openai", PackageID: "docs", SkillID: "write-docs",
 			InstallID: "openai+docs+write-docs", Name: "Write docs", Description: "Write docs",
@@ -37,6 +38,9 @@ func TestFetchPackageReleaseHydratesArtifactURLs(t *testing.T) {
 	}
 	if pkg.Revision != revision || len(pkg.Skills) != 1 || pkg.SkillCount != 1 {
 		t.Fatalf("Package = %+v", pkg)
+	}
+	if len(pkg.Postinstall) != 1 || pkg.Postinstall[0].Command != "npm" {
+		t.Fatalf("Postinstall = %+v", pkg.Postinstall)
 	}
 	wantURL := "/api/artifacts/skill/" + release.Skills[0].Artifact.Digest
 	if pkg.Skills[0].Artifact.DownloadURL != wantURL {

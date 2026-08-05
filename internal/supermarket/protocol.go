@@ -117,9 +117,15 @@ type SkillPackageSummary struct {
 
 type SkillPackageDescriptor struct {
 	SkillPackageSummary
-	Revision string         `json:"revision" validate:"required"`
-	Skills   []CatalogSkill `json:"skills" validate:"required"`
+	Revision    string                      `json:"revision" validate:"required"`
+	Postinstall []PackagePostinstallCommand `json:"postinstall,omitempty"`
+	Skills      []CatalogSkill              `json:"skills" validate:"required"`
 } // @name handlers.SupermarketSkillPackageDescriptor
+
+type PackagePostinstallCommand struct {
+	Command string   `json:"command" validate:"required"`
+	Args    []string `json:"args" validate:"required"`
+} // @name handlers.SupermarketPackagePostinstallCommand
 
 type SkillPackageReleaseSkill struct {
 	SchemaVersion  string        `json:"schema_version"`
@@ -141,14 +147,15 @@ type SkillPackageReleaseSkill struct {
 }
 
 type SkillPackageRelease struct {
-	SchemaVersion string                     `json:"schema_version"`
-	RegistryID    string                     `json:"registry_id"`
-	PackageID     string                     `json:"package_id"`
-	Name          string                     `json:"name"`
-	Description   string                     `json:"description"`
-	Tags          []string                   `json:"tags"`
-	Icon          *SkillIcon                 `json:"icon,omitempty"`
-	Skills        []SkillPackageReleaseSkill `json:"skills"`
+	SchemaVersion string                      `json:"schema_version"`
+	RegistryID    string                      `json:"registry_id"`
+	PackageID     string                      `json:"package_id"`
+	Name          string                      `json:"name"`
+	Description   string                      `json:"description"`
+	Tags          []string                    `json:"tags"`
+	Icon          *SkillIcon                  `json:"icon,omitempty"`
+	Postinstall   []PackagePostinstallCommand `json:"postinstall,omitempty"`
+	Skills        []SkillPackageReleaseSkill  `json:"skills"`
 }
 
 type SkillPackageListResponse struct {

@@ -154,3 +154,7 @@ func uniqueSortedStrings(values []string) []string {
 func packageInstallationLockKey(botID, targetID, registryID, packageID string) string {
 	return strings.Join([]string{"package", botID, targetID, registryID, packageID}, "\x00")
 }
+
+func packagePostinstallLockKey(botID, targetID string) string {
+	return strings.Join([]string{"postinstall", botID, targetID}, "\x00")
+}

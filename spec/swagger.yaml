@@ -3516,6 +3516,18 @@ definitions:
     - page
     - total
     type: object
+  handlers.SupermarketPackagePostinstallCommand:
+    properties:
+      args:
+        items:
+          type: string
+        type: array
+      command:
+        type: string
+    required:
+    - args
+    - command
+    type: object
   handlers.SupermarketRegistry:
     properties:
       adapter:
@@ -3676,6 +3688,10 @@ definitions:
         type: string
       package_id:
         type: string
+      postinstall:
+        items:
+          $ref: '#/definitions/handlers.SupermarketPackagePostinstallCommand'
+        type: array
       registry_id:
         type: string
       revision:
