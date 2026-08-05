@@ -226,7 +226,7 @@ func TestRunPluginScriptsReportsExecutionError(t *testing.T) {
 
 type installerPluginStub struct{}
 
-func (*installerPluginStub) Install(context.Context, string, pluginspkg.InstallRequest) (pluginspkg.Installation, error) {
+func (*installerPluginStub) Install(context.Context, string, pluginspkg.InstallPlan) (pluginspkg.Installation, error) {
 	return pluginspkg.Installation{}, nil
 }
 

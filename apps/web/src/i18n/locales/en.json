@@ -2958,38 +2958,17 @@
     },
     "plugins": {
       "title": "Plugins",
-      "intro": "Manage installed plugin bundles and their hidden MCP resources.",
+      "intro": "Manage installed plugin bundles and Skill Packages.",
       "installedTitle": "Installed plugins",
       "emptyTitle": "No Plugins",
-      "emptyDescription": "Install plugins from Supermarket to add bundled MCP resources and skills.",
-      "resourcesLabel": "Resources",
-      "authLabel": "Auth",
-      "toolPrefixLabel": "Tool Prefix",
-      "authorizeAction": "Authorize",
-      "refreshAuthAction": "Refresh OAuth status",
-      "enableAction": "Enable plugin",
-      "disableAction": "Disable plugin",
-      "uninstallAction": "Uninstall plugin",
-      "purgeAction": "Purge plugin",
-      "uninstallConfirm": "Uninstall this plugin and remove its managed resources?",
-      "purgeConfirm": "Permanently delete this plugin installation record and config?",
+      "emptyDescription": "Install plugins from Supermarket to add Skill Packages and plugin automation.",
       "loadFailed": "Failed to load plugins",
       "enableSuccess": "Plugin enabled",
       "disableSuccess": "Plugin disabled",
-      "uninstallSuccess": "Plugin uninstalled",
-      "purgeSuccess": "Plugin purged",
       "status": {
         "ready": "Ready",
-        "needsConfig": "Needs config",
-        "needsAuth": "Needs auth",
-        "adminRequired": "Admin setup",
         "disabled": "Disabled",
         "uninstalled": "Uninstalled"
-      },
-      "auth": {
-        "none": "Anonymous",
-        "managed_oauth": "Managed OAuth",
-        "user_secret": "User secret"
       }
     },
     "skills": {
@@ -3342,7 +3321,6 @@
     "packageInstallTitle": "Install Package",
     "loadError": "Failed to load from Supermarket",
     "submit": "Submit",
-    "mcps": "MCPs",
     "information": "Information",
     "category": "Category",
     "registry": "Registry",
@@ -3362,10 +3340,7 @@
     "packageNotFound": "Package not found",
     "pluginNotFound": "Plugin not found",
     "noDescription": "No description",
-    "unnamedSkill": "Unnamed skill",
-    "authManagedOAuth": "Managed OAuth",
-    "authUserSecret": "User secret",
-    "authNone": "No auth"
+    "unnamedSkill": "Unnamed skill"
   },
   "connectors": {
     "title": "Connectors",

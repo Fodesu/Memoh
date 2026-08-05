@@ -17,7 +17,7 @@ type packageRemovals struct {
 	items []*skillset.PackageRemoval
 }
 
-func (s *Service) prepareObsoletePackageRemovals(ctx context.Context, botID string, req InstallRequest) (*packageRemovals, error) {
+func (s *Service) prepareObsoletePackageRemovals(ctx context.Context, botID string, req InstallPlan) (*packageRemovals, error) {
 	if !req.ReplacePackages {
 		return nil, nil
 	}

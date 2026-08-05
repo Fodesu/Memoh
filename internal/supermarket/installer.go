@@ -30,7 +30,7 @@ var installationResourceLocks = struct {
 }{items: make(map[string]*resourceLock)}
 
 type PluginInstaller interface {
-	Install(context.Context, string, pluginspkg.InstallRequest) (pluginspkg.Installation, error)
+	Install(context.Context, string, pluginspkg.InstallPlan) (pluginspkg.Installation, error)
 	InstalledPluginState(context.Context, string, string) (pluginspkg.InstalledPluginState, bool, error)
 }
 

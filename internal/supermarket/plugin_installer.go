@@ -30,7 +30,6 @@ type InstallPluginRequest struct {
 	ReleaseRevision           string
 	ExpectedInstalledRevision *string
 	ExpectedInstallationTime  *time.Time
-	Variables                 map[string]string
 }
 
 type pluginSkillsResult struct {
@@ -103,7 +102,7 @@ func (i *Installer) InstallPlugin(ctx context.Context, botID string, req Install
 		return pluginspkg.Installation{}, &StatusError{Status: http.StatusConflict, Message: "Plugin release changed; refresh before installing"}
 	}
 	manifest := pluginspkg.NormalizeManifest(entry.Manifest)
-	if err := pluginspkg.ValidatePackageReferences(manifest.Packages); err != nil {
+	if err := pluginspkg.ValidateManifest(manifest); err != nil {
 		return pluginspkg.Installation{}, withStatus(http.StatusBadRequest, err)
 	}
 	if err := validatePluginEntry(entry, req.PluginID, manifest); err != nil {
@@ -171,8 +170,8 @@ func (i *Installer) InstallPlugin(ctx context.Context, botID string, req Install
 	if err != nil {
 		return pluginspkg.Installation{}, rollbackPluginPublications(ctx, withStatus(http.StatusBadGateway, err), bundlePublication, publications)
 	}
-	installation, err = i.plugins.Install(ctx, botID, pluginspkg.InstallRequest{
-		Manifest: manifest, Variables: req.Variables, InstalledSkills: installedSkills, InstalledPackages: installedPackages, ReplacePackages: true,
+	installation, err = i.plugins.Install(ctx, botID, pluginspkg.InstallPlan{
+		Manifest: manifest, InstalledSkills: installedSkills, InstalledPackages: installedPackages, ReplacePackages: true,
 		Release:           pluginspkg.ReleaseMetadata{Revision: entry.Release.Revision, ArtifactDigest: entry.Release.Artifact.Digest},
 		WorkspaceTargetID: target.TargetID,
 	})

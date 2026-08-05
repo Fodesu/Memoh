@@ -17,7 +17,6 @@ import (
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/mcp"
 	"github.com/memohai/memoh/internal/skillpackages"
 	skillset "github.com/memohai/memoh/internal/skills"
 	"github.com/memohai/memoh/internal/workspace/bridge"
@@ -28,25 +27,19 @@ type BridgeProvider struct {
 }
 
 type Service struct {
-	queries      dbstore.Queries
-	mcpService   *mcp.ConnectionService
-	oauthService *mcp.OAuthService
-	oauthClients *OAuthClientRegistry
-	bridges      bridge.Provider
-	logger       *slog.Logger
+	queries dbstore.Queries
+	bridges bridge.Provider
+	logger  *slog.Logger
 }
 
-func NewService(log *slog.Logger, queries dbstore.Queries, mcpService *mcp.ConnectionService, oauthService *mcp.OAuthService, oauthClients *OAuthClientRegistry, bridges BridgeProvider) *Service {
+func NewService(log *slog.Logger, queries dbstore.Queries, bridges BridgeProvider) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		queries:      queries,
-		mcpService:   mcpService,
-		oauthService: oauthService,
-		oauthClients: oauthClients,
-		bridges:      bridges.Provider,
-		logger:       log.With(slog.String("service", "plugins")),
+		queries: queries,
+		bridges: bridges.Provider,
+		logger:  log.With(slog.String("service", "plugins")),
 	}
 }
 
@@ -117,7 +110,7 @@ func (s *Service) InstalledPluginState(
 	return InstalledPluginState{}, false, nil
 }
 
-func (s *Service) Install(ctx context.Context, botID string, req InstallRequest) (Installation, error) {
+func (s *Service) Install(ctx context.Context, botID string, req InstallPlan) (Installation, error) {
 	var result Installation
 	removals, err := s.prepareObsoletePackageRemovals(ctx, botID, req)
 	if err != nil {
@@ -146,9 +139,9 @@ func (s *Service) Install(ctx context.Context, botID string, req InstallRequest)
 func (s *Service) install(
 	ctx context.Context,
 	botID string,
-	req InstallRequest,
+	req InstallPlan,
 ) (Installation, error) {
-	if s.queries == nil || s.mcpService == nil {
+	if s.queries == nil {
 		return Installation{}, errors.New("plugin service is not configured")
 	}
 	botUUID, err := db.ParseUUID(botID)
@@ -156,10 +149,7 @@ func (s *Service) install(
 		return Installation{}, err
 	}
 	manifest := normalizeManifest(req.Manifest)
-	if manifest.ID == "" {
-		return Installation{}, errors.New("plugin id is required")
-	}
-	if err := ValidatePackageReferences(manifest.Packages); err != nil {
+	if err := ValidateManifest(manifest); err != nil {
 		return Installation{}, err
 	}
 	if err := validateInstalledSkills(manifest.Packages, req.InstalledSkills); err != nil {
@@ -174,12 +164,7 @@ func (s *Service) install(
 	if manifest.Name == "" {
 		manifest.Name = manifest.ID
 	}
-	status := s.evaluateInitialStatus(manifest, req.Variables)
-	enabled := status == StatusReady
-
-	configPayload, err := encodeJSON(map[string]any{
-		"variables": req.Variables,
-	})
+	configPayload, err := encodeJSON(map[string]any{})
 	if err != nil {
 		return Installation{}, err
 	}
@@ -206,8 +191,8 @@ func (s *Service) install(
 		PluginID:          manifest.ID,
 		PluginName:        manifest.Name,
 		Version:           manifest.Version,
-		Status:            status,
-		Enabled:           enabled,
+		Status:            StatusReady,
+		Enabled:           true,
 		Config:            configPayload,
 		Metadata:          metadataPayload,
 		Manifest:          manifestPayload,
@@ -217,10 +202,6 @@ func (s *Service) install(
 		return Installation{}, err
 	}
 
-	installationID := row.ID.String()
-	if err := s.mcpService.DeleteByPlugin(ctx, botID, installationID); err != nil {
-		return Installation{}, err
-	}
 	if err := s.queries.DeleteBotPluginResources(ctx, row.ID); err != nil {
 		return Installation{}, err
 	}
@@ -232,32 +213,6 @@ func (s *Service) install(
 			})
 		}
 		if _, err := skillpackages.ReplacePluginReferences(ctx, s.queries, botUUID, row.ID, req.WorkspaceTargetID, packageRequirements); err != nil {
-			return Installation{}, err
-		}
-	}
-
-	for _, resource := range manifest.MCPs {
-		authReq := manifestAuthForResource(manifest, resource)
-		connReq := buildMCPConnectionRequest(manifest, resource, authReq, req.Variables)
-		active := enabled && strings.TrimSpace(strings.ToLower(authReq.Type)) != "managed_oauth"
-		connReq.Active = &active
-		conn, err := s.mcpService.CreateManaged(ctx, botID, connReq, mcp.ManagedConnectionRequest{
-			InstallationID: installationID,
-			ResourceKey:    resource.Key,
-			Visible:        strings.TrimSpace(strings.ToLower(resource.Visibility)) == "visible",
-			Metadata:       mcpResourceMetadata(manifest, resource, authReq),
-		})
-		if err != nil {
-			return Installation{}, fmt.Errorf("create plugin MCP resource %q: %w", resource.Key, err)
-		}
-		if _, err := s.queries.UpsertBotPluginResource(ctx, sqlc.UpsertBotPluginResourceParams{
-			InstallationID: row.ID,
-			ResourceType:   "mcp",
-			ResourceKey:    resource.Key,
-			ResourceID:     conn.ID,
-			Status:         resourceStatus(status, authReq),
-			Metadata:       mustJSON(mcpResourceMetadata(manifest, resource, authReq)),
-		}); err != nil {
 			return Installation{}, err
 		}
 	}
@@ -306,9 +261,6 @@ func (s *Service) setEnabled(ctx context.Context, botID, installationID string, 
 		return Installation{}, err
 	}
 	if !enabled {
-		if err := s.mcpService.SetPluginConnectionsActive(ctx, botID, installationID, false); err != nil {
-			return Installation{}, err
-		}
 		updated, err := s.updateStatus(ctx, botID, installationID, StatusDisabled, false)
 		if err != nil {
 			return Installation{}, err
@@ -316,29 +268,8 @@ func (s *Service) setEnabled(ctx context.Context, botID, installationID string, 
 		return s.normalizeInstallation(ctx, updated)
 	}
 
-	manifest, err := decodeManifest(row.Manifest)
-	if err != nil {
-		return Installation{}, err
-	}
 	if row.Status == StatusUninstalled {
 		return Installation{}, errors.New("plugin is uninstalled")
-	}
-	variables, configErr := variablesFromConfig(row.Config)
-	if configErr != nil {
-		return Installation{}, configErr
-	}
-	status := s.evaluateInitialStatus(manifest, variables)
-	if status == StatusNeedsAuth {
-		status, err = s.refreshOAuthStatus(ctx, botID, row, manifest)
-		if err != nil {
-			return Installation{}, err
-		}
-	}
-	if status != StatusReady {
-		return Installation{}, fmt.Errorf("plugin is not ready: %s", status)
-	}
-	if err := s.mcpService.SetPluginConnectionsActive(ctx, botID, installationID, true); err != nil {
-		return Installation{}, err
 	}
 	updated, err := s.updateStatus(ctx, botID, installationID, StatusReady, true)
 	if err != nil {
@@ -400,9 +331,6 @@ func (s *Service) uninstall(
 ) (Installation, error) {
 	row, err := s.getRow(ctx, botID, installationID)
 	if err != nil {
-		return Installation{}, err
-	}
-	if err := s.mcpService.DeleteByPlugin(ctx, botID, installationID); err != nil {
 		return Installation{}, err
 	}
 	if err := s.queries.DeleteBotPluginResources(ctx, row.ID); err != nil {
@@ -474,9 +402,6 @@ func (s *Service) purge(
 	if err != nil {
 		return err
 	}
-	if err := s.mcpService.DeleteByPlugin(ctx, botID, installationID); err != nil {
-		return err
-	}
 	if err := s.queries.DeleteBotPluginResources(ctx, row.ID); err != nil {
 		return err
 	}
@@ -498,104 +423,6 @@ func (s *Service) purge(
 		return err
 	}
 	return nil
-}
-
-func (s *Service) StartOAuth(ctx context.Context, botID, installationID, callbackURL string) (*mcp.AuthorizeResult, error) {
-	row, err := s.getRow(ctx, botID, installationID)
-	if err != nil {
-		return nil, err
-	}
-	manifest, err := decodeManifest(row.Manifest)
-	if err != nil {
-		return nil, err
-	}
-	resources, err := s.queries.ListBotPluginResources(ctx, row.ID)
-	if err != nil {
-		return nil, err
-	}
-	resourceByKey := map[string]string{}
-	for _, resource := range resources {
-		if strings.TrimSpace(resource.ResourceType) == "mcp" {
-			resourceByKey[resource.ResourceKey] = resource.ResourceID
-		}
-	}
-	for _, resource := range manifest.MCPs {
-		authReq := manifestAuthForResource(manifest, resource)
-		if strings.TrimSpace(strings.ToLower(authReq.Type)) != "managed_oauth" {
-			continue
-		}
-		var client OAuthClient
-		var ok bool
-		if strings.TrimSpace(authReq.ClientRef) != "" {
-			client, ok = s.oauthClients.Get(authReq.ClientRef)
-		}
-		if strings.TrimSpace(authReq.ClientRef) != "" && (!ok || strings.TrimSpace(client.ClientID) == "") {
-			return nil, fmt.Errorf("OAuth client %q is not configured", authReq.ClientRef)
-		}
-		connID := strings.TrimSpace(resourceByKey[resource.Key])
-		if connID == "" {
-			return nil, fmt.Errorf("OAuth MCP resource %q is not installed", resource.Key)
-		}
-		if strings.TrimSpace(callbackURL) == "" {
-			callbackURL = client.RedirectURI
-		}
-		if strings.TrimSpace(client.AuthorizationEndpoint) != "" && strings.TrimSpace(client.TokenEndpoint) != "" {
-			if err := s.oauthService.SaveDiscovery(ctx, connID, &mcp.DiscoveryResult{
-				AuthorizationServerURL: authorizationServerFromEndpoint(client.AuthorizationEndpoint),
-				AuthorizationEndpoint:  client.AuthorizationEndpoint,
-				TokenEndpoint:          client.TokenEndpoint,
-				ScopesSupported:        authReq.Scopes,
-				ResourceURI:            strings.TrimSpace(resource.URL),
-			}); err != nil {
-				return nil, err
-			}
-		} else {
-			result, err := s.oauthService.Discover(ctx, resource.URL)
-			if err != nil {
-				return nil, err
-			}
-			applyRequestedScopes(result, authReq.Scopes)
-			if err := s.oauthService.SaveDiscovery(ctx, connID, result); err != nil {
-				return nil, err
-			}
-		}
-		return s.oauthService.StartAuthorization(ctx, connID, client.ClientID, client.ClientSecret, callbackURL)
-	}
-	return nil, errors.New("plugin does not declare a managed OAuth MCP resource")
-}
-
-func (s *Service) RefreshOAuthStatus(ctx context.Context, botID, installationID string) (Installation, error) {
-	var result Installation
-	err := s.inTransaction(ctx, func(txService *Service) error {
-		var refreshErr error
-		result, refreshErr = txService.refreshOAuthStatusAndInstallation(ctx, botID, installationID)
-		return refreshErr
-	})
-	return result, err
-}
-
-func (s *Service) refreshOAuthStatusAndInstallation(ctx context.Context, botID, installationID string) (Installation, error) {
-	row, err := s.getRow(ctx, botID, installationID)
-	if err != nil {
-		return Installation{}, err
-	}
-	manifest, err := decodeManifest(row.Manifest)
-	if err != nil {
-		return Installation{}, err
-	}
-	status, err := s.refreshOAuthStatus(ctx, botID, row, manifest)
-	if err != nil {
-		return Installation{}, err
-	}
-	enabled := status == StatusReady
-	if err := s.mcpService.SetPluginConnectionsActive(ctx, botID, installationID, enabled); err != nil {
-		return Installation{}, err
-	}
-	updated, err := s.updateStatus(ctx, botID, installationID, status, enabled)
-	if err != nil {
-		return Installation{}, err
-	}
-	return s.normalizeInstallation(ctx, updated)
 }
 
 func (s *Service) getRow(ctx context.Context, botID, installationID string) (sqlc.BotPluginInstallation, error) {
@@ -639,10 +466,6 @@ func (s *Service) normalizeInstallation(ctx context.Context, row sqlc.BotPluginI
 	if err != nil {
 		return Installation{}, err
 	}
-	config, err := decodeJSONMap(row.Config)
-	if err != nil {
-		return Installation{}, err
-	}
 	resources, err := s.queries.ListBotPluginResources(ctx, row.ID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Installation{}, err
@@ -663,7 +486,6 @@ func (s *Service) normalizeInstallation(ctx context.Context, row sqlc.BotPluginI
 		Version:           row.Version,
 		Status:            row.Status,
 		Enabled:           row.Enabled,
-		Config:            redactConfig(manifest, config),
 		Metadata:          metadata,
 		Manifest:          manifest,
 		Resources:         outResources,
@@ -671,68 +493,6 @@ func (s *Service) normalizeInstallation(ctx context.Context, row sqlc.BotPluginI
 		InstalledAt:       timeFromPg(row.InstalledAt),
 		UpdatedAt:         timeFromPg(row.UpdatedAt),
 	}, nil
-}
-
-func (s *Service) evaluateInitialStatus(manifest Manifest, variables map[string]string) string {
-	status := StatusReady
-	for _, resource := range manifest.MCPs {
-		authReq := manifestAuthForResource(manifest, resource)
-		switch strings.TrimSpace(strings.ToLower(authReq.Type)) {
-		case "managed_oauth":
-			if strings.TrimSpace(authReq.ClientRef) != "" && !s.oauthClients.HasUsableClient(authReq.ClientRef) {
-				return StatusAdminRequired
-			}
-			status = StatusNeedsAuth
-		case "user_secret":
-			if missingRequiredVariables(manifest, resource, authReq, variables) {
-				return StatusNeedsConfig
-			}
-		}
-		if missingResourceConfig(manifest, resource, variables) {
-			return StatusNeedsConfig
-		}
-	}
-	return status
-}
-
-func (s *Service) refreshOAuthStatus(ctx context.Context, botID string, row sqlc.BotPluginInstallation, manifest Manifest) (string, error) {
-	resources, err := s.queries.ListBotPluginResources(ctx, row.ID)
-	if err != nil {
-		return "", err
-	}
-	resourceByKey := map[string]string{}
-	for _, resource := range resources {
-		if strings.TrimSpace(resource.ResourceType) == "mcp" {
-			resourceByKey[resource.ResourceKey] = resource.ResourceID
-		}
-	}
-	hasManagedOAuth := false
-	for _, resource := range manifest.MCPs {
-		authReq := manifestAuthForResource(manifest, resource)
-		if strings.TrimSpace(strings.ToLower(authReq.Type)) != "managed_oauth" {
-			continue
-		}
-		hasManagedOAuth = true
-		if strings.TrimSpace(authReq.ClientRef) != "" && !s.oauthClients.HasUsableClient(authReq.ClientRef) {
-			return StatusAdminRequired, nil
-		}
-		connID := strings.TrimSpace(resourceByKey[resource.Key])
-		if connID == "" {
-			return StatusNeedsAuth, nil
-		}
-		status, err := s.oauthService.GetStatus(ctx, connID)
-		if err != nil {
-			s.logger.Warn("failed to get plugin OAuth status", slog.String("bot_id", botID), slog.String("installation_id", row.ID.String()), slog.Any("error", err))
-			return StatusNeedsAuth, nil
-		}
-		if !status.HasToken || status.Expired {
-			return StatusNeedsAuth, nil
-		}
-	}
-	if hasManagedOAuth {
-		return StatusReady, nil
-	}
-	return row.Status, nil
 }
 
 func normalizeResource(row sqlc.BotPluginResource) (Resource, error) {
@@ -753,25 +513,15 @@ func normalizeResource(row sqlc.BotPluginResource) (Resource, error) {
 }
 
 func normalizeManifest(manifest Manifest) Manifest {
-	manifest.ID = sanitizeID(manifest.ID)
+	manifest.SchemaVersion = strings.TrimSpace(manifest.SchemaVersion)
+	manifest.ID = strings.TrimSpace(manifest.ID)
 	manifest.Name = strings.TrimSpace(manifest.Name)
 	manifest.Version = strings.TrimSpace(manifest.Version)
-	if manifest.Version == "" {
-		manifest.Version = "0.1.0"
-	}
-	if manifest.SchemaVersion == "" {
-		manifest.SchemaVersion = "1"
-	}
+	manifest.Description = strings.TrimSpace(manifest.Description)
+	manifest.Author.Name = strings.TrimSpace(manifest.Author.Name)
+	manifest.Author.Email = strings.TrimSpace(manifest.Author.Email)
+	manifest.Homepage = strings.TrimSpace(manifest.Homepage)
 	manifest.Install = normalizeInstallCommands(manifest.Install)
-	for i := range manifest.MCPs {
-		manifest.MCPs[i].Key = sanitizeID(manifest.MCPs[i].Key)
-		if manifest.MCPs[i].Key == "" {
-			manifest.MCPs[i].Key = "mcp"
-		}
-		if manifest.MCPs[i].Name == "" {
-			manifest.MCPs[i].Name = manifest.MCPs[i].DisplayName
-		}
-	}
 	for i := range manifest.Packages {
 		manifest.Packages[i].RegistryID = strings.TrimSpace(manifest.Packages[i].RegistryID)
 		manifest.Packages[i].PackageID = strings.TrimSpace(manifest.Packages[i].PackageID)
@@ -795,153 +545,6 @@ func normalizeInstallCommands(commands []string) InstallCommands {
 	return InstallCommands(out)
 }
 
-func manifestAuthForResource(manifest Manifest, resource MCPResource) AuthRequirement {
-	authRef := strings.TrimSpace(resource.AuthRef)
-	if authRef != "" {
-		for _, req := range manifest.AuthRequirements {
-			if strings.TrimSpace(req.Key) == authRef {
-				return req
-			}
-		}
-	}
-	if len(manifest.AuthRequirements) == 1 {
-		return manifest.AuthRequirements[0]
-	}
-	return AuthRequirement{Key: "anonymous", Type: "none"}
-}
-
-func buildMCPConnectionRequest(manifest Manifest, resource MCPResource, authReq AuthRequirement, variables map[string]string) mcp.UpsertRequest {
-	resolved := resolveVariables(manifest, resource, variables)
-	headers := map[string]string{}
-	for _, header := range resource.Headers {
-		value := resolveConfigValue(header, resolved)
-		if value != "" {
-			headers[header.Key] = expandTemplateVars(value, resolved)
-		}
-	}
-	env := map[string]string{}
-	for _, item := range resource.Env {
-		value := resolveConfigValue(item, resolved)
-		if value != "" {
-			env[item.Key] = expandTemplateVars(value, resolved)
-		}
-	}
-	args := make([]string, 0, len(resource.Args))
-	for _, arg := range resource.Args {
-		args = append(args, expandTemplateVars(arg, resolved))
-	}
-	authType := "none"
-	if strings.TrimSpace(strings.ToLower(authReq.Type)) == "managed_oauth" {
-		authType = "oauth"
-	}
-	return mcp.UpsertRequest{
-		Name:      stableResourceName(manifest.ID, resource.Key),
-		Command:   expandTemplateVars(resource.Command, resolved),
-		Args:      args,
-		Env:       env,
-		Cwd:       expandTemplateVars(resource.Cwd, resolved),
-		URL:       expandTemplateVars(resource.URL, resolved),
-		Headers:   headers,
-		Transport: resource.Transport,
-		AuthType:  authType,
-	}
-}
-
-func resolveVariables(manifest Manifest, resource MCPResource, variables map[string]string) map[string]string {
-	resolved := map[string]string{}
-	for key, value := range variables {
-		key = strings.TrimSpace(key)
-		if key != "" {
-			resolved[key] = value
-		}
-	}
-	for _, item := range manifest.Variables {
-		seedDefaultVariable(resolved, item)
-	}
-	for _, item := range resource.Env {
-		seedDefaultVariable(resolved, item)
-	}
-	for _, item := range resource.Headers {
-		seedDefaultVariable(resolved, item)
-	}
-	return resolved
-}
-
-func seedDefaultVariable(resolved map[string]string, item ConfigVar) {
-	key := strings.TrimSpace(item.Key)
-	if key == "" {
-		return
-	}
-	if _, ok := resolved[key]; ok {
-		return
-	}
-	value := strings.TrimSpace(item.DefaultValue)
-	if value == "" {
-		return
-	}
-	value = expandTemplateVars(value, resolved)
-	if hasUnresolvedTemplateVars(value) {
-		return
-	}
-	resolved[key] = value
-}
-
-func resolveConfigValue(item ConfigVar, variables map[string]string) string {
-	key := strings.TrimSpace(item.Key)
-	if key == "" {
-		return ""
-	}
-	if value, ok := variables[key]; ok {
-		return value
-	}
-	value := strings.TrimSpace(item.DefaultValue)
-	if value == "" {
-		return ""
-	}
-	value = expandTemplateVars(value, variables)
-	if hasUnresolvedTemplateVars(value) {
-		return ""
-	}
-	return value
-}
-
-func missingRequiredVariables(manifest Manifest, resource MCPResource, authReq AuthRequirement, variables map[string]string) bool {
-	resolved := resolveVariables(manifest, resource, variables)
-	for _, key := range authReq.Variables {
-		if strings.TrimSpace(resolved[strings.TrimSpace(key)]) == "" {
-			return true
-		}
-	}
-	return false
-}
-
-func missingResourceConfig(manifest Manifest, resource MCPResource, variables map[string]string) bool {
-	resolved := resolveVariables(manifest, resource, variables)
-	for _, item := range append(resource.Env, resource.Headers...) {
-		if !item.Required {
-			continue
-		}
-		if strings.TrimSpace(resolveConfigValue(item, resolved)) == "" {
-			return true
-		}
-	}
-	return false
-}
-
-func resourceStatus(installationStatus string, authReq AuthRequirement) string {
-	if strings.TrimSpace(strings.ToLower(authReq.Type)) == "managed_oauth" && installationStatus == StatusNeedsAuth {
-		return StatusNeedsAuth
-	}
-	return installationStatus
-}
-
-func applyRequestedScopes(result *mcp.DiscoveryResult, scopes []string) {
-	if result == nil || len(scopes) == 0 {
-		return
-	}
-	result.ScopesSupported = scopes
-}
-
 func manifestMetadata(manifest Manifest) map[string]any {
 	return map[string]any{
 		"icon":         manifest.Icon,
@@ -949,65 +552,6 @@ func manifestMetadata(manifest Manifest) map[string]any {
 		"capabilities": manifest.Capabilities,
 		"homepage":     manifest.Homepage,
 	}
-}
-
-func mcpResourceMetadata(manifest Manifest, resource MCPResource, authReq AuthRequirement) map[string]any {
-	return map[string]any{
-		"plugin_id":    manifest.ID,
-		"plugin_name":  manifest.Name,
-		"plugin_icon":  manifest.Icon,
-		"resource_key": resource.Key,
-		"display_name": resource.DisplayName,
-		"capabilities": resource.Capabilities,
-		"auth_type":    authReq.Type,
-		"client_ref":   authReq.ClientRef,
-		"tool_prefix":  stableResourceName(manifest.ID, resource.Key),
-		"visibility":   resource.Visibility,
-	}
-}
-
-func redactConfig(manifest Manifest, config map[string]any) map[string]any {
-	rawVariables, _ := config["variables"].(map[string]any)
-	variableStatus := map[string]any{}
-	for _, item := range manifest.Variables {
-		if item.Key == "" {
-			continue
-		}
-		_, configured := rawVariables[item.Key]
-		variableStatus[item.Key] = map[string]bool{"configured": configured}
-	}
-	return map[string]any{"variables": variableStatus}
-}
-
-func variablesFromConfig(raw []byte) (map[string]string, error) {
-	config, err := decodeJSONMap(raw)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]string{}
-	switch variables := config["variables"].(type) {
-	case map[string]any:
-		for key, value := range variables {
-			key = strings.TrimSpace(key)
-			if key == "" || value == nil {
-				continue
-			}
-			switch typed := value.(type) {
-			case string:
-				out[key] = typed
-			default:
-				out[key] = fmt.Sprint(typed)
-			}
-		}
-	case map[string]string:
-		for key, value := range variables {
-			key = strings.TrimSpace(key)
-			if key != "" {
-				out[key] = value
-			}
-		}
-	}
-	return out, nil
 }
 
 func encodeJSON(value any) ([]byte, error) {
@@ -1054,56 +598,34 @@ func timeFromPg(value pgtype.Timestamptz) time.Time {
 	return db.TimeFromPg(value)
 }
 
-func sanitizeID(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return ""
-	}
-	return idPattern.ReplaceAllString(value, "_")
-}
+var artifactDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-func stableResourceName(pluginID, resourceKey string) string {
-	name := sanitizeID(pluginID + "_" + resourceKey)
-	if name == "" {
-		return "plugin_mcp"
+func ValidateManifest(manifest Manifest) error {
+	if manifest.SchemaVersion != "1" {
+		return errors.New("plugin manifest schema_version must be 1")
 	}
-	return name
-}
-
-func expandTemplateVars(value string, vars map[string]string) string {
-	if value == "" || len(vars) == 0 {
-		return value
+	if !skillset.IsValidPluginID(manifest.ID) {
+		return errors.New("plugin manifest id is invalid")
 	}
-	return templateVarPattern.ReplaceAllStringFunc(value, func(match string) string {
-		key := match[2 : len(match)-1]
-		if val, ok := vars[key]; ok {
-			return val
+	if manifest.Name == "" || manifest.Version == "" || manifest.Description == "" || manifest.Author.Name == "" {
+		return errors.New("plugin manifest metadata is incomplete")
+	}
+	if manifest.Icon != nil {
+		switch manifest.Icon.Kind {
+		case "builtin":
+			if strings.TrimSpace(manifest.Icon.Name) == "" {
+				return errors.New("plugin builtin icon name is required")
+			}
+		case "external_url":
+			if strings.TrimSpace(manifest.Icon.URL) == "" {
+				return errors.New("plugin external icon URL is required")
+			}
+		default:
+			return errors.New("plugin icon kind is invalid")
 		}
-		return match
-	})
-}
-
-func hasUnresolvedTemplateVars(value string) bool {
-	return templateVarPattern.MatchString(value)
-}
-
-func authorizationServerFromEndpoint(endpoint string) string {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return ""
 	}
-	idx := strings.Index(endpoint, "/oauth")
-	if idx > len("https://") {
-		return endpoint[:idx]
-	}
-	return endpoint
+	return ValidatePackageReferences(manifest.Packages)
 }
-
-var (
-	idPattern             = regexp.MustCompile(`[^a-z0-9_-]+`)
-	artifactDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	templateVarPattern    = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
-)
 
 func PackageReferenceIdentity(reference PackageReference) string {
 	return reference.RegistryID + "/" + reference.PackageID

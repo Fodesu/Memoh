@@ -551,6 +551,18 @@ func validSupermarketPluginEntry(
 	bundle []byte,
 	_ ...SupermarketCatalogSkill,
 ) SupermarketPluginEntry {
+	if manifest.SchemaVersion == "" {
+		manifest.SchemaVersion = "1"
+	}
+	if manifest.Version == "" {
+		manifest.Version = "1.0.0"
+	}
+	if manifest.Description == "" {
+		manifest.Description = manifest.Name
+	}
+	if manifest.Author.Name == "" {
+		manifest.Author = pluginspkg.Author{Name: "Memoh", Email: "support@memoh.ai"}
+	}
 	digest := sha256.Sum256(bundle)
 	resolved := make([]SupermarketPluginResolvedPackage, 0, len(manifest.Packages))
 	for _, pkg := range manifest.Packages {
@@ -901,7 +913,7 @@ func extractPluginBundleArchiveForTest(
 }
 
 type recordingPluginInstaller struct {
-	request            pluginspkg.InstallRequest
+	request            pluginspkg.InstallPlan
 	installCalls       int
 	installErr         error
 	installed          bool
@@ -919,7 +931,7 @@ func (i *recordingPluginInstaller) InstalledPluginState(
 	}, i.installed, nil
 }
 
-func (i *recordingPluginInstaller) Install(_ context.Context, botID string, req pluginspkg.InstallRequest) (pluginspkg.Installation, error) {
+func (i *recordingPluginInstaller) Install(_ context.Context, botID string, req pluginspkg.InstallPlan) (pluginspkg.Installation, error) {
 	i.installCalls++
 	i.request = req
 	if i.installErr != nil {

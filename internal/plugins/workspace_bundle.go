@@ -29,7 +29,7 @@ type pluginBundleRemoval struct {
 	closed     bool
 }
 
-func (s *Service) prepareObsoleteBundleRemoval(ctx context.Context, botID string, req InstallRequest) (*pluginBundleRemoval, error) {
+func (s *Service) prepareObsoleteBundleRemoval(ctx context.Context, botID string, req InstallPlan) (*pluginBundleRemoval, error) {
 	if s.bridges == nil {
 		return nil, nil
 	}

@@ -8,15 +8,25 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func TestPluginsHandlerRegisterDoesNotExposeManifestInstallRoute(t *testing.T) {
+func TestPluginsHandlerRegisterDoesNotExposeRemovedRoutes(t *testing.T) {
 	e := echo.New()
 	(&PluginsHandler{}).Register(e)
 
-	req := httptest.NewRequest(http.MethodPost, "/bots/bot-1/plugins", nil)
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /bots/:bot_id/plugins status = %d, want 405", rec.Code)
+	tests := []struct {
+		method string
+		path   string
+		status int
+	}{
+		{method: http.MethodPost, path: "/bots/bot-1/plugins", status: http.StatusMethodNotAllowed},
+		{method: http.MethodPost, path: "/bots/bot-1/plugins/plugin-1/oauth/authorize", status: http.StatusNotFound},
+		{method: http.MethodGet, path: "/bots/bot-1/plugins/plugin-1/oauth/status", status: http.StatusNotFound},
+	}
+	for _, test := range tests {
+		req := httptest.NewRequest(test.method, test.path, nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		if rec.Code != test.status {
+			t.Errorf("%s %s status = %d, want %d", test.method, test.path, rec.Code, test.status)
+		}
 	}
 }

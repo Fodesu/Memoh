@@ -141,11 +141,10 @@ func (h *SupermarketHandler) GetPlugin(c echo.Context) error {
 
 // InstallPluginRequest is the request body for installing a plugin from supermarket.
 type InstallPluginRequest struct {
-	PluginID                      string            `json:"plugin_id" validate:"required"`
-	ReleaseRevision               string            `json:"release_revision" validate:"required"`
-	ExpectedInstalledRevision     *string           `json:"expected_installed_revision" validate:"required" extensions:"x-nullable"`
-	ExpectedInstallationUpdatedAt *time.Time        `json:"expected_installation_updated_at" validate:"required" extensions:"x-nullable"`
-	Variables                     map[string]string `json:"variables,omitempty"`
+	PluginID                      string     `json:"plugin_id" validate:"required"`
+	ReleaseRevision               string     `json:"release_revision" validate:"required"`
+	ExpectedInstalledRevision     *string    `json:"expected_installed_revision" validate:"required" extensions:"x-nullable"`
+	ExpectedInstallationUpdatedAt *time.Time `json:"expected_installation_updated_at" validate:"required" extensions:"x-nullable"`
 
 	expectedInstalledRevisionSet     bool
 	expectedInstallationUpdatedAtSet bool
@@ -235,7 +234,6 @@ func (h *SupermarketHandler) InstallPlugin(c echo.Context) error {
 		PluginID: req.PluginID, ReleaseRevision: req.ReleaseRevision,
 		ExpectedInstalledRevision: req.ExpectedInstalledRevision,
 		ExpectedInstallationTime:  req.ExpectedInstallationUpdatedAt,
-		Variables:                 req.Variables,
 	})
 	if err != nil {
 		return h.installerHTTPError(err)

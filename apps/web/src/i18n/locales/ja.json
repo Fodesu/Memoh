@@ -2948,37 +2948,16 @@
     },
     "plugins": {
       "title": "Plugin",
-      "intro": "インストールされているプラ​​グイン バンドルとその非表示のPlugin バンドルを管理するMCPリソース。",
+      "intro": "インストール済みの Plugin と Skill Package を管理します。",
       "emptyTitle": "Pluginなし",
-      "emptyDescription": "スーパーマーケットからPluginをインストールしてバンドルを追加しますMCPリソースとSkill。",
-      "resourcesLabel": "リソース",
-      "authLabel": "認証",
-      "toolPrefixLabel": "Toolプレフィックス",
-      "authorizeAction": "承認する",
-      "refreshAuthAction": "OAuth ステータスを更新する",
-      "enableAction": "Pluginを有効にする",
-      "disableAction": "Pluginを無効にする",
-      "uninstallAction": "Pluginのアンインストール",
-      "purgeAction": "Pluginをパージする",
-      "uninstallConfirm": "このPluginをアンインストールして、その管理リソースを削除しますか?",
-      "purgeConfirm": "このPluginのインストール記録と構成を完全に削除しますか?",
+      "emptyDescription": "スーパーマーケットから Plugin をインストールして、Skill Package と自動化を追加します。",
       "loadFailed": "Pluginのロードに失敗しました",
       "enableSuccess": "Pluginが有効になっている",
       "disableSuccess": "Pluginが無効になっています",
-      "uninstallSuccess": "Pluginがアンインストールされました",
-      "purgeSuccess": "Pluginがパージされました",
       "status": {
         "ready": "準備ができて",
-        "needsConfig": "構成が必要です",
-        "needsAuth": "認証が必要です",
-        "adminRequired": "管理者のセットアップ",
         "disabled": "無効",
         "uninstalled": "アンインストール済み"
-      },
-      "auth": {
-        "none": "匿名",
-        "managed_oauth": "マネージドOAuth",
-        "user_secret": "ユーザーの秘密"
       }
     },
     "skills": {
@@ -3320,7 +3299,6 @@
     "packageInstallTitle": "Package をインストール",
     "loadError": "スーパーマーケットからの読み込みに失敗しました",
     "submit": "送信",
-    "mcps": "MCP",
     "information": "情報",
     "category": "カテゴリ",
     "registry": "Registry",
@@ -3340,10 +3318,7 @@
     "packageNotFound": "Package が見つかりません",
     "pluginNotFound": "プラグインが見つかりません",
     "noDescription": "説明なし",
-    "unnamedSkill": "名前のないスキル",
-    "authManagedOAuth": "マネージドOAuth",
-    "authUserSecret": "ユーザーシークレット",
-    "authNone": "認証なし"
+    "unnamedSkill": "名前のないスキル"
   },
   "connectors": {
     "title": "コネクター",

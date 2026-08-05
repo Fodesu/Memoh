@@ -851,7 +851,7 @@ func TestRunLoadsReadyPluginHooksWithPluginRuntimeDefaults(t *testing.T) {
 	service.SetPluginService(fakePluginInstallationLister{items: []pluginspkg.Installation{
 		{PluginID: "github", Enabled: true, Status: pluginspkg.StatusReady, WorkspaceTargetID: "native"},
 		{PluginID: "disabled", Enabled: false, Status: pluginspkg.StatusReady, WorkspaceTargetID: "native"},
-		{PluginID: "needsauth", Enabled: true, Status: pluginspkg.StatusNeedsAuth, WorkspaceTargetID: "native"},
+		{PluginID: "disabled", Enabled: false, Status: pluginspkg.StatusDisabled, WorkspaceTargetID: "native"},
 		{PluginID: "forged", Enabled: true, Status: pluginspkg.StatusReady, WorkspaceTargetID: "remote-target"},
 	}})
 	runner := &fakeToolRunner{}

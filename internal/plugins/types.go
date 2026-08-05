@@ -8,12 +8,9 @@ import (
 )
 
 const (
-	StatusReady         = "ready"
-	StatusNeedsConfig   = "needs_config"
-	StatusNeedsAuth     = "needs_auth"
-	StatusAdminRequired = "admin_required"
-	StatusDisabled      = "disabled"
-	StatusUninstalled   = "uninstalled"
+	StatusReady       = "ready"
+	StatusDisabled    = "disabled"
+	StatusUninstalled = "uninstalled"
 )
 
 type Icon struct {
@@ -23,41 +20,8 @@ type Icon struct {
 }
 
 type Author struct {
-	Name  string `json:"name"`
+	Name  string `json:"name" validate:"required"`
 	Email string `json:"email,omitempty"`
-}
-
-type ConfigVar struct {
-	Key          string `json:"key"`
-	Description  string `json:"description,omitempty"`
-	DefaultValue string `json:"defaultValue,omitempty"`
-	Required     bool   `json:"required,omitempty"`
-	Secret       bool   `json:"secret,omitempty"`
-}
-
-type AuthRequirement struct {
-	Key       string   `json:"key"`
-	Type      string   `json:"type"`
-	ClientRef string   `json:"client_ref,omitempty"`
-	Scopes    []string `json:"scopes,omitempty"`
-	Variables []string `json:"variables,omitempty"`
-}
-
-type MCPResource struct {
-	Key          string      `json:"key"`
-	Name         string      `json:"name,omitempty"`
-	DisplayName  string      `json:"display_name,omitempty"`
-	Description  string      `json:"description,omitempty"`
-	Transport    string      `json:"transport,omitempty"`
-	Command      string      `json:"command,omitempty"`
-	Args         []string    `json:"args,omitempty"`
-	Env          []ConfigVar `json:"env,omitempty"`
-	Cwd          string      `json:"cwd,omitempty"`
-	URL          string      `json:"url,omitempty"`
-	Headers      []ConfigVar `json:"headers,omitempty"`
-	AuthRef      string      `json:"auth_ref,omitempty"`
-	Visibility   string      `json:"visibility,omitempty"`
-	Capabilities []string    `json:"capabilities,omitempty"`
 }
 
 type PackageReference struct {
@@ -114,35 +78,27 @@ func (c InstallCommands) MarshalJSON() ([]byte, error) {
 }
 
 type Manifest struct {
-	SchemaVersion    string             `json:"schema_version,omitempty"`
-	ID               string             `json:"id"`
-	Name             string             `json:"name"`
-	Version          string             `json:"version,omitempty"`
-	Description      string             `json:"description,omitempty"`
-	Author           Author             `json:"author"`
-	Icon             *Icon              `json:"icon,omitempty"`
-	Homepage         string             `json:"homepage,omitempty"`
-	Tags             []string           `json:"tags,omitempty"`
-	Capabilities     []string           `json:"capabilities,omitempty"`
-	Install          InstallCommands    `json:"install,omitempty"`
-	Variables        []ConfigVar        `json:"variables,omitempty"`
-	AuthRequirements []AuthRequirement  `json:"auth_requirements,omitempty"`
-	MCPs             []MCPResource      `json:"mcps,omitempty"`
-	Packages         []PackageReference `json:"packages,omitempty"`
+	SchemaVersion string             `json:"schema_version" validate:"required"`
+	ID            string             `json:"id" validate:"required"`
+	Name          string             `json:"name" validate:"required"`
+	Version       string             `json:"version" validate:"required"`
+	Description   string             `json:"description" validate:"required"`
+	Author        Author             `json:"author" validate:"required"`
+	Icon          *Icon              `json:"icon,omitempty"`
+	Homepage      string             `json:"homepage,omitempty"`
+	Tags          []string           `json:"tags,omitempty"`
+	Capabilities  []string           `json:"capabilities,omitempty"`
+	Install       InstallCommands    `json:"install,omitempty"`
+	Packages      []PackageReference `json:"packages,omitempty"`
 }
 
-type InstallRequest struct {
+type InstallPlan struct {
 	Manifest          Manifest           `json:"manifest"`
-	Variables         map[string]string  `json:"variables,omitempty"`
 	InstalledSkills   []InstalledSkill   `json:"-"`
 	InstalledPackages []InstalledPackage `json:"-"`
 	ReplacePackages   bool               `json:"-"`
 	Release           ReleaseMetadata    `json:"-"`
 	WorkspaceTargetID string             `json:"-"`
-}
-
-type OAuthAuthorizeRequest struct {
-	CallbackURL string `json:"callback_url,omitempty"`
 }
 
 type Resource struct {
@@ -164,7 +120,6 @@ type Installation struct {
 	Version           string         `json:"version"`
 	Status            string         `json:"status"`
 	Enabled           bool           `json:"enabled"`
-	Config            map[string]any `json:"config,omitempty"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
 	Manifest          Manifest       `json:"manifest"`
 	Resources         []Resource     `json:"resources,omitempty"`

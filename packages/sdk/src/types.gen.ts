@@ -1844,9 +1844,6 @@ export type HandlersInstallPluginRequest = {
     expected_installed_revision: string | null;
     plugin_id: string;
     release_revision: string;
-    variables?: {
-        [key: string]: string;
-    };
 };
 
 export type HandlersInstallRegistryPackageResponse = {
@@ -2076,22 +2073,19 @@ export type HandlersSupermarketPluginArtifact = {
 };
 
 export type HandlersSupermarketPluginEntry = {
-    auth_requirements?: Array<PluginsAuthRequirement>;
-    author?: PluginsAuthor;
+    author: PluginsAuthor;
     capabilities?: Array<string>;
-    description?: string;
+    description: string;
     homepage?: string;
     icon?: PluginsIcon;
-    id?: string;
+    id: string;
     install?: Array<string>;
-    mcps?: Array<PluginsMcpResource>;
-    name?: string;
+    name: string;
     packages?: Array<PluginsPackageReference>;
     release: HandlersSupermarketPluginRelease;
-    schema_version?: string;
+    schema_version: string;
     tags?: Array<string>;
-    variables?: Array<PluginsConfigVar>;
-    version?: string;
+    version: string;
 };
 
 export type HandlersSupermarketPluginListResponse = {
@@ -2740,25 +2734,9 @@ export type ModelsUpdateRequest = {
     type?: ModelsModelType;
 };
 
-export type PluginsAuthRequirement = {
-    client_ref?: string;
-    key?: string;
-    scopes?: Array<string>;
-    type?: string;
-    variables?: Array<string>;
-};
-
 export type PluginsAuthor = {
     email?: string;
-    name?: string;
-};
-
-export type PluginsConfigVar = {
-    defaultValue?: string;
-    description?: string;
-    key?: string;
-    required?: boolean;
-    secret?: boolean;
+    name: string;
 };
 
 export type PluginsIcon = {
@@ -2769,9 +2747,6 @@ export type PluginsIcon = {
 
 export type PluginsInstallation = {
     bot_id?: string;
-    config?: {
-        [key: string]: unknown;
-    };
     enabled?: boolean;
     id?: string;
     installed_at?: string;
@@ -2792,43 +2767,19 @@ export type PluginsListResponse = {
     items?: Array<PluginsInstallation>;
 };
 
-export type PluginsMcpResource = {
-    args?: Array<string>;
-    auth_ref?: string;
-    capabilities?: Array<string>;
-    command?: string;
-    cwd?: string;
-    description?: string;
-    display_name?: string;
-    env?: Array<PluginsConfigVar>;
-    headers?: Array<PluginsConfigVar>;
-    key?: string;
-    name?: string;
-    transport?: string;
-    url?: string;
-    visibility?: string;
-};
-
 export type PluginsManifest = {
-    auth_requirements?: Array<PluginsAuthRequirement>;
-    author?: PluginsAuthor;
+    author: PluginsAuthor;
     capabilities?: Array<string>;
-    description?: string;
+    description: string;
     homepage?: string;
     icon?: PluginsIcon;
-    id?: string;
+    id: string;
     install?: Array<string>;
-    mcps?: Array<PluginsMcpResource>;
-    name?: string;
+    name: string;
     packages?: Array<PluginsPackageReference>;
-    schema_version?: string;
+    schema_version: string;
     tags?: Array<string>;
-    variables?: Array<PluginsConfigVar>;
-    version?: string;
-};
-
-export type PluginsOAuthAuthorizeRequest = {
-    callback_url?: string;
+    version: string;
 };
 
 export type PluginsPackageReference = {
@@ -6595,7 +6546,12 @@ export type GetBotsByBotIdContainerSkillsData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Workspace target ID
+         */
+        workspace_target_id?: string;
+    };
     url: '/bots/{bot_id}/container/skills';
 };
 
@@ -8871,93 +8827,6 @@ export type PostBotsByBotIdPluginsByIdEnableResponses = {
 
 export type PostBotsByBotIdPluginsByIdEnableResponse = PostBotsByBotIdPluginsByIdEnableResponses[keyof PostBotsByBotIdPluginsByIdEnableResponses];
 
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeData = {
-    /**
-     * OAuth authorize request
-     */
-    body?: PluginsOAuthAuthorizeRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/oauth/authorize';
-};
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeError = PostBotsByBotIdPluginsByIdOauthAuthorizeErrors[keyof PostBotsByBotIdPluginsByIdOauthAuthorizeErrors];
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeResponses = {
-    /**
-     * OK
-     */
-    200: McpAuthorizeResult;
-};
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeResponse = PostBotsByBotIdPluginsByIdOauthAuthorizeResponses[keyof PostBotsByBotIdPluginsByIdOauthAuthorizeResponses];
-
-export type GetBotsByBotIdPluginsByIdOauthStatusData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/oauth/status';
-};
-
-export type GetBotsByBotIdPluginsByIdOauthStatusErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdPluginsByIdOauthStatusError = GetBotsByBotIdPluginsByIdOauthStatusErrors[keyof GetBotsByBotIdPluginsByIdOauthStatusErrors];
-
-export type GetBotsByBotIdPluginsByIdOauthStatusResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type GetBotsByBotIdPluginsByIdOauthStatusResponse = GetBotsByBotIdPluginsByIdOauthStatusResponses[keyof GetBotsByBotIdPluginsByIdOauthStatusResponses];
-
 export type PostBotsByBotIdPluginsByIdUninstallData = {
     body?: never;
     path: {
@@ -10340,7 +10209,12 @@ export type GetBotsByBotIdSupermarketPackagesData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Workspace target ID
+         */
+        workspace_target_id?: string;
+    };
     url: '/bots/{bot_id}/supermarket/packages';
 };
 

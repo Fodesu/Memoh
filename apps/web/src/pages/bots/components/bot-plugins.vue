@@ -103,20 +103,7 @@
           >
             {{ statusLabel(plugin.status) }}
           </Badge>
-          <Button
-            v-if="plugin.status === 'needs_auth'"
-            variant="outline"
-            size="sm"
-            :disabled="isPending(plugin, 'oauth')"
-            @click="startOAuth(plugin)"
-          >
-            <ExternalLink class="size-4" />
-            {{ $t('bots.plugins.authorizeAction') }}
-          </Button>
-          <div
-            v-else
-            class="flex items-center gap-2"
-          >
+          <div class="flex items-center gap-2">
             <span class="text-xs text-muted-foreground">
               {{ plugin.enabled ? $t('common.enabled') : $t('common.disabled') }}
             </span>
@@ -140,14 +127,10 @@ import { ExternalLink, PackageOpen, Store } from 'lucide-vue-next'
 import { Badge, Button, Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle, InlineLoadingRow, PageShell, SettingsRow, SettingsSection, Switch, toast } from '@felinic/ui'
 import {
   getBotsByBotIdPlugins,
-  getBotsByBotIdPluginsByIdOauthStatus,
   postBotsByBotIdPluginsByIdDisable,
   postBotsByBotIdPluginsByIdEnable,
-  postBotsByBotIdPluginsByIdOauthAuthorize,
   type PluginsInstallation,
-  type PluginsManifest,
 } from '@memohai/sdk'
-import { client } from '@memohai/sdk/client'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { BOT_PLUGINS_UPDATED_EVENT, isBotPluginsUpdatedEvent } from '@/utils/bot-plugin-events'
 import ProviderIcon from '@/components/provider-icon/index.vue'
@@ -197,12 +180,13 @@ async function loadPlugins() {
   }
 }
 
-function pluginManifest(plugin: PluginsInstallation): PluginsManifest {
+function pluginManifest(plugin: PluginsInstallation) {
   return {
-    ...(plugin.manifest ?? {}),
-    id: plugin.plugin_id || plugin.manifest?.id || plugin.id,
-    name: plugin.plugin_name || plugin.manifest?.name || plugin.plugin_id || plugin.id,
+    id: plugin.plugin_id || plugin.manifest?.id || plugin.id || '',
+    name: plugin.plugin_name || plugin.manifest?.name || plugin.plugin_id || plugin.id || '',
     description: plugin.manifest?.description || '',
+    homepage: plugin.manifest?.homepage,
+    icon: plugin.manifest?.icon,
   }
 }
 
@@ -217,9 +201,6 @@ function pluginIcon(plugin: PluginsInstallation): string {
 function statusLabel(status?: string): string {
   switch (status) {
     case 'ready': return t('bots.plugins.status.ready')
-    case 'needs_config': return t('bots.plugins.status.needsConfig')
-    case 'needs_auth': return t('bots.plugins.status.needsAuth')
-    case 'admin_required': return t('bots.plugins.status.adminRequired')
     case 'disabled': return t('bots.plugins.status.disabled')
     case 'uninstalled': return t('bots.plugins.status.uninstalled')
     default: return status || t('mcp.statusUnknown')
@@ -242,16 +223,6 @@ function togglePlugin(plugin: PluginsInstallation, enabled: boolean) {
   } else {
     void disablePlugin(plugin)
   }
-}
-
-function mcpOAuthCallbackUrl() {
-  const rawBase = String(client.getConfig().baseUrl || '/api')
-  const base = new URL(rawBase, window.location.origin)
-  const basePath = base.pathname.replace(/\/+$/, '')
-  base.pathname = `${basePath}/oauth/mcp/callback`
-  base.search = ''
-  base.hash = ''
-  return base.toString()
 }
 
 async function withPending(plugin: PluginsInstallation, action: string, task: () => Promise<void>) {
@@ -286,86 +257,4 @@ async function disablePlugin(plugin: PluginsInstallation) {
   })
 }
 
-async function startOAuth(plugin: PluginsInstallation) {
-  await withPending(plugin, 'oauth', async () => {
-    try {
-      const { data } = await postBotsByBotIdPluginsByIdOauthAuthorize({
-        path: { bot_id: props.botId, id: plugin.id! },
-        body: { callback_url: mcpOAuthCallbackUrl() },
-        throwOnError: true,
-      })
-      if (!data.authorization_url) throw new Error(t('mcp.oauth.flowInitFailed'))
-
-      const popup = window.open(data.authorization_url, 'mcp-oauth', 'width=600,height=700')
-      await waitForMCPOAuth(plugin, popup)
-      const synced = await syncOAuthStatus(plugin)
-      if (synced.status !== 'ready' && !synced.enabled) throw new Error(t('mcp.oauth.authFailed'))
-      toast.success(t('mcp.oauth.authSuccess'))
-      await loadPlugins()
-    } catch (error) {
-      const synced = await syncOAuthStatus(plugin).catch(() => null)
-      if (synced?.status === 'ready' || synced?.enabled) {
-        toast.success(t('mcp.oauth.authSuccess'))
-        await loadPlugins()
-        return
-      }
-      toast.error(resolveApiErrorMessage(error, t('mcp.oauth.flowInitFailed')))
-    }
-  })
-}
-
-function waitForMCPOAuth(plugin: PluginsInstallation, popup: Window | null): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let completed = false
-    const startedAt = Date.now()
-    let pollTimer: ReturnType<typeof setInterval> | undefined
-
-    const finish = (status: 'success' | 'error', error?: string) => {
-      if (completed) return
-      completed = true
-      if (pollTimer) clearInterval(pollTimer)
-      window.removeEventListener('message', onMessage)
-      if (status === 'success') {
-        resolve()
-      } else {
-        reject(new Error(error || t('mcp.oauth.authFailed')))
-      }
-    }
-
-    const onMessage = (event: MessageEvent) => {
-      if (event.data?.type !== 'mcp-oauth-callback') return
-      finish(event.data.status === 'success' ? 'success' : 'error', event.data.error)
-    }
-
-    window.addEventListener('message', onMessage)
-    pollTimer = setInterval(() => {
-      getBotsByBotIdPluginsByIdOauthStatus({
-        path: { bot_id: props.botId, id: plugin.id! },
-        throwOnError: true,
-      }).then(({ data }) => {
-        if (completed) return
-        if (data.status === 'ready' || data.enabled) {
-          finish('success')
-          return
-        }
-        if (popup?.closed || Date.now() - startedAt > 120_000) {
-          finish('error')
-        }
-      }).catch(() => {
-        if (!completed && (popup?.closed || Date.now() - startedAt > 120_000)) {
-          finish('error')
-        }
-      })
-    }, 2000)
-  })
-}
-
-async function syncOAuthStatus(plugin: PluginsInstallation): Promise<PluginsInstallation> {
-  const { data } = await getBotsByBotIdPluginsByIdOauthStatus({
-    path: { bot_id: props.botId, id: plugin.id! },
-    throwOnError: true,
-  })
-  plugins.value = plugins.value.map(item => item.id === data.id ? data : item)
-  return data
-}
 </script>

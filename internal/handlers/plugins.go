@@ -41,8 +41,6 @@ func (h *PluginsHandler) Register(e *echo.Echo) {
 	group.POST("/:id/disable", h.Disable)
 	group.POST("/:id/uninstall", h.Uninstall)
 	group.DELETE("/:id", h.Purge)
-	group.POST("/:id/oauth/authorize", h.StartOAuth)
-	group.GET("/:id/oauth/status", h.RefreshOAuthStatus)
 }
 
 func (h *PluginsHandler) requireBotAccess(c echo.Context) (string, error) {
@@ -209,61 +207,6 @@ func (h *PluginsHandler) Purge(c echo.Context) error {
 		return pluginServiceError(err)
 	}
 	return c.NoContent(http.StatusNoContent)
-}
-
-// StartOAuth godoc
-// @Summary Start managed OAuth for a bot plugin
-// @Tags plugins
-// @Param bot_id path string true "Bot ID"
-// @Param id path string true "Plugin installation ID"
-// @Param payload body plugins.OAuthAuthorizeRequest false "OAuth authorize request"
-// @Success 200 {object} mcp.AuthorizeResult
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Router /bots/{bot_id}/plugins/{id}/oauth/authorize [post].
-func (h *PluginsHandler) StartOAuth(c echo.Context) error {
-	botID, err := h.requireBotAccess(c)
-	if err != nil {
-		return err
-	}
-	id, err := pluginIDParam(c)
-	if err != nil {
-		return err
-	}
-	var req pluginspkg.OAuthAuthorizeRequest
-	_ = c.Bind(&req)
-	resp, err := h.service.StartOAuth(c.Request().Context(), botID, id, req.CallbackURL)
-	if err != nil {
-		return pluginServiceError(err)
-	}
-	return c.JSON(http.StatusOK, resp)
-}
-
-// RefreshOAuthStatus godoc
-// @Summary Refresh managed OAuth status for a bot plugin
-// @Tags plugins
-// @Param bot_id path string true "Bot ID"
-// @Param id path string true "Plugin installation ID"
-// @Success 200 {object} plugins.Installation
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Router /bots/{bot_id}/plugins/{id}/oauth/status [get].
-func (h *PluginsHandler) RefreshOAuthStatus(c echo.Context) error {
-	botID, err := h.requireBotAccess(c)
-	if err != nil {
-		return err
-	}
-	id, err := pluginIDParam(c)
-	if err != nil {
-		return err
-	}
-	resp, err := h.service.RefreshOAuthStatus(c.Request().Context(), botID, id)
-	if err != nil {
-		return pluginServiceError(err)
-	}
-	return c.JSON(http.StatusOK, resp)
 }
 
 func pluginServiceError(err error) error {

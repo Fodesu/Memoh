@@ -2958,38 +2958,17 @@
     },
     "plugins": {
       "title": "Plugins",
-      "intro": "管理已安装的 Plugin 以及由它们创建的隐藏 MCP 资源。",
+      "intro": "管理已安装的 Plugin 与 Skill Package。",
       "installedTitle": "已安装 Plugin",
       "emptyTitle": "暂无 Plugin",
-      "emptyDescription": "从市场安装 Plugin，为 Bot 增加打包好的 MCP 资源和技能。",
-      "resourcesLabel": "资源",
-      "authLabel": "认证",
-      "toolPrefixLabel": "工具前缀",
-      "authorizeAction": "授权",
-      "refreshAuthAction": "刷新 OAuth 状态",
-      "enableAction": "启用 Plugin",
-      "disableAction": "禁用 Plugin",
-      "uninstallAction": "卸载 Plugin",
-      "purgeAction": "清除 Plugin",
-      "uninstallConfirm": "确定卸载此 Plugin 并移除它管理的资源吗？",
-      "purgeConfirm": "确定永久删除此 Plugin 安装记录和配置吗？",
+      "emptyDescription": "从市场安装 Plugin，为 Bot 增加 Skill Package 与自动化能力。",
       "loadFailed": "加载 Plugin 失败",
       "enableSuccess": "Plugin 已启用",
       "disableSuccess": "Plugin 已禁用",
-      "uninstallSuccess": "Plugin 已卸载",
-      "purgeSuccess": "Plugin 已清除",
       "status": {
         "ready": "就绪",
-        "needsConfig": "需要配置",
-        "needsAuth": "需要授权",
-        "adminRequired": "需要管理员配置",
         "disabled": "已禁用",
         "uninstalled": "已卸载"
-      },
-      "auth": {
-        "none": "匿名",
-        "managed_oauth": "托管 OAuth",
-        "user_secret": "用户密钥"
       }
     },
     "skills": {
@@ -3342,7 +3321,6 @@
     "packageInstallTitle": "安装 Package",
     "loadError": "从市场加载失败",
     "submit": "提交",
-    "mcps": "MCPs",
     "information": "信息",
     "category": "分类",
     "registry": "Registry",
@@ -3362,10 +3340,7 @@
     "packageNotFound": "未找到 Package",
     "pluginNotFound": "未找到 Plugin",
     "noDescription": "暂无描述",
-    "unnamedSkill": "未命名 Skill",
-    "authManagedOAuth": "托管 OAuth",
-    "authUserSecret": "用户凭据",
-    "authNone": "无需授权"
+    "unnamedSkill": "未命名 Skill"
   },
   "connectors": {
     "title": "连接器",

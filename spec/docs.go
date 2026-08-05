@@ -3692,6 +3692,12 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace target ID",
+                        "name": "workspace_target_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -6583,114 +6589,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/bots/{bot_id}/plugins/{id}/oauth/authorize": {
-            "post": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "Start managed OAuth for a bot plugin",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Plugin installation ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "OAuth authorize request",
-                        "name": "payload",
-                        "in": "body",
-                        "schema": {
-                            "$ref": "#/definitions/plugins.OAuthAuthorizeRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/mcp.AuthorizeResult"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/plugins/{id}/oauth/status": {
-            "get": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "Refresh managed OAuth status for a bot plugin",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Plugin installation ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/plugins.Installation"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/bots/{bot_id}/plugins/{id}/uninstall": {
             "post": {
                 "tags": [
@@ -8390,6 +8288,12 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace target ID",
+                        "name": "workspace_target_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -19869,12 +19773,6 @@ const docTemplate = `{
                 },
                 "release_revision": {
                     "type": "string"
-                },
-                "variables": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
                 }
             }
         },
@@ -20508,15 +20406,15 @@ const docTemplate = `{
         "handlers.SupermarketPluginEntry": {
             "type": "object",
             "required": [
-                "release"
+                "author",
+                "description",
+                "id",
+                "name",
+                "release",
+                "schema_version",
+                "version"
             ],
             "properties": {
-                "auth_requirements": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.AuthRequirement"
-                    }
-                },
                 "author": {
                     "$ref": "#/definitions/plugins.Author"
                 },
@@ -20544,12 +20442,6 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
-                "mcps": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.MCPResource"
-                    }
-                },
                 "name": {
                     "type": "string"
                 },
@@ -20569,12 +20461,6 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
-                    }
-                },
-                "variables": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.ConfigVar"
                     }
                 },
                 "version": {
@@ -22241,60 +22127,17 @@ const docTemplate = `{
                 }
             }
         },
-        "plugins.AuthRequirement": {
-            "type": "object",
-            "properties": {
-                "client_ref": {
-                    "type": "string"
-                },
-                "key": {
-                    "type": "string"
-                },
-                "scopes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "type": {
-                    "type": "string"
-                },
-                "variables": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
         "plugins.Author": {
             "type": "object",
+            "required": [
+                "name"
+            ],
             "properties": {
                 "email": {
                     "type": "string"
                 },
                 "name": {
                     "type": "string"
-                }
-            }
-        },
-        "plugins.ConfigVar": {
-            "type": "object",
-            "properties": {
-                "defaultValue": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "key": {
-                    "type": "string"
-                },
-                "required": {
-                    "type": "boolean"
-                },
-                "secret": {
-                    "type": "boolean"
                 }
             }
         },
@@ -22317,10 +22160,6 @@ const docTemplate = `{
             "properties": {
                 "bot_id": {
                     "type": "string"
-                },
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
                 },
                 "enabled": {
                     "type": "boolean"
@@ -22375,74 +22214,17 @@ const docTemplate = `{
                 }
             }
         },
-        "plugins.MCPResource": {
-            "type": "object",
-            "properties": {
-                "args": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "auth_ref": {
-                    "type": "string"
-                },
-                "capabilities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "command": {
-                    "type": "string"
-                },
-                "cwd": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "display_name": {
-                    "type": "string"
-                },
-                "env": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.ConfigVar"
-                    }
-                },
-                "headers": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.ConfigVar"
-                    }
-                },
-                "key": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "transport": {
-                    "type": "string"
-                },
-                "url": {
-                    "type": "string"
-                },
-                "visibility": {
-                    "type": "string"
-                }
-            }
-        },
         "plugins.Manifest": {
             "type": "object",
+            "required": [
+                "author",
+                "description",
+                "id",
+                "name",
+                "schema_version",
+                "version"
+            ],
             "properties": {
-                "auth_requirements": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.AuthRequirement"
-                    }
-                },
                 "author": {
                     "$ref": "#/definitions/plugins.Author"
                 },
@@ -22470,12 +22252,6 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
-                "mcps": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.MCPResource"
-                    }
-                },
                 "name": {
                     "type": "string"
                 },
@@ -22494,21 +22270,7 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
-                "variables": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.ConfigVar"
-                    }
-                },
                 "version": {
-                    "type": "string"
-                }
-            }
-        },
-        "plugins.OAuthAuthorizeRequest": {
-            "type": "object",
-            "properties": {
-                "callback_url": {
                     "type": "string"
                 }
             }

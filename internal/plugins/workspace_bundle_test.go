@@ -18,7 +18,6 @@ import (
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/mcp"
 	skillset "github.com/memohai/memoh/internal/skills"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 	"github.com/memohai/memoh/internal/workspace/bridgepb"
@@ -158,9 +157,6 @@ func TestPurgeUninstalledPluginDoesNotRequireOriginalWorkspace(t *testing.T) {
 	service := NewService(
 		slog.New(slog.DiscardHandler),
 		queries,
-		mcp.NewConnectionService(nil, queries),
-		mcp.NewOAuthService(nil, queries, ""),
-		nil,
 		BridgeProvider{Provider: provider},
 	)
 
@@ -247,9 +243,6 @@ func TestUninstallRemovesPluginBundleAndRestoresItOnDatabaseFailure(t *testing.T
 			service := NewService(
 				slog.New(slog.DiscardHandler),
 				queries,
-				mcp.NewConnectionService(nil, queries),
-				mcp.NewOAuthService(nil, queries, ""),
-				nil,
 				BridgeProvider{Provider: provider},
 			)
 			_, uninstallErr := service.Uninstall(

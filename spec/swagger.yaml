@@ -3120,10 +3120,6 @@ definitions:
         type: string
       release_revision:
         type: string
-      variables:
-        additionalProperties:
-          type: string
-        type: object
     required:
     - expected_installation_updated_at
     - expected_installed_revision
@@ -3559,10 +3555,6 @@ definitions:
     type: object
   handlers.SupermarketPluginEntry:
     properties:
-      auth_requirements:
-        items:
-          $ref: '#/definitions/plugins.AuthRequirement'
-        type: array
       author:
         $ref: '#/definitions/plugins.Author'
       capabilities:
@@ -3581,10 +3573,6 @@ definitions:
         items:
           type: string
         type: array
-      mcps:
-        items:
-          $ref: '#/definitions/plugins.MCPResource'
-        type: array
       name:
         type: string
       packages:
@@ -3599,14 +3587,16 @@ definitions:
         items:
           type: string
         type: array
-      variables:
-        items:
-          $ref: '#/definitions/plugins.ConfigVar'
-        type: array
       version:
         type: string
     required:
+    - author
+    - description
+    - id
+    - name
     - release
+    - schema_version
+    - version
     type: object
   handlers.SupermarketPluginListResponse:
     properties:
@@ -4745,42 +4735,14 @@ definitions:
       type:
         $ref: '#/definitions/models.ModelType'
     type: object
-  plugins.AuthRequirement:
-    properties:
-      client_ref:
-        type: string
-      key:
-        type: string
-      scopes:
-        items:
-          type: string
-        type: array
-      type:
-        type: string
-      variables:
-        items:
-          type: string
-        type: array
-    type: object
   plugins.Author:
     properties:
       email:
         type: string
       name:
         type: string
-    type: object
-  plugins.ConfigVar:
-    properties:
-      defaultValue:
-        type: string
-      description:
-        type: string
-      key:
-        type: string
-      required:
-        type: boolean
-      secret:
-        type: boolean
+    required:
+    - name
     type: object
   plugins.Icon:
     properties:
@@ -4795,9 +4757,6 @@ definitions:
     properties:
       bot_id:
         type: string
-      config:
-        additionalProperties: {}
-        type: object
       enabled:
         type: boolean
       id:
@@ -4833,51 +4792,8 @@ definitions:
           $ref: '#/definitions/plugins.Installation'
         type: array
     type: object
-  plugins.MCPResource:
-    properties:
-      args:
-        items:
-          type: string
-        type: array
-      auth_ref:
-        type: string
-      capabilities:
-        items:
-          type: string
-        type: array
-      command:
-        type: string
-      cwd:
-        type: string
-      description:
-        type: string
-      display_name:
-        type: string
-      env:
-        items:
-          $ref: '#/definitions/plugins.ConfigVar'
-        type: array
-      headers:
-        items:
-          $ref: '#/definitions/plugins.ConfigVar'
-        type: array
-      key:
-        type: string
-      name:
-        type: string
-      transport:
-        type: string
-      url:
-        type: string
-      visibility:
-        type: string
-    type: object
   plugins.Manifest:
     properties:
-      auth_requirements:
-        items:
-          $ref: '#/definitions/plugins.AuthRequirement'
-        type: array
       author:
         $ref: '#/definitions/plugins.Author'
       capabilities:
@@ -4896,10 +4812,6 @@ definitions:
         items:
           type: string
         type: array
-      mcps:
-        items:
-          $ref: '#/definitions/plugins.MCPResource'
-        type: array
       name:
         type: string
       packages:
@@ -4912,17 +4824,15 @@ definitions:
         items:
           type: string
         type: array
-      variables:
-        items:
-          $ref: '#/definitions/plugins.ConfigVar'
-        type: array
       version:
         type: string
-    type: object
-  plugins.OAuthAuthorizeRequest:
-    properties:
-      callback_url:
-        type: string
+    required:
+    - author
+    - description
+    - id
+    - name
+    - schema_version
+    - version
     type: object
   plugins.PackageReference:
     properties:
@@ -8466,6 +8376,10 @@ paths:
         name: bot_id
         required: true
         type: string
+      - description: Workspace target ID
+        in: query
+        name: workspace_target_id
+        type: string
       responses:
         "200":
           description: OK
@@ -10361,77 +10275,6 @@ paths:
       summary: Enable bot plugin
       tags:
       - plugins
-  /bots/{bot_id}/plugins/{id}/oauth/authorize:
-    post:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Plugin installation ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: OAuth authorize request
-        in: body
-        name: payload
-        schema:
-          $ref: '#/definitions/plugins.OAuthAuthorizeRequest'
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/mcp.AuthorizeResult'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Start managed OAuth for a bot plugin
-      tags:
-      - plugins
-  /bots/{bot_id}/plugins/{id}/oauth/status:
-    get:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Plugin installation ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/plugins.Installation'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Refresh managed OAuth status for a bot plugin
-      tags:
-      - plugins
   /bots/{bot_id}/plugins/{id}/uninstall:
     post:
       parameters:
@@ -11567,6 +11410,10 @@ paths:
         in: path
         name: bot_id
         required: true
+        type: string
+      - description: Workspace target ID
+        in: query
+        name: workspace_target_id
         type: string
       responses:
         "200":

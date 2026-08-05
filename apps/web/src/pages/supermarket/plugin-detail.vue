@@ -53,49 +53,6 @@
       </p>
 
       <section
-        v-if="plugin.mcps?.length"
-        class="mt-8"
-      >
-        <h2 class="mb-4 text-lg font-semibold">
-          {{ $t('supermarket.mcps') }}
-          <span class="ml-1 text-muted-foreground">{{ plugin.mcps.length }}</span>
-        </h2>
-        <SettingsSection>
-          <SettingsRow
-            v-for="mcp in plugin.mcps"
-            :key="mcp.key || mcp.name"
-            align="start"
-          >
-            <template #leading>
-              <div class="flex size-10 shrink-0 items-center justify-center rounded-md border bg-background">
-                <Plug class="size-5 text-muted-foreground" />
-              </div>
-            </template>
-            <template #content>
-              <div class="flex flex-wrap items-center gap-2">
-                <p
-                  class="min-w-0 truncate text-sm font-medium text-foreground"
-                  :title="mcp.display_name || mcp.name || mcp.key"
-                >
-                  {{ mcp.display_name || mcp.name || mcp.key }}
-                </p>
-                <Badge
-                  v-if="authTypeForMcp(mcp.key)"
-                  variant="secondary"
-                  size="sm"
-                >
-                  {{ authTypeLabel(authTypeForMcp(mcp.key)) }}
-                </Badge>
-              </div>
-              <p class="mt-0.5 break-words text-xs text-muted-foreground">
-                {{ mcp.description || mcp.url || mcp.command || $t('supermarket.noDescription') }}
-              </p>
-            </template>
-          </SettingsRow>
-        </SettingsSection>
-      </section>
-
-      <section
         v-if="pluginPackages.length"
         class="mt-8"
       >
@@ -196,8 +153,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Boxes, ExternalLink, PackageOpen, Plug } from 'lucide-vue-next'
-import { Badge, Button, InlineLoadingRow, SettingsRow, SettingsSection, toast } from '@felinic/ui'
+import { ArrowLeft, Boxes, ExternalLink, PackageOpen } from 'lucide-vue-next'
+import { Button, InlineLoadingRow, SettingsRow, SettingsSection, toast } from '@felinic/ui'
 import {
   getSupermarketPluginsById,
   type HandlersSupermarketPluginEntry,
@@ -231,20 +188,6 @@ const pluginPackages = computed<HandlersSupermarketPluginResolvedPackage[]>(() =
 
 function packageKey(pkg: HandlersSupermarketPluginResolvedPackage) {
   return `${pkg.registry_id}/${pkg.package_id}`
-}
-
-function authTypeForMcp(key?: string) {
-  if (!key) return ''
-  return plugin.value?.auth_requirements?.find(item => item.key === key)?.type || ''
-}
-
-function authTypeLabel(type?: string) {
-  switch (type) {
-    case 'managed_oauth': return t('supermarket.authManagedOAuth')
-    case 'user_secret': return t('supermarket.authUserSecret')
-    case 'none': return t('supermarket.authNone')
-    default: return type || ''
-  }
 }
 
 async function loadPlugin() {
