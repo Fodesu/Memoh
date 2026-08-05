@@ -1,5 +1,5 @@
 <template>
-  <!-- 超市列表卡的形状 owner:plugin-card / skill-card 原本各手写一份同形结构,
+  <!-- 超市列表卡的形状由不同市场资源共用，
        且 hover 反馈只有 skill 那份有(plugin 卡悬停无任何反馈,是可见 bug)。
        归一后:图标槽(#leading)+ 标题 + 主页外链 + 两行截断描述 + 尾部动作槽(#actions)。
        卡高固定:描述框恒占两行(min-h-8 = 2 × text-xs 的 1rem 行高),短描述不塌、长描述

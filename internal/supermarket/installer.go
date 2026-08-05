@@ -9,10 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	pluginspkg "github.com/memohai/memoh/internal/plugins"
 	"github.com/memohai/memoh/internal/skillpackages"
 	"github.com/memohai/memoh/internal/workspace"
-	"github.com/memohai/memoh/internal/workspace/bridge"
 )
 
 const maxConcurrentPackagePreparations = 2
@@ -29,23 +27,16 @@ var installationResourceLocks = struct {
 	items map[string]*resourceLock
 }{items: make(map[string]*resourceLock)}
 
-type PluginInstaller interface {
-	Install(context.Context, string, pluginspkg.InstallPlan) (pluginspkg.Installation, error)
-	InstalledPluginState(context.Context, string, string) (pluginspkg.InstalledPluginState, bool, error)
-}
-
 type Installer struct {
 	client     *Client
-	plugins    PluginInstaller
 	packages   *skillpackages.Service
-	containers bridge.Provider
 	workspaces *workspace.Manager
 	logger     *slog.Logger
 }
 
-func NewInstaller(client *Client, plugins PluginInstaller, packages *skillpackages.Service, containers bridge.Provider, workspaces *workspace.Manager, logger *slog.Logger) *Installer {
+func NewInstaller(client *Client, packages *skillpackages.Service, workspaces *workspace.Manager, logger *slog.Logger) *Installer {
 	return &Installer{
-		client: client, plugins: plugins, packages: packages, containers: containers, workspaces: workspaces, logger: logger,
+		client: client, packages: packages, workspaces: workspaces, logger: logger,
 	}
 }
 
@@ -71,8 +62,6 @@ type WorkspaceTargetError struct{ Err error }
 
 func (e *WorkspaceTargetError) Error() string { return e.Err.Error() }
 func (e *WorkspaceTargetError) Unwrap() error { return e.Err }
-
-func withStatus(status int, err error) error { return &StatusError{Status: status, Err: err} }
 
 func (i *Installer) acquirePreparation(ctx context.Context) (func(), error) {
 	if i == nil {
@@ -164,8 +153,4 @@ func uniqueSortedStrings(values []string) []string {
 
 func packageInstallationLockKey(botID, targetID, registryID, packageID string) string {
 	return strings.Join([]string{"package", botID, targetID, registryID, packageID}, "\x00")
-}
-
-func pluginInstallationLockKey(botID, targetID, pluginID string) string {
-	return strings.Join([]string{"plugin", botID, targetID, pluginID}, "\x00")
 }

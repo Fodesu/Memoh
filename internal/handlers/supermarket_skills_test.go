@@ -148,7 +148,6 @@ func TestInstallRegistryPackagePublishesMembersInOneMutation(t *testing.T) {
 	release := registryPackageReleaseBytes(t, pkg)
 	revision := sha256.Sum256(release)
 	pkg.Revision = hex.EncodeToString(revision[:])
-	installer := &recordingPluginInstaller{}
 	obsoletePath := "/data/skills/registry/package/obsolete/SKILL.md"
 	env.writeSkillFile(t, obsoletePath, managedSkillRaw("obsolete", "Obsolete"))
 	handler := &SupermarketHandler{
@@ -165,7 +164,7 @@ func TestInstallRegistryPackagePublishesMembersInOneMutation(t *testing.T) {
 	}
 
 	packageService := skillpackages.NewService(&directPackageStore{})
-	service := supermarketclient.NewInstaller(handler.upstream, installer, packageService, nil, manager, slog.New(slog.DiscardHandler))
+	service := supermarketclient.NewInstaller(handler.upstream, packageService, manager, slog.New(slog.DiscardHandler))
 	result, err := service.InstallPackage(context.Background(), env.botID, supermarketclient.InstallPackageRequest{
 		RegistryID: pkg.RegistryID, PackageID: pkg.PackageID, Revision: pkg.Revision,
 	})
@@ -271,9 +270,7 @@ func TestUninstallRegistryPackageRemovesDirectoryAndRollsBackOnDatabaseFailure(t
 			}
 			installer := supermarketclient.NewInstaller(
 				nil,
-				&recordingPluginInstaller{},
 				skillpackages.NewService(store),
-				nil,
 				manager,
 				slog.New(slog.DiscardHandler),
 			)
@@ -451,4 +448,14 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
+}
+
+func testHTTPResponse(req *http.Request, status int, content []byte) *http.Response {
+	return &http.Response{
+		StatusCode:    status,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(bytes.NewReader(content)),
+		ContentLength: int64(len(content)),
+		Request:       req,
+	}
 }

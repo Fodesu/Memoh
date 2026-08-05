@@ -521,7 +521,6 @@ func normalizeManifest(manifest Manifest) Manifest {
 	manifest.Author.Name = strings.TrimSpace(manifest.Author.Name)
 	manifest.Author.Email = strings.TrimSpace(manifest.Author.Email)
 	manifest.Homepage = strings.TrimSpace(manifest.Homepage)
-	manifest.Install = normalizeInstallCommands(manifest.Install)
 	for i := range manifest.Packages {
 		manifest.Packages[i].RegistryID = strings.TrimSpace(manifest.Packages[i].RegistryID)
 		manifest.Packages[i].PackageID = strings.TrimSpace(manifest.Packages[i].PackageID)
@@ -531,18 +530,6 @@ func normalizeManifest(manifest Manifest) Manifest {
 
 func NormalizeManifest(manifest Manifest) Manifest {
 	return normalizeManifest(manifest)
-}
-
-func normalizeInstallCommands(commands []string) InstallCommands {
-	out := make([]string, 0, len(commands))
-	for _, command := range commands {
-		command = strings.TrimSpace(command)
-		if command == "" {
-			continue
-		}
-		out = append(out, command)
-	}
-	return InstallCommands(out)
 }
 
 func manifestMetadata(manifest Manifest) map[string]any {

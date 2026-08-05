@@ -354,7 +354,3 @@ func registrySkillUpstreamPath(registryID, packageID, skillID string) string {
 func registryPackageUpstreamPath(registryID, packageID string) string {
 	return "/api/registries/" + url.PathEscape(registryID) + "/packages/" + url.PathEscape(packageID)
 }
-
-func registryPackageReleaseUpstreamPath(registryID, packageID, revision string) string {
-	return registryPackageUpstreamPath(registryID, packageID) + "/releases/" + url.PathEscape(revision)
-}

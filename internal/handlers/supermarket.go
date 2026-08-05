@@ -1,26 +1,20 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/config"
-	pluginspkg "github.com/memohai/memoh/internal/plugins"
 	"github.com/memohai/memoh/internal/skillpackages"
-	skillset "github.com/memohai/memoh/internal/skills"
 	supermarketclient "github.com/memohai/memoh/internal/supermarket"
 	"github.com/memohai/memoh/internal/workspace"
-	"github.com/memohai/memoh/internal/workspace/bridge"
 )
 
 type SupermarketHandler struct {
@@ -36,9 +30,7 @@ type SupermarketHandler struct {
 func NewSupermarketHandler(
 	log *slog.Logger,
 	cfg config.Config,
-	pluginService *pluginspkg.Service,
 	packageService *skillpackages.Service,
-	containers bridge.Provider,
 	workspaces *workspace.Manager,
 	botService *bots.Service,
 	accountService *accounts.Service,
@@ -46,7 +38,7 @@ func NewSupermarketHandler(
 	upstream := supermarketclient.NewClient(cfg.Supermarket.GetBaseURL(), nil)
 	return &SupermarketHandler{
 		upstream:       upstream,
-		installer:      supermarketclient.NewInstaller(upstream, pluginService, packageService, containers, workspaces, log),
+		installer:      supermarketclient.NewInstaller(upstream, packageService, workspaces, log),
 		packages:       packageService,
 		workspaces:     workspaces,
 		botService:     botService,
@@ -57,8 +49,6 @@ func NewSupermarketHandler(
 
 func (h *SupermarketHandler) Register(e *echo.Echo) {
 	g := e.Group("/supermarket")
-	g.GET("/plugins", h.ListPlugins)
-	g.GET("/plugins/:id", h.GetPlugin)
 	g.GET("/skills", h.ListSkills)
 	g.GET("/packages", h.ListPackages)
 	g.GET("/registries", h.ListRegistries)
@@ -70,7 +60,6 @@ func (h *SupermarketHandler) Register(e *echo.Echo) {
 	g.GET("/artifacts/icon/:digest", h.GetRegistrySkillIcon)
 
 	ig := e.Group("/bots/:bot_id/supermarket")
-	ig.POST("/install-plugin", h.InstallPlugin)
 	ig.POST("/install-package", h.InstallPackage)
 	ig.GET("/packages", h.ListInstalledPackages)
 	ig.DELETE("/packages/:installation_id", h.UninstallPackage)
@@ -107,64 +96,7 @@ func (h *SupermarketHandler) proxy(c echo.Context, upstreamPath string) error {
 	return nil
 }
 
-// ListPlugins godoc
-// @Summary List plugins from supermarket
-// @Tags supermarket
-// @Param q query string false "Search query"
-// @Param tag query string false "Filter by tag"
-// @Param page query int false "Page number"
-// @Param limit query int false "Items per page"
-// @Success 200 {object} SupermarketPluginListResponse
-// @Failure 502 {object} ErrorResponse
-// @Router /supermarket/plugins [get].
-func (h *SupermarketHandler) ListPlugins(c echo.Context) error {
-	return h.proxy(c, "/api/plugins")
-}
-
-// GetPlugin godoc
-// @Summary Get plugin detail from supermarket
-// @Tags supermarket
-// @Param id path string true "Plugin ID"
-// @Success 200 {object} SupermarketPluginEntry
-// @Failure 404 {object} ErrorResponse
-// @Failure 502 {object} ErrorResponse
-// @Router /supermarket/plugins/{id} [get].
-func (h *SupermarketHandler) GetPlugin(c echo.Context) error {
-	id := strings.TrimSpace(c.Param("id"))
-	if !skillset.IsValidName(id) {
-		return echo.NewHTTPError(http.StatusBadRequest, "plugin id is invalid")
-	}
-	return h.proxy(c, "/api/plugins/"+url.PathEscape(id))
-}
-
 // --- Install endpoints ---
-
-// InstallPluginRequest is the request body for installing a plugin from supermarket.
-type InstallPluginRequest struct {
-	PluginID                      string     `json:"plugin_id" validate:"required"`
-	ReleaseRevision               string     `json:"release_revision" validate:"required"`
-	ExpectedInstalledRevision     *string    `json:"expected_installed_revision" validate:"required" extensions:"x-nullable"`
-	ExpectedInstallationUpdatedAt *time.Time `json:"expected_installation_updated_at" validate:"required" extensions:"x-nullable"`
-
-	expectedInstalledRevisionSet     bool
-	expectedInstallationUpdatedAtSet bool
-}
-
-func (r *InstallPluginRequest) UnmarshalJSON(data []byte) error {
-	type request InstallPluginRequest
-	var decoded request
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	*r = InstallPluginRequest(decoded)
-	_, r.expectedInstalledRevisionSet = fields["expected_installed_revision"]
-	_, r.expectedInstallationUpdatedAtSet = fields["expected_installation_updated_at"]
-	return nil
-}
 
 // InstallPackageRequest installs one immutable Package revision.
 type InstallPackageRequest struct {
@@ -172,73 +104,6 @@ type InstallPackageRequest struct {
 	PackageID         string `json:"package_id" validate:"required"`
 	Revision          string `json:"revision" validate:"required"`
 	WorkspaceTargetID string `json:"workspace_target_id,omitempty"`
-}
-
-// InstallPlugin godoc
-// @Summary Install plugin from supermarket to bot
-// @Tags supermarket
-// @Param bot_id path string true "Bot ID"
-// @Param payload body InstallPluginRequest true "Install plugin request"
-// @Success 200 {object} plugins.Installation
-// @Failure 400 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Failure 409 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
-// @Failure 502 {object} ErrorResponse
-// @Router /bots/{bot_id}/supermarket/install-plugin [post].
-func (h *SupermarketHandler) InstallPlugin(c echo.Context) error {
-	botID, err := h.requireBotAccess(c)
-	if err != nil {
-		return err
-	}
-
-	var req InstallPluginRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	req.PluginID = strings.TrimSpace(req.PluginID)
-	if req.PluginID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "plugin_id is required")
-	}
-	if !skillset.IsValidPluginID(req.PluginID) {
-		return echo.NewHTTPError(http.StatusBadRequest, "plugin_id is invalid")
-	}
-	req.ReleaseRevision = strings.TrimSpace(req.ReleaseRevision)
-	if !supermarketclient.IsCanonicalSHA256(req.ReleaseRevision) {
-		return echo.NewHTTPError(http.StatusBadRequest, "release_revision is invalid")
-	}
-	if !req.expectedInstalledRevisionSet {
-		return echo.NewHTTPError(http.StatusBadRequest, "expected_installed_revision is required")
-	}
-	if !req.expectedInstallationUpdatedAtSet {
-		return echo.NewHTTPError(http.StatusBadRequest, "expected_installation_updated_at is required")
-	}
-	if req.ExpectedInstalledRevision != nil {
-		expectedRevision := strings.TrimSpace(*req.ExpectedInstalledRevision)
-		if !supermarketclient.IsCanonicalSHA256(expectedRevision) {
-			return echo.NewHTTPError(http.StatusBadRequest, "expected_installed_revision is invalid")
-		}
-		req.ExpectedInstalledRevision = &expectedRevision
-	}
-	if (req.ExpectedInstalledRevision == nil) != (req.ExpectedInstallationUpdatedAt == nil) {
-		return echo.NewHTTPError(
-			http.StatusBadRequest,
-			"expected Plugin revision and installation timestamp must both be null or both be set",
-		)
-	}
-
-	if h.installer == nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "supermarket installer is not configured")
-	}
-	installation, err := h.installer.InstallPlugin(c.Request().Context(), botID, supermarketclient.InstallPluginRequest{
-		PluginID: req.PluginID, ReleaseRevision: req.ReleaseRevision,
-		ExpectedInstalledRevision: req.ExpectedInstalledRevision,
-		ExpectedInstallationTime:  req.ExpectedInstallationUpdatedAt,
-	})
-	if err != nil {
-		return h.installerHTTPError(err)
-	}
-	return c.JSON(http.StatusOK, installation)
 }
 
 // InstallPackage godoc
@@ -349,15 +214,3 @@ func (h *SupermarketHandler) installerHTTPError(err error) error {
 // --- Supermarket upstream types (for swagger) ---
 
 type SupermarketAuthor = supermarketclient.Author
-
-type SupermarketPluginArtifact = supermarketclient.PluginArtifact
-
-type SupermarketPluginResolvedPackage = supermarketclient.PluginResolvedPackage
-
-type SupermarketPluginRelease = supermarketclient.PluginRelease
-
-type SupermarketImmutablePluginRelease = supermarketclient.ImmutablePluginRelease
-
-type SupermarketPluginEntry = supermarketclient.PluginEntry
-
-type SupermarketPluginListResponse = supermarketclient.PluginListResponse

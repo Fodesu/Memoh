@@ -3108,24 +3108,6 @@ definitions:
     - registry_id
     - revision
     type: object
-  handlers.InstallPluginRequest:
-    properties:
-      expected_installation_updated_at:
-        type: string
-        x-nullable: true
-      expected_installed_revision:
-        type: string
-        x-nullable: true
-      plugin_id:
-        type: string
-      release_revision:
-        type: string
-    required:
-    - expected_installation_updated_at
-    - expected_installed_revision
-    - plugin_id
-    - release_revision
-    type: object
   handlers.InstallRegistryPackageResponse:
     properties:
       installation:
@@ -3533,114 +3515,6 @@ definitions:
     - limit
     - page
     - total
-    type: object
-  handlers.SupermarketPluginArtifact:
-    properties:
-      content_type:
-        type: string
-      digest:
-        type: string
-      download_url:
-        type: string
-      format:
-        type: string
-      size:
-        type: integer
-    required:
-    - content_type
-    - digest
-    - download_url
-    - format
-    - size
-    type: object
-  handlers.SupermarketPluginEntry:
-    properties:
-      author:
-        $ref: '#/definitions/plugins.Author'
-      capabilities:
-        items:
-          type: string
-        type: array
-      description:
-        type: string
-      homepage:
-        type: string
-      icon:
-        $ref: '#/definitions/plugins.Icon'
-      id:
-        type: string
-      install:
-        items:
-          type: string
-        type: array
-      name:
-        type: string
-      packages:
-        items:
-          $ref: '#/definitions/plugins.PackageReference'
-        type: array
-      release:
-        $ref: '#/definitions/handlers.SupermarketPluginRelease'
-      schema_version:
-        type: string
-      tags:
-        items:
-          type: string
-        type: array
-      version:
-        type: string
-    required:
-    - author
-    - description
-    - id
-    - name
-    - release
-    - schema_version
-    - version
-    type: object
-  handlers.SupermarketPluginListResponse:
-    properties:
-      data:
-        items:
-          $ref: '#/definitions/handlers.SupermarketPluginEntry'
-        type: array
-      limit:
-        type: integer
-      page:
-        type: integer
-      total:
-        type: integer
-    type: object
-  handlers.SupermarketPluginRelease:
-    properties:
-      artifact:
-        $ref: '#/definitions/handlers.SupermarketPluginArtifact'
-      packages:
-        items:
-          $ref: '#/definitions/handlers.SupermarketPluginResolvedPackage'
-        type: array
-      published_at:
-        type: string
-      revision:
-        type: string
-    required:
-    - artifact
-    - packages
-    - published_at
-    - revision
-    type: object
-  handlers.SupermarketPluginResolvedPackage:
-    properties:
-      package_id:
-        type: string
-      registry_id:
-        type: string
-      revision:
-        type: string
-    required:
-    - package_id
-    - registry_id
-    - revision
     type: object
   handlers.SupermarketRegistry:
     properties:
@@ -4808,10 +4682,6 @@ definitions:
         $ref: '#/definitions/plugins.Icon'
       id:
         type: string
-      install:
-        items:
-          type: string
-        type: array
       name:
         type: string
       packages:
@@ -11361,48 +11231,6 @@ paths:
       summary: Install an immutable Skill Package release to a bot workspace
       tags:
       - supermarket
-  /bots/{bot_id}/supermarket/install-plugin:
-    post:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Install plugin request
-        in: body
-        name: payload
-        required: true
-        schema:
-          $ref: '#/definitions/handlers.InstallPluginRequest'
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/plugins.Installation'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "502":
-          description: Bad Gateway
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Install plugin from supermarket to bot
-      tags:
-      - supermarket
   /bots/{bot_id}/supermarket/packages:
     get:
       parameters:
@@ -14832,61 +14660,6 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: List Skill Packages across supermarket Registries
-      tags:
-      - supermarket
-  /supermarket/plugins:
-    get:
-      parameters:
-      - description: Search query
-        in: query
-        name: q
-        type: string
-      - description: Filter by tag
-        in: query
-        name: tag
-        type: string
-      - description: Page number
-        in: query
-        name: page
-        type: integer
-      - description: Items per page
-        in: query
-        name: limit
-        type: integer
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.SupermarketPluginListResponse'
-        "502":
-          description: Bad Gateway
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: List plugins from supermarket
-      tags:
-      - supermarket
-  /supermarket/plugins/{id}:
-    get:
-      parameters:
-      - description: Plugin ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.SupermarketPluginEntry'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "502":
-          description: Bad Gateway
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Get plugin detail from supermarket
       tags:
       - supermarket
   /supermarket/registries:

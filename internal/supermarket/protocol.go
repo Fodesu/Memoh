@@ -1,51 +1,9 @@
 package supermarket
 
-import pluginspkg "github.com/memohai/memoh/internal/plugins"
-
 type Author struct {
 	Name  string `json:"name" validate:"required"`
 	Email string `json:"email" validate:"required"`
 } // @name handlers.SupermarketAuthor
-
-type PluginArtifact struct {
-	Format      string `json:"format" validate:"required"`
-	Digest      string `json:"digest" validate:"required"`
-	Size        int64  `json:"size" validate:"required"`
-	ContentType string `json:"content_type" validate:"required"`
-	DownloadURL string `json:"download_url" validate:"required"`
-} // @name handlers.SupermarketPluginArtifact
-
-type PluginResolvedPackage struct {
-	RegistryID string `json:"registry_id" validate:"required"`
-	PackageID  string `json:"package_id" validate:"required"`
-	Revision   string `json:"revision" validate:"required"`
-} // @name handlers.SupermarketPluginResolvedPackage
-
-type PluginRelease struct {
-	Revision    string                  `json:"revision" validate:"required"`
-	PublishedAt string                  `json:"published_at" validate:"required"`
-	Artifact    PluginArtifact          `json:"artifact" validate:"required"`
-	Packages    []PluginResolvedPackage `json:"packages" validate:"required"`
-} // @name handlers.SupermarketPluginRelease
-
-type ImmutablePluginRelease struct {
-	SchemaVersion string                  `json:"schema_version"`
-	Plugin        pluginspkg.Manifest     `json:"plugin"`
-	Artifact      PluginArtifact          `json:"artifact"`
-	Packages      []PluginResolvedPackage `json:"packages"`
-}
-
-type PluginEntry struct {
-	pluginspkg.Manifest
-	Release PluginRelease `json:"release" validate:"required"`
-} // @name handlers.SupermarketPluginEntry
-
-type PluginListResponse struct {
-	Total int           `json:"total"`
-	Page  int           `json:"page"`
-	Limit int           `json:"limit"`
-	Data  []PluginEntry `json:"data"`
-} // @name handlers.SupermarketPluginListResponse
 
 type RegistryListResponse struct {
 	Data []Registry `json:"data" validate:"required"`

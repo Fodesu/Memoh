@@ -11,13 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"time"
 )
 
-const (
-	maxPluginMetadataBytes  = 2 * 1024 * 1024
-	maxPackageMetadataBytes = 8 * 1024 * 1024
-)
+const maxPackageMetadataBytes = 8 * 1024 * 1024
 
 type ErrorKind string
 
@@ -59,51 +55,6 @@ func ErrorKindOf(err error) ErrorKind {
 		return protocolErr.Kind
 	}
 	return ""
-}
-
-// FetchPluginEntry resolves the mutable current pointer to one immutable,
-// digest-verified Plugin release.
-func (c *Client) FetchPluginEntry(ctx context.Context, pluginID string) (PluginEntry, error) {
-	requestPath := "/api/plugins/" + url.PathEscape(pluginID)
-	var current PluginEntry
-	if err := c.getJSON(ctx, requestPath, maxPluginMetadataBytes, &current); err != nil {
-		return PluginEntry{}, err
-	}
-	if !isCanonicalSHA256(current.Release.Revision) {
-		return PluginEntry{}, invalidResponse("fetch current Plugin", errors.New("invalid Plugin release revision"))
-	}
-	if _, err := time.Parse(time.RFC3339, current.Release.PublishedAt); err != nil {
-		return PluginEntry{}, invalidResponse("fetch current Plugin", errors.New("invalid Plugin release publication time"))
-	}
-	return c.FetchPluginRelease(ctx, pluginID, current.Release.Revision, current.Release.PublishedAt)
-}
-
-func (c *Client) FetchPluginRelease(
-	ctx context.Context,
-	pluginID, revision, publishedAt string,
-) (PluginEntry, error) {
-	requestPath := "/api/plugins/" + url.PathEscape(pluginID) + "/releases/" + url.PathEscape(revision)
-	var release ImmutablePluginRelease
-	if err := c.getImmutableJSON(ctx, requestPath, revision, maxPluginMetadataBytes, &release); err != nil {
-		if ErrorKindOf(err) == ErrorNotFound {
-			return PluginEntry{}, &ProtocolError{
-				Kind: ErrorInvalidResponse, Status: http.StatusNotFound, Op: "fetch Plugin release",
-				Err: errors.New("approved Plugin release is missing"),
-			}
-		}
-		return PluginEntry{}, err
-	}
-	if release.SchemaVersion != "1" {
-		return PluginEntry{}, invalidResponse("fetch Plugin release", errors.New("unsupported immutable Plugin release schema"))
-	}
-	release.Artifact.DownloadURL = "/api/artifacts/plugin/" + release.Artifact.Digest
-	return PluginEntry{
-		Manifest: release.Plugin,
-		Release: PluginRelease{
-			Revision: revision, PublishedAt: publishedAt,
-			Artifact: release.Artifact, Packages: release.Packages,
-		},
-	}, nil
 }
 
 // FetchPackageRelease downloads one immutable, digest-verified Package release.
@@ -182,35 +133,6 @@ func (c *Client) DownloadArtifact(ctx context.Context, artifact ArtifactDownload
 		return nil, invalidResponse("download Artifact", errors.New("SHA-256 verification failed"))
 	}
 	return content, nil
-}
-
-func (c *Client) getJSON(ctx context.Context, requestPath string, limit int64, target any) error {
-	resp, err := c.Get(ctx, requestPath, "application/json")
-	if err != nil {
-		return &ProtocolError{Kind: ErrorUnavailable, Op: "fetch Supermarket metadata", Err: err}
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNotFound {
-		return &ProtocolError{Kind: ErrorNotFound, Status: resp.StatusCode, Op: "fetch Supermarket metadata"}
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &ProtocolError{
-			Kind: ErrorUnavailable, Status: resp.StatusCode, Op: "fetch Supermarket metadata",
-			Err: fmt.Errorf("supermarket returned status %d", resp.StatusCode),
-		}
-	}
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return &ProtocolError{Kind: ErrorUnavailable, Op: "read Supermarket metadata", Err: err}
-	}
-	if int64(len(payload)) > limit {
-		return invalidResponse("decode Supermarket metadata", errors.New("response is too large"))
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	if err := decoder.Decode(target); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return invalidResponse("decode Supermarket metadata", errors.New("response is malformed"))
-	}
-	return nil
 }
 
 func (c *Client) getImmutableJSON(
