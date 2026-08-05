@@ -46,42 +46,10 @@
           >
             {{ $t('supermarket.connectorsSection') }}
           </TabsTrigger>
-          <TabsTrigger value="plugins">
-            {{ $t('supermarket.pluginSection') }}
-          </TabsTrigger>
           <TabsTrigger value="skills">
             {{ $t('supermarket.skillsSection') }}
           </TabsTrigger>
         </TabsList>
-
-        <!-- Plugins Tab -->
-        <TabsContent value="plugins">
-          <InlineLoadingRow
-            v-if="pluginsLoading"
-            class="justify-center py-8"
-          >
-            {{ $t('common.loading') }}
-          </InlineLoadingRow>
-
-          <div
-            v-else-if="!plugins.length"
-            class="py-8 text-center text-xs text-muted-foreground"
-          >
-            {{ $t('supermarket.noPluginResults') }}
-          </div>
-
-          <div
-            v-else
-            class="grid grid-cols-1 sm:grid-cols-2 gap-4"
-          >
-            <PluginCard
-              v-for="plugin in plugins"
-              :key="plugin.id"
-              :plugin="plugin"
-              @install="openPluginInstall"
-            />
-          </div>
-        </TabsContent>
 
         <!-- Skills Tab -->
         <TabsContent
@@ -212,11 +180,6 @@
         </TabsContent>
       </Tabs>
 
-      <InstallPluginDialog
-        v-model:open="pluginDialogOpen"
-        :plugin="selectedPlugin"
-        @installed="refreshAll"
-      />
       <ConnectConnectorDialog
         v-model:open="connectorDialogOpen"
         :connector="selectedConnector"
@@ -252,18 +215,14 @@ import {
 } from '@felinic/ui'
 import {
   getConnectorsCatalog,
-  getSupermarketPlugins,
   getSupermarketRegistries,
   getSupermarketPackages,
   type ConnectitConnector,
   type HandlersSupermarketSkillPackageSummary,
-  type HandlersSupermarketPluginEntry,
   type HandlersSupermarketRegistry,
 } from '@memohai/sdk'
 import { resolveApiErrorMessage } from '@/utils/api-error'
-import PluginCard from './components/plugin-card.vue'
 import PackageCard from './components/package-card.vue'
-import InstallPluginDialog from './components/install-plugin-dialog.vue'
 import ConnectConnectorDialog from './components/connect-connector-dialog.vue'
 import MarketItemCard from './components/market-item-card.vue'
 import ProviderIcon from '@/components/provider-icon/index.vue'
@@ -284,9 +243,9 @@ const allRegistriesValue = 'all'
 const activeTab = computed({
   get: () => {
     const valid = capabilitiesStore.connectors
-      ? ['connectors', 'plugins', 'skills']
-      : ['plugins', 'skills']
-    const fallback = capabilitiesStore.connectors ? 'connectors' : 'plugins'
+      ? ['connectors', 'skills']
+      : ['skills']
+    const fallback = capabilitiesStore.connectors ? 'connectors' : 'skills'
     return valid.includes(tabParam.value) ? tabParam.value : fallback
   },
   set: (value: string) => {
@@ -299,14 +258,10 @@ const searchQuery = ref('')
 const page = ref(1)
 const total = ref(0)
 const selectedRegistry = ref(allRegistriesValue)
-const plugins = ref<HandlersSupermarketPluginEntry[]>([])
 const packages = ref<HandlersSupermarketSkillPackageSummary[]>([])
 const registries = ref<HandlersSupermarketRegistry[]>([])
-const pluginsLoading = ref(false)
 const packagesLoading = ref(false)
 
-const pluginDialogOpen = ref(false)
-const selectedPlugin = ref<HandlersSupermarketPluginEntry | null>(null)
 const connectorDialogOpen = ref(false)
 const selectedConnector = ref<ConnectitConnector | null>(null)
 
@@ -356,7 +311,7 @@ watch(
     // Normalize the URL param only while this page owns the current route —
     // firing while KeepAlive-deactivated would rewrite another page's ?tab.
     if (loaded && !connectors && route.name === 'supermarket' && tabParam.value === 'connectors') {
-      tabParam.value = 'plugins'
+      tabParam.value = 'skills'
     }
   },
   { immediate: true },
@@ -393,11 +348,6 @@ function onRegistryFilterChange(value: string | number) {
   void loadPackages()
 }
 
-function openPluginInstall(plugin: HandlersSupermarketPluginEntry) {
-  selectedPlugin.value = plugin
-  pluginDialogOpen.value = true
-}
-
 function openConnectorConnect(connector: ConnectitConnector) {
   if (connector.status !== 'ready') return
   selectedConnector.value = connector
@@ -410,25 +360,6 @@ function openBotConnectors(botId: string) {
     params: { botName: botId },
     query: { tab: 'connectors' },
   })
-}
-
-async function loadPlugins() {
-  pluginsLoading.value = true
-  try {
-    const { data } = await getSupermarketPlugins({
-      query: {
-        q: searchQuery.value || undefined,
-        limit: 50,
-      },
-      throwOnError: true,
-    })
-    plugins.value = data.data ?? []
-  } catch (error) {
-    plugins.value = []
-    toast.error(resolveApiErrorMessage(error, t('supermarket.loadError')))
-  } finally {
-    pluginsLoading.value = false
-  }
 }
 
 async function loadRegistries() {
@@ -467,7 +398,6 @@ async function loadPackages() {
 }
 
 function refreshAll() {
-  void loadPlugins()
   void loadPackages()
 }
 
