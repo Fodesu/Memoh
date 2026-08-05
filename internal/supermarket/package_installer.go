@@ -93,80 +93,26 @@ func (i *Installer) InstallPackage(ctx context.Context, botID string, req Instal
 	if err != nil {
 		return InstallPackageResponse{}, &WorkspaceTargetError{Err: err}
 	}
+	release, err := i.acquirePreparation(targetCtx)
+	if err != nil {
+		return InstallPackageResponse{}, err
+	}
+	defer release()
 	pkg, err := i.fetchPackageRelease(targetCtx, registryID, packageID, revision)
 	if err != nil {
 		return InstallPackageResponse{}, err
 	}
-	if pkg.Revision != revision {
-		return InstallPackageResponse{}, invalidPackage(errors.New("registry Package revision does not match the request"))
+	prepared, err := i.preparePackage(targetCtx, target.Info.OS, pkg, registryID, packageID, revision)
+	if err != nil {
+		return InstallPackageResponse{}, err
 	}
-	if err := validatePackage(pkg, registryID, packageID); err != nil {
-		return InstallPackageResponse{}, invalidPackage(err)
-	}
-	if err := validatePackageBudget(pkg.Skills); err != nil {
-		return InstallPackageResponse{}, invalidPackage(err)
-	}
-	if err := validatePackagePostinstallWorkspace(target.Info, pkg.Postinstall); err != nil {
-		return InstallPackageResponse{}, &StatusError{
-			Status: http.StatusConflict, Message: "Package postinstall is not supported in this workspace", Err: err,
-		}
-	}
-	if i.packages == nil {
-		return InstallPackageResponse{}, errors.New("skill Package service is not configured")
-	}
-	lockKeys := []string{packageInstallationLockKey(botID, target.TargetID, registryID, packageID)}
-	if len(pkg.Postinstall) > 0 {
-		lockKeys = append(lockKeys, packagePostinstallLockKey(botID, target.TargetID))
-	}
-	releaseInstall, err := acquireInstallationResources(targetCtx, lockKeys...)
+	releaseInstall, err := acquireInstallationResources(targetCtx, packageInstallationLockKey(
+		botID, target.TargetID, registryID, packageID,
+	))
 	if err != nil {
 		return InstallPackageResponse{}, err
 	}
 	defer releaseInstall()
-
-	skipPostinstall := false
-	existing, err := i.packages.Get(targetCtx, botID, target.TargetID, registryID, packageID)
-	switch {
-	case err == nil:
-		if existing.Revision != revision && existing.PluginReferenceCount > 0 {
-			return InstallPackageResponse{}, packageLifecycleError(skillpackages.ErrRevisionConflict)
-		}
-		skipPostinstall = existing.Revision == revision && existing.DirectlyInstalled
-	case errors.Is(err, skillpackages.ErrNotInstalled):
-	default:
-		return InstallPackageResponse{}, packageLifecycleError(err)
-	}
-
-	releasePreparation, err := i.acquirePreparation(targetCtx)
-	if err != nil {
-		return InstallPackageResponse{}, err
-	}
-	defer releasePreparation()
-	prepared, err := i.preparePackage(targetCtx, target.Info.OS, pkg)
-	if err != nil {
-		return InstallPackageResponse{}, err
-	}
-	if !skipPostinstall {
-		err = runPackagePostinstall(
-			targetCtx,
-			target.Client,
-			prepared.descriptor.Postinstall,
-			botID,
-			registryID,
-			packageID,
-			revision,
-		)
-	}
-	if err != nil {
-		if targetCtx.Err() != nil {
-			return InstallPackageResponse{}, targetCtx.Err()
-		}
-		return InstallPackageResponse{}, apperror.Wrap(
-			apperror.CodeRegistryPackageInstallFailed,
-			fmt.Errorf("run Package postinstall: %w", err),
-			nil,
-		)
-	}
 	var installed []InstallSkillResponse
 	var installation skillpackages.Installation
 	publication, published, err := publishPackage(targetCtx, target.Client, prepared, target.TargetID)
@@ -174,6 +120,10 @@ func (i *Installer) InstallPackage(ctx context.Context, botID string, req Instal
 		return InstallPackageResponse{}, err
 	}
 	installed = published
+	if i.packages == nil {
+		_ = publication.Rollback(targetCtx)
+		return InstallPackageResponse{}, errors.New("skill Package service is not configured")
+	}
 	installation, err = i.packages.RecordDirect(targetCtx, botID, target.TargetID, skillpackages.Requirement{
 		RegistryID: registryID, PackageID: packageID, Revision: revision,
 	})
@@ -274,7 +224,16 @@ func (i *Installer) fetchPackageRelease(ctx context.Context, registryID, package
 	}
 }
 
-func (i *Installer) preparePackage(ctx context.Context, workspaceOS string, pkg SkillPackageDescriptor) (preparedPackage, error) {
+func (i *Installer) preparePackage(ctx context.Context, workspaceOS string, pkg SkillPackageDescriptor, registryID, packageID, revision string) (preparedPackage, error) {
+	if pkg.Revision != revision {
+		return preparedPackage{}, invalidPackage(errors.New("registry Package revision does not match the request"))
+	}
+	if err := validatePackage(pkg, registryID, packageID); err != nil {
+		return preparedPackage{}, invalidPackage(err)
+	}
+	if err := validatePackageBudget(pkg.Skills); err != nil {
+		return preparedPackage{}, invalidPackage(err)
+	}
 	prepared := preparedPackage{descriptor: pkg, skills: make([]preparedSkill, 0, len(pkg.Skills)), workspaceOS: workspaceOS}
 	for _, skill := range pkg.Skills {
 		item, err := i.prepareSkill(ctx, skill)
@@ -328,9 +287,6 @@ func publishPackage(ctx context.Context, client *bridge.Client, prepared prepare
 func validatePackage(pkg SkillPackageDescriptor, registryID, packageID string) error {
 	if pkg.SchemaVersion != "1" || pkg.RegistryID != registryID || pkg.PackageID != packageID || !isCanonicalSHA256(pkg.Revision) || len(pkg.Skills) == 0 || len(pkg.Skills) > maxPackageSkills || pkg.SkillCount != len(pkg.Skills) {
 		return errors.New("registry Package release is invalid")
-	}
-	if err := validatePackagePostinstall(pkg.Postinstall); err != nil {
-		return err
 	}
 	seen := make(map[string]struct{}, len(pkg.Skills))
 	for _, skill := range pkg.Skills {

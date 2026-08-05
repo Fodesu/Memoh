@@ -2057,11 +2057,6 @@ export type HandlersSupermarketCatalogSkillListResponse = {
     total: number;
 };
 
-export type HandlersSupermarketPackagePostinstallCommand = {
-    args: Array<string>;
-    command: string;
-};
-
 export type HandlersSupermarketRegistry = {
     adapter: string;
     category_count: number;
@@ -2132,7 +2127,6 @@ export type HandlersSupermarketSkillPackageDescriptor = {
     icon?: HandlersSupermarketSkillIcon;
     name: string;
     package_id: string;
-    postinstall?: Array<HandlersSupermarketPackagePostinstallCommand>;
     registry_id: string;
     revision: string;
     schema_version: string;

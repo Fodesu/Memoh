@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +22,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
-	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/config"
 	"github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -143,10 +141,6 @@ func TestInstallRegistryPackagePublishesMembersInOneMutation(t *testing.T) {
 	artifact := validSkillArtifact(t)
 	digest := sha256.Sum256(artifact)
 	pkg := validRegistryPackageDescriptor()
-	pkg.Postinstall = []supermarketclient.PackagePostinstallCommand{
-		{Command: "opencli", Args: []string{"setup", "it's ready"}},
-		{Command: "npm", Args: []string{"install", "--global", "opencli"}},
-	}
 	for index := range pkg.Skills {
 		pkg.Skills[index].Artifact.Digest = hex.EncodeToString(digest[:])
 		pkg.Skills[index].Artifact.Size = int64(len(artifact))
@@ -169,8 +163,7 @@ func TestInstallRegistryPackagePublishesMembersInOneMutation(t *testing.T) {
 		})}),
 	}
 
-	store := &directPackageStore{}
-	packageService := skillpackages.NewService(store)
+	packageService := skillpackages.NewService(&directPackageStore{})
 	service := supermarketclient.NewInstaller(handler.upstream, packageService, manager, slog.New(slog.DiscardHandler))
 	result, err := service.InstallPackage(context.Background(), env.botID, supermarketclient.InstallPackageRequest{
 		RegistryID: pkg.RegistryID, PackageID: pkg.PackageID, Revision: pkg.Revision,
@@ -188,123 +181,24 @@ func TestInstallRegistryPackagePublishesMembersInOneMutation(t *testing.T) {
 			t.Fatalf("installed Package member %q content=%q error=%v", skillID, content, err)
 		}
 	}
-	retry, err := service.InstallPackage(context.Background(), env.botID, supermarketclient.InstallPackageRequest{
-		RegistryID: pkg.RegistryID, PackageID: pkg.PackageID, Revision: pkg.Revision,
-	})
-	if err != nil || !retry.OK {
-		t.Fatalf("repeat install result=%+v error=%v", retry, err)
-	}
 	stagingEntries, err := os.ReadDir(env.localPath("/data/skills/.staging"))
 	if err != nil || len(stagingEntries) != 0 {
 		t.Fatalf("Package staging was not cleaned: entries=%v error=%v", stagingEntries, err)
-	}
-	if store.upsertCalls != 2 {
-		t.Fatalf("Package installation writes = %d, want 2", store.upsertCalls)
-	}
-	calls := env.bridge.recordedExecCalls()
-	if len(calls) != 2 {
-		t.Fatalf("postinstall calls = %+v, want 2", calls)
-	}
-	wantCommands := []string{
-		`'opencli' 'setup' 'it'"'"'s ready'`,
-		`'npm' 'install' '--global' 'opencli'`,
-	}
-	wantEnv := []string{
-		"MEMOH_BOT_ID=" + env.botID,
-		"MEMOH_REGISTRY_ID=" + pkg.RegistryID,
-		"MEMOH_PACKAGE_ID=" + pkg.PackageID,
-		"MEMOH_PACKAGE_REVISION=" + pkg.Revision,
-	}
-	for index, call := range calls {
-		if call.Command != wantCommands[index] || call.WorkDir != "/data" || call.TimeoutSeconds != -1 || !slices.Equal(call.Env, wantEnv) {
-			t.Fatalf("postinstall call %d = %+v, want command=%q work_dir=/data timeout=-1 env=%v", index, call, wantCommands[index], wantEnv)
-		}
-	}
-}
-
-func TestInstallRegistryPackagePostinstallFailureDoesNotPublishOrRecord(t *testing.T) {
-	env := newSkillsTestEnv(t)
-	manager := workspace.NewManager(
-		slog.Default(), nil, nil, config.WorkspaceConfig{DataRoot: env.dataRoot}, "", nil,
-	)
-	artifact := validSkillArtifact(t)
-	digest := sha256.Sum256(artifact)
-	pkg := validRegistryPackageDescriptor()
-	pkg.Postinstall = []supermarketclient.PackagePostinstallCommand{
-		{Command: "opencli", Args: []string{"setup"}},
-		{Command: "npm", Args: []string{"install", "--global", "opencli"}},
-	}
-	for index := range pkg.Skills {
-		pkg.Skills[index].Artifact.Digest = hex.EncodeToString(digest[:])
-		pkg.Skills[index].Artifact.Size = int64(len(artifact))
-	}
-	release := registryPackageReleaseBytes(t, pkg)
-	revision := sha256.Sum256(release)
-	pkg.Revision = hex.EncodeToString(revision[:])
-	obsoletePath := "/data/skills/registry/package/obsolete/SKILL.md"
-	env.writeSkillFile(t, obsoletePath, managedSkillRaw("obsolete", "Obsolete"))
-	env.bridge.setExecResults(skillsTestExecResult{Stderr: "setup failed", ExitCode: 7})
-	client := supermarketclient.NewClient("https://supermarket.example", &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if strings.HasPrefix(req.URL.Path, "/api/artifacts/skill/") {
-			return testHTTPResponse(req, http.StatusOK, artifact), nil
-		}
-		return testHTTPResponse(req, http.StatusOK, release), nil
-	})})
-	store := &directPackageStore{}
-	service := supermarketclient.NewInstaller(client, skillpackages.NewService(store), manager, slog.New(slog.DiscardHandler))
-
-	_, err := service.InstallPackage(context.Background(), env.botID, supermarketclient.InstallPackageRequest{
-		RegistryID: pkg.RegistryID, PackageID: pkg.PackageID, Revision: pkg.Revision,
-	})
-	if got := apperror.CodeOf(err); got != apperror.CodeRegistryPackageInstallFailed {
-		t.Fatalf("InstallPackage() error code = %q, want %q (error=%v)", got, apperror.CodeRegistryPackageInstallFailed, err)
-	}
-	cause := apperror.CauseOf(err)
-	if cause == nil || strings.Contains(cause.Error(), "setup failed") {
-		t.Fatalf("postinstall output leaked through the private installation cause: %v", cause)
-	}
-	if store.upsertCalls != 0 {
-		t.Fatalf("Package installation writes = %d, want 0", store.upsertCalls)
-	}
-	if _, err := os.Stat(env.localPath(obsoletePath)); err != nil {
-		t.Fatalf("existing Package was changed after postinstall failure: %v", err)
-	}
-	for _, skillID := range []string{"skill", "second"} {
-		installedPath := "/data/skills/registry/package/" + skillID + "/SKILL.md"
-		if _, err := os.Stat(env.localPath(installedPath)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("Package member %q was published after postinstall failure: %v", skillID, err)
-		}
-	}
-	if calls := env.bridge.recordedExecCalls(); len(calls) != 1 {
-		t.Fatalf("postinstall calls = %+v, want one failed command", calls)
 	}
 }
 
 type directPackageStore struct {
 	skillpackages.Store
-	upsertCalls int
-	row         *dbsqlc.BotSkillPackageInstallation
 }
 
-func (s *directPackageStore) GetBotSkillPackageInstallation(_ context.Context, arg dbsqlc.GetBotSkillPackageInstallationParams) (dbsqlc.BotSkillPackageInstallation, error) {
-	if s.row == nil || s.row.BotID != arg.BotID || s.row.WorkspaceTargetID != arg.WorkspaceTargetID ||
-		s.row.RegistryID != arg.RegistryID || s.row.PackageID != arg.PackageID {
-		return dbsqlc.BotSkillPackageInstallation{}, pgx.ErrNoRows
-	}
-	return *s.row, nil
-}
-
-func (s *directPackageStore) UpsertDirectBotSkillPackageInstallation(_ context.Context, arg dbsqlc.UpsertDirectBotSkillPackageInstallationParams) (dbsqlc.BotSkillPackageInstallation, error) {
-	s.upsertCalls++
+func (*directPackageStore) UpsertDirectBotSkillPackageInstallation(_ context.Context, arg dbsqlc.UpsertDirectBotSkillPackageInstallationParams) (dbsqlc.BotSkillPackageInstallation, error) {
 	now := pgtype.Timestamptz{Time: time.Now(), Valid: true}
-	row := dbsqlc.BotSkillPackageInstallation{
+	return dbsqlc.BotSkillPackageInstallation{
 		ID:    pgtype.UUID{Bytes: [16]byte{9, 9, 9, 9, 9, 9, 0x49, 9, 0x89, 9, 9, 9, 9, 9, 9, 9}, Valid: true},
 		BotID: arg.BotID, WorkspaceTargetID: arg.WorkspaceTargetID,
 		RegistryID: arg.RegistryID, PackageID: arg.PackageID, Revision: arg.Revision,
 		DirectlyInstalled: true, InstalledAt: now, UpdatedAt: now,
-	}
-	s.row = &row
-	return row, nil
+	}, nil
 }
 
 func (*directPackageStore) CountBotSkillPackageReferences(context.Context, pgtype.UUID) (int64, error) {
@@ -542,7 +436,6 @@ func registryPackageReleaseBytes(t *testing.T, pkg SupermarketSkillPackageDescri
 		Description:   pkg.Description,
 		Tags:          pkg.Tags,
 		Icon:          pkg.Icon,
-		Postinstall:   pkg.Postinstall,
 		Skills:        members,
 	})
 	if err != nil {

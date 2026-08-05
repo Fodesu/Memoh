@@ -20202,24 +20202,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SupermarketPackagePostinstallCommand": {
-            "type": "object",
-            "required": [
-                "args",
-                "command"
-            ],
-            "properties": {
-                "args": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "command": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.SupermarketRegistry": {
             "type": "object",
             "required": [
@@ -20464,12 +20446,6 @@ const docTemplate = `{
                 },
                 "package_id": {
                     "type": "string"
-                },
-                "postinstall": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketPackagePostinstallCommand"
-                    }
                 },
                 "registry_id": {
                     "type": "string"

@@ -86,9 +86,8 @@ func (c *Client) FetchPackageRelease(
 			Name: release.Name, Description: release.Description, Tags: release.Tags,
 			SkillCount: len(release.Skills), Icon: release.Icon,
 		},
-		Revision:    revision,
-		Postinstall: release.Postinstall,
-		Skills:      skills,
+		Revision: revision,
+		Skills:   skills,
 	}, nil
 }
 

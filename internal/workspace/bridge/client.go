@@ -370,13 +370,6 @@ func (s *ExecStream) Recv() (*pb.ExecOutput, error) {
 	return s.stream.Recv()
 }
 
-// CloseSend closes process stdin without canceling the running command.
-func (s *ExecStream) CloseSend() error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
-	return s.stream.CloseSend()
-}
-
 // Resize sends a terminal resize event to the running process.
 func (s *ExecStream) Resize(cols, rows uint32) error {
 	s.sendMu.Lock()
@@ -391,7 +384,9 @@ func (s *ExecStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	return s.CloseSend()
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	return s.stream.CloseSend()
 }
 
 // ExecStreamPTY opens a bidirectional PTY exec stream.

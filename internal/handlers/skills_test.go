@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -851,22 +850,6 @@ type skillsTestBridgeServer struct {
 	writeErrors     map[string]error
 	writeBaseErrors map[string]error
 	deleteErrors    map[string]error
-	execMu          sync.Mutex
-	execCalls       []skillsTestExecCall
-	execResults     []skillsTestExecResult
-}
-
-type skillsTestExecCall struct {
-	Command        string
-	WorkDir        string
-	Env            []string
-	TimeoutSeconds int32
-}
-
-type skillsTestExecResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int32
 }
 
 func startSkillsTestBridgeServer(t *testing.T, dataRoot, botID string) *skillsTestBridgeServer {
@@ -903,68 +886,6 @@ func startSkillsTestBridgeServer(t *testing.T, dataRoot, botID string) *skillsTe
 		<-done
 	})
 	return bridgeServer
-}
-
-func (s *skillsTestBridgeServer) Exec(stream pb.ContainerService_ExecServer) error {
-	input, err := stream.Recv()
-	if err != nil {
-		return status.Error(codes.InvalidArgument, "failed to receive exec config")
-	}
-	stdinClosed := make(chan error, 1)
-	go func() {
-		_, recvErr := stream.Recv()
-		stdinClosed <- recvErr
-	}()
-	select {
-	case recvErr := <-stdinClosed:
-		if !errors.Is(recvErr, io.EOF) {
-			return status.Error(codes.InvalidArgument, "exec stdin was not closed")
-		}
-	case <-time.After(time.Second):
-		return status.Error(codes.DeadlineExceeded, "exec stdin was not closed")
-	}
-	call := skillsTestExecCall{
-		Command:        input.GetCommand(),
-		WorkDir:        input.GetWorkDir(),
-		Env:            append([]string(nil), input.GetEnv()...),
-		TimeoutSeconds: input.GetTimeoutSeconds(),
-	}
-	s.execMu.Lock()
-	index := len(s.execCalls)
-	s.execCalls = append(s.execCalls, call)
-	var result skillsTestExecResult
-	if index < len(s.execResults) {
-		result = s.execResults[index]
-	}
-	s.execMu.Unlock()
-	if result.Stdout != "" {
-		if err := stream.Send(&pb.ExecOutput{Stream: pb.ExecOutput_STDOUT, Data: []byte(result.Stdout)}); err != nil {
-			return err
-		}
-	}
-	if result.Stderr != "" {
-		if err := stream.Send(&pb.ExecOutput{Stream: pb.ExecOutput_STDERR, Data: []byte(result.Stderr)}); err != nil {
-			return err
-		}
-	}
-	return stream.Send(&pb.ExecOutput{Stream: pb.ExecOutput_EXIT, ExitCode: result.ExitCode})
-}
-
-func (s *skillsTestBridgeServer) setExecResults(results ...skillsTestExecResult) {
-	s.execMu.Lock()
-	defer s.execMu.Unlock()
-	s.execResults = append([]skillsTestExecResult(nil), results...)
-}
-
-func (s *skillsTestBridgeServer) recordedExecCalls() []skillsTestExecCall {
-	s.execMu.Lock()
-	defer s.execMu.Unlock()
-	result := make([]skillsTestExecCall, len(s.execCalls))
-	for index, call := range s.execCalls {
-		result[index] = call
-		result[index].Env = append([]string(nil), call.Env...)
-	}
-	return result
 }
 
 func (s *skillsTestBridgeServer) ListDir(_ context.Context, req *pb.ListDirRequest) (*pb.ListDirResponse, error) {
