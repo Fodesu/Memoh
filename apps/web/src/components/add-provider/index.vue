@@ -200,6 +200,7 @@ import {
   CLIENT_TYPE_META,
   isManagedOAuthClientType,
   MANUAL_LLM_CLIENT_TYPE_LIST,
+  suggestedModelCompatibilities,
 } from '@/constants/client-types'
 import { FieldStack, FormDialogShell, toast } from '@felinic/ui'
 import { computed, ref, watch } from 'vue'
@@ -422,7 +423,7 @@ const defaultFormValues = {
   name: '',
   client_type: 'openai-completions',
   auto_import: false,
-  default_capabilities: ['tool-call'],
+  default_capabilities: suggestedModelCompatibilities('openai-completions'),
 }
 
 function valuesForPreset(preset: ProviderPreset | null) {
@@ -455,6 +456,7 @@ function resetCreateForm() {
 }
 
 watch(() => form.values.client_type, (clientType) => {
+  form.setFieldValue('default_capabilities', suggestedModelCompatibilities(clientType))
   if (clientType === 'openai-codex' && !form.values.base_url) {
     form.setFieldValue('base_url', 'https://chatgpt.com/backend-api')
   }

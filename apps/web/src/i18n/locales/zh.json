@@ -1197,8 +1197,6 @@
     "testFailed": "测试失败",
     "autoImport": "自动导入模型",
     "autoImportHint": "创建后自动从服务商获取并导入模型",
-    "defaultCapabilities": "未知模型的默认能力",
-    "defaultCapabilitiesHint": "仅在自定义服务商无法报告模型能力时使用。建议 Agent 协议使用工具调用；除非已验证支持，否则不要开启其他能力。",
     "configurationTitle": "配置",
     "clientType": "客户端类型",
     "icon": "图标",

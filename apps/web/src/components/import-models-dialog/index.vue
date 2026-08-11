@@ -44,12 +44,14 @@ import type { ButtonVariants } from '@felinic/ui'
 import { useDialogMutation } from '@/composables/useDialogMutation'
 import { useProviderModelCatalog } from '@/composables/useProviderModelCatalog'
 import DefaultModelCapabilities from '@/components/default-model-capabilities/index.vue'
+import { suggestedModelCompatibilities } from '@/constants/client-types'
 
 const props = withDefaults(defineProps<{
   providerId: string
   size?: ButtonVariants['size']
   mode?: 'import' | 'refresh'
   custom?: boolean
+  clientType?: string
 }>(), {
   size: 'default',
   mode: 'import',
@@ -61,7 +63,7 @@ const { run } = useDialogMutation()
 const { syncProviderModelCatalog } = useProviderModelCatalog()
 const isRefresh = computed(() => props.mode === 'refresh')
 const isCustom = computed(() => props.custom === true)
-const defaultCapabilities = ref<string[]>(['tool-call'])
+const defaultCapabilities = ref<string[]>(suggestedModelCompatibilities(props.clientType))
 
 const { mutateAsync: importModelsMutation, isLoading } = useMutation({
   mutation: () => syncProviderModelCatalog(

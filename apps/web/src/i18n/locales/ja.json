@@ -1156,8 +1156,6 @@
     "testFailed": "テストが失敗しました",
     "autoImport": "モデルを自動インポート",
     "autoImportHint": "作成後にプロバイダーからモデルを自動的に取得してインポートします。",
-    "defaultCapabilities": "不明な Model のデフォルト能力",
-    "defaultCapabilitiesHint": "カスタムプロバイダーが Model の能力を報告できない場合にのみ使用します。Agent プロトコルではツール呼び出しを推奨しますが、確認できていない能力は有効にしないでください。",
     "configurationTitle": "構成",
     "clientType": "クライアントの種類",
     "icon": "アイコン",

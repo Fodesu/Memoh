@@ -1197,8 +1197,6 @@
     "testFailed": "Test failed",
     "autoImport": "Auto Import Models",
     "autoImportHint": "Automatically fetch and import models from the provider after creation",
-    "defaultCapabilities": "Defaults for unknown models",
-    "defaultCapabilitiesHint": "Applied only when this custom provider cannot report a model's capabilities. Tool Call is suggested for agent protocols; leave other capabilities off unless you have verified support.",
     "configurationTitle": "Configuration",
     "clientType": "Client Type",
     "icon": "Icon",
