@@ -1121,7 +1121,8 @@
     "refreshSuccess": "Model カタログを更新しました: {created} 件追加、{updated} 件更新",
     "refreshFailed": "Model カタログの更新に失敗しました",
     "refreshConfirmHint": "このアカウントで現在利用できる最新の Model を取得し、利用できない Model を選択肢から除外します。",
-    "importConfirmHint": "このプロバイダーの API から、デフォルトの互換性（ビジョン、ツール呼び出し、推論）付きでモデルをインポートします。",
+    "importConfirmHint": "このプロバイダーの信頼できる Model カタログの能力情報を使ってインポートします。",
+    "customImportConfirmHint": "Model が能力を報告しない場合は、以下で選んだデフォルトを適用します。",
     "showingCount": "{total} の {count} を表示中"
   },
   "provider": {
@@ -1155,6 +1156,8 @@
     "testFailed": "テストが失敗しました",
     "autoImport": "モデルを自動インポート",
     "autoImportHint": "作成後にプロバイダーからモデルを自動的に取得してインポートします。",
+    "defaultCapabilities": "不明な Model のデフォルト能力",
+    "defaultCapabilitiesHint": "カスタムプロバイダーが Model の能力を報告できない場合にのみ使用します。Agent プロトコルではツール呼び出しを推奨しますが、確認できていない能力は有効にしないでください。",
     "configurationTitle": "構成",
     "clientType": "クライアントの種類",
     "icon": "アイコン",

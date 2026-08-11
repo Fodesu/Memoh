@@ -16,6 +16,7 @@ import { getAcpProfiles, type AcpprofileManagedField, type AcpprofilePublicProfi
 import { FieldStack, FormStack } from '@felinic/ui'
 import { useOnboarding } from '@/composables/useOnboarding'
 import ProviderIcon from '@/components/provider-icon/index.vue'
+import DefaultModelCapabilities from '@/components/default-model-capabilities/index.vue'
 import CreateModel from '@/components/create-model/index.vue'
 import ModelItem from '@/pages/providers/components/model-item.vue'
 import ChoiceTile from '../components/choice-tile.vue'
@@ -477,6 +478,13 @@ onMounted(() => {
                 </SelectContent>
               </Select>
             </FieldStack>
+          </div>
+          <div
+            v-if="!selectedPreset"
+            class="transition-all duration-[200ms] ease-out delay-[60ms]"
+            :class="formContentVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3'"
+          >
+            <DefaultModelCapabilities v-model="formValues.default_capabilities" />
           </div>
           <div
             class="transition-all duration-[200ms] ease-out"

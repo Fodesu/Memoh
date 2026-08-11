@@ -1162,7 +1162,8 @@
     "refreshSuccess": "模型目录已刷新：新增 {created} 个，更新 {updated} 个",
     "refreshFailed": "刷新模型目录失败",
     "refreshConfirmHint": "获取此账号当前可用的最新模型，并从模型选择器中移除已不可用的模型。",
-    "importConfirmHint": "将从该服务商的 API 导入模型，默认兼容性为视觉、工具调用和推理。",
+    "importConfirmHint": "将使用此服务商可信模型目录提供的能力信息导入模型。",
+    "customImportConfirmHint": "模型未报告能力时，将应用下方选择的默认值。",
     "showingCount": "显示 {count} / {total}"
   },
   "provider": {
@@ -1196,6 +1197,8 @@
     "testFailed": "测试失败",
     "autoImport": "自动导入模型",
     "autoImportHint": "创建后自动从服务商获取并导入模型",
+    "defaultCapabilities": "未知模型的默认能力",
+    "defaultCapabilitiesHint": "仅在自定义服务商无法报告模型能力时使用。建议 Agent 协议使用工具调用；除非已验证支持，否则不要开启其他能力。",
     "configurationTitle": "配置",
     "clientType": "客户端类型",
     "icon": "图标",

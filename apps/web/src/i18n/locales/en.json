@@ -1162,7 +1162,8 @@
     "refreshSuccess": "Model catalog refreshed: {created} added, {updated} updated",
     "refreshFailed": "Failed to refresh the model catalog",
     "refreshConfirmHint": "Fetch the latest models available to this account and remove unavailable models from model pickers.",
-    "importConfirmHint": "Models will be imported from this provider's API with default compatibilities (vision, tool-call, reasoning).",
+    "importConfirmHint": "Models will be imported using capabilities supplied by this provider's trusted catalog.",
+    "customImportConfirmHint": "For models that do not report capabilities, the selected defaults below will be applied.",
     "showingCount": "Showing {count} of {total}"
   },
   "provider": {
@@ -1196,6 +1197,8 @@
     "testFailed": "Test failed",
     "autoImport": "Auto Import Models",
     "autoImportHint": "Automatically fetch and import models from the provider after creation",
+    "defaultCapabilities": "Defaults for unknown models",
+    "defaultCapabilitiesHint": "Applied only when this custom provider cannot report a model's capabilities. Tool Call is suggested for agent protocols; leave other capabilities off unless you have verified support.",
     "configurationTitle": "Configuration",
     "clientType": "Client Type",
     "icon": "Icon",

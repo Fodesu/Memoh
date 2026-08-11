@@ -61,6 +61,7 @@
         :provider-id="curProvider?.id"
         :models="providerModels"
         :managed="isManagedModelCatalogClientType(curProvider?.client_type)"
+        :custom="!curProvider?.provider_template_id"
         :preview="!curProvider?.id"
         :delete-model-loading="deleteModelLoading"
         @edit="handleEditModel"

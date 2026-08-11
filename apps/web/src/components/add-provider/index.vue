@@ -142,6 +142,11 @@
             </FieldStack>
           </FormField>
 
+          <DefaultModelCapabilities
+            v-if="!selectedPreset && presetDomain === 'llm'"
+            v-model="form.values.default_capabilities"
+          />
+
           <Separator />
 
           <FormField
@@ -201,6 +206,7 @@ import { computed, ref, watch } from 'vue'
 import { providerPresets } from '@/constants/provider-presets'
 import type { ProviderPreset } from '@/constants/provider-presets'
 import ProviderIcon from '@/components/provider-icon/index.vue'
+import DefaultModelCapabilities from '@/components/default-model-capabilities/index.vue'
 import { templateConfigFields, templateDefaultConfig } from '@/utils/provider-template'
 import { suggestProviderName } from './provider-presets'
 
@@ -353,10 +359,14 @@ const { mutateAsync: createProviderMutation, isLoading } = useMutation({
     }
     if (data.auto_import && result?.id) {
       try {
+        const defaultCompatibilities = !preset && props.presetDomain === 'llm'
+          ? data.default_capabilities as string[]
+          : undefined
         const importResult = props.importModels
           ? await props.importModels(result.id)
           : (await postProvidersByIdImportModels({
               path: { id: result.id },
+              ...(defaultCompatibilities && { body: { default_compatibilities: defaultCompatibilities } }),
               throwOnError: true,
             })).data
         if (importResult) {
@@ -386,6 +396,7 @@ const providerSchema = toTypedSchema(z.object({
   name: z.string().min(1, t('provider.nameRequired')),
   client_type: z.string().min(1, t('provider.clientTypeRequired')),
   auto_import: z.boolean().optional(),
+  default_capabilities: z.array(z.string()).optional(),
 }).superRefine((value, ctx) => {
   const requiresApiKey = shouldShowApiKeyField() && selectedPreset.value?.requiresApiKey !== false
   if (requiresApiKey && !value.api_key?.trim()) {
@@ -411,6 +422,7 @@ const defaultFormValues = {
   name: '',
   client_type: 'openai-completions',
   auto_import: false,
+  default_capabilities: ['tool-call'],
 }
 
 function valuesForPreset(preset: ProviderPreset | null) {

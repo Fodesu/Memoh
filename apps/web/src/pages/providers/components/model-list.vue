@@ -26,6 +26,7 @@
           :provider-id="providerId"
           size="sm"
           :mode="(models?.length ?? 0) > 0 ? 'refresh' : 'import'"
+          :custom="custom"
         />
         <CreateModel
           v-if="!managed"
@@ -155,6 +156,7 @@ const props = defineProps<{
   models: ModelsGetResponse[] | undefined
   deleteModelLoading: boolean
   managed?: boolean
+  custom?: boolean
   preview?: boolean
 }>()
 
