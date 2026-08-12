@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   importModels: vi.fn(),
   postProvider: vi.fn(),
   postProviderFromTemplate: vi.fn(),
+  putModelsById: vi.fn(),
   testProvider: vi.fn(),
   updateProvider: vi.fn(),
   invalidateQueries: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock('@memohai/sdk', () => ({
   postProvidersByIdImportModels: mocks.importModels,
   postProvidersByIdTest: mocks.testProvider,
   postProvidersFromTemplate: mocks.postProviderFromTemplate,
+  putModelsById: mocks.putModelsById,
   putProvidersById: mocks.updateProvider,
 }))
 
@@ -110,6 +112,15 @@ describe('useProviderSetup', () => {
     })
     expect(mocks.postProvider).not.toHaveBeenCalled()
     expect(ready).toHaveBeenCalledWith({ providerId: 'provider-id' })
+    expect(mocks.putModelsById).toHaveBeenCalledTimes(2)
+    expect(mocks.putModelsById).toHaveBeenCalledWith(expect.objectContaining({
+      path: { id: 'pro-id' },
+      body: expect.objectContaining({ enable: true }),
+    }))
+    expect(mocks.putModelsById).toHaveBeenCalledWith(expect.objectContaining({
+      path: { id: 'flash-id' },
+      body: expect.objectContaining({ enable: true }),
+    }))
     app.unmount()
   })
 

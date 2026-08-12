@@ -144,7 +144,8 @@
 
           <DefaultModelCapabilities
             v-if="!selectedPreset && presetDomain === 'llm'"
-            v-model="form.values.default_capabilities"
+            :model-value="form.values.default_capabilities ?? []"
+            @update:model-value="updateDefaultCapabilities"
           />
 
           <Separator />
@@ -453,6 +454,10 @@ function applyPreset(value: string) {
 function resetCreateForm() {
   selectedPresetId.value = defaultPresetId.value
   form.resetForm({ values: valuesForPreset(selectedPreset.value) })
+}
+
+function updateDefaultCapabilities(capabilities: string[]) {
+  form.setFieldValue('default_capabilities', capabilities)
 }
 
 watch(() => form.values.client_type, (clientType) => {

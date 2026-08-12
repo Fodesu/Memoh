@@ -10,6 +10,7 @@ import {
   deleteModelsById,
   getProvidersByIdModels,
   getProvidersNameByName,
+  putModelsById,
   putProvidersById,
   type ProvidersCreateRequest,
   type ProvidersGetResponse,
@@ -327,6 +328,7 @@ export function useProviderSetup(options: {
       })
       if (models && models.length > 0) {
         if (models.some(model => model.type === 'chat')) {
+          await enableImportedChatModels(models)
           options.onProviderReady({ providerId })
           return
         }
@@ -337,6 +339,31 @@ export function useProviderSetup(options: {
     }
 
     errorState.value = importFailed ? 'http' : 'noModels'
+  }
+
+  async function enableImportedChatModels(models: ModelsGetResponse[]) {
+    const disabledChatModels = models.filter(model => model.type === 'chat' && !model.enable && model.id)
+    if (disabledChatModels.length === 0) return
+    try {
+      await Promise.all(disabledChatModels.map(model =>
+        putModelsById({
+          path: { id: model.id! },
+          body: {
+            model_id: model.model_id,
+            name: model.name,
+            provider_id: model.provider_id,
+            type: model.type,
+            config: model.config,
+            enable: true,
+          },
+          throwOnError: true,
+        }),
+      ))
+      queryCache.invalidateQueries({ key: ['provider-models'] })
+      queryCache.invalidateQueries({ key: ['models'] })
+    } catch {
+      // The next step remains usable; failed model updates can be retried from Settings.
+    }
   }
 
   async function saveAndNext() {
