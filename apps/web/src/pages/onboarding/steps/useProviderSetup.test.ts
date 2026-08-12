@@ -91,7 +91,7 @@ describe('useProviderSetup', () => {
     })
   })
 
-  it('creates a preset from its template and exposes all chat models', async () => {
+  it('hands off a template provider without enabling every imported model', async () => {
     mocks.getProviderTemplates.mockResolvedValue({
       data: [{ id: 'template-id', domain: 'llm', key: 'deepseek' }],
     })
@@ -112,15 +112,7 @@ describe('useProviderSetup', () => {
     })
     expect(mocks.postProvider).not.toHaveBeenCalled()
     expect(ready).toHaveBeenCalledWith({ providerId: 'provider-id' })
-    expect(mocks.putModelsById).toHaveBeenCalledTimes(2)
-    expect(mocks.putModelsById).toHaveBeenCalledWith(expect.objectContaining({
-      path: { id: 'pro-id' },
-      body: expect.objectContaining({ enable: true }),
-    }))
-    expect(mocks.putModelsById).toHaveBeenCalledWith(expect.objectContaining({
-      path: { id: 'flash-id' },
-      body: expect.objectContaining({ enable: true }),
-    }))
+    expect(mocks.putModelsById).not.toHaveBeenCalled()
     app.unmount()
   })
 
