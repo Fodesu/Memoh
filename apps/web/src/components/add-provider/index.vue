@@ -195,6 +195,7 @@ import {
   CLIENT_TYPE_META,
   isManagedOAuthClientType,
   MANUAL_LLM_CLIENT_TYPE_LIST,
+  suggestedModelCompatibilities,
 } from '@/constants/client-types'
 import { FieldStack, FormDialogShell, toast } from '@felinic/ui'
 import { computed, ref, watch } from 'vue'
@@ -211,7 +212,7 @@ const props = withDefaults(defineProps<{
   presetDomain?: 'llm' | 'video' | 'speech' | 'transcription'
   templates?: ProvidertemplatesGetResponse[]
   initialTemplateId?: string
-  importModels?: (providerId: string) => Promise<{ created?: number, skipped?: number } | null | undefined>
+  importModels?: (providerId: string, defaultCompatibilities?: string[]) => Promise<{ created?: number, skipped?: number } | null | undefined>
 }>(), {
   providers: () => [],
   hideTrigger: false,
@@ -353,10 +354,16 @@ const { mutateAsync: createProviderMutation, isLoading } = useMutation({
     }
     if (data.auto_import && result?.id) {
       try {
+        const defaultCompatibilities = preset
+          ? undefined
+          : suggestedModelCompatibilities(data.client_type)
         const importResult = props.importModels
-          ? await props.importModels(result.id)
+          ? await props.importModels(result.id, defaultCompatibilities)
           : (await postProvidersByIdImportModels({
               path: { id: result.id },
+              ...(defaultCompatibilities !== undefined && {
+                body: { default_compatibilities: defaultCompatibilities },
+              }),
               throwOnError: true,
             })).data
         if (importResult) {

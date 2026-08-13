@@ -111,6 +111,10 @@ describe('useProviderSetup', () => {
       throwOnError: true,
     })
     expect(mocks.postProvider).not.toHaveBeenCalled()
+    expect(mocks.importModels).toHaveBeenCalledWith({
+      path: { id: 'provider-id' },
+      throwOnError: true,
+    })
     expect(ready).toHaveBeenCalledWith({ providerId: 'provider-id' })
     expect(mocks.putModelsById).not.toHaveBeenCalled()
     app.unmount()
@@ -137,7 +141,7 @@ describe('useProviderSetup', () => {
     'openai-completions',
     'anthropic-messages',
     'google-generative-ai',
-  ])('imports custom %s providers without implicit capability defaults', async (clientType) => {
+  ])('imports custom %s providers with explicit protocol defaults', async (clientType) => {
     mocks.getProviderByName.mockResolvedValue({ data: null })
     mocks.postProvider.mockResolvedValue({ data: { id: 'provider-id' } })
     const { app, setup } = mountSetup(null)
@@ -154,6 +158,7 @@ describe('useProviderSetup', () => {
     expect(mocks.postProviderFromTemplate).not.toHaveBeenCalled()
     expect(mocks.importModels).toHaveBeenCalledWith({
       path: { id: 'provider-id' },
+      body: { default_compatibilities: ['tool-call', 'reasoning'] },
       throwOnError: true,
     })
     app.unmount()

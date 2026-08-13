@@ -15,7 +15,7 @@ import {
   type ProvidersGetResponse,
   type ModelsGetResponse,
 } from '@memohai/sdk'
-import { MANUAL_LLM_CLIENT_TYPE_LIST } from '@/constants/client-types'
+import { MANUAL_LLM_CLIENT_TYPE_LIST, suggestedModelCompatibilities } from '@/constants/client-types'
 import type { ProviderPreset } from '@/constants/provider-presets'
 import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import { findProviderTemplate } from './provider-setup'
@@ -110,9 +110,12 @@ export function useProviderSetup(options: {
   })
 
   const { mutateAsync: importModels, isLoading: importing } = useMutation({
-    mutation: async (providerId: string) => {
+    mutation: async (payload: { providerId: string, defaultCompatibilities?: string[] }) => {
       const { data } = await postProvidersByIdImportModels({
-        path: { id: providerId },
+        path: { id: payload.providerId },
+        ...(payload.defaultCompatibilities !== undefined && {
+          body: { default_compatibilities: payload.defaultCompatibilities },
+        }),
         throwOnError: true,
       })
       return data
@@ -285,7 +288,7 @@ export function useProviderSetup(options: {
     }
   }
 
-  async function runImport(providerId: string) {
+  async function runImport(providerId: string, defaultCompatibilities?: string[]) {
     errorState.value = null
     errorDetail.value = ''
 
@@ -311,7 +314,7 @@ export function useProviderSetup(options: {
 
     let importFailed = false
     try {
-      await importModels(providerId)
+      await importModels({ providerId, defaultCompatibilities })
     } catch {
       importFailed = true
     }
@@ -349,7 +352,10 @@ export function useProviderSetup(options: {
     try {
       const providerId = await ensureProviderCreated()
       if (!providerId) return
-      await runImport(providerId)
+      const defaultCompatibilities = options.selectedPreset()
+        ? undefined
+        : suggestedModelCompatibilities(formValues.value.client_type)
+      await runImport(providerId, defaultCompatibilities)
     } finally {
       saving.value = false
     }
@@ -360,7 +366,10 @@ export function useProviderSetup(options: {
       await saveAndNext()
       return
     }
-    await runImport(createdProviderId.value)
+    const defaultCompatibilities = options.selectedPreset()
+      ? undefined
+      : suggestedModelCompatibilities(formValues.value.client_type)
+    await runImport(createdProviderId.value, defaultCompatibilities)
   }
 
   async function onEnterManual() {
