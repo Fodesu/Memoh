@@ -15,7 +15,7 @@ import {
   type ProvidersGetResponse,
   type ModelsGetResponse,
 } from '@memohai/sdk'
-import { MANUAL_LLM_CLIENT_TYPE_LIST, suggestedModelCompatibilities } from '@/constants/client-types'
+import { MANUAL_LLM_CLIENT_TYPE_LIST } from '@/constants/client-types'
 import type { ProviderPreset } from '@/constants/provider-presets'
 import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import { findProviderTemplate } from './provider-setup'
@@ -32,7 +32,6 @@ export function useProviderSetup(options: {
     api_key: '',
     base_url: '',
     client_type: 'openai-completions',
-    default_capabilities: suggestedModelCompatibilities('openai-completions'),
   })
 
   const formError = ref('')
@@ -114,9 +113,6 @@ export function useProviderSetup(options: {
     mutation: async (providerId: string) => {
       const { data } = await postProvidersByIdImportModels({
         path: { id: providerId },
-        ...(!options.selectedPreset() && {
-          body: { default_compatibilities: formValues.value.default_capabilities ?? ['tool-call'] },
-        }),
         throwOnError: true,
       })
       return data
@@ -167,8 +163,8 @@ export function useProviderSetup(options: {
   function initFormValues(preset: ProviderPreset | null) {
     suppressDirtyReset.value = true
     formValues.value = preset
-      ? { name: preset.name, api_key: '', base_url: preset.baseUrl, client_type: preset.clientType, default_capabilities: suggestedModelCompatibilities(preset.clientType) }
-      : { name: '', api_key: '', base_url: '', client_type: 'openai-completions', default_capabilities: suggestedModelCompatibilities('openai-completions') }
+      ? { name: preset.name, api_key: '', base_url: preset.baseUrl, client_type: preset.clientType }
+      : { name: '', api_key: '', base_url: '', client_type: 'openai-completions' }
     formError.value = ''
     resetFormState()
   }
@@ -397,14 +393,7 @@ export function useProviderSetup(options: {
   }
 
   watch(
-    () => formValues.value.client_type,
-    clientType => {
-      formValues.value.default_capabilities = suggestedModelCompatibilities(clientType)
-    },
-  )
-
-  watch(
-    () => [formValues.value.name, formValues.value.api_key, formValues.value.base_url, formValues.value.client_type, formValues.value.default_capabilities],
+    () => [formValues.value.name, formValues.value.api_key, formValues.value.base_url, formValues.value.client_type],
     () => {
       if (suppressDirtyReset.value) return
       if (manualMode.value) return

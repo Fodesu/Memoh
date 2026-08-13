@@ -137,7 +137,7 @@ describe('useProviderSetup', () => {
     'openai-completions',
     'anthropic-messages',
     'google-generative-ai',
-  ])('uses explicit defaults with the generic API for custom %s providers', async (clientType) => {
+  ])('imports custom %s providers without implicit capability defaults', async (clientType) => {
     mocks.getProviderByName.mockResolvedValue({ data: null })
     mocks.postProvider.mockResolvedValue({ data: { id: 'provider-id' } })
     const { app, setup } = mountSetup(null)
@@ -146,7 +146,6 @@ describe('useProviderSetup', () => {
       api_key: 'sk-test',
       base_url: 'https://example.com/v1',
       client_type: clientType,
-      default_capabilities: ['tool-call'],
     }
 
     await setup.saveAndNext()
@@ -155,7 +154,6 @@ describe('useProviderSetup', () => {
     expect(mocks.postProviderFromTemplate).not.toHaveBeenCalled()
     expect(mocks.importModels).toHaveBeenCalledWith({
       path: { id: 'provider-id' },
-      body: { default_compatibilities: ['tool-call'] },
       throwOnError: true,
     })
     app.unmount()
