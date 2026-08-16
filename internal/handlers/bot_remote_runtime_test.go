@@ -20,7 +20,6 @@ func TestWorkspaceTargetHTTPError(t *testing.T) {
 		"invalid mode":       {workspace.ErrInvalidWorkspaceToolApprovalMode, http.StatusBadRequest},
 		"unusable runtime":   {workspace.ErrRemoteRuntimeNotUsable, http.StatusNotFound},
 		"missing target":     {workspace.ErrWorkspaceTargetNotFound, http.StatusNotFound},
-		"target in use":      {workspace.ErrWorkspaceTargetInUse, http.StatusConflict},
 		"owner mismatch":     {workspace.ErrRemoteRuntimeOwnerMismatch, http.StatusConflict},
 		"client too old":     {workspace.ErrRemoteRuntimeClientUpdateNeeded, http.StatusConflict},
 		"unexpected failure": {errors.New("boom"), http.StatusInternalServerError},

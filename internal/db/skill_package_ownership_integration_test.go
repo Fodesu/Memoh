@@ -4,13 +4,11 @@ package db_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	memohdb "github.com/memohai/memoh/internal/db"
 	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
 )
 
@@ -21,7 +19,7 @@ const (
 	packageRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
-func TestRemoteRuntimeDeletionRespectsPackageInstallation(t *testing.T) {
+func TestRemoteRuntimeDeletionRemovesPackageInstallation(t *testing.T) {
 	ctx := context.Background()
 	pool := teamScopedPool(t)
 	seedPackageBot(t, pool)
@@ -39,17 +37,68 @@ func TestRemoteRuntimeDeletionRespectsPackageInstallation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
-	if err := store.DeleteMount(ctx, packageBotOneID, targetID); !errors.Is(err, memohdb.ErrNotFound) {
-		t.Fatalf("DeleteMount() with installed Package error = %v, want deletion to be rejected", err)
+	if err := store.DeleteMount(ctx, packageBotOneID, targetID); err != nil {
+		t.Fatalf("DeleteMount() with installed Package: %v", err)
+	}
+	var packageCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM bot_skill_package_installations
+		WHERE bot_id = $1 AND workspace_target_id = $2`, packageBotOneID, targetID).Scan(&packageCount); err != nil {
+		t.Fatalf("count Package installations: %v", err)
+	}
+	if packageCount != 0 {
+		t.Fatalf("Package installation count = %d, want 0", packageCount)
+	}
+	var bindingCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM bot_remote_runtime_bindings
+		WHERE bot_id = $1 AND id = $2`, packageBotOneID, targetID).Scan(&bindingCount); err != nil {
+		t.Fatalf("count target bindings: %v", err)
+	}
+	if bindingCount != 0 {
+		t.Fatalf("target binding count = %d, want 0", bindingCount)
+	}
+}
+
+func TestUserRuntimeRevocationRemovesPackageInstallations(t *testing.T) {
+	ctx := context.Background()
+	pool := teamScopedPool(t)
+	seedPackageBot(t, pool)
+	const runtimeID = "50000000-0000-4000-8000-000000000002"
+	const targetID = "60000000-0000-4000-8000-000000000002"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO user_runtimes (id, user_id, name, api_token) VALUES ($1, $2, 'package-runtime-2', 'token-2')`,
+		runtimeID, packageUserID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO bot_remote_runtime_bindings (id, bot_id, runtime_id) VALUES ($1, $2, $3)`,
+		targetID, packageBotOneID, runtimeID); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO bot_skill_package_installations
+			(id, bot_id, workspace_target_id, registry_id, package_id, revision)
+		VALUES ($1, $2, $3, 'openai', 'documents', $4)`,
+		"30000000-0000-4000-8000-000000000002", packageBotOneID, targetID, packageRevision); err != nil {
+		t.Fatalf("seed runtime Package: %v", err)
 	}
 
-	if _, err := pool.Exec(ctx, `
-		DELETE FROM bot_skill_package_installations
-		WHERE bot_id = $1 AND workspace_target_id = $2`, packageBotOneID, targetID); err != nil {
-		t.Fatalf("remove Package: %v", err)
+	store, err := postgresstore.New(pool)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
 	}
-	if err := store.DeleteMount(ctx, packageBotOneID, targetID); err != nil {
-		t.Fatalf("DeleteMount() after Package removal: %v", err)
+	if err := store.RevokeUserRuntime(ctx, runtimeID, packageUserID); err != nil {
+		t.Fatalf("RevokeUserRuntime(): %v", err)
+	}
+	var packageCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM bot_skill_package_installations
+		WHERE bot_id = $1 AND workspace_target_id = $2`, packageBotOneID, targetID).Scan(&packageCount); err != nil {
+		t.Fatalf("count revoked runtime Package installations: %v", err)
+	}
+	if packageCount != 0 {
+		t.Fatalf("revoked runtime Package installation count = %d, want 0", packageCount)
 	}
 }
 

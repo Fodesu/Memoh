@@ -139,18 +139,19 @@ func (s *fakeRemoteBindingStore) DeleteMount(_ context.Context, botID, targetID 
 	return db.ErrNotFound
 }
 
-func TestDeleteMountRejectsTargetWithInstalledResources(t *testing.T) {
+func TestDeleteMountRemovesTarget(t *testing.T) {
 	store := &fakeRemoteBindingStore{
 		records: []dbstore.BotRemoteRuntimeBindingRecord{{
 			ID: remoteTestTargetID, BotID: remoteTestBotID, RuntimeID: remoteTestRuntimeID,
 		}},
-		deleteErr: db.ErrNotFound,
 	}
 	service := &RemoteWorkspaceService{store: store}
 
-	err := service.DeleteMount(context.Background(), remoteTestBotID, remoteTestTargetID)
-	if !errors.Is(err, ErrWorkspaceTargetInUse) {
-		t.Fatalf("DeleteMount() error = %v, want ErrWorkspaceTargetInUse", err)
+	if err := service.DeleteMount(context.Background(), remoteTestBotID, remoteTestTargetID); err != nil {
+		t.Fatalf("DeleteMount() error = %v", err)
+	}
+	if len(store.records) != 0 {
+		t.Fatalf("target records = %d, want 0", len(store.records))
 	}
 }
 
