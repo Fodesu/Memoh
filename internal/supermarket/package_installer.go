@@ -92,7 +92,6 @@ func (i *Installer) InstallPackage(ctx context.Context, botID string, req Instal
 	if err != nil {
 		return InstallPackageResponse{}, &WorkspaceTargetError{Err: err}
 	}
-	i.cleanupRetiredPluginData(targetCtx, target.Client)
 	release, err := i.acquirePreparation(targetCtx)
 	if err != nil {
 		return InstallPackageResponse{}, err
@@ -170,7 +169,6 @@ func (i *Installer) UninstallPackage(ctx context.Context, botID, installationID 
 	if err != nil {
 		return UninstallPackageResponse{}, &WorkspaceTargetError{Err: err}
 	}
-	i.cleanupRetiredPluginData(targetCtx, target.Client)
 	consistent, err := skillset.ReconcilePackage(
 		targetCtx,
 		target.Client,
@@ -296,12 +294,6 @@ func publishPackage(ctx context.Context, client *bridge.Client, prepared prepare
 		installed = append(installed, InstallSkillResponse{OK: true, RegistryID: item.skill.RegistryID, PackageID: item.skill.PackageID, SkillID: item.skill.SkillID, InstallID: item.skill.InstallID, WorkspaceTargetID: workspaceTargetID, ArtifactDigest: item.skill.Artifact.Digest, FilesWritten: item.archive.FileCount()})
 	}
 	return publication, installed, nil
-}
-
-func (i *Installer) cleanupRetiredPluginData(ctx context.Context, client *bridge.Client) {
-	if err := workspace.CleanupRetiredPluginData(ctx, client); err != nil && i.logger != nil {
-		i.logger.Warn("cleanup retired Plugin workspace data failed", slog.Any("error", err))
-	}
 }
 
 func validatePackage(pkg SkillPackageDescriptor, registryID, packageID string) error {

@@ -16,7 +16,6 @@ const (
 	workspaceAgentsFileName       = "AGENTS.md"
 	legacyIdentityFileName        = "IDENTITY.md"
 	managedWorkspaceSkillsDir     = ".memoh/skills"
-	retiredPluginDataDir          = ".memoh/plugins"
 	templateKeepFileName          = ".gitkeep"
 )
 
@@ -41,7 +40,6 @@ type WorkspaceFileSystem interface {
 	Mkdir(ctx context.Context, dirPath string) error
 	WriteFile(ctx context.Context, filePath string, content []byte) error
 	Rename(ctx context.Context, oldPath, newPath string) error
-	DeleteFile(ctx context.Context, filePath string, recursive bool) error
 }
 
 // TemplateBootstrapper copies the canonical embedded template tree into one
@@ -70,9 +68,6 @@ func (b *TemplateBootstrapper) Bootstrap(ctx context.Context, target WorkspaceFi
 	}
 	if err := target.Mkdir(ctx, root); err != nil {
 		return fmt.Errorf("create workspace root: %w", err)
-	}
-	if err := cleanupRetiredWorkspaceData(ctx, target, root); err != nil {
-		return err
 	}
 	if err := migrateLegacyWorkspaceIdentity(ctx, target, root); err != nil {
 		return err
@@ -129,26 +124,6 @@ func (b *TemplateBootstrapper) Bootstrap(ctx context.Context, target WorkspaceFi
 	})
 }
 
-func cleanupRetiredWorkspaceData(ctx context.Context, target WorkspaceFileSystem, root string) error {
-	if err := target.DeleteFile(ctx, path.Join(root, retiredPluginDataDir), true); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("remove retired workspace data %s: %w", retiredPluginDataDir, err)
-	}
-	return nil
-}
-
-// CleanupRetiredPluginData removes files owned by the deleted Plugin runtime
-// from a workspace that does not pass through the native bootstrap path.
-func CleanupRetiredPluginData(ctx context.Context, client *bridge.Client) error {
-	if client == nil {
-		return nil
-	}
-	err := client.DeleteFile(ctx, path.Join(defaultWorkspaceBootstrapRoot, retiredPluginDataDir), true)
-	if errors.Is(err, bridge.ErrNotFound) {
-		return nil
-	}
-	return err
-}
-
 func migrateLegacyWorkspaceIdentity(ctx context.Context, target WorkspaceFileSystem, root string) error {
 	agentsPath := path.Join(root, workspaceAgentsFileName)
 	if _, err := target.Stat(ctx, agentsPath); err == nil {
@@ -203,12 +178,4 @@ func (b bridgeWorkspaceFileSystem) WriteFile(ctx context.Context, filePath strin
 
 func (b bridgeWorkspaceFileSystem) Rename(ctx context.Context, oldPath, newPath string) error {
 	return b.client.Rename(ctx, oldPath, newPath)
-}
-
-func (b bridgeWorkspaceFileSystem) DeleteFile(ctx context.Context, filePath string, recursive bool) error {
-	err := b.client.DeleteFile(ctx, filePath, recursive)
-	if errors.Is(err, bridge.ErrNotFound) {
-		return fmt.Errorf("%w: %s", fs.ErrNotExist, filePath)
-	}
-	return err
 }

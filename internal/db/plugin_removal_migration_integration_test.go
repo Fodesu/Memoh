@@ -15,7 +15,7 @@ func TestPluginRemovalMigrationDeletesManagedMCPConnections(t *testing.T) {
 	dsn := teamMigrationDSN(t)
 	steps := countMigrationsFrom(t, "0136_remove_plugin_system.up.sql")
 
-	// Recreate the legacy Plugin schema, then exercise the real 0131 upgrade.
+	// Recreate the legacy Plugin schema, then exercise the real 0136 upgrade.
 	stepDown(t, dsn, steps)
 
 	const (
