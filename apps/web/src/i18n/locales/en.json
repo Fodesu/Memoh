@@ -2094,7 +2094,6 @@
       "compaction": "Compaction",
       "schedule": "Schedule",
       "history": "History",
-      "plugins": "Plugins",
       "connectors": "Connectors",
       "skills": "Skills",
       "email": "Email",
@@ -2956,21 +2955,6 @@
         "note": "Note"
       }
     },
-    "plugins": {
-      "title": "Plugins",
-      "intro": "Manage installed plugin bundles and Skill Packages.",
-      "installedTitle": "Installed plugins",
-      "emptyTitle": "No Plugins",
-      "emptyDescription": "Install plugins from Supermarket to add Skill Packages and plugin automation.",
-      "loadFailed": "Failed to load plugins",
-      "enableSuccess": "Plugin enabled",
-      "disableSuccess": "Plugin disabled",
-      "status": {
-        "ready": "Ready",
-        "disabled": "Disabled",
-        "uninstalled": "Uninstalled"
-      }
-    },
     "skills": {
       "title": "Skills",
       "discoveryTitle": "Skill Paths",
@@ -3001,9 +2985,8 @@
       "backToLibrary": "Back",
       "viewSkill": "View Skill",
       "uninstallPackage": "Uninstall Package",
-      "uninstallPackageConfirm": "Uninstall this Package? Skills still required by a Plugin will remain available.",
+      "uninstallPackageConfirm": "Uninstall this Package?",
       "uninstallPackageSuccess": "Package uninstalled",
-      "uninstallPackageReferenceRemoved": "Direct installation removed; the Package is still used by a Plugin",
       "uninstallPackageFailed": "Failed to uninstall Package",
       "packageSkillsUnavailable": "Package Skills are unavailable",
       "close": "Close",
@@ -3017,7 +3000,6 @@
       "disabledBadge": "Disabled",
       "legacyBadge": "Legacy",
       "compatBadge": "External",
-      "pluginBadge": "Plugin",
       "description": "Description",
       "descriptionPlaceholder": "Enter skill description",
       "content": "Content",

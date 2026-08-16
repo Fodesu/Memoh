@@ -359,6 +359,12 @@ const docTemplate = `{
                         "name": "name",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot ID to exclude from the conflict check (used when renaming)",
+                        "name": "exclude_bot_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -4670,14 +4676,6 @@ const docTemplate = `{
                     "mcp"
                 ],
                 "summary": "List MCP connections",
-                "parameters": [
-                    {
-                        "type": "boolean",
-                        "description": "Include plugin-managed hidden MCP connections",
-                        "name": "include_managed",
-                        "in": "query"
-                    }
-                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -6345,300 +6343,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/bots/{bot_id}/plugins": {
-            "get": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "List bot plugins",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/plugins.ListResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/plugins/{id}": {
-            "get": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "Get bot plugin installation",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Plugin installation ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/plugins.Installation"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "Purge bot plugin installation",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Plugin installation ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/plugins/{id}/disable": {
-            "post": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "Disable bot plugin",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Plugin installation ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/plugins.Installation"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/plugins/{id}/enable": {
-            "post": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "Enable bot plugin",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Plugin installation ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/plugins.Installation"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/plugins/{id}/uninstall": {
-            "post": {
-                "tags": [
-                    "plugins"
-                ],
-                "summary": "Uninstall bot plugin",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Plugin installation ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/plugins.Installation"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/bots/{bot_id}/quick-actions/execute": {
             "post": {
                 "description": "Runs a typed Web quick action such as help or skill.list and returns a command_result or command_error envelope.",
@@ -7055,6 +6759,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Only include child sessions under this parent session.",
                         "name": "parent_session_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only include sessions bound to this workdir. The literal none selects sessions with no workdir.",
+                        "name": "workdir_id",
                         "in": "query"
                     },
                     {
@@ -8256,7 +7966,7 @@ const docTemplate = `{
                 "tags": [
                     "supermarket"
                 ],
-                "summary": "Remove a directly installed Skill Package from a bot",
+                "summary": "Uninstall a Skill Package from a bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -8282,12 +7992,6 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -9124,6 +8828,221 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workdirs": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workdirs"
+                ],
+                "summary": "List a Bot's workdirs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include archived workdirs",
+                        "name": "include_archived",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workdir.WorkdirsResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Registers a named working directory on a workspace target. The directory must already exist on that target.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workdirs"
+                ],
+                "summary": "Create a Bot workdir",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Workdir",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workdir.CreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/workdir.Workdir"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workdirs/{workdir_id}": {
+            "delete": {
+                "description": "Archiving refuses new session bindings but keeps existing sessions working: their directory never changes underneath them.",
+                "tags": [
+                    "workdirs"
+                ],
+                "summary": "Archive a Bot workdir",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workdir ID",
+                        "name": "workdir_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Only the name can change. The target and path are immutable: they are baked into the working directory of every session bound to this workdir.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workdirs"
+                ],
+                "summary": "Rename a Bot workdir",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workdir ID",
+                        "name": "workdir_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New name",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workdir.UpdateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workdir.Workdir"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -18139,6 +18058,12 @@ const docTemplate = `{
         "conversation.UIUserInput": {
             "type": "object",
             "properties": {
+                "answers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/userinput.UIAnswer"
+                    }
+                },
                 "can_respond": {
                     "type": "boolean"
                 },
@@ -18567,16 +18492,6 @@ const docTemplate = `{
                 "last_probed_at": {
                     "type": "string"
                 },
-                "managed_by_plugin_installation_id": {
-                    "type": "string"
-                },
-                "managed_resource_key": {
-                    "type": "string"
-                },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
                 "name": {
                     "type": "string"
                 },
@@ -18597,9 +18512,6 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
-                },
-                "visible": {
-                    "type": "boolean"
                 }
             }
         },
@@ -20857,6 +20769,10 @@ const docTemplate = `{
                 },
                 "type": {
                     "type": "string"
+                },
+                "workdir_id": {
+                    "description": "WorkdirID immutably binds the new session to a bot workdir. The\nworkdir decides the session's workspace target and working directory\nfor its whole life; there is no way to change or clear it later.",
+                    "type": "string"
                 }
             }
         },
@@ -21796,193 +21712,6 @@ const docTemplate = `{
                 }
             }
         },
-        "plugins.Author": {
-            "type": "object",
-            "required": [
-                "name"
-            ],
-            "properties": {
-                "email": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
-        "plugins.Icon": {
-            "type": "object",
-            "properties": {
-                "kind": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "url": {
-                    "type": "string"
-                }
-            }
-        },
-        "plugins.Installation": {
-            "type": "object",
-            "properties": {
-                "bot_id": {
-                    "type": "string"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "installed_at": {
-                    "type": "string"
-                },
-                "manifest": {
-                    "$ref": "#/definitions/plugins.Manifest"
-                },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "plugin_id": {
-                    "type": "string"
-                },
-                "plugin_name": {
-                    "type": "string"
-                },
-                "resources": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.Resource"
-                    }
-                },
-                "status": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "version": {
-                    "type": "string"
-                },
-                "workspace_target_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "plugins.ListResponse": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.Installation"
-                    }
-                }
-            }
-        },
-        "plugins.Manifest": {
-            "type": "object",
-            "required": [
-                "author",
-                "description",
-                "id",
-                "name",
-                "schema_version",
-                "version"
-            ],
-            "properties": {
-                "author": {
-                    "$ref": "#/definitions/plugins.Author"
-                },
-                "capabilities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "description": {
-                    "type": "string"
-                },
-                "homepage": {
-                    "type": "string"
-                },
-                "icon": {
-                    "$ref": "#/definitions/plugins.Icon"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "packages": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/plugins.PackageReference"
-                    }
-                },
-                "schema_version": {
-                    "type": "string"
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "version": {
-                    "type": "string"
-                }
-            }
-        },
-        "plugins.PackageReference": {
-            "type": "object",
-            "required": [
-                "package_id",
-                "registry_id"
-            ],
-            "properties": {
-                "package_id": {
-                    "type": "string"
-                },
-                "registry_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "plugins.Resource": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "resource_id": {
-                    "type": "string"
-                },
-                "resource_key": {
-                    "type": "string"
-                },
-                "resource_type": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
         "providers.CountResponse": {
             "type": "object",
             "properties": {
@@ -22824,6 +22553,9 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
+                },
+                "workdir_id": {
+                    "type": "string"
                 }
             }
         },
@@ -23023,6 +22755,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "chat_model_id": {
+                    "description": "Reference fields below use pointer semantics so autosaving clients can\nclear a selection: nil = keep current, \"\" = clear, value = set. The\nservice mirrors each into a ` + "`" + `\u003cfield\u003e_set` + "`" + ` SQL flag (same pattern as\nFetchProviderID / CompactionModelID); plain strings would make \"\"\nindistinguishable from \"not sent\".",
                     "type": "string"
                 },
                 "chat_runtime": {
@@ -23059,12 +22792,14 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "heartbeat_model_id": {
+                    "description": "HeartbeatModelID joins the pointer group above (nil/\"\"/value) so the\nheartbeat tab's autosave can clear a model override.",
                     "type": "string"
                 },
                 "image_model_id": {
                     "type": "string"
                 },
                 "language": {
+                    "description": "Language follows the same pointer rule; \"\" normalizes to DefaultLanguage\n(\"auto\") rather than clearing the column.",
                     "type": "string"
                 },
                 "memory_provider_id": {
@@ -23113,11 +22848,9 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "bot_id",
-                "directly_installed",
                 "id",
                 "installed_at",
                 "package_id",
-                "plugin_reference_count",
                 "registry_id",
                 "revision",
                 "updated_at",
@@ -23127,9 +22860,6 @@ const docTemplate = `{
                 "bot_id": {
                     "type": "string"
                 },
-                "directly_installed": {
-                    "type": "boolean"
-                },
                 "id": {
                     "type": "string"
                 },
@@ -23138,9 +22868,6 @@ const docTemplate = `{
                 },
                 "package_id": {
                     "type": "string"
-                },
-                "plugin_reference_count": {
-                    "type": "integer"
                 },
                 "registry_id": {
                     "type": "string"
@@ -23180,8 +22907,7 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "installation",
-                "ok",
-                "removed_files"
+                "ok"
             ],
             "properties": {
                 "installation": {
@@ -23189,9 +22915,32 @@ const docTemplate = `{
                 },
                 "ok": {
                     "type": "boolean"
+                }
+            }
+        },
+        "userinput.UIAnswer": {
+            "type": "object",
+            "properties": {
+                "custom_text": {
+                    "type": "string"
                 },
-                "removed_files": {
+                "question": {
+                    "type": "string"
+                },
+                "question_id": {
+                    "type": "string"
+                },
+                "selected": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/userinput.UIOption"
+                    }
+                },
+                "skipped": {
                     "type": "boolean"
+                },
+                "text": {
+                    "type": "string"
                 }
             }
         },
@@ -23490,6 +23239,81 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                }
+            }
+        },
+        "workdir.CreateRequest": {
+            "type": "object",
+            "required": [
+                "name",
+                "path"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "workspace_target_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "workdir.UpdateRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "workdir.Workdir": {
+            "type": "object",
+            "properties": {
+                "archived": {
+                    "type": "boolean"
+                },
+                "bot_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by_user_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "target_kind": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "workspace_target_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "workdir.WorkdirsResponse": {
+            "type": "object",
+            "properties": {
+                "workdirs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workdir.Workdir"
+                    }
                 }
             }
         },

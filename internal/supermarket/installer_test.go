@@ -3,11 +3,8 @@ package supermarket
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/memohai/memoh/internal/skillpackages"
 )
 
 func TestInstallerPreparationLimit(t *testing.T) {
@@ -139,13 +136,5 @@ func TestValidatePackageRejectsIdentityCountAndDuplicates(t *testing.T) {
 	pkg.Skills[0].Artifact.UncompressedSize = maxPackageArtifactsUncompressed + 1
 	if err := validatePackageBudget(pkg.Skills); err == nil {
 		t.Fatal("validatePackageBudget accepted an oversized Package")
-	}
-}
-
-func TestPackageRevisionConflictUsesHTTPConflict(t *testing.T) {
-	err := packageLifecycleError(skillpackages.ErrRevisionConflict)
-	var statusErr *StatusError
-	if !errors.As(err, &statusErr) || statusErr.Status != http.StatusConflict {
-		t.Fatalf("packageLifecycleError() = %v, want HTTP 409", err)
 	}
 }

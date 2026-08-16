@@ -23,7 +23,6 @@ const (
 	LegacyDirPath             = config.DefaultDataMount + "/.skills"
 	IndexDirPath              = config.DefaultDataMount + "/.memoh/skills"
 	IndexFilePath             = IndexDirPath + "/index.json"
-	PluginDirPath             = config.DefaultDataMount + "/.memoh/plugins"
 	SkillDiscoveryRootsEnvVar = "MEMOH_SKILL_DISCOVERY_ROOTS"
 
 	SourceKindManaged  = "managed"
@@ -108,42 +107,6 @@ type indexedItem struct {
 
 func ManagedDir() string {
 	return ManagedDirPath
-}
-
-func PluginDirForID(pluginID string) (string, error) {
-	if !IsValidPluginID(pluginID) {
-		return "", bridge.ErrBadRequest
-	}
-
-	dirPath := path.Clean(path.Join(PluginDirPath, pluginID))
-	if dirPath == PluginDirPath || !strings.HasPrefix(dirPath, PluginDirPath+"/") {
-		return "", bridge.ErrBadRequest
-	}
-	return dirPath, nil
-}
-
-func PluginHooksPathForID(pluginID string) (string, error) {
-	pluginRoot, err := PluginDirForID(pluginID)
-	if err != nil {
-		return "", err
-	}
-	return path.Join(pluginRoot, "hooks.json"), nil
-}
-
-func PluginScriptsDirForID(pluginID string) (string, error) {
-	pluginRoot, err := PluginDirForID(pluginID)
-	if err != nil {
-		return "", err
-	}
-	return safePluginChildDir(pluginRoot, "scripts")
-}
-
-func safePluginChildDir(pluginRoot, child string) (string, error) {
-	dirPath := path.Clean(path.Join(pluginRoot, child))
-	if dirPath == PluginDirPath || !strings.HasPrefix(dirPath, pluginRoot+"/") {
-		return "", bridge.ErrBadRequest
-	}
-	return dirPath, nil
 }
 
 func ContainerEnv(rawCompatRoots []string) []string {
@@ -357,7 +320,7 @@ func normalizeCompatDiscoveryRoots(paths []string) []string {
 		if !strings.HasPrefix(p, "/") {
 			continue
 		}
-		if p == ManagedDirPath || p == IndexDirPath || p == LegacyDirPath || p == PluginDirPath {
+		if p == ManagedDirPath || p == IndexDirPath || p == LegacyDirPath {
 			continue
 		}
 		if _, ok := seen[p]; ok {
@@ -445,21 +408,6 @@ func IsValidName(name string) bool {
 }
 
 const maxPortableResourceIDBytes = 128
-
-// IsValidPluginID validates the canonical Plugin and MCP identifier alphabet.
-func IsValidPluginID(value string) bool {
-	if value == "" || value != strings.TrimSpace(value) || len(value) > maxPortableResourceIDBytes || isWindowsReservedName(value) {
-		return false
-	}
-	for index, character := range []byte(value) {
-		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') ||
-			(index > 0 && (character == '-' || character == '_')) {
-			continue
-		}
-		return false
-	}
-	return true
-}
 
 // IsValidRegistryComponent validates one Registry, Package, or Skill path component.
 func IsValidRegistryComponent(value string) bool {

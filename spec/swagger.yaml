@@ -2148,6 +2148,10 @@ definitions:
     type: object
   conversation.UIUserInput:
     properties:
+      answers:
+        items:
+          $ref: '#/definitions/userinput.UIAnswer'
+        type: array
       can_respond:
         type: boolean
       questions:
@@ -2433,13 +2437,6 @@ definitions:
         type: boolean
       last_probed_at:
         type: string
-      managed_by_plugin_installation_id:
-        type: string
-      managed_resource_key:
-        type: string
-      metadata:
-        additionalProperties: {}
-        type: object
       name:
         type: string
       status:
@@ -2454,8 +2451,6 @@ definitions:
         type: string
       updated_at:
         type: string
-      visible:
-        type: boolean
     type: object
   handlers.ACPClaudeCodeOAuthAuthorizeResponse:
     properties:
@@ -3968,6 +3963,12 @@ definitions:
         type: string
       type:
         type: string
+      workdir_id:
+        description: |-
+          WorkdirID immutably binds the new session to a bot workdir. The
+          workdir decides the session's workspace target and working directory
+          for its whole life; there is no way to change or clear it later.
+        type: string
     type: object
   handlers.displayInfoResponse:
     properties:
@@ -4609,131 +4610,6 @@ definitions:
       type:
         $ref: '#/definitions/models.ModelType'
     type: object
-  plugins.Author:
-    properties:
-      email:
-        type: string
-      name:
-        type: string
-    required:
-    - name
-    type: object
-  plugins.Icon:
-    properties:
-      kind:
-        type: string
-      name:
-        type: string
-      url:
-        type: string
-    type: object
-  plugins.Installation:
-    properties:
-      bot_id:
-        type: string
-      enabled:
-        type: boolean
-      id:
-        type: string
-      installed_at:
-        type: string
-      manifest:
-        $ref: '#/definitions/plugins.Manifest'
-      metadata:
-        additionalProperties: {}
-        type: object
-      plugin_id:
-        type: string
-      plugin_name:
-        type: string
-      resources:
-        items:
-          $ref: '#/definitions/plugins.Resource'
-        type: array
-      status:
-        type: string
-      updated_at:
-        type: string
-      version:
-        type: string
-      workspace_target_id:
-        type: string
-    type: object
-  plugins.ListResponse:
-    properties:
-      items:
-        items:
-          $ref: '#/definitions/plugins.Installation'
-        type: array
-    type: object
-  plugins.Manifest:
-    properties:
-      author:
-        $ref: '#/definitions/plugins.Author'
-      capabilities:
-        items:
-          type: string
-        type: array
-      description:
-        type: string
-      homepage:
-        type: string
-      icon:
-        $ref: '#/definitions/plugins.Icon'
-      id:
-        type: string
-      name:
-        type: string
-      packages:
-        items:
-          $ref: '#/definitions/plugins.PackageReference'
-        type: array
-      schema_version:
-        type: string
-      tags:
-        items:
-          type: string
-        type: array
-      version:
-        type: string
-    required:
-    - author
-    - description
-    - id
-    - name
-    - schema_version
-    - version
-    type: object
-  plugins.PackageReference:
-    properties:
-      package_id:
-        type: string
-      registry_id:
-        type: string
-    required:
-    - package_id
-    - registry_id
-    type: object
-  plugins.Resource:
-    properties:
-      created_at:
-        type: string
-      id:
-        type: string
-      metadata:
-        additionalProperties: {}
-        type: object
-      resource_id:
-        type: string
-      resource_key:
-        type: string
-      resource_type:
-        type: string
-      status:
-        type: string
-      updated_at:
-        type: string
-    type: object
   providers.CountResponse:
     properties:
       count:
@@ -5348,6 +5224,8 @@ definitions:
         type: string
       updated_at:
         type: string
+      workdir_id:
+        type: string
     type: object
   settings.Settings:
     properties:
@@ -5483,6 +5361,12 @@ definitions:
       chat_acp_project_path:
         type: string
       chat_model_id:
+        description: |-
+          Reference fields below use pointer semantics so autosaving clients can
+          clear a selection: nil = keep current, "" = clear, value = set. The
+          service mirrors each into a `<field>_set` SQL flag (same pattern as
+          FetchProviderID / CompactionModelID); plain strings would make ""
+          indistinguishable from "not sent".
         type: string
       chat_runtime:
         type: string
@@ -5507,10 +5391,16 @@ definitions:
       heartbeat_interval:
         type: integer
       heartbeat_model_id:
+        description: |-
+          HeartbeatModelID joins the pointer group above (nil/""/value) so the
+          heartbeat tab's autosave can clear a model override.
         type: string
       image_model_id:
         type: string
       language:
+        description: |-
+          Language follows the same pointer rule; "" normalizes to DefaultLanguage
+          ("auto") rather than clearing the column.
         type: string
       memory_provider_id:
         type: string
@@ -5544,16 +5434,12 @@ definitions:
     properties:
       bot_id:
         type: string
-      directly_installed:
-        type: boolean
       id:
         type: string
       installed_at:
         type: string
       package_id:
         type: string
-      plugin_reference_count:
-        type: integer
       registry_id:
         type: string
       revision:
@@ -5564,11 +5450,9 @@ definitions:
         type: string
     required:
     - bot_id
-    - directly_installed
     - id
     - installed_at
     - package_id
-    - plugin_reference_count
     - registry_id
     - revision
     - updated_at
@@ -5593,12 +5477,26 @@ definitions:
         $ref: '#/definitions/skillpackages.Installation'
       ok:
         type: boolean
-      removed_files:
-        type: boolean
     required:
     - installation
     - ok
-    - removed_files
+    type: object
+  userinput.UIAnswer:
+    properties:
+      custom_text:
+        type: string
+      question:
+        type: string
+      question_id:
+        type: string
+      selected:
+        items:
+          $ref: '#/definitions/userinput.UIOption'
+        type: array
+      skipped:
+        type: boolean
+      text:
+        type: string
     type: object
   userinput.UIOption:
     properties:
@@ -5798,6 +5696,55 @@ definitions:
         type: string
       status:
         type: string
+    type: object
+  workdir.CreateRequest:
+    properties:
+      name:
+        type: string
+      path:
+        type: string
+      workspace_target_id:
+        type: string
+    required:
+    - name
+    - path
+    type: object
+  workdir.UpdateRequest:
+    properties:
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  workdir.Workdir:
+    properties:
+      archived:
+        type: boolean
+      bot_id:
+        type: string
+      created_at:
+        type: string
+      created_by_user_id:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      target_kind:
+        type: string
+      updated_at:
+        type: string
+      workspace_target_id:
+        type: string
+    type: object
+  workdir.WorkdirsResponse:
+    properties:
+      workdirs:
+        items:
+          $ref: '#/definitions/workdir.Workdir'
+        type: array
     type: object
   workspace.SetPrimaryWorkspaceTargetRequest:
     properties:
@@ -8848,11 +8795,6 @@ paths:
   /bots/{bot_id}/mcp:
     get:
       description: List MCP connections for a bot
-      parameters:
-      - description: Include plugin-managed hidden MCP connections
-        in: query
-        name: include_managed
-        type: boolean
       responses:
         "200":
           description: OK
@@ -9984,200 +9926,6 @@ paths:
       summary: Locate a bot history message
       tags:
       - messages
-  /bots/{bot_id}/plugins:
-    get:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/plugins.ListResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: List bot plugins
-      tags:
-      - plugins
-  /bots/{bot_id}/plugins/{id}:
-    delete:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Plugin installation ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "204":
-          description: No Content
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Purge bot plugin installation
-      tags:
-      - plugins
-    get:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Plugin installation ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/plugins.Installation'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Get bot plugin installation
-      tags:
-      - plugins
-  /bots/{bot_id}/plugins/{id}/disable:
-    post:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Plugin installation ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/plugins.Installation'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Disable bot plugin
-      tags:
-      - plugins
-  /bots/{bot_id}/plugins/{id}/enable:
-    post:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Plugin installation ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/plugins.Installation'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Enable bot plugin
-      tags:
-      - plugins
-  /bots/{bot_id}/plugins/{id}/uninstall:
-    post:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Plugin installation ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/plugins.Installation'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Uninstall bot plugin
-      tags:
-      - plugins
   /bots/{bot_id}/quick-actions/execute:
     post:
       consumes:
@@ -10456,6 +10204,11 @@ paths:
       - description: Only include child sessions under this parent session.
         in: query
         name: parent_session_id
+        type: string
+      - description: Only include sessions bound to this workdir. The literal none
+          selects sessions with no workdir.
+        in: query
+        name: workdir_id
         type: string
       - description: Page size (1..200). Defaults to 50.
         in: query
@@ -11279,11 +11032,7 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Remove a directly installed Skill Package from a bot
+      summary: Uninstall a Skill Package from a bot
       tags:
       - supermarket
   /bots/{bot_id}/token-usage:
@@ -11852,6 +11601,152 @@ paths:
       summary: WebSocket chat endpoint
       tags:
       - local-channel
+  /bots/{bot_id}/workdirs:
+    get:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Include archived workdirs
+        in: query
+        name: include_archived
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/workdir.WorkdirsResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List a Bot's workdirs
+      tags:
+      - workdirs
+    post:
+      consumes:
+      - application/json
+      description: Registers a named working directory on a workspace target. The
+        directory must already exist on that target.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Workdir
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/workdir.CreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/workdir.Workdir'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Create a Bot workdir
+      tags:
+      - workdirs
+  /bots/{bot_id}/workdirs/{workdir_id}:
+    delete:
+      description: 'Archiving refuses new session bindings but keeps existing sessions
+        working: their directory never changes underneath them.'
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Workdir ID
+        in: path
+        name: workdir_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Archive a Bot workdir
+      tags:
+      - workdirs
+    patch:
+      consumes:
+      - application/json
+      description: 'Only the name can change. The target and path are immutable: they
+        are baked into the working directory of every session bound to this workdir.'
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Workdir ID
+        in: path
+        name: workdir_id
+        required: true
+        type: string
+      - description: New name
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/workdir.UpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/workdir.Workdir'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Rename a Bot workdir
+      tags:
+      - workdirs
   /bots/{bot_id}/workspace-targets:
     get:
       parameters:
@@ -12627,6 +12522,10 @@ paths:
         in: query
         name: name
         required: true
+        type: string
+      - description: Bot ID to exclude from the conflict check (used when renaming)
+        in: query
+        name: exclude_bot_id
         type: string
       responses:
         "200":

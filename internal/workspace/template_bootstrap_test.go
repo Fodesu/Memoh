@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"path"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -88,6 +89,22 @@ func TestTemplateBootstrapperRequiresProviderNeutralNotFoundError(t *testing.T) 
 	}
 }
 
+func TestTemplateBootstrapperRemovesRetiredWorkspaceData(t *testing.T) {
+	t.Parallel()
+
+	target := newFakeWorkspaceFS()
+	target.files["/data/.memoh/plugins/notion/plugin.yaml"] = []byte("legacy\n")
+	target.files["/data/skills/user/personal/notes/SKILL.md"] = []byte("keep\n")
+
+	if err := NewTemplateBootstrapper(fstest.MapFS{}).Bootstrap(context.Background(), target, "/data"); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, ok := target.files["/data/.memoh/plugins/notion/plugin.yaml"]; ok {
+		t.Fatal("retired Plugin data still exists")
+	}
+	assertWorkspaceFile(t, target, "/data/skills/user/personal/notes/SKILL.md", "keep\n")
+}
+
 type fakeWorkspaceFS struct {
 	files   map[string][]byte
 	dirs    map[string]struct{}
@@ -138,6 +155,27 @@ func (f *fakeWorkspaceFS) Rename(_ context.Context, oldPath, newPath string) err
 	}
 	f.files[newPath] = content
 	delete(f.files, oldPath)
+	return nil
+}
+
+func (f *fakeWorkspaceFS) DeleteFile(_ context.Context, filePath string, recursive bool) error {
+	filePath = path.Clean(filePath)
+	delete(f.files, filePath)
+	delete(f.dirs, filePath)
+	if !recursive {
+		return nil
+	}
+	prefix := filePath + "/"
+	for current := range f.files {
+		if strings.HasPrefix(current, prefix) {
+			delete(f.files, current)
+		}
+	}
+	for current := range f.dirs {
+		if strings.HasPrefix(current, prefix) {
+			delete(f.dirs, current)
+		}
+	}
 	return nil
 }
 

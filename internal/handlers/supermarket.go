@@ -176,13 +176,12 @@ func (h *SupermarketHandler) ListInstalledPackages(c echo.Context) error {
 }
 
 // UninstallPackage godoc
-// @Summary Remove a directly installed Skill Package from a bot
+// @Summary Uninstall a Skill Package from a bot
 // @Tags supermarket
 // @Param bot_id path string true "Bot ID"
 // @Param installation_id path string true "Package installation ID"
 // @Success 200 {object} supermarket.UninstallPackageResponse
 // @Failure 404 {object} ErrorResponse
-// @Failure 409 {object} ErrorResponse
 // @Router /bots/{bot_id}/supermarket/packages/{installation_id} [delete].
 func (h *SupermarketHandler) UninstallPackage(c echo.Context) error {
 	botID, err := h.requireBotAccess(c)

@@ -30,7 +30,7 @@ const (
 
 var (
 	ErrWorkspaceTargetNotFound          = errors.New("workspace target not found")
-	ErrWorkspaceTargetInUse             = errors.New("workspace target has installed Plugins or Skill Packages")
+	ErrWorkspaceTargetInUse             = errors.New("workspace target has installed Skill Packages")
 	ErrRemoteWorkspaceNotBound          = errors.New("remote workspace is not bound")
 	ErrRemoteRuntimeNotUsable           = errors.New("remote runtime not found, revoked, or owned by another user")
 	ErrRemoteRuntimeOffline             = errors.New("remote runtime is offline")

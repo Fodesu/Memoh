@@ -370,26 +370,6 @@ func TestUpsertSkillsAPIRenamesManagedSkillAndRejectsDirectRegistryEdit(t *testi
 	}
 }
 
-func TestUpsertSkillsAPIRejectsPluginOnlyRegistrySkill(t *testing.T) {
-	env := newSkillsTestEnv(t)
-	registryPath := path.Join(skillset.ManagedDir(), "memoh", "notion", "meeting", "SKILL.md")
-	original := managedSkillRaw("meeting", "Meeting notes")
-	env.writeSkillFile(t, registryPath, original)
-
-	_, err := env.callJSON(t, http.MethodPost, "/bots/:bot_id/container/skills", SkillsUpsertRequest{
-		Skills:     []string{managedSkillRaw("meeting", "Changed")},
-		SourcePath: registryPath,
-	}, env.handler.UpsertSkills)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusBadRequest {
-		t.Fatalf("UpsertSkills(plugin-only) error = %v, want 400", err)
-	}
-	got, readErr := os.ReadFile(env.localPath(registryPath))
-	if readErr != nil || string(got) != original {
-		t.Fatalf("plugin-only Registry Skill changed: content=%q err=%v", got, readErr)
-	}
-}
-
 func TestUpsertSkillsAPIRenameRejectsExistingDestination(t *testing.T) {
 	env := newSkillsTestEnv(t)
 	alphaPath := path.Join(skillset.ManagedDir(), skillset.UserSkillNamespace, skillset.UserSkillPackage, "alpha", "SKILL.md")
@@ -569,31 +549,31 @@ func TestListSkillsAPIUsesConfiguredDiscoveryRoots(t *testing.T) {
 
 func TestListSkillsAPIIncludesInstalledRegistrySkillDirectories(t *testing.T) {
 	env := newSkillsTestEnv(t)
-	pluginRoot, err := skillset.SkillDirForIDs("memoh", "github", "review")
+	packageRoot, err := skillset.SkillDirForIDs("memoh", "github", "review")
 	if err != nil {
-		t.Fatalf("plugin Registry Skill root: %v", err)
+		t.Fatalf("Registry Package Skill root: %v", err)
 	}
 	disabledRoot, err := skillset.SkillDirForIDs("memoh", "disabled", "hidden")
 	if err != nil {
-		t.Fatalf("disabled Plugin Registry Skill root: %v", err)
+		t.Fatalf("disabled Registry Package Skill root: %v", err)
 	}
 	remoteRoot, err := skillset.SkillDirForIDs("memoh", "remote", "hidden")
 	if err != nil {
-		t.Fatalf("remote Plugin Registry Skill root: %v", err)
+		t.Fatalf("remote Registry Package Skill root: %v", err)
 	}
-	pluginPath := path.Join(pluginRoot, "SKILL.md")
+	packagePath := path.Join(packageRoot, "SKILL.md")
 	disabledPath := path.Join(disabledRoot, "SKILL.md")
 	remotePath := path.Join(remoteRoot, "SKILL.md")
-	env.writeSkillFile(t, pluginPath, managedSkillRaw("review", "Plugin Review"))
-	env.writeSkillFile(t, disabledPath, managedSkillRaw("hidden", "Hidden Plugin"))
-	env.writeSkillFile(t, remotePath, managedSkillRaw("hidden", "Remote Plugin"))
+	env.writeSkillFile(t, packagePath, managedSkillRaw("review", "Package Review"))
+	env.writeSkillFile(t, disabledPath, managedSkillRaw("hidden", "Hidden Package"))
+	env.writeSkillFile(t, remotePath, managedSkillRaw("hidden", "Remote Package"))
 	skills := env.listSkills(t)
 	if len(skills) != 3 {
 		t.Fatalf("expected 3 installed Registry Skills, got %d: %+v", len(skills), skills)
 	}
-	got := mustFindSkillByPath(t, skills, pluginPath)
-	if got.SourceRoot != pluginRoot {
-		t.Fatalf("source_root = %q, want %q", got.SourceRoot, pluginRoot)
+	got := mustFindSkillByPath(t, skills, packagePath)
+	if got.SourceRoot != packageRoot {
+		t.Fatalf("source_root = %q, want %q", got.SourceRoot, packageRoot)
 	}
 	if got.SourceKind != skillset.SourceKindRegistry {
 		t.Fatalf("source_kind = %q, want %q", got.SourceKind, skillset.SourceKindRegistry)
@@ -961,6 +941,16 @@ func (s *skillsTestBridgeServer) ReadRaw(req *pb.ReadRawRequest, stream pb.Conta
 		return nil
 	}
 	return stream.Send(&pb.DataChunk{Data: data})
+}
+
+func (s *skillsTestBridgeServer) ReadFile(_ context.Context, req *pb.ReadFileRequest) (*pb.ReadFileResponse, error) {
+	_, localPath := s.resolvePath(req.GetPath())
+	//nolint:gosec // test-only temp workspace path
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		return nil, toStatusError(err, req.GetPath())
+	}
+	return &pb.ReadFileResponse{Content: string(data)}, nil
 }
 
 func (s *skillsTestBridgeServer) WriteRaw(stream pb.ContainerService_WriteRawServer) error {

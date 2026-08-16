@@ -46,7 +46,6 @@ type InstallPackageResponse struct {
 
 type UninstallPackageResponse struct {
 	OK           bool                       `json:"ok" validate:"required"`
-	RemovedFiles bool                       `json:"removed_files" validate:"required"`
 	Installation skillpackages.Installation `json:"installation" validate:"required"`
 }
 
@@ -85,14 +84,15 @@ func (i *Installer) InstallPackage(ctx context.Context, botID string, req Instal
 	if !isCanonicalSHA256(revision) {
 		return InstallPackageResponse{}, &StatusError{Status: http.StatusBadRequest, Message: "revision is invalid"}
 	}
-	if i.workspaces == nil {
-		return InstallPackageResponse{}, apperror.Wrap(apperror.CodeRegistryPackageInstallFailed, errors.New("workspace manager is not configured"), nil)
+	if i.packages == nil || i.workspaces == nil {
+		return InstallPackageResponse{}, apperror.Wrap(apperror.CodeRegistryPackageInstallFailed, errors.New("skill Package installer is not configured"), nil)
 	}
 	targetCtx := workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	target, err := i.workspaces.ResolveWorkspaceTarget(targetCtx, botID, req.WorkspaceTargetID)
 	if err != nil {
 		return InstallPackageResponse{}, &WorkspaceTargetError{Err: err}
 	}
+	i.cleanupRetiredPluginData(targetCtx, target.Client)
 	release, err := i.acquirePreparation(targetCtx)
 	if err != nil {
 		return InstallPackageResponse{}, err
@@ -113,18 +113,28 @@ func (i *Installer) InstallPackage(ctx context.Context, botID string, req Instal
 		return InstallPackageResponse{}, err
 	}
 	defer releaseInstall()
-	var installed []InstallSkillResponse
-	var installation skillpackages.Installation
+	expectedRevision := ""
+	current, err := i.packages.Get(targetCtx, botID, target.TargetID, registryID, packageID)
+	if err == nil {
+		expectedRevision = current.Revision
+	} else if !errors.Is(err, skillpackages.ErrNotInstalled) {
+		return InstallPackageResponse{}, packageLifecycleError(err)
+	}
+	consistent, err := skillset.ReconcilePackage(targetCtx, target.Client, registryID, packageID, expectedRevision)
+	if err != nil {
+		return InstallPackageResponse{}, apperror.Wrap(apperror.CodeRegistryPackageInstallFailed, fmt.Errorf("recover Registry Package state: %w", err), nil)
+	}
+	if !consistent && i.logger != nil {
+		i.logger.Warn("Skill Package files did not match the recorded revision; replacing them",
+			slog.String("registry_id", registryID), slog.String("package_id", packageID),
+			slog.String("workspace_target_id", target.TargetID), slog.String("recorded_revision", expectedRevision),
+		)
+	}
 	publication, published, err := publishPackage(targetCtx, target.Client, prepared, target.TargetID)
 	if err != nil {
 		return InstallPackageResponse{}, err
 	}
-	installed = published
-	if i.packages == nil {
-		_ = publication.Rollback(targetCtx)
-		return InstallPackageResponse{}, errors.New("skill Package service is not configured")
-	}
-	installation, err = i.packages.RecordDirect(targetCtx, botID, target.TargetID, skillpackages.Requirement{
+	installation, err := i.packages.Record(targetCtx, botID, target.TargetID, skillpackages.Requirement{
 		RegistryID: registryID, PackageID: packageID, Revision: revision,
 	})
 	if err != nil {
@@ -133,20 +143,16 @@ func (i *Installer) InstallPackage(ctx context.Context, botID string, req Instal
 	if err := publication.Commit(targetCtx); err != nil && i.logger != nil {
 		i.logger.Warn("cleanup replaced Skill Package failed", slog.Any("error", err))
 	}
-	return InstallPackageResponse{OK: true, RegistryID: registryID, PackageID: packageID, Revision: revision, WorkspaceTargetID: target.TargetID, Skills: installed, Installation: installation}, nil
+	return InstallPackageResponse{OK: true, RegistryID: registryID, PackageID: packageID, Revision: revision, WorkspaceTargetID: target.TargetID, Skills: published, Installation: installation}, nil
 }
 
 func (i *Installer) UninstallPackage(ctx context.Context, botID, installationID string) (UninstallPackageResponse, error) {
 	if i.packages == nil || i.workspaces == nil {
 		return UninstallPackageResponse{}, errors.New("skill Package installer is not configured")
 	}
-	var result UninstallPackageResponse
 	installation, err := i.packages.GetByID(ctx, botID, installationID)
 	if err != nil {
 		return UninstallPackageResponse{}, packageLifecycleError(err)
-	}
-	if !installation.DirectlyInstalled {
-		return UninstallPackageResponse{}, packageLifecycleError(skillpackages.ErrNotDirect)
 	}
 	releaseInstall, err := acquireInstallationResources(ctx, packageInstallationLockKey(
 		botID, installation.WorkspaceTargetID, installation.RegistryID, installation.PackageID,
@@ -159,51 +165,51 @@ func (i *Installer) UninstallPackage(ctx context.Context, botID, installationID 
 	if err != nil {
 		return UninstallPackageResponse{}, packageLifecycleError(err)
 	}
-	if !installation.DirectlyInstalled {
-		return UninstallPackageResponse{}, packageLifecycleError(skillpackages.ErrNotDirect)
-	}
-
-	var removal *skillset.PackageRemoval
-	if installation.PluginReferenceCount == 0 {
-		targetCtx := workspace.WithWorkspaceTarget(ctx, installation.WorkspaceTargetID)
-		target, err := i.workspaces.ResolveWorkspaceTarget(targetCtx, botID, installation.WorkspaceTargetID)
-		if err != nil {
-			return UninstallPackageResponse{}, &WorkspaceTargetError{Err: err}
-		}
-		removal, err = skillset.PreparePackageRemoval(
-			targetCtx,
-			target.Client,
-			installation.RegistryID,
-			installation.PackageID,
-		)
-		if err != nil {
-			return UninstallPackageResponse{}, err
-		}
-	}
-
-	updated, removed, err := i.packages.ReleaseDirect(ctx, botID, installationID)
+	targetCtx := workspace.WithWorkspaceTarget(ctx, installation.WorkspaceTargetID)
+	target, err := i.workspaces.ResolveWorkspaceTarget(targetCtx, botID, installation.WorkspaceTargetID)
 	if err != nil {
-		return UninstallPackageResponse{}, errors.Join(packageLifecycleError(err), removal.Rollback(ctx))
+		return UninstallPackageResponse{}, &WorkspaceTargetError{Err: err}
 	}
-	if !removed {
-		if err := removal.Rollback(ctx); err != nil {
-			return UninstallPackageResponse{}, err
-		}
-	} else if err := removal.Commit(ctx); err != nil && i.logger != nil {
+	i.cleanupRetiredPluginData(targetCtx, target.Client)
+	consistent, err := skillset.ReconcilePackage(
+		targetCtx,
+		target.Client,
+		installation.RegistryID,
+		installation.PackageID,
+		installation.Revision,
+	)
+	if err != nil {
+		return UninstallPackageResponse{}, fmt.Errorf("recover Skill Package state: %w", err)
+	}
+	if !consistent && i.logger != nil {
+		i.logger.Warn("Skill Package files did not match the recorded revision; removing the managed path",
+			slog.String("registry_id", installation.RegistryID), slog.String("package_id", installation.PackageID),
+			slog.String("workspace_target_id", target.TargetID), slog.String("recorded_revision", installation.Revision),
+		)
+	}
+	removal, err := skillset.PreparePackageRemoval(
+		targetCtx,
+		target.Client,
+		installation.RegistryID,
+		installation.PackageID,
+	)
+	if err != nil {
+		return UninstallPackageResponse{}, err
+	}
+	removed, err := i.packages.Delete(ctx, botID, installationID)
+	if err != nil {
+		return UninstallPackageResponse{}, errors.Join(packageLifecycleError(err), removal.Rollback(targetCtx))
+	}
+	if err := removal.Commit(targetCtx); err != nil && i.logger != nil {
 		i.logger.Warn("cleanup uninstalled Skill Package failed", slog.Any("error", err))
 	}
-	result = UninstallPackageResponse{OK: true, RemovedFiles: removed, Installation: updated}
-	return result, nil
+	return UninstallPackageResponse{OK: true, Installation: removed}, nil
 }
 
 func packageLifecycleError(err error) error {
 	switch {
 	case errors.Is(err, skillpackages.ErrNotInstalled):
 		return &StatusError{Status: http.StatusNotFound, Message: "Skill Package installation was not found", Err: err}
-	case errors.Is(err, skillpackages.ErrNotDirect):
-		return &StatusError{Status: http.StatusConflict, Message: "Skill Package is owned by an installed Plugin", Err: err}
-	case errors.Is(err, skillpackages.ErrRevisionConflict):
-		return &StatusError{Status: http.StatusConflict, Message: "Skill Package revision conflicts with an existing installation", Err: err}
 	default:
 		return err
 	}
@@ -273,7 +279,15 @@ func publishPackage(ctx context.Context, client *bridge.Client, prepared prepare
 	for _, item := range prepared.skills {
 		members = append(members, skillset.PackageArchive{SkillID: item.skill.SkillID, Archive: item.archive})
 	}
-	publication, err := skillset.PublishPackage(ctx, client, prepared.workspaceOS, prepared.descriptor.RegistryID, prepared.descriptor.PackageID, members)
+	publication, err := skillset.PublishPackage(
+		ctx,
+		client,
+		prepared.workspaceOS,
+		prepared.descriptor.RegistryID,
+		prepared.descriptor.PackageID,
+		prepared.descriptor.Revision,
+		members,
+	)
 	if err != nil {
 		return nil, nil, apperror.Wrap(apperror.CodeRegistryPackageInstallFailed, fmt.Errorf("publish Registry Package: %w", err), nil)
 	}
@@ -282,6 +296,12 @@ func publishPackage(ctx context.Context, client *bridge.Client, prepared prepare
 		installed = append(installed, InstallSkillResponse{OK: true, RegistryID: item.skill.RegistryID, PackageID: item.skill.PackageID, SkillID: item.skill.SkillID, InstallID: item.skill.InstallID, WorkspaceTargetID: workspaceTargetID, ArtifactDigest: item.skill.Artifact.Digest, FilesWritten: item.archive.FileCount()})
 	}
 	return publication, installed, nil
+}
+
+func (i *Installer) cleanupRetiredPluginData(ctx context.Context, client *bridge.Client) {
+	if err := workspace.CleanupRetiredPluginData(ctx, client); err != nil && i.logger != nil {
+		i.logger.Warn("cleanup retired Plugin workspace data failed", slog.Any("error", err))
+	}
 }
 
 func validatePackage(pkg SkillPackageDescriptor, registryID, packageID string) error {

@@ -2,8 +2,6 @@ package skills
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"path"
 	"strings"
@@ -43,14 +41,6 @@ func writeArchiveFiles(
 
 func publicationCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), archivePublicationCleanupTimeout)
-}
-
-func randomInstallSuffix() (string, error) {
-	value := make([]byte, 12)
-	if _, err := rand.Read(value); err != nil {
-		return "", fmt.Errorf("create installation ID: %w", err)
-	}
-	return hex.EncodeToString(value), nil
 }
 
 func applyExecutableModes(ctx context.Context, client *bridge.Client, workspaceOS string, paths []string) error {

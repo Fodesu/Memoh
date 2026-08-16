@@ -187,7 +187,7 @@ func TestClientRenameMissingSourceReturnsNotFound(t *testing.T) {
 		WorkspaceRoot:  root,
 		DataMount:      "/data",
 	}))
-	err := client.Rename(context.Background(), "/data/.memoh/plugins/notion", "/data/.memoh/plugins/.staging/backup-notion")
+	err := client.Rename(context.Background(), "/data/skills/openai/docs", "/data/skills/.staging/openai/docs/backup")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Rename() error = %v, want ErrNotFound", err)
 	}

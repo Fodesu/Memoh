@@ -2083,7 +2083,6 @@
       "compaction": "圧縮",
       "schedule": "スケジュール",
       "history": "歴史",
-      "plugins": "Plugin",
       "connectors": "コネクター",
       "skills": "Skill",
       "email": "メール",
@@ -2946,20 +2945,6 @@
         "note": "ノート"
       }
     },
-    "plugins": {
-      "title": "Plugin",
-      "intro": "インストール済みの Plugin と Skill Package を管理します。",
-      "emptyTitle": "Pluginなし",
-      "emptyDescription": "スーパーマーケットから Plugin をインストールして、Skill Package と自動化を追加します。",
-      "loadFailed": "Pluginのロードに失敗しました",
-      "enableSuccess": "Pluginが有効になっている",
-      "disableSuccess": "Pluginが無効になっています",
-      "status": {
-        "ready": "準備ができて",
-        "disabled": "無効",
-        "uninstalled": "アンインストール済み"
-      }
-    },
     "skills": {
       "shadowedHint": "同名のマネージドコピーがこのソースより優先されます。",
       "title": "Skill",
@@ -2991,9 +2976,8 @@
       "backToLibrary": "戻る",
       "viewSkill": "Skill を表示",
       "uninstallPackage": "Package をアンインストール",
-      "uninstallPackageConfirm": "この Package をアンインストールしますか？Plugin が使用中の Skill は保持されます。",
+      "uninstallPackageConfirm": "この Package をアンインストールしますか？",
       "uninstallPackageSuccess": "Package をアンインストールしました",
-      "uninstallPackageReferenceRemoved": "直接インストールを解除しました。Package は Plugin で引き続き使用されます",
       "uninstallPackageFailed": "Package のアンインストールに失敗しました",
       "packageSkillsUnavailable": "Package の Skill は現在利用できません",
       "close": "閉じる",
@@ -3006,7 +2990,6 @@
       "disabledBadge": "無効",
       "legacyBadge": "遺産",
       "compatBadge": "外部の",
-      "pluginBadge": "Plugin",
       "description": "説明",
       "descriptionPlaceholder": "Skillの説明を入力してください",
       "content": "コンテンツ",

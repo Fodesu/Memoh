@@ -15,181 +15,96 @@ import (
 
 type packageStoreStub struct {
 	Store
-	row                dbsqlc.BotSkillPackageInstallation
-	referenceCount     int64
-	countCalls         int
-	directUpsertErr    error
-	pluginUpsertErr    error
-	previousReferences []dbsqlc.ListBotPluginPackageReferencesRow
-	rows               []dbsqlc.ListBotSkillPackageInstallationsRow
-	deletedReferences  bool
-	deleteUnreferenced bool
+	row          dbsqlc.BotSkillPackageInstallation
+	rows         []dbsqlc.BotSkillPackageInstallation
+	upsertErr    error
+	deleteErr    error
+	upsertParams dbsqlc.UpsertBotSkillPackageInstallationParams
+	deleted      bool
 }
 
-func (s *packageStoreStub) ListBotSkillPackageInstallations(context.Context, pgtype.UUID) ([]dbsqlc.ListBotSkillPackageInstallationsRow, error) {
+func (s *packageStoreStub) ListBotSkillPackageInstallations(context.Context, pgtype.UUID) ([]dbsqlc.BotSkillPackageInstallation, error) {
 	return s.rows, nil
 }
 
-func (s *packageStoreStub) CountBotSkillPackageReferences(context.Context, pgtype.UUID) (int64, error) {
-	s.countCalls++
-	return s.referenceCount, nil
+func (s *packageStoreStub) UpsertBotSkillPackageInstallation(_ context.Context, arg dbsqlc.UpsertBotSkillPackageInstallationParams) (dbsqlc.BotSkillPackageInstallation, error) {
+	s.upsertParams = arg
+	return s.row, s.upsertErr
 }
 
-func (s *packageStoreStub) GetBotSkillPackageInstallationByID(context.Context, dbsqlc.GetBotSkillPackageInstallationByIDParams) (dbsqlc.BotSkillPackageInstallation, error) {
-	if !s.row.ID.Valid {
-		return dbsqlc.BotSkillPackageInstallation{}, pgx.ErrNoRows
+func (s *packageStoreStub) DeleteBotSkillPackageInstallation(context.Context, dbsqlc.DeleteBotSkillPackageInstallationParams) (dbsqlc.BotSkillPackageInstallation, error) {
+	if s.deleteErr == nil {
+		s.deleted = true
 	}
-	return s.row, nil
+	return s.row, s.deleteErr
 }
 
-func (s *packageStoreStub) UpsertDirectBotSkillPackageInstallation(context.Context, dbsqlc.UpsertDirectBotSkillPackageInstallationParams) (dbsqlc.BotSkillPackageInstallation, error) {
-	return s.row, s.directUpsertErr
-}
-
-func (s *packageStoreStub) SetBotSkillPackageDirectlyInstalled(_ context.Context, arg dbsqlc.SetBotSkillPackageDirectlyInstalledParams) (dbsqlc.BotSkillPackageInstallation, error) {
-	s.row.DirectlyInstalled = arg.DirectlyInstalled
-	return s.row, nil
-}
-
-func (s *packageStoreStub) DeleteBotSkillPackageInstallationIfUnreferenced(context.Context, dbsqlc.DeleteBotSkillPackageInstallationIfUnreferencedParams) (pgtype.UUID, error) {
-	if !s.deleteUnreferenced {
-		return pgtype.UUID{}, pgx.ErrNoRows
-	}
-	return s.row.ID, nil
-}
-
-func (s *packageStoreStub) ListBotPluginPackageReferences(context.Context, pgtype.UUID) ([]dbsqlc.ListBotPluginPackageReferencesRow, error) {
-	return s.previousReferences, nil
-}
-
-func (s *packageStoreStub) DeleteBotPluginPackageReferences(context.Context, pgtype.UUID) error {
-	s.deletedReferences = true
-	return nil
-}
-
-func (s *packageStoreStub) UpsertPluginBotSkillPackageInstallation(context.Context, dbsqlc.UpsertPluginBotSkillPackageInstallationParams) (dbsqlc.BotSkillPackageInstallation, error) {
-	return s.row, s.pluginUpsertErr
-}
-
-func (*packageStoreStub) UpsertBotPluginPackageReference(context.Context, dbsqlc.UpsertBotPluginPackageReferenceParams) (dbsqlc.BotPluginPackageReference, error) {
-	return dbsqlc.BotPluginPackageReference{}, nil
-}
-
-func TestRecordDirectMapsRevisionConflict(t *testing.T) {
-	store := &packageStoreStub{directUpsertErr: pgx.ErrNoRows}
+func TestRecordUpsertsPackageRevision(t *testing.T) {
+	row := packageRow()
+	store := &packageStoreStub{row: row}
 	service := NewService(store)
 
-	_, err := service.RecordDirect(context.Background(), packageUUID(1).String(), "", Requirement{
-		RegistryID: "openai",
+	got, err := service.Record(context.Background(), row.BotID.String(), "native", Requirement{
+		RegistryID: row.RegistryID,
+		PackageID:  row.PackageID,
+		Revision:   row.Revision,
+	})
+	if err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	if got.PackageID != row.PackageID || got.Revision != row.Revision {
+		t.Fatalf("Record() = %+v, want Package %q at revision %q", got, row.PackageID, row.Revision)
+	}
+	if store.upsertParams.WorkspaceTargetID != "native" || store.upsertParams.RegistryID != row.RegistryID {
+		t.Fatalf("upsert params = %+v", store.upsertParams)
+	}
+}
+
+func TestRecordRejectsInvalidRequirement(t *testing.T) {
+	store := &packageStoreStub{row: packageRow()}
+	_, err := NewService(store).Record(context.Background(), packageUUID(1).String(), "native", Requirement{
+		RegistryID: "OpenAI",
 		PackageID:  "documents",
 		Revision:   strings.Repeat("a", 64),
 	})
-	if !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("RecordDirect() error = %v, want ErrRevisionConflict", err)
+	if err == nil {
+		t.Fatal("Record() accepted an invalid Registry ID")
 	}
 }
 
-func TestListForTargetExcludesOtherWorkspaceTargets(t *testing.T) {
-	native := packageRow(true)
-	native.WorkspaceTargetID = "native"
-	remote := packageRow(false)
+func TestListForTargetFiltersPackages(t *testing.T) {
+	native := packageRow()
+	remote := packageRow()
 	remote.ID = packageUUID(4)
 	remote.WorkspaceTargetID = "remote"
-	store := &packageStoreStub{rows: []dbsqlc.ListBotSkillPackageInstallationsRow{
-		listPackageRow(native, 2), listPackageRow(remote, 1),
-	}}
+	store := &packageStoreStub{rows: []dbsqlc.BotSkillPackageInstallation{native, remote}}
 
 	items, err := NewService(store).ListForTarget(context.Background(), native.BotID.String(), "native")
 	if err != nil {
 		t.Fatalf("ListForTarget() error = %v", err)
 	}
-	if len(items) != 1 || items[0].WorkspaceTargetID != "native" || items[0].PluginReferenceCount != 2 {
-		t.Fatalf("ListForTarget() = %+v, want only native", items)
-	}
-	if store.countCalls != 0 {
-		t.Fatalf("ListForTarget() issued %d per-Package reference count queries", store.countCalls)
+	if len(items) != 1 || items[0].WorkspaceTargetID != "native" {
+		t.Fatalf("ListForTarget() = %+v, want only native Package", items)
 	}
 }
 
-func listPackageRow(row dbsqlc.BotSkillPackageInstallation, referenceCount int64) dbsqlc.ListBotSkillPackageInstallationsRow {
-	return dbsqlc.ListBotSkillPackageInstallationsRow{
-		ID: row.ID, TeamID: row.TeamID, BotID: row.BotID, WorkspaceTargetID: row.WorkspaceTargetID,
-		RegistryID: row.RegistryID, PackageID: row.PackageID, Revision: row.Revision,
-		DirectlyInstalled: row.DirectlyInstalled, InstalledAt: row.InstalledAt, UpdatedAt: row.UpdatedAt,
-		PluginReferenceCount: referenceCount,
+func TestDeleteMapsMissingInstallation(t *testing.T) {
+	store := &packageStoreStub{row: packageRow(), deleteErr: pgx.ErrNoRows}
+	_, err := NewService(store).Delete(context.Background(), store.row.BotID.String(), store.row.ID.String())
+	if !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("Delete() error = %v, want ErrNotInstalled", err)
+	}
+	if store.deleted {
+		t.Fatal("Delete() marked a missing Package as deleted")
 	}
 }
 
-func TestReleaseDirectKeepsPackageReferencedByPlugin(t *testing.T) {
-	row := packageRow(true)
-	store := &packageStoreStub{row: row, referenceCount: 1}
-	service := NewService(store)
-
-	installation, removed, err := service.ReleaseDirect(context.Background(), row.BotID.String(), row.ID.String())
-	if err != nil {
-		t.Fatalf("ReleaseDirect() error = %v", err)
-	}
-	if removed || installation.DirectlyInstalled || installation.PluginReferenceCount != 1 {
-		t.Fatalf("ReleaseDirect() = removed %v, installation %+v", removed, installation)
-	}
-}
-
-func TestReleaseDirectDeletesPackageWithoutPluginReference(t *testing.T) {
-	row := packageRow(true)
-	store := &packageStoreStub{row: row, deleteUnreferenced: true}
-	service := NewService(store)
-
-	_, removed, err := service.ReleaseDirect(context.Background(), row.BotID.String(), row.ID.String())
-	if err != nil {
-		t.Fatalf("ReleaseDirect() error = %v", err)
-	}
-	if !removed {
-		t.Fatal("ReleaseDirect() retained a Package with no owner")
-	}
-}
-
-func TestReplacePluginReferencesMapsRevisionConflict(t *testing.T) {
-	row := packageRow(false)
-	store := &packageStoreStub{row: row, pluginUpsertErr: pgx.ErrNoRows}
-	_, err := ReplacePluginReferences(
-		context.Background(),
-		store,
-		row.BotID,
-		packageUUID(3),
-		"",
-		[]Requirement{{RegistryID: "openai", PackageID: "documents", Revision: strings.Repeat("b", 64)}},
-	)
-	if !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("ReplacePluginReferences() error = %v, want ErrRevisionConflict", err)
-	}
-}
-
-func TestReplacePluginReferencesDeletesOrphanedPreviousPackage(t *testing.T) {
-	row := packageRow(false)
-	store := &packageStoreStub{
-		row:                row,
-		deleteUnreferenced: true,
-		previousReferences: []dbsqlc.ListBotPluginPackageReferencesRow{{
-			PackageInstallationID: row.ID,
-			BotID:                 row.BotID, RegistryID: row.RegistryID, PackageID: row.PackageID,
-			Revision: row.Revision, DirectlyInstalled: false,
-		}},
-	}
-	orphaned, err := ReplacePluginReferences(context.Background(), store, row.BotID, packageUUID(3), "", nil)
-	if err != nil {
-		t.Fatalf("ReplacePluginReferences() error = %v", err)
-	}
-	if !store.deletedReferences || len(orphaned) != 1 || orphaned[0].PackageID != row.PackageID {
-		t.Fatalf("ReplacePluginReferences() orphaned = %+v, deleted references = %v", orphaned, store.deletedReferences)
-	}
-}
-
-func packageRow(direct bool) dbsqlc.BotSkillPackageInstallation {
+func packageRow() dbsqlc.BotSkillPackageInstallation {
 	now := pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	return dbsqlc.BotSkillPackageInstallation{
-		ID: packageUUID(2), BotID: packageUUID(1),
+		ID: packageUUID(2), BotID: packageUUID(1), WorkspaceTargetID: "native",
 		RegistryID: "openai", PackageID: "documents", Revision: strings.Repeat("a", 64),
-		DirectlyInstalled: direct, InstalledAt: now, UpdatedAt: now,
+		InstalledAt: now, UpdatedAt: now,
 	}
 }
 

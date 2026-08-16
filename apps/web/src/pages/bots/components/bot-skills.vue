@@ -30,7 +30,7 @@
         {{ $t('bots.skills.addSkill') }}
       </Button>
       <ConfirmPopover
-        v-if="selectedPackage?.directlyInstalled"
+        v-if="selectedPackage"
         :message="$t('bots.skills.uninstallPackageConfirm')"
         :cancel-text="$t('common.cancel')"
         :confirm-text="$t('common.confirm')"
@@ -165,7 +165,7 @@
             v-for="pkg in skillPackages"
             :key="pkg.key"
             align="start"
-            class="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            :class="packageRowClass"
             role="button"
             tabindex="0"
             @click="openPackage(pkg.key)"
@@ -516,10 +516,11 @@ type SkillPackage = {
   packageId: string
   workspaceTargetId: string
   revision: string
-  directlyInstalled: boolean
-  pluginReferenceCount: number
   skills: SkillItem[]
 }
+
+// The whole SettingsRow is the Package navigation target, so this page owns its interaction state.
+const packageRowClass = 'cursor-pointer transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset' /* ui-allow-style */
 
 const props = defineProps<{
   botId: string
@@ -592,8 +593,6 @@ const skillPackages = computed<SkillPackage[]>(() => {
         packageId: item.package_id,
         workspaceTargetId,
         revision: item.revision,
-        directlyInstalled: item.directly_installed,
-        pluginReferenceCount: item.plugin_reference_count,
         skills: skillsByPackage.get(identity) || [],
       }
     })
@@ -856,16 +855,14 @@ function closePackage() {
 
 async function handleUninstallPackage() {
   const pkg = selectedPackage.value
-  if (!pkg?.directlyInstalled) return
+  if (!pkg) return
   isUninstallingPackage.value = true
   try {
-    const { data } = await deleteBotsByBotIdSupermarketPackagesByInstallationId({
+    await deleteBotsByBotIdSupermarketPackagesByInstallationId({
       path: { bot_id: props.botId, installation_id: pkg.installationId },
       throwOnError: true,
     })
-    toast.success(t(data.removed_files
-      ? 'bots.skills.uninstallPackageSuccess'
-      : 'bots.skills.uninstallPackageReferenceRemoved'))
+    toast.success(t('bots.skills.uninstallPackageSuccess'))
     closePackage()
     await fetchSkillLibrary()
   } catch (error) {
@@ -889,8 +886,6 @@ function sourceKindLabel(kind?: string) {
       return t('bots.skills.legacyBadge')
     case 'compat':
       return t('bots.skills.compatBadge')
-    case 'plugin':
-      return t('bots.skills.pluginBadge')
     default:
       return t('bots.skills.managedBadge')
   }

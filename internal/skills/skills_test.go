@@ -254,7 +254,6 @@ func TestDeletableSkillDirForSourcePath(t *testing.T) {
 		"relative/SKILL.md",
 		pathJoin(ManagedDirPath, "alpha", "README.md"),
 		"/data/.agents/skills/alpha/SKILL.md",
-		pathJoin(PluginDirPath, "github", "skills", "review", "SKILL.md"),
 		pathJoin(ManagedDirPath, "..", "escape", "SKILL.md"),
 	} {
 		if _, err := DeletableSkillDirForSourcePath(sourcePath); !errors.Is(err, bridge.ErrBadRequest) {
@@ -321,45 +320,6 @@ func TestPlanUpsertCreateRenameAndRejectRegistryEdit(t *testing.T) {
 	}
 	if override.WritePath != pathJoin(ManagedDirPath, UserSkillNamespace, UserSkillPackage, "alpha", "SKILL.md") || override.RenameFromDir != "" {
 		t.Fatalf("PlanUpsert(override) = %+v", override)
-	}
-}
-
-func TestPluginPathsForIDRejectEscapingIDs(t *testing.T) {
-	for _, id := range []string{
-		".", "..", ".plugin", "alpha.beta", "alpha..beta", "alpha/beta", "Alpha", "alpha+beta",
-		"con", "nul.txt", " github ", strings.Repeat("a", maxPortableResourceIDBytes+1),
-	} {
-		for name, fn := range map[string]func(string) (string, error){
-			"PluginDirForID":        PluginDirForID,
-			"PluginHooksPathForID":  PluginHooksPathForID,
-			"PluginScriptsDirForID": PluginScriptsDirForID,
-		} {
-			if _, err := fn(id); !errors.Is(err, bridge.ErrBadRequest) {
-				t.Fatalf("%s(%q) err = %v, want ErrBadRequest", name, id, err)
-			}
-		}
-	}
-
-	gotRoot, err := PluginDirForID("github")
-	if err != nil {
-		t.Fatalf("PluginDirForID(valid) returned error: %v", err)
-	}
-	if gotRoot != pathJoin(PluginDirPath, "github") {
-		t.Fatalf("PluginDirForID(valid) = %q, want %q", gotRoot, pathJoin(PluginDirPath, "github"))
-	}
-	gotHooks, err := PluginHooksPathForID("github")
-	if err != nil {
-		t.Fatalf("PluginHooksPathForID(valid) returned error: %v", err)
-	}
-	if gotHooks != pathJoin(PluginDirPath, "github", "hooks.json") {
-		t.Fatalf("PluginHooksPathForID(valid) = %q, want %q", gotHooks, pathJoin(PluginDirPath, "github", "hooks.json"))
-	}
-	gotScripts, err := PluginScriptsDirForID("github")
-	if err != nil {
-		t.Fatalf("PluginScriptsDirForID(valid) returned error: %v", err)
-	}
-	if gotScripts != pathJoin(PluginDirPath, "github", "scripts") {
-		t.Fatalf("PluginScriptsDirForID(valid) = %q, want %q", gotScripts, pathJoin(PluginDirPath, "github", "scripts"))
 	}
 }
 

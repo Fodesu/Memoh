@@ -2094,7 +2094,6 @@
       "compaction": "上下文压缩",
       "schedule": "定时任务",
       "history": "对话历史",
-      "plugins": "Plugins",
       "connectors": "连接器",
       "skills": "技能",
       "email": "邮件",
@@ -2956,21 +2955,6 @@
         "note": "备注"
       }
     },
-    "plugins": {
-      "title": "Plugins",
-      "intro": "管理已安装的 Plugin 与 Skill Package。",
-      "installedTitle": "已安装 Plugin",
-      "emptyTitle": "暂无 Plugin",
-      "emptyDescription": "从市场安装 Plugin，为 Bot 增加 Skill Package 与自动化能力。",
-      "loadFailed": "加载 Plugin 失败",
-      "enableSuccess": "Plugin 已启用",
-      "disableSuccess": "Plugin 已禁用",
-      "status": {
-        "ready": "就绪",
-        "disabled": "已禁用",
-        "uninstalled": "已卸载"
-      }
-    },
     "skills": {
       "title": "技能",
       "discoveryTitle": "技能路径",
@@ -3001,9 +2985,8 @@
       "backToLibrary": "返回",
       "viewSkill": "查看 Skill",
       "uninstallPackage": "卸载 Package",
-      "uninstallPackageConfirm": "确定卸载这个 Package 吗？Plugin 仍在使用的 Skill 会继续保留。",
+      "uninstallPackageConfirm": "确定卸载这个 Package 吗？",
       "uninstallPackageSuccess": "Package 已卸载",
-      "uninstallPackageReferenceRemoved": "已移除直接安装；Plugin 仍在使用这个 Package",
       "uninstallPackageFailed": "卸载 Package 失败",
       "packageSkillsUnavailable": "Package 中的 Skill 当前不可用",
       "close": "关闭",
@@ -3017,7 +3000,6 @@
       "disabledBadge": "已禁用",
       "legacyBadge": "旧版",
       "compatBadge": "外部",
-      "pluginBadge": "Plugin",
       "description": "描述",
       "descriptionPlaceholder": "输入技能描述",
       "content": "内容",

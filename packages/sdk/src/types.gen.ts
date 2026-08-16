@@ -1238,6 +1238,7 @@ export type ConversationUiTurn = {
 };
 
 export type ConversationUiUserInput = {
+    answers?: Array<UserinputUiAnswer>;
     can_respond?: boolean;
     questions?: Array<UserinputUiQuestion>;
     short_id?: number;
@@ -1416,18 +1417,12 @@ export type GithubComMemohaiMemohInternalMcpConnection = {
     id?: string;
     is_active?: boolean;
     last_probed_at?: string;
-    managed_by_plugin_installation_id?: string;
-    managed_resource_key?: string;
-    metadata?: {
-        [key: string]: unknown;
-    };
     name?: string;
     status?: string;
     status_message?: string;
     tools_cache?: Array<McpToolDescriptor>;
     type?: string;
     updated_at?: string;
-    visible?: boolean;
 };
 
 export type HandlersAcpClaudeCodeOAuthAuthorizeResponse = {
@@ -2281,6 +2276,12 @@ export type HandlersCreateSessionRequest = {
     session_mode?: string;
     title?: string;
     type?: string;
+    /**
+     * WorkdirID immutably binds the new session to a bot workdir. The
+     * workdir decides the session's workspace target and working directory
+     * for its whole life; there is no way to change or clear it later.
+     */
+    workdir_id?: string;
 };
 
 export type HandlersDisplayInfoResponse = {
@@ -2681,71 +2682,6 @@ export type ModelsUpdateRequest = {
     name?: string;
     provider_id?: string;
     type?: ModelsModelType;
-};
-
-export type PluginsAuthor = {
-    email?: string;
-    name: string;
-};
-
-export type PluginsIcon = {
-    kind?: string;
-    name?: string;
-    url?: string;
-};
-
-export type PluginsInstallation = {
-    bot_id?: string;
-    enabled?: boolean;
-    id?: string;
-    installed_at?: string;
-    manifest?: PluginsManifest;
-    metadata?: {
-        [key: string]: unknown;
-    };
-    plugin_id?: string;
-    plugin_name?: string;
-    resources?: Array<PluginsResource>;
-    status?: string;
-    updated_at?: string;
-    version?: string;
-    workspace_target_id?: string;
-};
-
-export type PluginsListResponse = {
-    items?: Array<PluginsInstallation>;
-};
-
-export type PluginsManifest = {
-    author: PluginsAuthor;
-    capabilities?: Array<string>;
-    description: string;
-    homepage?: string;
-    icon?: PluginsIcon;
-    id: string;
-    name: string;
-    packages?: Array<PluginsPackageReference>;
-    schema_version: string;
-    tags?: Array<string>;
-    version: string;
-};
-
-export type PluginsPackageReference = {
-    package_id: string;
-    registry_id: string;
-};
-
-export type PluginsResource = {
-    created_at?: string;
-    id?: string;
-    metadata?: {
-        [key: string]: unknown;
-    };
-    resource_id?: string;
-    resource_key?: string;
-    resource_type?: string;
-    status?: string;
-    updated_at?: string;
 };
 
 export type ProvidersCountResponse = {
@@ -3179,6 +3115,7 @@ export type SessionSession = {
     title?: string;
     type?: string;
     updated_at?: string;
+    workdir_id?: string;
 };
 
 export type SettingsSettings = {
@@ -3250,6 +3187,13 @@ export type SettingsUpsertRequest = {
     chat_acp_agent_id?: string;
     chat_acp_project_mode?: string;
     chat_acp_project_path?: string;
+    /**
+     * Reference fields below use pointer semantics so autosaving clients can
+     * clear a selection: nil = keep current, "" = clear, value = set. The
+     * service mirrors each into a `<field>_set` SQL flag (same pattern as
+     * FetchProviderID / CompactionModelID); plain strings would make ""
+     * indistinguishable from "not sent".
+     */
     chat_model_id?: string;
     chat_runtime?: string;
     command_ui_language?: string;
@@ -3262,8 +3206,16 @@ export type SettingsUpsertRequest = {
     fetch_provider_id?: string;
     heartbeat_enabled?: boolean;
     heartbeat_interval?: number;
+    /**
+     * HeartbeatModelID joins the pointer group above (nil/""/value) so the
+     * heartbeat tab's autosave can clear a model override.
+     */
     heartbeat_model_id?: string;
     image_model_id?: string;
+    /**
+     * Language follows the same pointer rule; "" normalizes to DefaultLanguage
+     * ("auto") rather than clearing the column.
+     */
     language?: string;
     memory_provider_id?: string;
     overlay_config?: {
@@ -3284,11 +3236,9 @@ export type SettingsUpsertRequest = {
 
 export type SkillpackagesInstallation = {
     bot_id: string;
-    directly_installed: boolean;
     id: string;
     installed_at: string;
     package_id: string;
-    plugin_reference_count: number;
     registry_id: string;
     revision: string;
     updated_at: string;
@@ -3306,7 +3256,15 @@ export type SkillsSafeCatalogItem = {
 export type SupermarketUninstallPackageResponse = {
     installation: SkillpackagesInstallation;
     ok: boolean;
-    removed_files: boolean;
+};
+
+export type UserinputUiAnswer = {
+    custom_text?: string;
+    question?: string;
+    question_id?: string;
+    selected?: Array<UserinputUiOption>;
+    skipped?: boolean;
+    text?: string;
 };
 
 export type UserinputUiOption = {
@@ -3428,6 +3386,33 @@ export type WebhooktunnelStatus = {
     mode?: string;
     public_base_url?: string;
     status?: string;
+};
+
+export type WorkdirCreateRequest = {
+    name: string;
+    path: string;
+    workspace_target_id?: string;
+};
+
+export type WorkdirUpdateRequest = {
+    name: string;
+};
+
+export type WorkdirWorkdir = {
+    archived?: boolean;
+    bot_id?: string;
+    created_at?: string;
+    created_by_user_id?: string;
+    id?: string;
+    name?: string;
+    path?: string;
+    target_kind?: string;
+    updated_at?: string;
+    workspace_target_id?: string;
+};
+
+export type WorkdirWorkdirsResponse = {
+    workdirs?: Array<WorkdirWorkdir>;
 };
 
 export type WorkspaceSetPrimaryWorkspaceTargetRequest = {
@@ -3746,6 +3731,10 @@ export type GetBotsNameAvailabilityData = {
          * Candidate bot name
          */
         name: string;
+        /**
+         * Bot ID to exclude from the conflict check (used when renaming)
+         */
+        exclude_bot_id?: string;
     };
     url: '/bots/name-availability';
 };
@@ -7258,12 +7247,7 @@ export type PostBotsByBotIdHooksTestResponse = PostBotsByBotIdHooksTestResponses
 export type GetBotsByBotIdMcpData = {
     body?: never;
     path?: never;
-    query?: {
-        /**
-         * Include plugin-managed hidden MCP connections
-         */
-        include_managed?: boolean;
-    };
+    query?: never;
     url: '/bots/{bot_id}/mcp';
 };
 
@@ -8567,256 +8551,6 @@ export type GetBotsByBotIdMessagesLocateResponses = {
 
 export type GetBotsByBotIdMessagesLocateResponse = GetBotsByBotIdMessagesLocateResponses[keyof GetBotsByBotIdMessagesLocateResponses];
 
-export type GetBotsByBotIdPluginsData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins';
-};
-
-export type GetBotsByBotIdPluginsErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdPluginsError = GetBotsByBotIdPluginsErrors[keyof GetBotsByBotIdPluginsErrors];
-
-export type GetBotsByBotIdPluginsResponses = {
-    /**
-     * OK
-     */
-    200: PluginsListResponse;
-};
-
-export type GetBotsByBotIdPluginsResponse = GetBotsByBotIdPluginsResponses[keyof GetBotsByBotIdPluginsResponses];
-
-export type DeleteBotsByBotIdPluginsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}';
-};
-
-export type DeleteBotsByBotIdPluginsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type DeleteBotsByBotIdPluginsByIdError = DeleteBotsByBotIdPluginsByIdErrors[keyof DeleteBotsByBotIdPluginsByIdErrors];
-
-export type DeleteBotsByBotIdPluginsByIdResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type GetBotsByBotIdPluginsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}';
-};
-
-export type GetBotsByBotIdPluginsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdPluginsByIdError = GetBotsByBotIdPluginsByIdErrors[keyof GetBotsByBotIdPluginsByIdErrors];
-
-export type GetBotsByBotIdPluginsByIdResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type GetBotsByBotIdPluginsByIdResponse = GetBotsByBotIdPluginsByIdResponses[keyof GetBotsByBotIdPluginsByIdResponses];
-
-export type PostBotsByBotIdPluginsByIdDisableData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/disable';
-};
-
-export type PostBotsByBotIdPluginsByIdDisableErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdDisableError = PostBotsByBotIdPluginsByIdDisableErrors[keyof PostBotsByBotIdPluginsByIdDisableErrors];
-
-export type PostBotsByBotIdPluginsByIdDisableResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type PostBotsByBotIdPluginsByIdDisableResponse = PostBotsByBotIdPluginsByIdDisableResponses[keyof PostBotsByBotIdPluginsByIdDisableResponses];
-
-export type PostBotsByBotIdPluginsByIdEnableData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/enable';
-};
-
-export type PostBotsByBotIdPluginsByIdEnableErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdEnableError = PostBotsByBotIdPluginsByIdEnableErrors[keyof PostBotsByBotIdPluginsByIdEnableErrors];
-
-export type PostBotsByBotIdPluginsByIdEnableResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type PostBotsByBotIdPluginsByIdEnableResponse = PostBotsByBotIdPluginsByIdEnableResponses[keyof PostBotsByBotIdPluginsByIdEnableResponses];
-
-export type PostBotsByBotIdPluginsByIdUninstallData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/uninstall';
-};
-
-export type PostBotsByBotIdPluginsByIdUninstallErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdUninstallError = PostBotsByBotIdPluginsByIdUninstallErrors[keyof PostBotsByBotIdPluginsByIdUninstallErrors];
-
-export type PostBotsByBotIdPluginsByIdUninstallResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type PostBotsByBotIdPluginsByIdUninstallResponse = PostBotsByBotIdPluginsByIdUninstallResponses[keyof PostBotsByBotIdPluginsByIdUninstallResponses];
-
 export type PostBotsByBotIdQuickActionsExecuteData = {
     /**
      * Quick action payload
@@ -9165,6 +8899,10 @@ export type GetBotsByBotIdSessionsData = {
          * Only include child sessions under this parent session.
          */
         parent_session_id?: string;
+        /**
+         * Only include sessions bound to this workdir. The literal none selects sessions with no workdir.
+         */
+        workdir_id?: string;
         /**
          * Page size (1..200). Defaults to 50.
          */
@@ -10156,10 +9894,6 @@ export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors = {
      * Not Found
      */
     404: HandlersErrorResponse;
-    /**
-     * Conflict
-     */
-    409: HandlersErrorResponse;
 };
 
 export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdError = DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors[keyof DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors];
@@ -10815,6 +10549,171 @@ export type GetBotsByBotIdWebWsErrors = {
 };
 
 export type GetBotsByBotIdWebWsError = GetBotsByBotIdWebWsErrors[keyof GetBotsByBotIdWebWsErrors];
+
+export type GetBotsByBotIdWorkdirsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: {
+        /**
+         * Include archived workdirs
+         */
+        include_archived?: boolean;
+    };
+    url: '/bots/{bot_id}/workdirs';
+};
+
+export type GetBotsByBotIdWorkdirsErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdWorkdirsError = GetBotsByBotIdWorkdirsErrors[keyof GetBotsByBotIdWorkdirsErrors];
+
+export type GetBotsByBotIdWorkdirsResponses = {
+    /**
+     * OK
+     */
+    200: WorkdirWorkdirsResponse;
+};
+
+export type GetBotsByBotIdWorkdirsResponse = GetBotsByBotIdWorkdirsResponses[keyof GetBotsByBotIdWorkdirsResponses];
+
+export type PostBotsByBotIdWorkdirsData = {
+    /**
+     * Workdir
+     */
+    body: WorkdirCreateRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workdirs';
+};
+
+export type PostBotsByBotIdWorkdirsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdWorkdirsError = PostBotsByBotIdWorkdirsErrors[keyof PostBotsByBotIdWorkdirsErrors];
+
+export type PostBotsByBotIdWorkdirsResponses = {
+    /**
+     * Created
+     */
+    201: WorkdirWorkdir;
+};
+
+export type PostBotsByBotIdWorkdirsResponse = PostBotsByBotIdWorkdirsResponses[keyof PostBotsByBotIdWorkdirsResponses];
+
+export type DeleteBotsByBotIdWorkdirsByWorkdirIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Workdir ID
+         */
+        workdir_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workdirs/{workdir_id}';
+};
+
+export type DeleteBotsByBotIdWorkdirsByWorkdirIdErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type DeleteBotsByBotIdWorkdirsByWorkdirIdError = DeleteBotsByBotIdWorkdirsByWorkdirIdErrors[keyof DeleteBotsByBotIdWorkdirsByWorkdirIdErrors];
+
+export type DeleteBotsByBotIdWorkdirsByWorkdirIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PatchBotsByBotIdWorkdirsByWorkdirIdData = {
+    /**
+     * New name
+     */
+    body: WorkdirUpdateRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Workdir ID
+         */
+        workdir_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workdirs/{workdir_id}';
+};
+
+export type PatchBotsByBotIdWorkdirsByWorkdirIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PatchBotsByBotIdWorkdirsByWorkdirIdError = PatchBotsByBotIdWorkdirsByWorkdirIdErrors[keyof PatchBotsByBotIdWorkdirsByWorkdirIdErrors];
+
+export type PatchBotsByBotIdWorkdirsByWorkdirIdResponses = {
+    /**
+     * OK
+     */
+    200: WorkdirWorkdir;
+};
+
+export type PatchBotsByBotIdWorkdirsByWorkdirIdResponse = PatchBotsByBotIdWorkdirsByWorkdirIdResponses[keyof PatchBotsByBotIdWorkdirsByWorkdirIdResponses];
 
 export type GetBotsByBotIdWorkspaceTargetsData = {
     body?: never;

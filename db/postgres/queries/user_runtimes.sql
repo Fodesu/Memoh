@@ -216,14 +216,6 @@ WHERE binding.team_id = public.memoh_current_team_id()
       AND package.bot_id = binding.bot_id
       AND package.workspace_target_id = binding.id::text
   )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM bot_plugin_installations AS plugin
-    WHERE plugin.team_id = public.memoh_current_team_id()
-      AND plugin.bot_id = binding.bot_id
-      AND plugin.status <> 'uninstalled'
-      AND plugin.workspace_target_id = binding.id::text
-  )
 RETURNING id;
 
 -- name: ListBotRemoteRuntimeGrantsByRuntimeOwner :many

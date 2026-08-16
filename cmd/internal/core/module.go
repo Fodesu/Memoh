@@ -19,12 +19,10 @@ import (
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/oauthclients"
-	pluginspkg "github.com/memohai/memoh/internal/plugins"
 	"github.com/memohai/memoh/internal/policy"
 	"github.com/memohai/memoh/internal/providertemplates"
 	"github.com/memohai/memoh/internal/schedule"
 	"github.com/memohai/memoh/internal/searchproviders"
-	"github.com/memohai/memoh/internal/settings"
 	"github.com/memohai/memoh/internal/skillpackages"
 	"github.com/memohai/memoh/internal/userruntime"
 	videopkg "github.com/memohai/memoh/internal/video"
@@ -82,7 +80,6 @@ func ServerModule() fx.Option {
 			provideWorkspaceManager,
 			workdir.NewService,
 			provideBridgeProvider,
-			providePluginBridgeProvider,
 			provideMemoryLLM,
 			memprovider.NewService,
 			provideMemoryProviderRegistry,
@@ -100,7 +97,6 @@ func ServerModule() fx.Option {
 			connectors.NewService,
 			connectors.NewSource,
 			provideSkillPackageService,
-			pluginspkg.NewService,
 			mcp.NewToolSessionContextStore,
 			provideAudioRegistry,
 			audiopkg.NewService,
