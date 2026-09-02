@@ -142,6 +142,7 @@
       "response_interrupted": "模型响应意外中断，请重试。"
     },
     "queue_no_active_run": "当前回复已经结束，消息仍保留在队列中。",
+    "queue_admission_overloaded": "队列当前繁忙，请稍后重试。",
     "queue_admission_unavailable": "队列服务暂时不可用，请稍后重试。",
     "queue_item_not_pending": "这条消息已不在待处理队列中。",
     "profile": {

@@ -178,6 +178,8 @@ func queueAdmissionError(err error) error {
 		return apperror.New(apperror.CodeQueueNoActiveRun, nil)
 	case errors.Is(err, queue.ErrInvocationConflict):
 		return apperror.New(apperror.CodeSessionInvocationConflict, nil)
+	case errors.Is(err, queue.ErrAdmissionOverloaded):
+		return apperror.New(apperror.CodeQueueAdmissionOverloaded, nil)
 	case errors.Is(err, queue.ErrInvalidReference):
 		return apperror.New(apperror.CodeQueueRequestInvalid, nil)
 	default:

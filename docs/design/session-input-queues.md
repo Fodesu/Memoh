@@ -62,7 +62,7 @@ Memoh 的每次模型调用是一个 run，归属于一个会话，由 `session_
 
 ## 3. 迁移
 
-迁移 `0144_session_input_queues` 新增三张表和一列，`0001_init.up.sql` 同步更新。本次 PR 删除了原分支为 Redis 路径引入的 `ingress_sequence` 列，以及 0145 至 0147 合并进来后残留的 DROP INDEX 语句。
+迁移 `0146_session_input_queues` 新增三张表和一列，`0001_init.up.sql` 同步更新。本次 PR 删除了原分支为 Redis 路径引入的 `ingress_sequence` 列，以及 0145 至 0147 合并进来后残留的 DROP INDEX 语句。
 
 ### 3.1 对象
 
@@ -92,7 +92,7 @@ ALTER TABLE public.session_runs
 
 原因：普通外键创建时扫描已有数据，扫描 FORCE RLS 表会调用 `memoh_current_team_id()`，迁移角色没有 team context 时失败。NOT VALID 跳过历史扫描，新增和更新的行仍受约束。该列在本迁移内新建，历史值全为 NULL，验证结果恒为真。仓库中 0129 的 `bot_sessions_workdir_id_fkey` 使用相同写法，属于既定处理方式。已在 dev 库以超级用户执行 `VALIDATE CONSTRAINT` 成功。
 
-待处理：可在 0144 末尾以 DO 块尝试 VALIDATE 并捕获 42501，有 team context 的角色直接得到已验证状态，受限角色保持 NOT VALID。
+迁移末尾以 DO 块尝试 `VALIDATE CONSTRAINT`，捕获 `insufficient_privilege` 后跳过。有 team context 的角色（超级用户、开发环境）在迁移内直接得到已验证状态；受限角色保持 NOT VALID，迁移不失败。已在 dev 库分别以受限角色与超级用户验证：前者输出 NOTICE 且 `convalidated` 为 false，后者为 true。
 
 ### 3.4 回滚
 
@@ -103,6 +103,8 @@ down 迁移按逆序删除外键、索引、列与表。已在 dev 库执行 dow
 ### 4.1 入队
 
 单条语句完成锁定、校验、分配位置与插入。会话行 `FOR UPDATE` 让同会话并发入队串行化，position 由锁内 `max + 1` 分配。活跃 run 在同一语句内重读，bot 处于 deleting 状态时不接受。
+
+service 层以自动提交执行这条语句，不再包裹显式事务。单条语句本身原子，去掉 BEGIN 与 COMMIT 两次往返不改变语义。service 层另有进程级准入门限：同时执行中的入队语句上限 64（约连接池的 2 倍），超出立即返回 `ErrAdmissionOverloaded`，HTTP 映射为 429，客户端用同一 invocation_id 重试。
 
 ```sql
 WITH locked_session AS MATERIALIZED (
@@ -217,10 +219,11 @@ Claim 是单语句 CAS：取 target_run_id 匹配、status 为 accepted 的最�
 | `queue_no_active_run` | 409 | 入队时会话没有活跃 run |
 | `session_runtime.invocation_conflict` | 409 | 同一 invocation_id 携带不同 payload 重试 |
 | `queue_item_not_pending` | 409 | 编辑、取消、重排、promotion 的目标已不是 accepted |
+| `queue_admission_overloaded` | 429 | 进程内同时执行的入队语句超过上限，客户端以同一 invocation_id 重试 |
 | `queue_request_invalid` | 400 | 参数缺失或 id 格式错误 |
 | `queue_admission_unavailable` | 503 | service 未配置 |
 
-原分支为 Redis 路径定义的 `queue_admission_overloaded` 等三个错误码已删除。
+原分支为 Redis 路径定义的 `queue_target_run_not_active` 与 `queue_continuation_lost` 已删除。
 
 ### 5.4 运行时投影与前端刷新
 
@@ -283,6 +286,16 @@ Redis 分批层在返回回执前仍等待 PostgreSQL 提交，数据库提交�
 
 直连路径的上限构成：入队语句本身平均 0.32 毫秒；关闭 synchronous_commit 后吞吐从 7266 升到 10481 req/s，WAL fsync 约占上限的 30%；其余为 BEGIN 与 COMMIT 的两次往返和单机 CPU 争用。
 
+去掉显式事务后的对照，同一进程内交替运行 3 轮，每轮 5 万次入队，在途 64：
+
+| 轮 | 显式事务 req/s | 自动提交 req/s | 显式事务 p50 | 自动提交 p50 |
+|---|---|---|---|---|
+| 1 | 5855 | 8726 | 9.3 ms | 6.7 ms |
+| 2 | 6601 | 7346 | 9.2 ms | 7.9 ms |
+| 3 | 6546 | 4104 | 9.1 ms | 6.5 ms |
+
+p50 稳定下降约 25% 到 30%，与省去两次往返一致。吞吐在前两轮提升 11% 到 49%，第三轮自动提交出现一次 1.2 秒的尾部样本拉低了整体吞吐，原因未查明；本机同配置多次运行的吞吐波动本身约 20%。
+
 ### 6.3 延迟与在途数的关系
 
 三组直连数据中 p50 与"在途数 ÷ 吞吐"的计算值一致：
@@ -320,9 +333,9 @@ Redis 分批层在返回回执前仍等待 PostgreSQL 提交，数据库提交�
 | 事项 | 状态 | 说明 |
 |---|---|---|
 | p99 约 203 毫秒台阶 | 原因未查明 | 在 store 层与 HTTP 层均出现，位于 PostgreSQL 执行之外；需换环境重测 |
-| NOT VALID 外键补验 | 待处理 | 在迁移末尾以 DO 块尝试 VALIDATE，捕获 42501 跳过 |
-| 入队背压 | 未实施 | 进程级有界信号量，超出即返回 429；约 30 行；当前无触发负载 |
-| 去掉入队显式事务 | 未实施 | 单语句自动提交可省两次往返，预期 1.5 到 2 倍；语义不变；当前无触发负载 |
+| NOT VALID 外键补验 | 已完成 | 迁移末尾 DO 块尝试 VALIDATE，受限角色捕获 insufficient_privilege 跳过 |
+| 入队背压 | 已完成 | 进程级有界门限 64，超出返回 429 `queue_admission_overloaded` |
+| 去掉入队显式事务 | 已完成 | 入队改为自动提交单语句，p50 下降约 25% 到 30% |
 | 按 team_id 分片 | Memoh-cloud 规划 | 用户与 team 多对多，小 team 占多数，需多租户共享实例加目录库映射；另开分支 |
 | 人工 QA | 待验证 | run 进行中提交 follow-up 与 steer、拖动重排、promotion、run 结束后 continuation 自动接续 |
 

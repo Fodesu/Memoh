@@ -139,6 +139,7 @@
       "response_interrupted": "モデルの応答が中断されました。もう一度お試しください。"
     },
     "queue_no_active_run": "現在の応答は終了しました。メッセージはキューに残っています。",
+    "queue_admission_overloaded": "キューが混雑しています。しばらくしてから再試行してください。",
     "queue_admission_unavailable": "キューサービスは一時的に利用できません。しばらくしてから再試行してください。",
     "queue_item_not_pending": "このメッセージは待機中のキューにありません。",
     "profile": {

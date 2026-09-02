@@ -15,7 +15,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/session/queue"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
 // TestQueueWriteLoad drives the direct PostgreSQL enqueue path with a fixed
@@ -50,6 +49,16 @@ func TestQueueWriteLoad(t *testing.T) {
 
 func runWriteLoad(t *testing.T, ctx context.Context, queries *postgresstore.Queries, botIDs, sessionIDs []string, total, inFlight int) {
 	t.Helper()
+	store := queue.NewPostgresStore(queries)
+	runWriteLoadWith(t, ctx, "", botIDs, sessionIDs, total, inFlight, func(ctx context.Context, botID, sessionID string) error {
+		// Autocommit single statement, matching the application service.
+		_, err := store.EnqueueFollowUp(ctx, botID, sessionID, uuid.NewString(), uuid.NewString(), []byte(`{"text":"load"}`))
+		return err
+	})
+}
+
+func runWriteLoadWith(t *testing.T, ctx context.Context, label string, botIDs, sessionIDs []string, total, inFlight int, enqueue func(context.Context, string, string) error) {
+	t.Helper()
 	jobs := make(chan int)
 	latencies := make([]time.Duration, total)
 	var errCount atomic.Int64
@@ -62,10 +71,7 @@ func runWriteLoad(t *testing.T, ctx context.Context, queries *postgresstore.Quer
 			for i := range jobs {
 				idx := i % len(sessionIDs)
 				began := time.Now()
-				err := queries.InTx(ctx, func(q dbstore.Queries) error {
-					_, err := queue.NewPostgresStore(q).EnqueueFollowUp(ctx, botIDs[idx], sessionIDs[idx], uuid.NewString(), uuid.NewString(), []byte(`{"text":"load"}`))
-					return err
-				})
+				err := enqueue(ctx, botIDs[idx], sessionIDs[idx])
 				latencies[i] = time.Since(began)
 				if err != nil {
 					errCount.Add(1)
@@ -81,8 +87,12 @@ func runWriteLoad(t *testing.T, ctx context.Context, queries *postgresstore.Quer
 	wall := time.Since(start)
 	sort.Slice(latencies, func(a, b int) bool { return latencies[a] < latencies[b] })
 	pct := func(p float64) time.Duration { return latencies[int(float64(total-1)*p)] }
-	t.Logf("%-10d %-10.0f %-10s %-10s %-10s %-10s %-8d %-8s",
-		inFlight, float64(total)/wall.Seconds(),
+	head := any(inFlight)
+	if label != "" {
+		head = label
+	}
+	t.Logf("%-10v %-10.0f %-10s %-10s %-10s %-10s %-8d %-8s",
+		head, float64(total)/wall.Seconds(),
 		pct(0.50).Round(10*time.Microsecond), pct(0.95).Round(10*time.Microsecond),
 		pct(0.99).Round(10*time.Microsecond), latencies[total-1].Round(10*time.Microsecond),
 		errCount.Load(), wall.Round(time.Millisecond))

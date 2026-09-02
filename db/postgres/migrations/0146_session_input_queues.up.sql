@@ -209,3 +209,16 @@ ALTER TABLE public.session_runs
     REFERENCES public.session_follow_up_queue(team_id, item_id)
     ON DELETE RESTRICT
     NOT VALID;
+
+-- Validate the deferred foreign key when the migration role has a team
+-- context (superuser, dev). A restricted role without memoh.team_id cannot
+-- scan the FORCE RLS referenced table; it keeps NOT VALID, and new writes
+-- remain enforced either way.
+DO $$
+BEGIN
+    ALTER TABLE public.session_runs
+        VALIDATE CONSTRAINT session_runs_source_follow_up_item_fkey;
+EXCEPTION
+    WHEN insufficient_privilege THEN
+        RAISE NOTICE 'session_runs_source_follow_up_item_fkey left NOT VALID: no team context for validation';
+END $$;

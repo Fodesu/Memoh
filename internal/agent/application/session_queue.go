@@ -22,6 +22,42 @@ type SessionQueues struct {
 
 var errQueueTransactionsUnavailable = errors.New("session queue requires transactional queries")
 
+// queueAdmissionLimit bounds concurrent enqueue statements per process. The
+// enqueue SQL is one statement, so its cost is one pooled connection for the
+// statement's duration; beyond about twice the pool size a request only waits
+// in the pgx acquire queue. Rejecting there with ErrAdmissionOverloaded lets
+// clients retry with the same invocation_id instead of holding a goroutine
+// for hundreds of milliseconds.
+const defaultQueueAdmissionLimit = 64
+
+// SetQueueAdmissionLimit overrides the per-process enqueue concurrency bound.
+// Zero or negative restores the default.
+func (s *Service) SetQueueAdmissionLimit(limit int) {
+	if s == nil {
+		return
+	}
+	if limit <= 0 {
+		limit = defaultQueueAdmissionLimit
+	}
+	s.queueAdmissionGate = make(chan struct{}, limit)
+}
+
+func (s *Service) acquireQueueAdmission() (release func(), err error) {
+	if s.queueAdmissionGate == nil {
+		s.queueAdmissionGateOnce.Do(func() {
+			if s.queueAdmissionGate == nil {
+				s.queueAdmissionGate = make(chan struct{}, defaultQueueAdmissionLimit)
+			}
+		})
+	}
+	select {
+	case s.queueAdmissionGate <- struct{}{}:
+		return func() { <-s.queueAdmissionGate }, nil
+	default:
+		return nil, sessionqueue.ErrAdmissionOverloaded
+	}
+}
+
 func (s *Service) queueTx(ctx context.Context, fn func(dbstore.Queries) error) error {
 	if s == nil || s.queries == nil {
 		return errQueueTransactionsUnavailable
@@ -35,27 +71,34 @@ func (s *Service) queueTx(ctx context.Context, fn func(dbstore.Queries) error) e
 	return runner.InTx(ctx, fn)
 }
 
-// EnqueueSteer admits one steer item for the session's active run. The SQL
-// statement locks the session row, so no separate admission lock is taken.
+// EnqueueSteer admits one steer item for the session's active run. The
+// enqueue is a single statement that locks the session row, re-reads the
+// active run, and inserts; it runs in autocommit rather than an explicit
+// transaction, which removes the BEGIN and COMMIT round trips without
+// changing atomicity or the replay lookup semantics.
 func (s *Service) EnqueueSteer(ctx context.Context, botID, sessionID, invocationID string, payload []byte) (sessionqueue.SteerItem, error) {
-	var item sessionqueue.SteerItem
-	err := s.queueTx(ctx, func(q dbstore.Queries) error {
-		var err error
-		item, err = sessionqueue.NewPostgresStore(q).EnqueueSteer(ctx, botID, sessionID, uuid.NewString(), invocationID, payload)
-		return err
-	})
-	return item, err
+	if s == nil || s.queries == nil {
+		return sessionqueue.SteerItem{}, errQueueTransactionsUnavailable
+	}
+	release, err := s.acquireQueueAdmission()
+	if err != nil {
+		return sessionqueue.SteerItem{}, err
+	}
+	defer release()
+	return sessionqueue.NewPostgresStore(s.queries).EnqueueSteer(ctx, botID, sessionID, uuid.NewString(), invocationID, payload)
 }
 
 // EnqueueFollowUp admits one follow-up item during the session's active run.
 func (s *Service) EnqueueFollowUp(ctx context.Context, botID, sessionID, invocationID string, payload []byte) (sessionqueue.FollowUpItem, error) {
-	var item sessionqueue.FollowUpItem
-	err := s.queueTx(ctx, func(q dbstore.Queries) error {
-		var err error
-		item, err = sessionqueue.NewPostgresStore(q).EnqueueFollowUp(ctx, botID, sessionID, uuid.NewString(), invocationID, payload)
-		return err
-	})
-	return item, err
+	if s == nil || s.queries == nil {
+		return sessionqueue.FollowUpItem{}, errQueueTransactionsUnavailable
+	}
+	release, err := s.acquireQueueAdmission()
+	if err != nil {
+		return sessionqueue.FollowUpItem{}, err
+	}
+	defer release()
+	return sessionqueue.NewPostgresStore(s.queries).EnqueueFollowUp(ctx, botID, sessionID, uuid.NewString(), invocationID, payload)
 }
 
 // ListSessionQueues returns the head of both pending queues from one

@@ -85,10 +85,11 @@ const (
 	CodeSessionHistoryInconsistent              Code = "session_runtime.history_inconsistent"
 	CodeAgentResponseTimeout                    Code = "agent.response_timeout"
 	CodeAgentResponseInterrupted                Code = "agent.response_interrupted"
-	CodeQueueNoActiveRun                 Code = "queue_no_active_run"
-	CodeQueueAdmissionUnavailable        Code = "queue_admission_unavailable"
-	CodeQueueRequestInvalid              Code = "queue_request_invalid"
-	CodeQueueItemNotPending              Code = "queue_item_not_pending"
+	CodeQueueNoActiveRun                        Code = "queue_no_active_run"
+	CodeQueueAdmissionOverloaded                Code = "queue_admission_overloaded"
+	CodeQueueAdmissionUnavailable               Code = "queue_admission_unavailable"
+	CodeQueueRequestInvalid                     Code = "queue_request_invalid"
+	CodeQueueItemNotPending                     Code = "queue_item_not_pending"
 
 	CodeContextLifecycleRequestInvalid         Code = "context_lifecycle.request_invalid"
 	CodeContextLifecycleAuthenticationRequired Code = "context_lifecycle.authentication_required"
@@ -464,6 +465,10 @@ var catalog = map[Code]Definition{
 	CodeQueueNoActiveRun: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "There is no active run to receive this queued input.",
+	},
+	CodeQueueAdmissionOverloaded: {
+		HTTPStatus: http.StatusTooManyRequests,
+		Detail:     "The queue is busy. Please retry this request shortly.",
 	},
 	CodeQueueAdmissionUnavailable: {
 		HTTPStatus: http.StatusServiceUnavailable,

@@ -142,6 +142,7 @@
       "response_interrupted": "The model response was interrupted. Please try again."
     },
     "queue_no_active_run": "The current response has ended. The message is still queued.",
+    "queue_admission_overloaded": "The queue is busy. Please retry shortly.",
     "queue_admission_unavailable": "Queue admission is temporarily unavailable. Please retry shortly.",
     "queue_item_not_pending": "This message is no longer pending in the queue.",
     "profile": {
