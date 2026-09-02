@@ -1541,18 +1541,22 @@ const queueLocalRefresh = ref(0)
 // or follow-up continuation user turn changes this signature; a local enqueue
 // bumps the counter. The composable keeps a slow fallback timer for a missed
 // event.
+//
+// Only the newest queue turn is part of the key: queue inputs are consumed in
+// order, so the latest one is the only boundary that can still move. Scanning
+// from the end keeps this computed constant-time for long transcripts instead
+// of filtering and joining every queue turn on each message change.
 const queueRefreshKey = computed(() => {
-  const queueTurnSignature = messages.value
-    .filter(message => (
-      message.role === 'user'
-      && (
-        isRuntimeSteerTurnId(message.turnId)
-        || isRuntimeContinuationUserTurn(message)
-      )
-    ))
-    .map(message => `${message.id}\u0000${message.turnId ?? ''}`)
-    .join('\u0000')
-  return `${streaming.value ? 'live' : 'idle'}\u0000${queueTurnSignature}\u0000${queueLocalRefresh.value}`
+  let latestQueueTurn = ''
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    const message = messages.value[index]!
+    if (message.role !== 'user') continue
+    if (isRuntimeSteerTurnId(message.turnId) || isRuntimeContinuationUserTurn(message)) {
+      latestQueueTurn = `${message.id}\u0000${message.turnId ?? ''}`
+      break
+    }
+  }
+  return `${streaming.value ? 'live' : 'idle'}\u0000${latestQueueTurn}\u0000${queueLocalRefresh.value}`
 })
 const requestedSkills = ref<RequestedSkillSelection[]>([])
 const slashPanelSuppressedPrefix = ref('')
