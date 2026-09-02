@@ -961,7 +961,7 @@ import ComposerContinueOn from './composer-continue-on.vue'
 import ChatAttachmentCard from './chat-attachment-card.vue'
 import { useChatScroll } from '../composables/useChatScroll'
 import { useQueueTurnAnchors } from '../composables/useQueueTurnAnchors'
-import { isRuntimeSteerTurnId } from '@/store/chat/types'
+import { isRuntimeContinuationUserTurn, isRuntimeSteerTurnId } from '@/store/chat/types'
 import BgTaskPill from './bg-task-pill.vue'
 import ForkSourceDivider from './fork-source-divider.vue'
 import ChatForkDialog from './chat-fork-dialog.vue'
@@ -1537,16 +1537,22 @@ function showForkSourceDividerBefore(index: number): boolean {
 
 const activeSessionId = computed(() => paneTarget.value.sessionId ?? activeSession.value?.id ?? '')
 const queueLocalRefresh = ref(0)
-// The queue list refreshes on runtime events instead of polling. Any steer
-// being claimed or applied, or the run leaving the active state, changes this
-// signature; a local enqueue bumps the counter. The composable keeps a slow
-// fallback timer for a missed event.
+// The queue list refreshes on runtime boundaries instead of polling. A steer
+// or follow-up continuation user turn changes this signature; a local enqueue
+// bumps the counter. The composable keeps a slow fallback timer for a missed
+// event.
 const queueRefreshKey = computed(() => {
-  const steerSignature = messages.value
-    .filter(message => message.role === 'user' && isRuntimeSteerTurnId(message.turnId))
-    .map(message => message.id)
+  const queueTurnSignature = messages.value
+    .filter(message => (
+      message.role === 'user'
+      && (
+        isRuntimeSteerTurnId(message.turnId)
+        || isRuntimeContinuationUserTurn(message)
+      )
+    ))
+    .map(message => `${message.id}\u0000${message.turnId ?? ''}`)
     .join('\u0000')
-  return `${streaming.value ? 'live' : 'idle'}\u0000${steerSignature}\u0000${queueLocalRefresh.value}`
+  return `${streaming.value ? 'live' : 'idle'}\u0000${queueTurnSignature}\u0000${queueLocalRefresh.value}`
 })
 const requestedSkills = ref<RequestedSkillSelection[]>([])
 const slashPanelSuppressedPrefix = ref('')

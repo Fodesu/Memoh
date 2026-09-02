@@ -168,6 +168,28 @@ export interface ChatSystemTurn {
 
 export type ChatMessage = ChatUserTurn | ChatAssistantTurn | ChatSystemTurn
 
+/**
+ * A user turn admitted from a durable follow-up continuation run.
+ *
+ * Runtime continuation turns are intentionally distinct from queue steer
+ * turns: both are runtime-owned inputs, but only the former represents a
+ * follow-up item being handed off to a new run.
+ */
+export function isRuntimeContinuationUserTurn(
+  message: {
+    role: string
+    turnId?: string
+    runtimeRunId?: string
+    runtimeContinuation?: boolean
+  },
+): boolean {
+  return message.role === 'user'
+    && Boolean(message.runtimeRunId?.trim())
+    && message.runtimeContinuation === true
+    && Boolean(message.turnId?.trim())
+    && !isRuntimeSteerTurnId(message.turnId)
+}
+
 export type SendMessageStage = 'startup' | 'stream'
 
 export interface SendMessageResult {
