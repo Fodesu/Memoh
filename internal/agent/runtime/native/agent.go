@@ -469,6 +469,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	}
 	opts = append(opts, a.onStepOption(streamCtx, cfg, nil))
 	var nextDurableStep int
+	// emittedStep counts FinishStepParts seen on this attempt so the step_end
+	// marker can name the durable step index the following commit will use.
+	emittedStep := 0
 	onStepCommitted := func(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
 		stepIndex += cfg.StepIndexOffset
 		if cfg.OnStepCommitted != nil {
@@ -555,6 +558,15 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		switch p := part.(type) {
 		case *sdk.StartPart:
 			_ = p // stream start already emitted
+
+		case *sdk.FinishStepPart:
+			// Emitted after every part of the step and before the SDK invokes the
+			// commit barrier. The session runtime uses it to know the step's live
+			// projection is complete before it anchors a queue steer to it.
+			if !sendEvent(ctx, ch, StreamEvent{Type: EventStepEnd, StepNumber: cfg.StepIndexOffset + emittedStep}) {
+				aborted = true
+			}
+			emittedStep++
 
 		case *sdk.TextStartPart:
 			if !sendEvent(ctx, ch, StreamEvent{Type: EventTextStart}) {

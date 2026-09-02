@@ -182,7 +182,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 			}
 			c.continueAfterFinal.Store(true)
 		}
-		c.publishQueueUserTurns(context.WithoutCancel(ctx), outcome)
+		c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, outcome)
 	} else {
 		persisted, err = c.persister.PersistAgentStep(context.WithoutCancel(ctx), agentStep)
 	}
@@ -211,7 +211,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	return nil
 }
 
-func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, outcome queueStepOutcome) {
+func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int, outcome queueStepOutcome) {
 	if c == nil || c.service == nil || c.service.sessionManager == nil {
 		return
 	}
@@ -237,6 +237,11 @@ func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, outcome 
 		update.ClaimedSteerItemID = string(outcome.claimedSteer.ID)
 		update.ClaimedSteerText = continuationPayloadText(outcome.claimedSteer.Payload)
 		update.ClaimedSteerTimestamp = outcome.claimedSteer.CreatedAt
+		// Anchor after the step that just committed. Its step_end marker was
+		// emitted by the native loop before the commit barrier ran, so the wait
+		// only covers event consumption and is bounded.
+		after := stepIndex
+		update.AfterStepIndex = &after
 	}
 	if len(update.PersistedTurns) == 0 && update.AppliedSteerItemID == "" && update.ClaimedSteerItemID == "" {
 		return

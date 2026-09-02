@@ -143,3 +143,122 @@ func TestPublishQueueUserTurnsLocatesClaimAndAppliesItWithoutDuplicateProjection
 		t.Fatalf("durable user turns = %#v", got)
 	}
 }
+
+// TestPublishQueueUserTurnsAnchorsClaimedSteerAfterCommittedStepOutput pins
+// the fix for a steer rendering above assistant output that preceded it. The
+// commit barrier runs on the model loop while agent events are consumed on
+// another goroutine; a claimed steer that names the committed step must wait
+// until that step's step_end marker has been consumed before it reads the
+// projection to compute its anchor.
+func TestPublishQueueUserTurnsAnchorsClaimedSteerAfterCommittedStepOutput(t *testing.T) {
+	manager := testRuntimeManager(t, NewMemoryBackend(), "owner-steer-anchor")
+	handle, err := manager.StartRunWithAdmissionBuilderHandle(
+		context.Background(), testBotID, testSessionID, testRunID,
+		func(_ context.Context, _ RunHandle) (RunAdmissionView, error) {
+			return RunAdmissionView{RequestUserTurn: &chatview.UITurn{
+				TurnID: "turn-root", Role: "user", Text: "original", Timestamp: time.Now(),
+			}}, nil
+		},
+		make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1),
+	)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	ctx := context.Background()
+	// Step 0 output that the consumer has already applied.
+	for _, ev := range []native.StreamEvent{
+		{Type: native.EventTextStart},
+		{Type: native.EventTextDelta, Delta: "early"},
+		{Type: native.EventTextEnd},
+	} {
+		if _, err := manager.HandleAgentEvent(ctx, handle, ev); err != nil {
+			t.Fatalf("publish %s: %v", ev.Type, err)
+		}
+	}
+
+	// The commit for step 0 publishes the claimed steer now, but the tail of
+	// step 0 (a tool block plus the step_end marker) is still in flight.
+	stepZero := 0
+	published := make(chan error, 1)
+	go func() {
+		published <- manager.PublishQueueUserTurns(ctx, handle, QueueUserTurnUpdate{
+			ClaimedSteerItemID: "steer-1", ClaimedSteerText: "change course",
+			ClaimedSteerTimestamp: time.Now().UTC(), AfterStepIndex: &stepZero,
+		})
+	}()
+	select {
+	case err := <-published:
+		t.Fatalf("steer published before step 0 was consumed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Late tail of step 0 arrives and is consumed.
+	for _, ev := range []native.StreamEvent{
+		{Type: native.EventToolCallStart, ToolCallID: "call-1", ToolName: "exec"},
+		{Type: native.EventToolCallEnd, ToolCallID: "call-1", ToolName: "exec", Result: "ok"},
+		{Type: native.EventStepEnd, StepNumber: 0},
+	} {
+		if _, err := manager.HandleAgentEvent(ctx, handle, ev); err != nil {
+			t.Fatalf("publish late %s: %v", ev.Type, err)
+		}
+	}
+	select {
+	case err := <-published:
+		if err != nil {
+			t.Fatalf("publish claimed steer: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("steer publish did not resume after step_end was consumed")
+	}
+
+	snapshot, err := manager.Snapshot(ctx, testBotID, testSessionID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	run := snapshot.CurrentRunView
+	if run == nil || len(run.SteerTurns) != 1 {
+		t.Fatalf("steer turns = %#v", run)
+	}
+	maxID := -1
+	for _, message := range run.Messages {
+		if message.ID > maxID {
+			maxID = message.ID
+		}
+	}
+	if got := run.SteerTurns[0].AfterMessageID; got != maxID {
+		t.Fatalf("steer anchored after message %d, want %d (the last message of the committed step)", got, maxID)
+	}
+	if len(run.Messages) < 2 {
+		t.Fatalf("expected text and tool blocks before the steer, got %#v", run.Messages)
+	}
+}
+
+func TestPublishQueueUserTurnsWithoutStepIndexDoesNotWait(t *testing.T) {
+	manager := testRuntimeManager(t, NewMemoryBackend(), "owner-steer-nowait")
+	handle, err := manager.StartRunWithAdmissionBuilderHandle(
+		context.Background(), testBotID, testSessionID, testRunID,
+		func(_ context.Context, _ RunHandle) (RunAdmissionView, error) {
+			return RunAdmissionView{RequestUserTurn: &chatview.UITurn{
+				TurnID: "turn-root", Role: "user", Text: "original", Timestamp: time.Now(),
+			}}, nil
+		},
+		make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1),
+	)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.PublishQueueUserTurns(context.Background(), handle, QueueUserTurnUpdate{
+			ClaimedSteerItemID: "steer-1", ClaimedSteerText: "recovered", ClaimedSteerTimestamp: time.Now().UTC(),
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("publish without step index: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publish without AfterStepIndex must not block")
+	}
+}

@@ -414,6 +414,12 @@ func TestToolBoundarySteerPublishesClaimBeforeFollowingStepCommit(t *testing.T) 
 		t.Fatal("run did not receive a durable step committer")
 	}
 	committer.reasoningTiming = newReasoningTimingTracker(nil)
+	// The native loop emits step_end for a step before its commit barrier runs,
+	// and a claimed steer waits for that marker to be consumed so it anchors
+	// after the step's full output. Mirror that ordering here.
+	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{Type: native.EventStepEnd, StepNumber: 0}); err != nil {
+		t.Fatalf("publish step_end: %v", err)
+	}
 	if err := committer.commit(ctx, 0, &sdk.StepResult{
 		Messages:     []sdk.Message{sdk.AssistantMessage("checking files")},
 		FinishReason: sdk.FinishReasonToolCalls,

@@ -194,11 +194,16 @@ func TestAgentStreamEmitsToolCallInputStartThenStart(t *testing.T) {
 		events = append(events, event)
 	}
 
-	if len(events) != 4 {
-		t.Fatalf("expected 4 events, got %d: %#v", len(events), events)
+	if len(events) != 5 {
+		t.Fatalf("expected 5 events, got %d: %#v", len(events), events)
 	}
 	if events[0].Type != EventAgentStart {
 		t.Fatalf("expected first event %q, got %#v", EventAgentStart, events[0])
+	}
+	// step_end follows every part of the step and precedes the terminal event;
+	// it carries the durable step index the following commit uses.
+	if events[3].Type != EventStepEnd || events[3].StepNumber != 0 {
+		t.Fatalf("expected step_end for step 0 before agent_end, got %#v", events[3])
 	}
 	if events[1].Type != EventToolCallInputStart || events[1].ToolCallID != "call-1" || events[1].ToolName != "write" {
 		t.Fatalf("unexpected tool call input start event: %#v", events[1])
@@ -213,8 +218,8 @@ func TestAgentStreamEmitsToolCallInputStartThenStart(t *testing.T) {
 	if !reflect.DeepEqual(events[2].Input, expectedInput) {
 		t.Fatalf("expected tool call start input %#v, got %#v", expectedInput, events[2].Input)
 	}
-	if events[3].Type != EventAgentEnd {
-		t.Fatalf("expected terminal event %q, got %#v", EventAgentEnd, events[3])
+	if events[4].Type != EventAgentEnd {
+		t.Fatalf("expected terminal event %q, got %#v", EventAgentEnd, events[4])
 	}
 	if commits != 1 {
 		t.Fatalf("committed steps = %d, want 1", commits)

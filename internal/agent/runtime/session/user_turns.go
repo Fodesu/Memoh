@@ -17,6 +17,13 @@ type QueueUserTurnUpdate struct {
 	ClaimedSteerItemID    string
 	ClaimedSteerText      string
 	ClaimedSteerTimestamp time.Time
+	// AfterStepIndex, when set, is the durable step whose output must already
+	// be in the live projection before a claimed steer is anchored. The commit
+	// barrier runs on the model loop while agent events are consumed on
+	// another goroutine, so without this wait the anchor could be computed
+	// from a projection still missing the tail of the step, and the steer
+	// would render above output that preceded it.
+	AfterStepIndex *int
 }
 
 // PublishQueueUserTurns projects one committed queue step into the live run.
@@ -48,6 +55,14 @@ func (m *Manager) PublishQueueUserTurns(ctx context.Context, handle RunHandle, u
 			return errors.New("applied steer runtime turn requires turn_id")
 		}
 		appliedTurn = turn
+	}
+
+	if update.AfterStepIndex != nil && strings.TrimSpace(update.ClaimedSteerItemID) != "" {
+		if ctrl := m.localControlForHandle(handle.normalized()); ctrl != nil {
+			if err := ctrl.awaitStepConsumed(ctx, *update.AfterStepIndex); err != nil {
+				return err
+			}
+		}
 	}
 
 	published := make([]chatview.UITurn, 0, len(normalized))

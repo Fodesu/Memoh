@@ -120,6 +120,13 @@ type runControl struct {
 	decisionMu        sync.Mutex
 	decisionReady     chan struct{}
 	decisionReadyOnce sync.Once
+	// stepMu guards the step cursor: the highest durable step index whose
+	// step_end marker this run has consumed into the live projection. Queue
+	// steer anchoring waits on it so the anchor never precedes output that the
+	// model loop already produced but the event consumer has not applied yet.
+	stepMu       sync.Mutex
+	stepConsumed int
+	stepChanged  chan struct{}
 	// pendingDecisions tracks every decision that still awaits a terminal
 	// status. decisionInline marks runtimes that block inside the same turn
 	// instead of parking and re-entering through EventAgentStart.
@@ -279,6 +286,52 @@ func (c *runControl) decisionReadySignal() <-chan struct{} {
 	c.decisionMu.Lock()
 	defer c.decisionMu.Unlock()
 	return c.decisionReady
+}
+
+// markStepConsumed records that the live projection now holds every part of
+// durable step stepIndex. Waiters blocked in awaitStepConsumed are woken.
+func (c *runControl) markStepConsumed(stepIndex int) {
+	if c == nil {
+		return
+	}
+	c.stepMu.Lock()
+	defer c.stepMu.Unlock()
+	if stepIndex+1 > c.stepConsumed {
+		c.stepConsumed = stepIndex + 1
+	}
+	if c.stepChanged != nil {
+		close(c.stepChanged)
+		c.stepChanged = nil
+	}
+}
+
+// awaitStepConsumed blocks until the projection has consumed step stepIndex,
+// the context ends, or the run's lifecycle context ends. Callers only pass an
+// index whose step_end marker the native loop has already emitted, so the wait
+// is bounded by event consumption, not by model progress.
+func (c *runControl) awaitStepConsumed(ctx context.Context, stepIndex int) error {
+	if c == nil {
+		return nil
+	}
+	for {
+		c.stepMu.Lock()
+		if c.stepConsumed > stepIndex {
+			c.stepMu.Unlock()
+			return nil
+		}
+		if c.stepChanged == nil {
+			c.stepChanged = make(chan struct{})
+		}
+		changed := c.stepChanged
+		c.stepMu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.lifecycleCtx.Done():
+			return ErrRunOwnershipLost
+		}
+	}
 }
 
 type Options struct {
@@ -1847,6 +1900,12 @@ func (m *Manager) handleAgentEvent(ctx context.Context, handle RunHandle, event 
 	case native.EventError:
 	default:
 		messages = ctrl.converter.HandleEvent(chatview.UIStreamEventFromAgentEvent(event))
+	}
+	if event.Type == native.EventStepEnd {
+		// The marker itself changes nothing visible; it only advances the step
+		// cursor that queue steer anchoring waits on.
+		ctrl.markStepConsumed(event.StepNumber)
+		return nil, nil
 	}
 	delta, visibleChange := runtimeDeltaForAgentEvent(event, messages)
 	if !visibleChange {
