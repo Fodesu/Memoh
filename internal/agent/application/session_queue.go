@@ -39,21 +39,23 @@ func (s *Service) SetQueueAdmissionLimit(limit int) {
 	if limit <= 0 {
 		limit = defaultQueueAdmissionLimit
 	}
+	s.queueAdmissionMu.Lock()
+	defer s.queueAdmissionMu.Unlock()
 	s.queueAdmissionGate = make(chan struct{}, limit)
 }
 
 func (s *Service) acquireQueueAdmission() (release func(), err error) {
+	s.queueAdmissionMu.Lock()
 	if s.queueAdmissionGate == nil {
-		s.queueAdmissionGateOnce.Do(func() {
-			if s.queueAdmissionGate == nil {
-				s.queueAdmissionGate = make(chan struct{}, defaultQueueAdmissionLimit)
-			}
-		})
+		s.queueAdmissionGate = make(chan struct{}, defaultQueueAdmissionLimit)
 	}
+	gate := s.queueAdmissionGate
 	select {
-	case s.queueAdmissionGate <- struct{}{}:
-		return func() { <-s.queueAdmissionGate }, nil
+	case gate <- struct{}{}:
+		s.queueAdmissionMu.Unlock()
+		return func() { <-gate }, nil
 	default:
+		s.queueAdmissionMu.Unlock()
 		return nil, sessionqueue.ErrAdmissionOverloaded
 	}
 }

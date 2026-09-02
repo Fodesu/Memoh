@@ -159,8 +159,8 @@ type Service struct {
 	queueCoordinator                  sessionqueue.Coordinator
 	queueStore                        queueRuntimeStore
 	queueContinuationsInFlight        sync.Map
+	queueAdmissionMu                  sync.Mutex
 	queueAdmissionGate                chan struct{}
-	queueAdmissionGateOnce            sync.Once
 	sessionManager                    *sessionruntime.Manager
 }
 
