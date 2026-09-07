@@ -516,6 +516,10 @@ func (s *Service) continueToolApprovalSession(
 		}
 		if eventErr := agentStreamLifecycleError(event); eventErr != nil && lifecycleCause == nil {
 			lifecycleCause = eventErr
+			// The public event forwarded downstream carries only a stable code;
+			// keep the runtime's private detail in the server log so a failed
+			// continuation can be diagnosed.
+			s.logContinuationStreamError(req.RunID, event)
 		}
 		if event.IsTerminal() {
 			terminalEventSeen = true

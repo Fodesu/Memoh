@@ -503,6 +503,22 @@ func (s *Service) logRuntimeDecisionContinuationFailure(command sessionruntime.C
 	)
 }
 
+// logContinuationStreamError records the private detail of a native error
+// event observed while a decision continuation streams. publicAgentStreamEvent
+// replaces that detail with a stable code before the event leaves the
+// application, so this is the only place the original text is retained.
+func (s *Service) logContinuationStreamError(runID string, event native.StreamEvent) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.Error("decision continuation stream error",
+		slog.String("run_id", strings.TrimSpace(runID)),
+		slog.String("event_type", string(event.Type)),
+		slog.String("code", strings.TrimSpace(event.Code)),
+		slog.String("error", strings.TrimSpace(event.Error)),
+	)
+}
+
 func firstLifecycleCause(causes ...error) error {
 	for _, cause := range causes {
 		if cause != nil {
