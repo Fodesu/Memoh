@@ -601,6 +601,8 @@ describe('chat transcript controller', () => {
       status: 'running',
       operation: null,
       streaming: true,
+      // Frames arrive in projection order: request user, the assistant
+      // segment that preceded the steer, then the steer itself.
       turns: [
         {
           id: 'runtime-user',
@@ -610,19 +612,19 @@ describe('chat transcript controller', () => {
           timestamp: '2026-01-01T00:00:00.000Z',
         },
         {
+          id: 'runtime-assistant',
+          turn_id: 'turn-1',
+          role: 'assistant',
+          messages: [{ id: 0, type: 'text', content: 'tool output' }],
+          timestamp: '2026-01-01T00:01:00.000Z',
+        },
+        {
           id: 'runtime-steer',
           turn_id: 'turn-steer',
           turn_position: 50,
           role: 'user',
           text: 'continue from here',
           timestamp: '2026-01-01T00:02:00.000Z',
-        },
-        {
-          id: 'runtime-assistant',
-          turn_id: 'turn-1',
-          role: 'assistant',
-          messages: [{ id: 0, type: 'text', content: 'tool output' }],
-          timestamp: '2026-01-01T00:01:00.000Z',
         },
       ],
     })
@@ -632,6 +634,66 @@ describe('chat transcript controller', () => {
       role: 'user',
       text: 'continue from here',
     })
+  })
+
+  it('keeps a request user persisted at step commit ahead of the assistant that started before it', () => {
+    const { transcript } = makeTranscript()
+    transcript.applyRuntimeTranscript({
+      runId: 'run-1',
+      turnId: 'turn-1',
+      invocationId: '',
+      status: 'running',
+      operation: null,
+      streaming: true,
+      turns: [
+        {
+          id: 'runtime-user',
+          turn_id: 'turn-1',
+          role: 'user',
+          text: 'question',
+          timestamp: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'runtime-assistant',
+          turn_id: 'turn-1',
+          role: 'assistant',
+          messages: [{ id: 0, type: 'text', content: 'first step' }],
+          timestamp: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    })
+
+    // The first step commit persists the request user; the runtime frame now
+    // carries that row with its turn_position and the commit timestamp, which
+    // is later than the assistant turn that was already streaming.
+    transcript.applyRuntimeTranscript({
+      runId: 'run-1',
+      turnId: 'turn-1',
+      invocationId: '',
+      status: 'running',
+      operation: null,
+      streaming: true,
+      turns: [
+        {
+          id: 'persisted-user',
+          turn_id: 'turn-1',
+          turn_position: 7,
+          role: 'user',
+          text: 'question',
+          timestamp: '2026-01-01T00:00:28.000Z',
+        },
+        {
+          id: 'runtime-assistant',
+          turn_id: 'turn-1',
+          role: 'assistant',
+          messages: [{ id: 0, type: 'text', content: 'first step' }, { id: 1, type: 'text', content: 'second step' }],
+          timestamp: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    })
+
+    expect(transcript.messages.map(turn => turn.role)).toEqual(['user', 'assistant'])
+    expect(transcript.messages[0]).toMatchObject({ role: 'user', text: 'question', turnPosition: 7 })
   })
 
   it('renders a provisional steer between completed and next-step assistant output', () => {
@@ -678,6 +740,42 @@ describe('chat transcript controller', () => {
     expect(transcript.messages[2]).toMatchObject({ text: 'change direction' })
     expect(transcript.messages[3]).toMatchObject({ streaming: true })
     expect(transcript.messages[1]).toMatchObject({ streaming: false })
+  })
+
+  it('lets settled history adopt the post-steer assistant segment instead of duplicating it', () => {
+    const { transcript } = makeTranscript()
+    transcript.replaceMessages([rawUser('history-old', 'earlier')], 'session-1')
+    transcript.hasLoadedOlder.value = true
+    transcript.applyRuntimeTranscript({
+      runId: 'run-1',
+      turnId: 'turn-1',
+      invocationId: '',
+      status: 'running',
+      operation: null,
+      streaming: true,
+      turns: [
+        { id: 'runtime-user', turn_id: 'turn-1', role: 'user', text: 'original', timestamp: '2026-01-01T00:00:00.000Z' },
+        { id: 'runtime-assistant', turn_id: 'turn-1', role: 'assistant', messages: [{ id: 0, type: 'text', content: 'before steer' }], timestamp: '2026-01-01T00:00:00.000Z' },
+        { id: 'runtime-steer', turn_id: 'turn-steer-1', turn_position: 2, role: 'user', text: 'change direction', timestamp: '2026-01-01T00:02:00.000Z' },
+        { id: 'runtime-assistant-after', turn_id: 'turn-steer-1', role: 'assistant', messages: [{ id: 1, type: 'text', content: 'after steer' }], timestamp: '2026-01-01T00:02:00.000Z' },
+      ],
+    })
+
+    transcript.mergeMessages([
+      rawUser('history-old', 'earlier'),
+      { id: 'db-user', turn_id: 'turn-1', turn_position: 1, role: 'user', text: 'original', timestamp: '2026-01-01T00:00:30.000Z' },
+      { id: 'db-assistant', turn_id: 'turn-1', turn_position: 1, role: 'assistant', messages: [{ id: 0, type: 'text', content: 'before steer' }], timestamp: '2026-01-01T00:00:30.000Z' },
+      { id: 'db-steer', turn_id: 'turn-steer-1', turn_position: 2, role: 'user', text: 'change direction', timestamp: '2026-01-01T00:02:00.000Z' },
+      { id: 'db-assistant-after', turn_id: 'turn-steer-1', turn_position: 2, role: 'assistant', messages: [{ id: 0, type: 'text', content: 'after steer' }], timestamp: '2026-01-01T00:02:00.000Z' },
+    ], 'session-1')
+
+    expect(transcript.messages.map(turn => [turn.role, turn.turnId])).toEqual([
+      ['user', 'turn-history-old'],
+      ['user', 'turn-1'],
+      ['assistant', 'turn-1'],
+      ['user', 'turn-steer-1'],
+      ['assistant', 'turn-steer-1'],
+    ])
   })
 
   it('requires a history resync when a replacement anchor is missing', () => {

@@ -193,13 +193,24 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
         id: `runtime:${RUNTIME_STEER_TURN_PREFIX}${steer.item_id}:user`,
       })
       segmentStart = segmentEnd
-      segmentTurnId = `${RUNTIME_STEER_TURN_PREFIX}${steer.item_id}:assistant`
+      // History persists an applied steer as its own turn and files the
+      // assistant output that follows it under that turn. Name the live
+      // segment after the durable turn as soon as it is known, so the settled
+      // page replaces this segment instead of rendering beside it. Until then
+      // the segment carries the provisional steer identity.
+      segmentTurnId = durable
+        ? steerTurnId
+        : `${RUNTIME_STEER_TURN_PREFIX}${steer.item_id}:assistant`
       segmentTimestamp = steer.timestamp
     }
     // The final segment is the only live assistant after a steer boundary. It
     // intentionally exists while empty so the running indicator stays below
-    // the newly admitted user input until the next model delta arrives.
-    turns.push(runtimeAssistantTurn(segmentTurnId, segmentTimestamp, assistantMessages.slice(segmentStart)))
+    // the newly admitted user input until the next model delta arrives. Once
+    // the run has settled an empty segment would only render a blank turn.
+    const finalSegment = assistantMessages.slice(segmentStart)
+    if (active || finalSegment.length > 0 || turns.every(turn => turn.role !== 'assistant')) {
+      turns.push(runtimeAssistantTurn(segmentTurnId, segmentTimestamp, finalSegment))
+    }
   }
   return {
     runId: run.run_id,

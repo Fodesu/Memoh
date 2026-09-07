@@ -225,6 +225,40 @@ describe('runtime projection', () => {
     const users = applied.transcript.turns.filter(turn => turn.role === 'user')
     expect(users).toHaveLength(2)
     expect(users[1]).toMatchObject({ turn_id: 'turn-steer-1', turn_position: 2 })
+    // History files the post-steer assistant output under the steer's turn;
+    // the live segment must carry that identity so the settled page replaces
+    // it instead of rendering a second copy beside it.
+    expect(applied.transcript.turns.map(turn => [turn.role, turn.turn_id])).toEqual([
+      ['user', 'turn-1'],
+      ['assistant', 'turn-1'],
+      ['user', 'turn-steer-1'],
+      ['assistant', 'turn-steer-1'],
+    ])
+  })
+
+  it('drops the empty trailing assistant segment once the run has settled', () => {
+    const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      status: 'completed',
+      messages: [{ id: 0, type: 'text', content: 'before' }],
+      user_turns: [
+        { turn_id: 'turn-1', role: 'user', text: 'hello', timestamp: '2026-07-27T08:00:00.000Z' },
+        { turn_id: 'turn-steer-1', turn_position: 2, role: 'user', text: 'change direction', timestamp: '2026-07-27T08:00:02.000Z' },
+      ],
+      steer_turns: [{
+        item_id: 'steer-item-1',
+        status: 'applied',
+        text: 'change direction',
+        turn_id: 'turn-steer-1',
+        after_message_id: 0,
+        timestamp: '2026-07-27T08:00:02.000Z',
+      }],
+    })))
+
+    expect(state.transcript.turns.map(turn => [turn.role, turn.turn_id])).toEqual([
+      ['user', 'turn-1'],
+      ['assistant', 'turn-1'],
+      ['user', 'turn-steer-1'],
+    ])
   })
 
   it('treats a null message list from an idle runtime snapshot as empty', () => {

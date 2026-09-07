@@ -11,7 +11,6 @@ import {
   mergeApprovalState,
   nextId,
   stringRecord,
-  sortChatMessages,
 } from '../chat-list.normalize'
 import { upsertById } from '../chat-list.utils'
 import type {
@@ -529,17 +528,14 @@ export function createTranscriptController({
     for (let index = indices.length - 1; index >= 0; index -= 1) {
       messages.splice(indices[index]!, 1)
     }
-    // A persisted steer carries its authoritative turn_position. Runtime
-    // frames previously inserted the whole run at the first matching turn,
-    // which moved a later steer above the assistant/tool output that preceded
-    // it. Once a position is known, merge and use the same ordering rule as
-    // settled history; positionless live frames retain their arrival order.
-    if (resolved.some(turn => turn.role === 'user' && turn.turnPosition !== undefined)) {
-      messages.splice(0, 0, ...resolved)
-      messages.splice(0, messages.length, ...sortChatMessages(messages))
-    } else {
-      messages.splice(insertAt, 0, ...resolved)
-    }
+    // The runtime frame already orders a run's turns: request users first,
+    // then assistant segments split around each steer by after_message_id.
+    // Insert that block as delivered. Re-sorting the whole transcript here
+    // would fall back to timestamps wherever a live assistant turn has no
+    // turn_position yet, and a request user persisted at step commit carries
+    // a later timestamp than the assistant turn that started streaming
+    // before it, which rendered the reply above its own request.
+    messages.splice(insertAt, 0, ...resolved)
     return true
   }
 

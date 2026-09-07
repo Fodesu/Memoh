@@ -8,8 +8,15 @@ export function markRuntimeTurn(
   slice: RuntimeTranscriptSlice,
   originalUser: boolean,
 ): RuntimeChatTurn {
-  const isSteerAssistantSegment = turn.role === 'assistant' && isRuntimeSteerTurnId(turn.turnId)
-  if (originalUser || !turn.turnId || (turn.role === 'assistant' && !isSteerAssistantSegment)) {
+  // An assistant segment keeps its own turn identity when it is provisional
+  // (steer prefix) or nested under a user turn the same frame carries: that
+  // is the durable turn history files the post-steer output under. Any other
+  // assistant turn belongs to the run's request turn.
+  const nestedAssistantSegment = turn.role === 'assistant' && Boolean(turn.turnId) && (
+    isRuntimeSteerTurnId(turn.turnId)
+    || slice.turns.some(other => other.role === 'user' && other.turn_id.trim() === turn.turnId)
+  )
+  if (originalUser || !turn.turnId || (turn.role === 'assistant' && !nestedAssistantSegment)) {
     turn.turnId = slice.turnId
   }
   turn.runtimeRunId = slice.runId
