@@ -83,33 +83,23 @@ func storeRedisJSON(ctx context.Context, tx *redis.Tx, key string, value any, tt
 	return err
 }
 
+// compactableQueueState is implemented by both queue documents so the generic
+// mutation helpers can bound terminal items before writing the document back.
+type compactableQueueState interface{ compact() }
+
 func redisMutate[T any, R any](ctx context.Context, b *RedisBackend, key string, mutate func(*T, time.Time) (R, error)) (R, error) {
-	var zero R
-	if err := b.ensureQueueOpen(); err != nil {
-		return zero, err
-	}
-	var result R
-	err := redisWatch(ctx, b, []string{key}, func(tx *redis.Tx) error {
-		state, err := loadRedisJSON[T](ctx, tx, key)
-		if err != nil {
-			return err
-		}
-		now, err := tx.Time(ctx).Result()
-		if err != nil {
-			return err
-		}
-		result, err = mutate(&state, now.UTC())
-		if err != nil {
-			return err
-		}
-		return storeRedisJSON(ctx, tx, key, state, b.stateTTL)
+	return redisMutateWithKeys(ctx, b, []string{key}, key, func(_ *redis.Tx, state *T, now time.Time) (R, error) {
+		return mutate(state, now)
 	})
-	if err != nil {
-		return zero, err
-	}
-	return result, nil
 }
 
+// redisMutateWithKeys runs one optimistic transaction over a queue document.
+// keys is the WATCH set; the document itself must be part of it. Callers may
+// read other keys inside mutate without watching them: the queue document is
+// the serialization point for queue decisions, and run ownership is watched
+// through the run key where a decision depends on it. The session state key is
+// deliberately never watched here because it is rewritten on every streamed
+// runtime delta and would make queue transactions fail under normal output.
 func redisMutateWithKeys[T any, R any](ctx context.Context, b *RedisBackend, keys []string, key string, mutate func(*redis.Tx, *T, time.Time) (R, error)) (R, error) {
 	var zero R
 	if err := b.ensureQueueOpen(); err != nil {
@@ -129,6 +119,9 @@ func redisMutateWithKeys[T any, R any](ctx context.Context, b *RedisBackend, key
 		if err != nil {
 			return err
 		}
+		if compactable, ok := any(&state).(compactableQueueState); ok {
+			compactable.compact()
+		}
 		return storeRedisJSON(ctx, tx, key, state, b.stateTTL)
 	})
 	if err != nil {
@@ -146,7 +139,10 @@ func (b *RedisBackend) EnqueueSteer(ctx context.Context, key Key, itemID, invoca
 	}
 	stateKey, queueKey := b.stateKey(key), b.steerQueueKey(key)
 	var item SteerItem
-	err := redisWatch(ctx, b, []string{stateKey, queueKey}, func(tx *redis.Tx) error {
+	// The state key is read but not watched: a run that terminalizes between
+	// this read and EXEC is closed by CloseSteerRun, which serializes on the
+	// queue key and rejects the item or has already sealed the run ID.
+	err := redisWatch(ctx, b, []string{queueKey}, func(tx *redis.Tx) error {
 		queue, err := loadRedisJSON[steerQueueState](ctx, tx, queueKey)
 		if err != nil {
 			return err
@@ -162,6 +158,9 @@ func (b *RedisBackend) EnqueueSteer(ctx context.Context, key Key, itemID, invoca
 		run, active := activeRun(snapshot, ok)
 		if !active || queue.ClosedRunID == run.RunID {
 			return ErrQueueNoActiveRun
+		}
+		if countPendingSteers(queue) >= MaxPendingQueueItems {
+			return ErrQueueCapacityExceeded
 		}
 		now, err := tx.Time(ctx).Result()
 		if err != nil {
@@ -187,7 +186,10 @@ func (b *RedisBackend) EnqueueFollowUp(ctx context.Context, key Key, itemID, inv
 	}
 	stateKey, queueKey := b.stateKey(key), b.followUpQueueKey(key)
 	var item FollowUpItem
-	err := redisWatch(ctx, b, []string{stateKey, queueKey}, func(tx *redis.Tx) error {
+	// The state key is read but not watched; the application re-checks for an
+	// active run after a successful enqueue and starts the follow-up itself
+	// when the terminal observer has already passed.
+	err := redisWatch(ctx, b, []string{queueKey}, func(tx *redis.Tx) error {
 		queue, err := loadRedisJSON[followUpQueueState](ctx, tx, queueKey)
 		if err != nil {
 			return err
@@ -203,6 +205,9 @@ func (b *RedisBackend) EnqueueFollowUp(ctx context.Context, key Key, itemID, inv
 		run, active := activeRun(snapshot, ok)
 		if !active {
 			return ErrQueueNoActiveRun
+		}
+		if countPendingFollowUps(queue) >= MaxPendingQueueItems {
+			return ErrQueueCapacityExceeded
 		}
 		now, err := tx.Time(ctx).Result()
 		if err != nil {
@@ -346,7 +351,7 @@ func (b *RedisBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref 
 		return PromoteFollowUpResult{}, ErrQueueInvalidReference
 	}
 	var result PromoteFollowUpResult
-	err := redisWatch(ctx, b, []string{stateKey, steerKey, followKey}, func(tx *redis.Tx) error {
+	err := redisWatch(ctx, b, []string{steerKey, followKey}, func(tx *redis.Tx) error {
 		snapshot, ok, err := loadRedisSnapshot(ctx, tx, stateKey)
 		if err != nil {
 			return err
@@ -380,6 +385,9 @@ func (b *RedisBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref 
 			if follows.Items[i].ID != ref.ItemID || follows.Items[i].Status != QueueAccepted {
 				continue
 			}
+			if countPendingSteers(steers) >= MaxPendingQueueItems {
+				return ErrQueueCapacityExceeded
+			}
 			steer := SteerItem{ID: SteerItemID(uuid.NewString()), BotID: key.BotID, SessionID: key.SessionID, TargetRunID: run.RunID, InvocationID: "promote:" + string(ref.ItemID), Payload: append([]byte(nil), follows.Items[i].Payload...), Status: QueueAccepted, Position: nextSteerPosition(steers), CreatedAt: now.UTC()}
 			steers.Items = append(steers.Items, steer)
 			if steers.PromotedFollowUpItems == nil {
@@ -389,6 +397,7 @@ func (b *RedisBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref 
 			steers.UpdatedAt = now.UTC()
 			follows.Items[i].Status = QueueCanceled
 			follows.UpdatedAt = now.UTC()
+			follows.compact()
 			steerData, err := json.Marshal(steers)
 			if err != nil {
 				return err
@@ -423,7 +432,9 @@ func (b *RedisBackend) ClaimNextSteer(ctx context.Context, handle RunHandle, sea
 	var item SteerItem
 	var claim SteerClaimRef
 	var claimed bool
-	err := redisWatch(ctx, b, []string{stateKey, runKey, queueKey}, func(tx *redis.Tx) error {
+	// Ownership is watched through the run key, which the finishing owner
+	// deletes; the state key is only read for the projected run status.
+	err := redisWatch(ctx, b, []string{runKey, queueKey}, func(tx *redis.Tx) error {
 		snapshot, ok, err := loadRedisSnapshot(ctx, tx, stateKey)
 		if err != nil {
 			return err
@@ -439,10 +450,20 @@ func (b *RedisBackend) ClaimNextSteer(ctx context.Context, handle RunHandle, sea
 		if err != nil {
 			return err
 		}
-		for _, existing := range state.Items {
+		for i := range state.Items {
+			existing := &state.Items[i]
 			if existing.Status == QueueClaimed && existing.Claim != nil && existing.Claim.RunID == handle.RunID {
-				item, claim, claimed = cloneSteerItem(existing), *existing.Claim, true
-				return nil
+				item, claim, claimed = cloneSteerItem(*existing), *existing.Claim, true
+				if !advanceSteerClaim(existing, handle) {
+					return nil
+				}
+				now, err := tx.Time(ctx).Result()
+				if err != nil {
+					return err
+				}
+				state.UpdatedAt = now.UTC()
+				item, claim = cloneSteerItem(*existing), *existing.Claim
+				return storeRedisJSON(ctx, tx, queueKey, state, b.stateTTL)
 			}
 		}
 		best := -1
@@ -478,7 +499,7 @@ func (b *RedisBackend) ApplySteer(ctx context.Context, key Key, ref SteerClaimRe
 		return err
 	}
 	stateKey, runKey, queueKey := b.stateKey(key), b.runKey(key, ref.RunID), b.steerQueueKey(key)
-	_, err := redisMutateWithKeys(ctx, b, []string{stateKey, runKey, queueKey}, queueKey, func(tx *redis.Tx, state *steerQueueState, now time.Time) (struct{}, error) {
+	_, err := redisMutateWithKeys(ctx, b, []string{runKey, queueKey}, queueKey, func(tx *redis.Tx, state *steerQueueState, now time.Time) (struct{}, error) {
 		snapshot, ok, err := loadRedisSnapshot(ctx, tx, stateKey)
 		if err != nil {
 			return struct{}{}, err
@@ -503,12 +524,24 @@ func (b *RedisBackend) ApplySteer(ctx context.Context, key Key, ref SteerClaimRe
 	return err
 }
 
+func (b *RedisBackend) CloseSteerRun(ctx context.Context, key Key, runID string) error {
+	runID = strings.TrimSpace(runID)
+	if err := validateQueueKey(key); err != nil || runID == "" {
+		return ErrQueueInvalidReference
+	}
+	_, err := redisMutate(ctx, b, b.steerQueueKey(key), func(state *steerQueueState, now time.Time) (struct{}, error) {
+		closeSteerRun(state, runID, now)
+		return struct{}{}, nil
+	})
+	return err
+}
+
 func (b *RedisBackend) ReleaseSteer(ctx context.Context, key Key, ref SteerClaimRef) error {
 	if err := validateSteerClaim(key, ref); err != nil {
 		return err
 	}
 	stateKey, runKey, queueKey := b.stateKey(key), b.runKey(key, ref.RunID), b.steerQueueKey(key)
-	_, err := redisMutateWithKeys(ctx, b, []string{stateKey, runKey, queueKey}, queueKey, func(tx *redis.Tx, state *steerQueueState, now time.Time) (struct{}, error) {
+	_, err := redisMutateWithKeys(ctx, b, []string{runKey, queueKey}, queueKey, func(tx *redis.Tx, state *steerQueueState, now time.Time) (struct{}, error) {
 		snapshot, ok, err := loadRedisSnapshot(ctx, tx, stateKey)
 		if err != nil {
 			return struct{}{}, err

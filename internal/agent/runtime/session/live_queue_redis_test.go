@@ -142,4 +142,16 @@ func TestRedisLiveQueueContractOptional(t *testing.T) {
 	if _, _, ok, err := first.ClaimNextFollowUp(ctx, key, "different-terminal-run"); err != nil || ok {
 		t.Fatalf("applied follow-up was claimable again: ok=%v err=%v", ok, err)
 	}
+
+	// Terminal close from another instance rejects the remaining steers and
+	// seals the run while its live snapshot is still active.
+	if err := second.CloseSteerRun(ctx, key, ref.RunID); err != nil {
+		t.Fatalf("close steer run: %v", err)
+	}
+	if steers, _, err := first.PendingQueues(ctx, key, 0); err != nil || len(steers) != 0 {
+		t.Fatalf("pending steers after close = %#v, err=%v", steers, err)
+	}
+	if _, err := first.EnqueueSteer(ctx, key, "steer-late", "invoke-steer-late", []byte("late")); !errors.Is(err, ErrQueueNoActiveRun) {
+		t.Fatalf("late steer after close = %v, want %v", err, ErrQueueNoActiveRun)
+	}
 }

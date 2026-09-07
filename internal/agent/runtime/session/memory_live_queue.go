@@ -50,6 +50,9 @@ func (b *MemoryBackend) EnqueueSteer(ctx context.Context, key Key, itemID, invoc
 	if !active || state.ClosedRunID == run.RunID {
 		return SteerItem{}, ErrQueueNoActiveRun
 	}
+	if countPendingSteers(state) >= MaxPendingQueueItems {
+		return SteerItem{}, ErrQueueCapacityExceeded
+	}
 	item := SteerItem{
 		ID: SteerItemID(itemID), BotID: key.BotID, SessionID: key.SessionID,
 		TargetRunID: run.RunID, InvocationID: invocationID, Payload: append([]byte(nil), payload...),
@@ -86,6 +89,9 @@ func (b *MemoryBackend) EnqueueFollowUp(ctx context.Context, key Key, itemID, in
 	run, active := activeRun(snapshot, ok)
 	if !active {
 		return FollowUpItem{}, ErrQueueNoActiveRun
+	}
+	if countPendingFollowUps(state) >= MaxPendingQueueItems {
+		return FollowUpItem{}, ErrQueueCapacityExceeded
 	}
 	item := FollowUpItem{
 		ID: FollowUpItemID(itemID), BotID: key.BotID, SessionID: key.SessionID,
@@ -227,11 +233,38 @@ func (b *MemoryBackend) CancelSteer(ctx context.Context, key Key, itemID SteerIt
 		if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
 			state.Items[i].Status = QueueCanceled
 			state.UpdatedAt = time.Now().UTC()
+			state.compact()
 			b.steerQueues[key.String()] = state
 			return nil
 		}
 	}
 	return ErrQueueNotPending
+}
+
+func (b *MemoryBackend) CloseSteerRun(ctx context.Context, key Key, runID string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	runID = strings.TrimSpace(runID)
+	if err := validateQueueKey(key); err != nil || runID == "" {
+		return ErrQueueInvalidReference
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return ErrLiveQueueUnavailable
+	}
+	state, ok := b.steerQueues[key.String()]
+	if !ok {
+		// No steer was ever admitted for this session; there is nothing to
+		// seal because a later run has its own run ID.
+		return nil
+	}
+	if closeSteerRun(&state, runID, time.Now().UTC()) {
+		state.compact()
+		b.steerQueues[key.String()] = state
+	}
+	return nil
 }
 
 func (b *MemoryBackend) CancelFollowUp(ctx context.Context, key Key, itemID FollowUpItemID) error {
@@ -251,6 +284,7 @@ func (b *MemoryBackend) CancelFollowUp(ctx context.Context, key Key, itemID Foll
 		if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
 			state.Items[i].Status = QueueCanceled
 			state.UpdatedAt = time.Now().UTC()
+			state.compact()
 			b.followUpQueues[key.String()] = state
 			return nil
 		}
@@ -290,6 +324,9 @@ func (b *MemoryBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref
 		if follows.Items[i].ID != ref.ItemID || follows.Items[i].Status != QueueAccepted {
 			continue
 		}
+		if countPendingSteers(steers) >= MaxPendingQueueItems {
+			return PromoteFollowUpResult{}, ErrQueueCapacityExceeded
+		}
 		steer := SteerItem{
 			ID: SteerItemID(uuid.NewString()), BotID: key.BotID, SessionID: key.SessionID,
 			TargetRunID: run.RunID, InvocationID: "promote:" + string(ref.ItemID),
@@ -304,6 +341,7 @@ func (b *MemoryBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref
 		steers.UpdatedAt = now
 		follows.Items[i].Status = QueueCanceled
 		follows.UpdatedAt = now
+		follows.compact()
 		b.steerQueues[key.String()] = steers
 		b.followUpQueues[key.String()] = follows
 		return PromoteFollowUpResult{FollowUp: ref, Steer: cloneSteerItem(steer)}, nil
@@ -326,13 +364,18 @@ func (b *MemoryBackend) ClaimNextSteer(ctx context.Context, handle RunHandle, se
 	}
 	now := time.Now().UTC()
 	snapshot, ok := b.liveSnapshotLocked(handle.key(), now)
-	if !ok || !runMatchesHandle(snapshot.CurrentRunView, handle) || snapshot.CurrentRunView.OwnerID != handle.OwnerID || !isActiveRunStatus(snapshot.CurrentRunView.Status) {
+	if !ok || !runMatchesHandle(snapshot.CurrentRunView, handle) || !runViewOwnedBy(snapshot.CurrentRunView, handle.OwnerID) || !isActiveRunStatus(snapshot.CurrentRunView.Status) {
 		return SteerItem{}, SteerClaimRef{}, false, ErrRunOwnershipLost
 	}
 	state := b.steerQueues[handle.key().String()]
-	for _, item := range state.Items {
+	for i := range state.Items {
+		item := &state.Items[i]
 		if item.Status == QueueClaimed && item.Claim != nil && item.Claim.RunID == handle.RunID {
-			return cloneSteerItem(item), *item.Claim, true, nil
+			if advanceSteerClaim(item, handle) {
+				state.UpdatedAt = now
+				b.steerQueues[handle.key().String()] = state
+			}
+			return cloneSteerItem(*item), *item.Claim, true, nil
 		}
 	}
 	best := -1
@@ -380,6 +423,7 @@ func (b *MemoryBackend) ApplySteer(ctx context.Context, key Key, ref SteerClaimR
 		if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
 			state.Items[i].Status = QueueApplied
 			state.UpdatedAt = time.Now().UTC()
+			state.compact()
 			b.steerQueues[key.String()] = state
 			return nil
 		}
@@ -481,6 +525,7 @@ func (b *MemoryBackend) ApplyFollowUp(ctx context.Context, key Key, ref FollowUp
 		if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
 			state.Items[i].Status = QueueApplied
 			state.UpdatedAt = time.Now().UTC()
+			state.compact()
 			b.followUpQueues[key.String()] = state
 			return nil
 		}

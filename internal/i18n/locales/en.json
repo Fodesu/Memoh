@@ -535,7 +535,9 @@
     "unavailable": "Queue admission is unavailable. Try again shortly.",
     "conflict": "This message was already submitted with different content.",
     "invalid": "Queue input must include text.",
-    "unsupported": "Queue controls are not available in discussion sessions."
+    "unsupported": "Queue controls are not available in discussion sessions.",
+    "capacity": "The queue for this session is full. Wait for pending items to run before adding more.",
+    "followUpUnsupportedChannel": "Queued follow-ups are not available on this channel; its replies are delivered from the message you send. Use /steer to add to the current reply, or queue from the web app."
   },
   "menu": {
     "start": "Show the welcome message",

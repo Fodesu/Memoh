@@ -73,19 +73,12 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 	})
 	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)
 	manager.SetDecisionFinalizer(s.finalizeRuntimeDecisions)
-	manager.SetDeferredTurnStarter(func(ctx context.Context, cmd turn.StartTurnCommand) error {
-		handle, err := s.StartTurn(ctx, cmd)
-		if err != nil {
-			return err
-		}
-		// A deferred turn has no HTTP/channel stream waiting on its handle.
-		// Drain it in the application so the run can finish and persist its
-		// history; runtime event publication still feeds the normal observers.
-		go drainDeferredTurn(handle)
-		return err
-	})
 	manager.SetTerminalObserver(func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 		s.reconcileTerminalContextLifecycle(ctx, terminal)
+		// Steers die with their run; follow-ups outlive it. Close the steer
+		// queue before the follow-up starter so a continuation run never sees
+		// a stale steer that still names the finished run.
+		s.closeSteerQueueForRun(ctx, terminal)
 		s.startFollowUpAfterTerminal(ctx, terminal)
 	})
 	manager.SetTerminalReconciler(s.reconcileTerminalContextLifecycles)

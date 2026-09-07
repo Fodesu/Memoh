@@ -36,7 +36,14 @@ func (s *Service) EnqueueFollowUp(ctx context.Context, botID, sessionID, invocat
 	if err != nil {
 		return sessionqueue.FollowUpItem{}, err
 	}
-	return runtime.EnqueueFollowUp(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, uuid.NewString(), invocationID, payload)
+	item, err := runtime.EnqueueFollowUp(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, uuid.NewString(), invocationID, payload)
+	if err != nil {
+		return sessionqueue.FollowUpItem{}, err
+	}
+	if item.Status == sessionqueue.Accepted {
+		s.kickFollowUpIfIdle(ctx, botID, sessionID, item.EnqueuedDuringRunID)
+	}
+	return item, nil
 }
 
 func (s *Service) ListSessionQueues(ctx context.Context, botID, sessionID string) (SessionQueues, error) {

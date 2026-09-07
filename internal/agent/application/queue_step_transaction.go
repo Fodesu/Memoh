@@ -115,13 +115,23 @@ func (q *queueStepTransaction) commit(
 	outcome.persisted = persisted
 	if q.pendingSteer != nil {
 		if err := q.service.sessionManager.ApplySteer(ctx, sessionruntime.Key{BotID: q.run.BotID, SessionID: q.run.SessionID}, *q.pendingSteer); err != nil {
-			q.releaseSteerClaim(ctx)
+			// The steer text is already part of the committed step. Releasing the
+			// claim here would let the next commit inject it a second time; leave
+			// it claimed and fail the step, so terminal cleanup rejects the item.
 			return outcome, err
 		}
 		outcome.appliedSteerItemID = string(q.pendingSteer.ItemID)
 		q.pendingSteer = nil
 		q.pendingSteerItem = nil
 		q.pendingSteerDelivery = steerNotPending
+	}
+	if kind == queueStepDeferredDecision {
+		// The loop parks after this step and its inject channel is never read
+		// again. A claim taken here would sit unapplied across the decision, and
+		// across any owner change while the run waits. The continuation's first
+		// committed step claims instead, so the steer enters the request after
+		// the decision result exactly as a tool-loop claim would.
+		return outcome, nil
 	}
 
 	item, claim, claimed, err := q.service.sessionManager.ClaimNextSteer(ctx, q.run, kind == queueStepFinal)

@@ -216,39 +216,6 @@ func (b *RedisBackend) Load(ctx context.Context, key Key) (Snapshot, bool, error
 	return snapshot, true, nil
 }
 
-func (b *RedisBackend) EnqueueDeferredTurn(ctx context.Context, key Key, payload []byte) error {
-	if err := b.ensureQueueOpen(); err != nil {
-		return err
-	}
-	if strings.TrimSpace(key.BotID) == "" || strings.TrimSpace(key.SessionID) == "" || len(payload) == 0 {
-		return errors.New("deferred turn key and payload are required")
-	}
-	queueKey := b.deferredTurnKey(key)
-	_, err := b.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.RPush(ctx, queueKey, payload)
-		pipe.Expire(ctx, queueKey, b.stateTTL)
-		return nil
-	})
-	return err
-}
-
-func (b *RedisBackend) DequeueDeferredTurn(ctx context.Context, key Key) ([]byte, bool, error) {
-	if err := b.ensureQueueOpen(); err != nil {
-		return nil, false, err
-	}
-	if strings.TrimSpace(key.BotID) == "" || strings.TrimSpace(key.SessionID) == "" {
-		return nil, false, nil
-	}
-	payload, err := b.client.LPop(ctx, b.deferredTurnKey(key)).Bytes()
-	if errors.Is(err, redis.Nil) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return payload, true, nil
-}
-
 func (b *RedisBackend) Update(ctx context.Context, key Key, update SnapshotUpdate) (Snapshot, bool, error) {
 	if update == nil {
 		return Snapshot{}, false, errors.New("snapshot update is required")
@@ -1166,10 +1133,6 @@ func effectiveRedisHistoryReset(state redisHistoryResetState, botID, sessionID s
 
 func (b *RedisBackend) stateKey(key Key) string {
 	return b.keyPrefix + "state:" + key.String()
-}
-
-func (b *RedisBackend) deferredTurnKey(key Key) string {
-	return b.keyPrefix + "deferred_turns:" + key.String()
 }
 
 func (b *RedisBackend) runKey(key Key, runID string) string {

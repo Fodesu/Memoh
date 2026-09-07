@@ -2,7 +2,6 @@ package sessionruntime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,7 +58,6 @@ type Manager struct {
 	terminalObserver       func(context.Context, TerminalRun)
 	decisionFinalizer      func(context.Context, RunHandle) error
 	terminalReconciler     func(context.Context) error
-	deferredTurnStarter    func(context.Context, turn.StartTurnCommand) error
 	cancelLostRunDecisions func(context.Context, string, string, string, int64, string) error
 	historyResetHandler    HistoryResetHandler
 	pendingCommands        map[string]map[*commandWaiter]struct{}
@@ -525,81 +523,6 @@ func (m *Manager) SetTerminalReconciler(reconciler func(context.Context) error) 
 	m.mu.Unlock()
 }
 
-// SetDeferredTurnStarter installs the application callback that starts a
-// complete turn after a busy session releases its current run.
-func (m *Manager) SetDeferredTurnStarter(starter func(context.Context, turn.StartTurnCommand) error) {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	m.deferredTurnStarter = starter
-	m.mu.Unlock()
-}
-
-// EnqueueDeferredTurn stores a complete transient turn in the configured live
-// backend. Memory and Redis therefore share the same semantics while keeping
-// the turn payload intact for attachments and channel metadata.
-func (m *Manager) EnqueueDeferredTurn(ctx context.Context, cmd turn.StartTurnCommand) error {
-	if m == nil || m.backend == nil {
-		return errors.New("session runtime manager is not configured")
-	}
-	store, ok := m.backend.(DeferredTurnBackend)
-	if !ok {
-		return errors.New("session runtime deferred queue is unavailable")
-	}
-	payload, err := json.Marshal(cmd)
-	if err != nil {
-		return err
-	}
-	key := Key{BotID: cmd.BotID, SessionID: cmd.ThreadID}
-	if err := store.EnqueueDeferredTurn(ctx, key, payload); err != nil {
-		return err
-	}
-	// Close the race where the active run terminalizes immediately before the
-	// enqueue reaches the backend and its terminal observer has already drained.
-	if snapshot, ok, err := m.backend.Load(ctx, key); err == nil && (!ok || snapshot.CurrentRunView == nil || !isActiveRunStatus(snapshot.CurrentRunView.Status)) {
-		m.drainDeferredTurn(context.WithoutCancel(ctx), key)
-	}
-	return nil
-}
-
-func (m *Manager) drainDeferredTurn(ctx context.Context, key Key) {
-	if m == nil || m.backend == nil {
-		return
-	}
-	store, ok := m.backend.(DeferredTurnBackend)
-	if !ok {
-		return
-	}
-	m.mu.Lock()
-	starter := m.deferredTurnStarter
-	m.mu.Unlock()
-	if starter == nil {
-		return
-	}
-	payload, ok, err := store.DequeueDeferredTurn(ctx, key)
-	if err != nil || !ok {
-		return
-	}
-	var cmd turn.StartTurnCommand
-	if err := json.Unmarshal(payload, &cmd); err != nil {
-		if m.logger != nil {
-			m.logger.Warn("drop malformed deferred turn", slog.String("bot_id", key.BotID), slog.String("session_id", key.SessionID), slog.Any("error", err))
-		}
-		return
-	}
-	if err := starter(ctx, cmd); err != nil {
-		// Preserve FIFO only when the session is still busy. Other admission
-		// failures are terminal for this transient runtime buffer and are logged
-		// by the application starter.
-		if errors.Is(err, turn.ErrSessionBusy) {
-			_ = store.EnqueueDeferredTurn(ctx, key, payload)
-		} else if m.logger != nil {
-			m.logger.Warn("drop deferred turn after admission failure", slog.String("bot_id", key.BotID), slog.String("session_id", key.SessionID), slog.Any("error", err))
-		}
-	}
-}
-
 // SetLostRunDecisionCanceller installs run-scoped cleanup for decisions parked
 // by a run that the reaper has durably marked lost.
 func (m *Manager) SetLostRunDecisionCanceller(canceller func(context.Context, string, string, string, int64, string) error) {
@@ -621,7 +544,6 @@ func (m *Manager) observeTerminalRun(ctx context.Context, run TerminalRun) {
 	if observer != nil {
 		observer(context.WithoutCancel(ctx), run)
 	}
-	m.drainDeferredTurn(context.WithoutCancel(ctx), Key{BotID: run.BotID, SessionID: run.SessionID})
 }
 
 // reconcileAndObserveTerminalRun is reserved for recovery paths where a

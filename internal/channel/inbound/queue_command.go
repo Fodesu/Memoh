@@ -15,6 +15,12 @@ const (
 	QueueCommandCodeConflict    = "queue_invocation_conflict"
 	QueueCommandCodeInvalid     = "queue_request_invalid"
 	QueueCommandCodeUnsupported = "queue_unsupported_session"
+	QueueCommandCodeCapacity    = "queue_capacity_exceeded"
+	// QueueCommandCodeFollowUpUnsupportedChannel means the channel cannot
+	// receive the reply of a run that the server starts from the follow-up
+	// queue: platform channels deliver replies from the inbound call's run
+	// handle, which a queued run does not have.
+	QueueCommandCodeFollowUpUnsupportedChannel = "queue_follow_up_unsupported_channel"
 )
 
 // QueueCommandInput contains only facts derived by the channel boundary. The
@@ -62,7 +68,9 @@ func NormalizeQueueCommandCode(code string) string {
 		QueueCommandCodeUnavailable,
 		QueueCommandCodeConflict,
 		QueueCommandCodeInvalid,
-		QueueCommandCodeUnsupported:
+		QueueCommandCodeUnsupported,
+		QueueCommandCodeCapacity,
+		QueueCommandCodeFollowUpUnsupportedChannel:
 		return code
 	default:
 		return ""

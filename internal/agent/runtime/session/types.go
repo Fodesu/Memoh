@@ -572,15 +572,6 @@ type DecisionOutputStore interface {
 // entries. The producer treats it as a failed checkpoint write.
 var ErrDecisionOutputSequenceGap = errors.New("decision output sequence gap")
 
-// DeferredTurnBackend stores complete, transient turn submissions that arrived
-// while a session already had an active run. It is intentionally separate from
-// the steer/follow-up queues: this is a runtime handoff buffer whose
-// lifetime follows the configured memory or Redis backend.
-type DeferredTurnBackend interface {
-	EnqueueDeferredTurn(context.Context, Key, []byte) error
-	DequeueDeferredTurn(context.Context, Key) ([]byte, bool, error)
-}
-
 // DistributedBackend adds cross-process run ownership and command routing.
 // MemoryBackend intentionally does not implement this interface.
 type DistributedBackend interface {

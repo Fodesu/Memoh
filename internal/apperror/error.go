@@ -104,6 +104,7 @@ const (
 	CodeQueueAdmissionUnavailable                Code = "queue_admission_unavailable"
 	CodeQueueRequestInvalid                      Code = "queue_request_invalid"
 	CodeQueueItemNotPending                      Code = "queue_item_not_pending"
+	CodeQueueCapacityExceeded                    Code = "queue_capacity_exceeded"
 
 	CodeContextLifecycleRequestInvalid         Code = "context_lifecycle.request_invalid"
 	CodeContextLifecycleAuthenticationRequired Code = "context_lifecycle.authentication_required"
@@ -540,6 +541,10 @@ var catalog = map[Code]Definition{
 	CodeQueueItemNotPending: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "This queue item is no longer accepted and pending.",
+	},
+	CodeQueueCapacityExceeded: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This session queue is full. Cancel or wait for pending items before adding more.",
 	},
 	CodeContextLifecycleRequestInvalid: {
 		HTTPStatus: http.StatusBadRequest,

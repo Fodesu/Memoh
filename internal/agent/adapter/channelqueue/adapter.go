@@ -56,6 +56,8 @@ func mapAdmissionError(err error) error {
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeConflict)
 	case errors.Is(err, queue.ErrAdmissionOverloaded):
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeOverloaded)
+	case errors.Is(err, queue.ErrCapacityExceeded):
+		return inbound.NewQueueCommandError(inbound.QueueCommandCodeCapacity)
 	case errors.Is(err, queue.ErrInvalidReference):
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeInvalid)
 	default:

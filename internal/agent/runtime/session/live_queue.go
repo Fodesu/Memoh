@@ -20,11 +20,36 @@ const (
 	QueueCanceled QueueStatus = "canceled"
 )
 
+// Stable error codes recorded on rejected queue items. They are runtime
+// vocabulary, not transport codes: the item stays readable through the queue
+// API until compaction drops it.
+const (
+	// QueueErrorTargetRunNotActive marks a steer whose target run reached a
+	// terminal state before the steer entered a model step.
+	QueueErrorTargetRunNotActive = "queue_target_run_not_active"
+)
+
+const (
+	// MaxPendingQueueItems bounds accepted items per queue and session. Queue
+	// state is one serialized document per queue, so an unbounded pending set
+	// would grow every mutation's read and write linearly.
+	MaxPendingQueueItems = 64
+	// queueTerminalRetention is how many applied, rejected, and canceled
+	// items each queue keeps for invocation replay and status lookups. Older
+	// terminal items are dropped by compaction after every mutation.
+	queueTerminalRetention = 64
+	// terminalClaimRetention bounds the follow-up per-run claim record. It is
+	// deliberately larger than the item retention so the record outlives the
+	// items it points at.
+	terminalClaimRetention = 4 * queueTerminalRetention
+)
+
 var (
 	ErrQueueNoActiveRun         = errors.New("queue: no active run")
 	ErrQueueInvalidReference    = errors.New("queue: invalid claim reference")
 	ErrQueueNotPending          = errors.New("queue: item is not an accepted pending item")
 	ErrQueueInvocationConflict  = errors.New("queue: invocation payload conflicts with an existing item")
+	ErrQueueCapacityExceeded    = errors.New("queue: pending capacity exceeded")
 	ErrLiveQueueUnavailable     = errors.New("session runtime queue is unavailable")
 	ErrQueueAdmissionOverloaded = errors.New("queue: admission overloaded")
 )
@@ -65,7 +90,9 @@ type SteerItem struct {
 	Status                        QueueStatus
 	Position                      int64
 	Claim                         *SteerClaimRef
-	CreatedAt                     time.Time
+	// ErrorCode is set when Status is rejected.
+	ErrorCode string
+	CreatedAt time.Time
 }
 
 type FollowUpItem struct {
@@ -77,7 +104,9 @@ type FollowUpItem struct {
 	Status              QueueStatus
 	Position            int64
 	Claim               *FollowUpClaimRef
-	CreatedAt           time.Time
+	// ErrorCode is set when Status is rejected.
+	ErrorCode string
+	CreatedAt time.Time
 }
 
 type PromoteFollowUpResult struct {
@@ -101,6 +130,11 @@ type LiveQueueBackend interface {
 	ClaimNextSteer(context.Context, RunHandle, bool) (SteerItem, SteerClaimRef, bool, error)
 	ApplySteer(context.Context, Key, SteerClaimRef) error
 	ReleaseSteer(context.Context, Key, SteerClaimRef) error
+	// CloseSteerRun rejects every accepted or claimed steer that targets the
+	// given run and seals the run against later steer admission. It is called
+	// once the run is durably terminal; a steer is bound to its run and has no
+	// meaning for any later run of the session.
+	CloseSteerRun(context.Context, Key, string) error
 	ClaimNextFollowUp(context.Context, Key, string) (FollowUpItem, FollowUpClaimRef, bool, error)
 	ApplyFollowUp(context.Context, Key, FollowUpClaimRef) error
 	ReleaseFollowUp(context.Context, Key, FollowUpClaimRef) error
@@ -161,8 +195,38 @@ func validateFollowUpClaim(key Key, ref FollowUpClaimRef) error {
 	return nil
 }
 
+// advanceSteerClaim moves an unapplied claim to the run's current execution
+// identity after an owner change. The consumer run and claim token stay the
+// same, so this is one logical consumption continued by a new owner, and the
+// previous owner's reference no longer matches the stored claim.
+func advanceSteerClaim(item *SteerItem, handle RunHandle) bool {
+	if item == nil || item.Claim == nil || item.Status != QueueClaimed || item.Claim.RunID != handle.RunID {
+		return false
+	}
+	claim := item.Claim
+	if claim.OwnerID == handle.OwnerID && claim.Generation == handle.Generation && claim.FencingToken == handle.FencingToken {
+		return false
+	}
+	claim.OwnerID = handle.OwnerID
+	claim.Generation = handle.Generation
+	claim.FencingToken = handle.FencingToken
+	return true
+}
+
+// runViewOwnedBy reports whether the projected run is owned by ownerID. The
+// memory backend has a single process and never records an owner on the live
+// run view, so an empty view owner matches any handle; a distributed backend
+// records the owner and must match it exactly.
+func runViewOwnedBy(run *CurrentRunView, ownerID string) bool {
+	if run == nil {
+		return false
+	}
+	viewOwner := strings.TrimSpace(run.OwnerID)
+	return viewOwner == "" || viewOwner == strings.TrimSpace(ownerID)
+}
+
 func runMatchesSteerClaim(run *CurrentRunView, ref SteerClaimRef) bool {
-	return run != nil && run.RunID == ref.RunID && run.OwnerID == ref.OwnerID && run.Generation == ref.Generation && isActiveRunStatus(run.Status)
+	return run != nil && run.RunID == ref.RunID && runViewOwnedBy(run, ref.OwnerID) && run.Generation == ref.Generation && isActiveRunStatus(run.Status)
 }
 
 func cloneSteerItem(item SteerItem) SteerItem {
@@ -209,6 +273,152 @@ func pendingFollowUps(state followUpQueueState, limit int) []FollowUpItem {
 		items = items[:limit]
 	}
 	return items
+}
+
+func countPendingSteers(state steerQueueState) int {
+	count := 0
+	for _, item := range state.Items {
+		if item.Status == QueueAccepted {
+			count++
+		}
+	}
+	return count
+}
+
+func countPendingFollowUps(state followUpQueueState) int {
+	count := 0
+	for _, item := range state.Items {
+		if item.Status == QueueAccepted {
+			count++
+		}
+	}
+	return count
+}
+
+// closeSteerRun rejects the run's unapplied steers and records the run as
+// closed so a steer admitted after the terminal decision is refused even while
+// the live snapshot still shows the run as active. It reports whether any
+// item changed.
+func closeSteerRun(state *steerQueueState, runID string, now time.Time) bool {
+	changed := false
+	for i := range state.Items {
+		item := &state.Items[i]
+		if item.TargetRunID != runID || (item.Status != QueueAccepted && item.Status != QueueClaimed) {
+			continue
+		}
+		item.Status = QueueRejected
+		item.ErrorCode = QueueErrorTargetRunNotActive
+		item.Claim = nil
+		changed = true
+	}
+	if state.ClosedRunID != runID {
+		state.ClosedRunID = runID
+		changed = true
+	}
+	if changed {
+		state.UpdatedAt = now
+	}
+	return changed
+}
+
+func (s QueueStatus) terminal() bool {
+	switch s {
+	case QueueApplied, QueueRejected, QueueExpired, QueueCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// compact keeps every accepted or claimed item and only the newest terminal
+// items, so a long-lived session's queue document stays bounded. Map entries
+// that point at dropped items are removed with them.
+func (state *steerQueueState) compact() {
+	if state == nil {
+		return
+	}
+	state.Items = compactQueueItems(state.Items, func(item SteerItem) (QueueStatus, time.Time, int64) {
+		return item.Status, item.CreatedAt, item.Position
+	})
+	if len(state.PromotedFollowUpItems) == 0 {
+		return
+	}
+	present := make(map[string]struct{}, len(state.Items))
+	for _, item := range state.Items {
+		present[string(item.ID)] = struct{}{}
+	}
+	for followUpID, steerID := range state.PromotedFollowUpItems {
+		if _, ok := present[steerID]; !ok {
+			delete(state.PromotedFollowUpItems, followUpID)
+		}
+	}
+}
+
+func (state *followUpQueueState) compact() {
+	if state == nil {
+		return
+	}
+	state.Items = compactQueueItems(state.Items, func(item FollowUpItem) (QueueStatus, time.Time, int64) {
+		return item.Status, item.CreatedAt, item.Position
+	})
+	// TerminalClaims is the per-trigger-run idempotency record: a repeated
+	// terminal observation for the same run must find its entry and claim
+	// nothing more, even after retention dropped the applied item. Entries
+	// therefore outlive their items and are only pruned once the map itself
+	// grows past its bound.
+	if len(state.TerminalClaims) <= terminalClaimRetention {
+		return
+	}
+	present := make(map[string]struct{}, len(state.Items))
+	for _, item := range state.Items {
+		present[string(item.ID)] = struct{}{}
+	}
+	for runID, itemID := range state.TerminalClaims {
+		if _, ok := present[itemID]; !ok {
+			delete(state.TerminalClaims, runID)
+		}
+	}
+}
+
+func compactQueueItems[T any](items []T, describe func(T) (QueueStatus, time.Time, int64)) []T {
+	terminal := 0
+	for _, item := range items {
+		if status, _, _ := describe(item); status.terminal() {
+			terminal++
+		}
+	}
+	if terminal <= queueTerminalRetention {
+		return items
+	}
+	type indexed struct {
+		index     int
+		createdAt time.Time
+		position  int64
+	}
+	candidates := make([]indexed, 0, terminal)
+	for i, item := range items {
+		if status, createdAt, position := describe(item); status.terminal() {
+			candidates = append(candidates, indexed{index: i, createdAt: createdAt, position: position})
+		}
+	}
+	// Oldest first; the head of this order is dropped.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if !candidates[i].createdAt.Equal(candidates[j].createdAt) {
+			return candidates[i].createdAt.Before(candidates[j].createdAt)
+		}
+		return candidates[i].position < candidates[j].position
+	})
+	drop := make(map[int]struct{}, terminal-queueTerminalRetention)
+	for _, candidate := range candidates[:terminal-queueTerminalRetention] {
+		drop[candidate.index] = struct{}{}
+	}
+	kept := make([]T, 0, len(items)-len(drop))
+	for i, item := range items {
+		if _, dropped := drop[i]; !dropped {
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 func nextSteerPosition(state steerQueueState) int64 {

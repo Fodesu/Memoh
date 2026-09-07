@@ -117,6 +117,14 @@ func (m *Manager) ReleaseSteer(ctx context.Context, key Key, ref SteerClaimRef) 
 	return queue.ReleaseSteer(ctx, key, ref)
 }
 
+func (m *Manager) CloseSteerRun(ctx context.Context, key Key, runID string) error {
+	queue, err := m.liveQueueBackend()
+	if err != nil {
+		return err
+	}
+	return queue.CloseSteerRun(ctx, key, runID)
+}
+
 func (m *Manager) ClaimNextFollowUp(ctx context.Context, key Key, triggerRunID string) (FollowUpItem, FollowUpClaimRef, bool, error) {
 	queue, err := m.liveQueueBackend()
 	if err != nil {

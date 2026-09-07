@@ -1392,12 +1392,19 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 
 // startTurnWithBusyRetry covers the race where a channel message arrives while
 // an ask_user/tool response is committing and the same session is still busy.
-// A runtime that supports deferred turns accepts the complete command
-// immediately; older or test services retain the bounded retry fallback.
+//
+// Only local channel types (web, cli) park the complete command in the
+// follow-up queue. Their users observe the resulting run through the session
+// runtime subscription, so nobody needs this call's handle. A platform
+// channel delivers the reply by streaming this handle's events back to the
+// platform; a run started later from the queue would have no consumer and its
+// reply would never reach the user, so platform channels keep the bounded
+// retry and surface ErrSessionBusy when it expires.
 func (p *ChannelInboundProcessor) startTurnWithBusyRetry(ctx context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
 	if p == nil || p.turnSvc == nil {
 		return nil, errors.New("channel inbound processor not configured")
 	}
+	deferrable := !cmd.NoDefer && isLocalChannelType(channel.ChannelType(cmd.CurrentChannel))
 	deadline := time.NewTimer(turnBusyRetryWindow)
 	defer deadline.Stop()
 	delay := turnBusyRetryInitial
@@ -1406,7 +1413,7 @@ func (p *ChannelInboundProcessor) startTurnWithBusyRetry(ctx context.Context, cm
 		if !errors.Is(err, turn.ErrSessionBusy) {
 			return handle, err
 		}
-		if deferred, ok := p.turnSvc.(turn.DeferredTurnService); ok {
+		if deferred, ok := p.turnSvc.(turn.DeferredTurnService); ok && deferrable {
 			if queueErr := deferred.EnqueueDeferredTurn(ctx, cmd); queueErr == nil {
 				return nil, turn.ErrTurnDeferred
 			}
@@ -1477,6 +1484,12 @@ func (p *ChannelInboundProcessor) handleQueueCommand(
 	}
 	if strings.TrimSpace(sessionType) == sessionpkg.TypeDiscuss {
 		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeUnsupported)
+	}
+	// A follow-up starts a run that the server owns; only local channels see
+	// that run's output through the session runtime subscription. A steer
+	// joins the run this channel is already streaming, so it stays available.
+	if resource == "queue" && !isLocalChannelType(msg.Channel) {
+		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeFollowUpUnsupportedChannel)
 	}
 	invocationID := queueCommandIdempotencyKey(msg.Channel, routeID, msg.Message.ID, resource)
 	input := QueueCommandInput{
@@ -1741,6 +1754,10 @@ func slashChannelMessageKey(code string) string {
 		return "queue.invalid"
 	case QueueCommandCodeUnsupported:
 		return "queue.unsupported"
+	case QueueCommandCodeCapacity:
+		return "queue.capacity"
+	case QueueCommandCodeFollowUpUnsupportedChannel:
+		return "queue.followUpUnsupportedChannel"
 	default:
 		return ""
 	}

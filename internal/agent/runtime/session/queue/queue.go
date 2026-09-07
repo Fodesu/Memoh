@@ -26,6 +26,9 @@ const (
 	Canceled = sessionruntime.QueueCanceled
 
 	DefaultPendingListLimit = 256
+	MaxPendingItems         = sessionruntime.MaxPendingQueueItems
+
+	ErrorTargetRunNotActive = sessionruntime.QueueErrorTargetRunNotActive
 )
 
 var (
@@ -33,5 +36,6 @@ var (
 	ErrInvalidReference    = sessionruntime.ErrQueueInvalidReference
 	ErrNotPending          = sessionruntime.ErrQueueNotPending
 	ErrInvocationConflict  = sessionruntime.ErrQueueInvocationConflict
+	ErrCapacityExceeded    = sessionruntime.ErrQueueCapacityExceeded
 	ErrAdmissionOverloaded = sessionruntime.ErrQueueAdmissionOverloaded
 )

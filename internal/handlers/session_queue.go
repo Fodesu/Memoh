@@ -180,6 +180,8 @@ func queueAdmissionError(err error) error {
 		return apperror.New(apperror.CodeSessionInvocationConflict, nil)
 	case errors.Is(err, queue.ErrAdmissionOverloaded):
 		return apperror.New(apperror.CodeQueueAdmissionOverloaded, nil)
+	case errors.Is(err, queue.ErrCapacityExceeded):
+		return apperror.New(apperror.CodeQueueCapacityExceeded, nil)
 	case errors.Is(err, queue.ErrInvalidReference):
 		return apperror.New(apperror.CodeQueueRequestInvalid, nil)
 	default:
@@ -195,6 +197,8 @@ func queueMutationError(err error) error {
 		return apperror.New(apperror.CodeQueueNoActiveRun, nil)
 	case errors.Is(err, queue.ErrNotPending), errors.Is(err, queue.ErrInvalidReference):
 		return apperror.New(apperror.CodeQueueItemNotPending, nil)
+	case errors.Is(err, queue.ErrCapacityExceeded):
+		return apperror.New(apperror.CodeQueueCapacityExceeded, nil)
 	default:
 		return err
 	}

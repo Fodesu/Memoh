@@ -48,12 +48,6 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	if cmd.Mode == turn.ModeDiscuss {
 		admission, err := s.admitTurnRun(runCtx, cmd, cancel, cancelCause, nil)
 		if err != nil {
-			if errors.Is(err, turn.ErrSessionBusy) && !cmd.NoDefer {
-				if queueErr := s.EnqueueDeferredTurn(ctx, cmd); queueErr == nil {
-					cancel()
-					return nil, turn.ErrTurnDeferred
-				}
-			}
 			cancel()
 			return nil, err
 		}
@@ -62,14 +56,13 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	}
 
 	injectCh := make(chan turn.InjectMessage, 16)
+	// A busy thread is reported as ErrSessionBusy. Whether to park the command
+	// in the follow-up queue is the ingress's decision (EnqueueDeferredTurn):
+	// only a caller whose user sees the run through the session runtime
+	// subscription can drop its handle, because a run started from the queue
+	// has no other consumer for its output.
 	admission, err := s.admitTurnRun(runCtx, cmd, cancel, cancelCause, injectCh)
 	if err != nil {
-		if errors.Is(err, turn.ErrSessionBusy) && !cmd.NoDefer {
-			if queueErr := s.EnqueueDeferredTurn(ctx, cmd); queueErr == nil {
-				cancel()
-				return nil, turn.ErrTurnDeferred
-			}
-		}
 		cancel()
 		return nil, err
 	}
@@ -114,16 +107,6 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	}
 	go h.pump(cmd, chunkCh, errCh)
 	return h, nil
-}
-
-// EnqueueDeferredTurn places a complete user turn in the session runtime's
-// transient memory or Redis queue. The command remains intact so attachments,
-// reply metadata, and channel routing survive the busy handoff.
-func (s *Service) EnqueueDeferredTurn(ctx context.Context, cmd turn.StartTurnCommand) error {
-	if s == nil || s.sessionManager == nil {
-		return errors.New("turn: deferred queue is not configured")
-	}
-	return s.sessionManager.EnqueueDeferredTurn(ctx, cmd)
 }
 
 func (s *Service) streamTurnChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, <-chan error) {

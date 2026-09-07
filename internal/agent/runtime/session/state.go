@@ -115,6 +115,10 @@ func (*Manager) leaseExpired(run *CurrentRunView, now time.Time) bool {
 	return true
 }
 
+// IsActiveRunStatus reports whether a projected run status still occupies the
+// session: accepted, running, or waiting for a decision.
+func IsActiveRunStatus(status string) bool { return isActiveRunStatus(status) }
+
 func isActiveRunStatus(status string) bool {
 	return strings.EqualFold(status, RunStatusAdmitting) ||
 		strings.EqualFold(status, RunStatusRunning) ||

@@ -17,10 +17,10 @@ import (
 // delivery and drop the duplicate silently.
 var ErrDuplicateTurn = errors.New("turn: duplicate idempotency key")
 
-// ErrSessionBusy reports that the thread already has a run in flight. Runtime
-// implementations may convert this into ErrTurnDeferred by placing the full
-// command in their configured transient queue; callers without that facility
-// can still retry the unchanged command.
+// ErrSessionBusy reports that the thread already has a run in flight. An
+// ingress whose user observes runs through the session runtime subscription
+// may park the full command with DeferredTurnService and report
+// ErrTurnDeferred instead; other callers retry the unchanged command.
 //
 // It is declared here rather than reused from the runtime because this package
 // is the only agent surface Channel may import, and it must not depend on the
@@ -51,9 +51,9 @@ const (
 // outbound assets through RunHandle.AddOutboundAssets.
 type StartTurnCommand struct {
 	SchemaVersion int
-	// NoDefer is reserved for server-owned continuation attempts. A transient
-	// follow-up claim must not be copied into the generic deferred-turn queue
-	// when a terminal handoff races another admission.
+	// NoDefer is reserved for server-owned continuation attempts. A follow-up
+	// that is already being started must surface ErrSessionBusy instead of
+	// re-entering the follow-up queue when it races another admission.
 	NoDefer bool
 	TeamID  string // required; the service fails closed when empty
 	Mode    Mode
@@ -243,8 +243,11 @@ type Stopper interface {
 	StopTurn(context.Context, StopCommand) (bool, error)
 }
 
-// DeferredTurnService is an optional runtime queue used by channel adapters
-// when a complete user turn arrives while its session is busy.
+// DeferredTurnService parks a complete user turn that arrived while its
+// session was busy. The run it later starts has no handle consumer, so only an
+// ingress that delivers output through the session runtime subscription (web,
+// cli) may use it; platform channels stream replies from the handle and must
+// not.
 type DeferredTurnService interface {
 	EnqueueDeferredTurn(context.Context, StartTurnCommand) error
 }

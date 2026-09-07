@@ -157,6 +157,8 @@ type Service struct {
 	publishTurnEvent                  func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
 	turnHooks                         *turnRuntimeHooks
 	sessionManager                    *sessionruntime.Manager
+	// followUpStarts holds one in-flight follow-up starter per session key.
+	followUpStarts sync.Map
 }
 
 // NewService creates an application service backed by the native agent.

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 )
 
@@ -99,48 +98,6 @@ func TestMemoryBackendDoesNotImplementDistributedCoordination(t *testing.T) {
 
 	if _, ok := any(NewMemoryBackend()).(DistributedBackend); ok {
 		t.Fatal("MemoryBackend unexpectedly implements DistributedBackend")
-	}
-}
-
-func TestMemoryBackendDeferredTurnsFIFO(t *testing.T) {
-	backend := NewMemoryBackend()
-	key := Key{BotID: "bot-1", SessionID: "session-1"}
-	for _, payload := range []string{"first", "second"} {
-		if err := backend.EnqueueDeferredTurn(context.Background(), key, []byte(payload)); err != nil {
-			t.Fatalf("enqueue %q: %v", payload, err)
-		}
-	}
-	for _, want := range []string{"first", "second"} {
-		got, ok, err := backend.DequeueDeferredTurn(context.Background(), key)
-		if err != nil || !ok || string(got) != want {
-			t.Fatalf("dequeue = %q, %v, %v; want %q", got, ok, err, want)
-		}
-	}
-	if _, ok, err := backend.DequeueDeferredTurn(context.Background(), key); err != nil || ok {
-		t.Fatalf("empty dequeue = ok:%v err:%v", ok, err)
-	}
-}
-
-func TestManagerDrainsDeferredTurnAfterTerminalObservation(t *testing.T) {
-	m := NewManager(NewMemoryBackend(), Options{})
-	key := Key{BotID: "bot-1", SessionID: "session-1"}
-	want := turn.StartTurnCommand{BotID: key.BotID, ThreadID: key.SessionID, Query: "next"}
-	if err := m.EnqueueDeferredTurn(context.Background(), want); err != nil {
-		t.Fatalf("enqueue deferred turn: %v", err)
-	}
-	started := make(chan turn.StartTurnCommand, 1)
-	m.SetDeferredTurnStarter(func(_ context.Context, cmd turn.StartTurnCommand) error {
-		started <- cmd
-		return nil
-	})
-	m.observeTerminalRun(context.Background(), TerminalRun{RunID: "run-1", BotID: key.BotID, SessionID: key.SessionID})
-	select {
-	case got := <-started:
-		if got.Query != want.Query || got.ThreadID != want.ThreadID {
-			t.Fatalf("started command = %#v, want %#v", got, want)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("deferred turn was not started")
 	}
 }
 
