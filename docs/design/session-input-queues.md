@@ -9,28 +9,145 @@ The configured `session_runtime.backend` selects the storage implementation:
 
 - `memory` keeps queue state in the process heap. It is fast and has no
   external dependency, but all queue items are lost when the process exits.
-- `redis` keeps queue state in Redis using per-session keys and optimistic
-  transactions. It is shared by runtime instances, but it is still transient:
-  Redis expiry, flush, or loss can discard items.
+- `redis` keeps queue state in Redis using one document per queue and session
+  and optimistic transactions. It is shared by runtime instances, but it is
+  still transient: Redis expiry, flush, or loss can discard items.
 
-Both implementations expose the same runtime API. Steer and follow-up remain
+Both implementations expose the same runtime API (`LiveQueueBackend` in
+`internal/agent/runtime/session/live_queue.go`). Steer and follow-up remain
 separate Go types, methods, and Redis keys; an item from one queue cannot be
 read or mutated through the other queue API.
 
-## Queue semantics
+## Item lifecycle
 
-An item starts as `accepted`, may be `claimed`, and becomes `applied` after the
-runtime consumes it. Cancellation is terminal. Reordering and editing are
-allowed only while an item is accepted and pending. Invocation IDs provide
-best-effort replay protection for the lifetime of the live queue state; an
-accepted result is an acknowledgement from the selected runtime backend, not a
-durable receipt.
+```text
+accepted -> claimed -> applied
+   |          |
+   +----------+-----> rejected   (error_code set)
+   +----------------> canceled
+```
 
-Steer items capture the active run ID at admission and are claimable only by
-that run's owner, generation, and fencing token. Follow-up items capture the
-run that was active when they were enqueued. At a terminal boundary the
-application claims the next follow-up and starts a normal new turn; applying
-the claim is idempotent, and a failed start releases the claim for retry.
+- `accepted`: the item is stored and pending. Only accepted items are listed,
+  reordered, edited, or canceled.
+- `claimed`: a consumer holds the item. A steer claim carries the run ID,
+  owner, generation, fencing token, and a claim token; a follow-up claim carries
+  the terminal run that triggered it and a claim token.
+- `applied`: the item entered a model step whose history commit succeeded
+  (steer), or started its continuation run (follow-up).
+- `rejected`: the runtime refused the item after acceptance. `ErrorCode` names
+  the stable reason; today the only reason is `queue_target_run_not_active`.
+- `canceled`: the caller withdrew a pending item. Promoting a follow-up to a
+  steer cancels the follow-up and creates a new steer item.
+
+`expired` exists in the status vocabulary but no path writes it.
+
+Invocation IDs provide best-effort replay protection for the lifetime of the
+retained items: the same invocation with the same payload returns the existing
+item, and a different payload returns `ErrQueueInvocationConflict`.
+
+## Capacity and compaction
+
+Each queue document is bounded in two ways:
+
+- At most `MaxPendingQueueItems` (64) accepted items per queue and session.
+  Enqueue beyond that returns `ErrQueueCapacityExceeded`, surfaced as
+  `queue_capacity_exceeded` over HTTP and channel slash commands.
+- After every mutation the document keeps all accepted and claimed items and
+  only the newest 64 terminal items. Map entries that reference dropped items
+  (promotion records, per-run follow-up claims) are removed with them.
+
+Replay protection therefore covers roughly the last 64 completed submissions.
+
+## Steer
+
+A steer is bound to the run that was active when it was admitted.
+
+History keeps its existing turn model: every user message opens a turn, and
+the assistant and tool rows that answer it belong to that turn. An applied
+steer is therefore persisted as its own turn, and the output that follows it
+is filed under that turn, while the run ID does not change. A run can span
+several turns; the live projection names the post-steer assistant segment
+after the steer's turn as soon as that turn is known.
+
+- Admission records the active run as `TargetRunID`. Without an active run,
+  or after the run has been sealed, admission returns `ErrQueueNoActiveRun`.
+- At each committed step the application applies the previously claimed steer
+  and claims the next accepted steer for the same run. During a tool loop the
+  claimed text is injected into the next model request; at a final step the
+  claim reopens the same run with the steer as the next model input.
+- A step that parks the run for a tool approval or user input applies the
+  previous claim but does not claim a new one. The continuation's first
+  committed step claims instead, so no claim waits unapplied across the
+  decision.
+- `ClaimNextSteer` returns the run's existing unapplied claim before selecting
+  a new item. When the run has been reclaimed by a new owner, the stored claim
+  is advanced to the new owner, generation, and fencing token; the previous
+  owner's reference no longer matches it.
+- A final step that finds no steer seals the run (`ClosedRunID`), so a steer
+  that arrives between the final commit and the terminal record is refused.
+- When the run reaches any terminal state the terminal observer calls
+  `CloseSteerRun`: every accepted or claimed steer targeting the run becomes
+  `rejected` with `queue_target_run_not_active`, and the run is sealed.
+
+A claim is valid only for the run's current owner, generation, and fencing
+token; applying with a stale claim returns `ErrRunOwnershipLost`.
+
+## Follow-up
+
+A follow-up is bound to the session. It records the run that was active when
+it was enqueued (`EnqueuedDuringRunID`) but is consumed by whichever run
+finishes next.
+
+Two producers share the queue:
+
+- The queue panel and the `/queue` slash command store `{"text": ...}`. The
+  continuation starts as an ordinary chat turn on the same session. `/queue`
+  is accepted only on local channel types (web, cli); a platform channel gets
+  `queue_follow_up_unsupported_channel`, because it could not receive the
+  reply of a run the server starts from the queue. `/steer` stays available on
+  every channel: it joins the run whose reply the channel is already
+  streaming.
+- A complete turn that met a busy session (`turn.ErrSessionBusy`) may be
+  stored through `EnqueueDeferredTurn` as `{"text": ..., "command": ...}` with
+  the full `StartTurnCommand`. The continuation keeps the route, reply target,
+  attachments, and metadata of the original message. The caller sees
+  `turn.ErrTurnDeferred`; if the run ended before the enqueue, the caller sees
+  `ErrQueueNoActiveRun` and retries ordinary admission.
+  Only the local channel types (web, cli) do this: their users observe the
+  resulting run through the session runtime subscription. Platform channels
+  deliver replies by streaming the caller's run handle, and a run started from
+  the queue has no such consumer, so they keep the bounded busy retry and
+  surface `ErrSessionBusy` when it expires. `StartTurn` itself never defers.
+
+Consumption:
+
+- The terminal observer claims the oldest accepted follow-up for the finished
+  run and starts it through normal turn admission with `NoDefer` set and the
+  retry identity `follow-up:<item_id>`. Admission remains the only owner and
+  fencing authority; the queue only selects payload.
+- One starter runs per session at a time. A successful start applies the
+  claim; a failed start releases it so the next terminal boundary claims it
+  again. Ordinary user turns may win the session slot first; the follow-up
+  then waits for that run to end.
+- An enqueue that observed an active run re-checks the live snapshot after
+  writing. If the run has already ended, the enqueue path starts the follow-up
+  itself, so an item cannot wait for an unrelated later run.
+- Follow-ups are not rejected when the run they were queued behind aborts,
+  fails, or is lost. The queued input still belongs to the session; only
+  steers, which are run-bound, are rejected at terminal.
+
+## Redis transactions
+
+Queue mutations run as `WATCH`/`MULTI` transactions whose watch set is the
+queue document plus, where a decision depends on ownership, the run key that
+the finishing owner deletes. The session state key is read inside the
+transaction but never watched: it is rewritten on every streamed runtime delta
+and watching it would fail queue transactions during normal output. A steer
+admitted against a snapshot that turns terminal is still closed by
+`CloseSteerRun`, which serializes on the queue document.
+
+Conflicting transactions retry with exponential backoff up to eight times and
+then return `ErrQueueAdmissionOverloaded`.
 
 ## PostgreSQL boundary
 
