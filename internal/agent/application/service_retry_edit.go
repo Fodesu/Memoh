@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
@@ -34,6 +35,10 @@ type RetryLatestMessageInput struct {
 	// turn's preference write-back has finished (issue #879). Same contract
 	// as ChatRequest.OnModelPreferenceSettled.
 	OnModelPreferenceSettled func()
+	// RunHandle and InjectCh are server-owned admission capabilities. They are
+	// populated only by the in-process Web runtime, never by client JSON.
+	RunHandle sessionruntime.RunHandle
+	InjectCh  chan turnpkg.InjectMessage
 }
 
 type EditLatestMessageInput struct {
@@ -55,6 +60,8 @@ type EditLatestMessageInput struct {
 	ToolHTTPURL            string
 	// OnModelPreferenceSettled: see RetryLatestMessageInput.
 	OnModelPreferenceSettled func()
+	RunHandle              sessionruntime.RunHandle
+	InjectCh               chan turnpkg.InjectMessage
 }
 
 func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMessageInput, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) error {
@@ -77,6 +84,7 @@ func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMes
 		ChatID:                       strings.TrimSpace(input.BotID),
 		ThreadID:                     sessionID,
 		RunID:                        strings.TrimSpace(input.RunID),
+		RunHandle:                    input.RunHandle,
 		TurnID:                       strings.TrimSpace(input.TurnID),
 		TurnPosition:                 input.TurnPosition,
 		UserID:                       strings.TrimSpace(input.ActorUserID),
@@ -93,6 +101,8 @@ func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMes
 		ReasoningEffort:              strings.TrimSpace(input.ReasoningEffort),
 		WorkspaceTargetID:            strings.TrimSpace(input.WorkspaceTargetID),
 		ToolHTTPURL:                  strings.TrimSpace(input.ToolHTTPURL),
+		InjectCh:                     input.InjectCh,
+		QueueInjectCh:                input.InjectCh,
 		ReusePersistedUserMessage:    true,
 		PersistedUserMessageID:       requestMessage.ID,
 		SkipHistoryTurn:              true,
@@ -120,6 +130,7 @@ func (s *Service) EditLatestMessageWS(ctx context.Context, input EditLatestMessa
 		ChatID:                       strings.TrimSpace(input.BotID),
 		ThreadID:                     sessionID,
 		RunID:                        strings.TrimSpace(input.RunID),
+		RunHandle:                    input.RunHandle,
 		TurnID:                       strings.TrimSpace(input.TurnID),
 		TurnPosition:                 input.TurnPosition,
 		UserID:                       strings.TrimSpace(input.ActorUserID),
@@ -137,6 +148,8 @@ func (s *Service) EditLatestMessageWS(ctx context.Context, input EditLatestMessa
 		ReasoningEffort:              strings.TrimSpace(input.ReasoningEffort),
 		WorkspaceTargetID:            strings.TrimSpace(input.WorkspaceTargetID),
 		ToolHTTPURL:                  strings.TrimSpace(input.ToolHTTPURL),
+		InjectCh:                     input.InjectCh,
+		QueueInjectCh:                input.InjectCh,
 		SkipHistoryTurn:              true,
 		HistoryCutoffBeforeMessageID: strings.TrimSpace(turn.RequestMessageID),
 		OnModelPreferenceSettled:     input.OnModelPreferenceSettled,
@@ -273,6 +286,17 @@ func (s *Service) streamReplacementWS(
 	eventCh chan<- WSStreamEvent,
 	abortCh <-chan struct{},
 ) error {
+	replacement := &messagepkg.TurnReplacement{
+		OldTurnID:               strings.TrimSpace(oldTurnID),
+		ReplacementTurnID:       strings.TrimSpace(req.TurnID),
+		ReplacementTurnPosition: req.TurnPosition,
+		RequestMessageID:        strings.TrimSpace(requestMessageID),
+		Reason:                  strings.TrimSpace(reason),
+	}
+	if update := s.prepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID); update != nil {
+		replacement.SessionMetadata = update.metadata
+	}
+	req.TurnReplacement = replacement
 	_, err := s.streamChatWSResultWithHooks(
 		ctx,
 		req,

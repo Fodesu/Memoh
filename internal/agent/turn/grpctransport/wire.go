@@ -11,6 +11,10 @@ import (
 const (
 	legacySessionIDKey  = "SessionID"
 	internalThreadIDKey = "ThreadID"
+	// turnDeferredStatusMessage is part of the private gRPC vocabulary. Keep it
+	// centralized because the client uses it to distinguish a deferred
+	// admission result from other ResourceExhausted failures.
+	turnDeferredStatusMessage = "turn deferred"
 )
 
 // The authenticated server-channel RPC predates the internal Thread

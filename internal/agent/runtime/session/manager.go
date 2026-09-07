@@ -2,6 +2,7 @@ package sessionruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,6 +59,8 @@ type Manager struct {
 	terminalObserver       func(context.Context, TerminalRun)
 	decisionFinalizer      func(context.Context, RunHandle) error
 	terminalReconciler     func(context.Context) error
+	deferredTurnStarter    func(context.Context, turn.StartTurnCommand) error
+	cancelLostRunDecisions func(context.Context, string, string, string, int64, string) error
 	historyResetHandler    HistoryResetHandler
 	pendingCommands        map[string]map[*commandWaiter]struct{}
 	inflightCommandTargets map[string]struct{}
@@ -95,6 +98,7 @@ type runControl struct {
 	botID             string
 	sessionID         string
 	runID             string
+	ownerID           string
 	turnID            string
 	generation        string
 	fencingToken      int64
@@ -118,6 +122,13 @@ type runControl struct {
 	decisionMu        sync.Mutex
 	decisionReady     chan struct{}
 	decisionReadyOnce sync.Once
+	// stepMu guards the step cursor: the highest durable step index whose
+	// step_end marker this run has consumed into the live projection. Queue
+	// steer anchoring waits on it so the anchor never precedes output that the
+	// model loop already produced but the event consumer has not applied yet.
+	stepMu       sync.Mutex
+	stepConsumed int
+	stepChanged  chan struct{}
 	// pendingDecisions tracks every decision that still awaits a terminal
 	// status. decisionInline marks runtimes that block inside the same turn
 	// instead of parking and re-entering through EventAgentStart.
@@ -164,7 +175,7 @@ func (c *runControl) handle() RunHandle {
 	if c == nil {
 		return RunHandle{}
 	}
-	return RunHandle{BotID: c.botID, SessionID: c.sessionID, RunID: c.runID, TurnID: c.turnID, Generation: c.generation, FencingToken: c.fencingToken}
+	return RunHandle{BotID: c.botID, SessionID: c.sessionID, RunID: c.runID, OwnerID: c.ownerID, TurnID: c.turnID, Generation: c.generation, FencingToken: c.fencingToken}
 }
 
 func (c *runControl) beginDecisionWait(decisionID string) {
@@ -277,6 +288,52 @@ func (c *runControl) decisionReadySignal() <-chan struct{} {
 	c.decisionMu.Lock()
 	defer c.decisionMu.Unlock()
 	return c.decisionReady
+}
+
+// markStepConsumed records that the live projection now holds every part of
+// durable step stepIndex. Waiters blocked in awaitStepConsumed are woken.
+func (c *runControl) markStepConsumed(stepIndex int) {
+	if c == nil {
+		return
+	}
+	c.stepMu.Lock()
+	defer c.stepMu.Unlock()
+	if stepIndex+1 > c.stepConsumed {
+		c.stepConsumed = stepIndex + 1
+	}
+	if c.stepChanged != nil {
+		close(c.stepChanged)
+		c.stepChanged = nil
+	}
+}
+
+// awaitStepConsumed blocks until the projection has consumed step stepIndex,
+// the context ends, or the run's lifecycle context ends. Callers only pass an
+// index whose step_end marker the native loop has already emitted, so the wait
+// is bounded by event consumption, not by model progress.
+func (c *runControl) awaitStepConsumed(ctx context.Context, stepIndex int) error {
+	if c == nil {
+		return nil
+	}
+	for {
+		c.stepMu.Lock()
+		if c.stepConsumed > stepIndex {
+			c.stepMu.Unlock()
+			return nil
+		}
+		if c.stepChanged == nil {
+			c.stepChanged = make(chan struct{})
+		}
+		changed := c.stepChanged
+		c.stepMu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.lifecycleCtx.Done():
+			return ErrRunOwnershipLost
+		}
+	}
 }
 
 type Options struct {
@@ -468,6 +525,92 @@ func (m *Manager) SetTerminalReconciler(reconciler func(context.Context) error) 
 	m.mu.Unlock()
 }
 
+// SetDeferredTurnStarter installs the application callback that starts a
+// complete turn after a busy session releases its current run.
+func (m *Manager) SetDeferredTurnStarter(starter func(context.Context, turn.StartTurnCommand) error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.deferredTurnStarter = starter
+	m.mu.Unlock()
+}
+
+// EnqueueDeferredTurn stores a complete transient turn in the configured live
+// backend. Memory and Redis therefore share the same semantics while keeping
+// the turn payload intact for attachments and channel metadata.
+func (m *Manager) EnqueueDeferredTurn(ctx context.Context, cmd turn.StartTurnCommand) error {
+	if m == nil || m.backend == nil {
+		return errors.New("session runtime manager is not configured")
+	}
+	store, ok := m.backend.(DeferredTurnBackend)
+	if !ok {
+		return errors.New("session runtime deferred queue is unavailable")
+	}
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	key := Key{BotID: cmd.BotID, SessionID: cmd.ThreadID}
+	if err := store.EnqueueDeferredTurn(ctx, key, payload); err != nil {
+		return err
+	}
+	// Close the race where the active run terminalizes immediately before the
+	// enqueue reaches the backend and its terminal observer has already drained.
+	if snapshot, ok, err := m.backend.Load(ctx, key); err == nil && (!ok || snapshot.CurrentRunView == nil || !isActiveRunStatus(snapshot.CurrentRunView.Status)) {
+		m.drainDeferredTurn(context.WithoutCancel(ctx), key)
+	}
+	return nil
+}
+
+func (m *Manager) drainDeferredTurn(ctx context.Context, key Key) {
+	if m == nil || m.backend == nil {
+		return
+	}
+	store, ok := m.backend.(DeferredTurnBackend)
+	if !ok {
+		return
+	}
+	m.mu.Lock()
+	starter := m.deferredTurnStarter
+	m.mu.Unlock()
+	if starter == nil {
+		return
+	}
+	payload, ok, err := store.DequeueDeferredTurn(ctx, key)
+	if err != nil || !ok {
+		return
+	}
+	var cmd turn.StartTurnCommand
+	if err := json.Unmarshal(payload, &cmd); err != nil {
+		if m.logger != nil {
+			m.logger.Warn("drop malformed deferred turn", slog.String("bot_id", key.BotID), slog.String("session_id", key.SessionID), slog.Any("error", err))
+		}
+		return
+	}
+	if err := starter(ctx, cmd); err != nil {
+		// Preserve FIFO only when the session is still busy. Other admission
+		// failures are terminal for this transient runtime buffer and are logged
+		// by the application starter.
+		if errors.Is(err, turn.ErrSessionBusy) {
+			_ = store.EnqueueDeferredTurn(ctx, key, payload)
+		} else if m.logger != nil {
+			m.logger.Warn("drop deferred turn after admission failure", slog.String("bot_id", key.BotID), slog.String("session_id", key.SessionID), slog.Any("error", err))
+		}
+	}
+}
+
+// SetLostRunDecisionCanceller installs run-scoped cleanup for decisions parked
+// by a run that the reaper has durably marked lost.
+func (m *Manager) SetLostRunDecisionCanceller(canceller func(context.Context, string, string, string, int64, string) error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.cancelLostRunDecisions = canceller
+	m.mu.Unlock()
+}
+
 func (m *Manager) observeTerminalRun(ctx context.Context, run TerminalRun) {
 	if m == nil || run.RunID == "" {
 		return
@@ -478,6 +621,7 @@ func (m *Manager) observeTerminalRun(ctx context.Context, run TerminalRun) {
 	if observer != nil {
 		observer(context.WithoutCancel(ctx), run)
 	}
+	m.drainDeferredTurn(context.WithoutCancel(ctx), Key{BotID: run.BotID, SessionID: run.SessionID})
 }
 
 // reconcileAndObserveTerminalRun is reserved for recovery paths where a
@@ -755,6 +899,10 @@ func (m *Manager) startReaper(ctx context.Context) error {
 	reaper.SetWaitingDecisionRecoverer(m.recoverWaitingDecision)
 	reaper.SetTerminalObserver(m.reconcileAndObserveTerminalRun)
 	reaper.SetTerminalReconciler(m.reconcileTerminalRuns)
+	m.mu.Lock()
+	cancelLostRunDecisions := m.cancelLostRunDecisions
+	m.mu.Unlock()
+	reaper.SetLostRunDecisionCanceller(cancelLostRunDecisions)
 	if err := reaper.Start(ctx); err != nil {
 		return err
 	}
@@ -848,6 +996,24 @@ func (m *Manager) StartRunHandle(ctx context.Context, botID, sessionID, runID st
 	return m.StartRunWithAdmissionBuilderHandle(ctx, botID, sessionID, runID, func(context.Context, RunHandle) (RunAdmissionView, error) {
 		return RunAdmissionView{}, nil
 	}, abortCh, cancel, injectCh)
+}
+
+// OwnerID returns this manager's stable execution-owner identity.
+func (m *Manager) OwnerID() string {
+	if m == nil {
+		return ""
+	}
+	return m.ownerID
+}
+
+// LivenessGeneration returns the current live-backend incarnation for
+// application-owned recovery code. It is read-only; ownership still changes
+// only through the durable fenced claim.
+func (m *Manager) LivenessGeneration(ctx context.Context) (string, error) {
+	if m == nil {
+		return "", ErrManagerClosed
+	}
+	return m.livenessGeneration(ctx)
 }
 
 // StartRunWithAdmissionBuilderHandle reserves the cross-server run before
@@ -954,7 +1120,7 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 	ctx = admissionCtx
 
 	runGeneration := m.newGeneration()
-	handle := RunHandle{BotID: botID, SessionID: sessionID, RunID: runID, TurnID: start.turnID, Generation: runGeneration, FencingToken: start.fencingToken}
+	handle := RunHandle{BotID: botID, SessionID: sessionID, RunID: runID, OwnerID: m.ownerID, TurnID: start.turnID, Generation: runGeneration, FencingToken: start.fencingToken}
 	if handle.FencingToken > 0 {
 		ctx = runtimefence.WithContext(ctx, runtimefence.Fence{
 			BotID:     handle.BotID,
@@ -967,6 +1133,7 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 		botID:           botID,
 		sessionID:       sessionID,
 		runID:           runID,
+		ownerID:         m.ownerID,
 		turnID:          start.turnID,
 		generation:      runGeneration,
 		fencingToken:    start.fencingToken,
@@ -1171,6 +1338,12 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 		run.Status = RunStatusRunning
 		run.RequestUserTurn = admission.RequestUserTurn
 		run.Operation = admission.Operation
+		switch {
+		case admission.RequestUserTurn != nil:
+			run.UserTurns = []chatview.UITurn{*admission.RequestUserTurn}
+		case admission.Operation != nil && admission.Operation.ReplacementUserTurn != nil:
+			run.UserTurns = []chatview.UITurn{*admission.Operation.ReplacementUserTurn}
+		}
 		run.UpdatedAt = now
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
@@ -1657,7 +1830,20 @@ func (m *Manager) prepareAgentTerminalEvent(
 		return agentTerminalProposal{}, nil
 	}
 	if prepared.State.Terminal() {
-		return agentTerminalProposal{}, ErrRunOwnershipLost
+		// CommitStep may durably finalize this exact run before its delayed native
+		// terminal event reaches the live projection. prepareLedgerFinish has
+		// already verified this handle's fencing token, so replay that terminal
+		// outcome only when it agrees with the event we are publishing.
+		if prepared.State != terminalLedgerState(status, errorCode, "") {
+			return agentTerminalProposal{}, ErrRunOwnershipLost
+		}
+		return agentTerminalProposal{
+			prepared:  true,
+			status:    liveRunStatus(prepared.State),
+			errorCode: strings.TrimSpace(prepared.ErrorCode),
+			error:     strings.TrimSpace(prepared.ErrorMessage),
+			at:        prepared.FinishProposedAt,
+		}, nil
 	}
 	if prepared.State == ledger.StateFinishing {
 		status = liveRunStatus(prepared.ProposedState)
@@ -1745,6 +1931,12 @@ func (m *Manager) handleAgentEvent(ctx context.Context, handle RunHandle, event 
 	case native.EventError:
 	default:
 		messages = ctrl.converter.HandleEvent(chatview.UIStreamEventFromAgentEvent(event))
+	}
+	if event.Type == native.EventStepEnd {
+		// The marker itself changes nothing visible; it only advances the step
+		// cursor that queue steer anchoring waits on.
+		ctrl.markStepConsumed(event.StepNumber)
+		return nil, nil
 	}
 	delta, visibleChange := runtimeDeltaForAgentEvent(event, messages)
 	if !visibleChange {

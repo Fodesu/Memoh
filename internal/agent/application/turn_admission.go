@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	tools "github.com/felinics/memoh/internal/agent/tool"
@@ -52,6 +53,7 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 		return
 	}
 	s.sessionRuntime = manager
+	s.sessionManager = manager
 	s.decisionRuntime = manager
 	s.abortRuntime = manager
 	s.publishTurnEvent = func(ctx context.Context, handle sessionruntime.RunHandle, event native.StreamEvent) error {
@@ -59,10 +61,53 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 		return err
 	}
 	manager.SetDecisionStore(s)
+	manager.SetLostRunDecisionCanceller(func(ctx context.Context, botID, sessionID, runID string, fencingToken int64, reason string) error {
+		canceller, ok := s.userInput.(interface {
+			CancelPendingForRun(context.Context, string, string, string, int64, string) ([]userinput.Request, error)
+		})
+		if !ok {
+			return nil
+		}
+		_, err := canceller.CancelPendingForRun(ctx, botID, sessionID, runID, fencingToken, reason)
+		return err
+	})
 	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)
 	manager.SetDecisionFinalizer(s.finalizeRuntimeDecisions)
-	manager.SetTerminalObserver(s.reconcileTerminalContextLifecycle)
+	manager.SetDeferredTurnStarter(func(ctx context.Context, cmd turn.StartTurnCommand) error {
+		handle, err := s.StartTurn(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		// A deferred turn has no HTTP/channel stream waiting on its handle.
+		// Drain it in the application so the run can finish and persist its
+		// history; runtime event publication still feeds the normal observers.
+		go drainDeferredTurn(handle)
+		return err
+	})
+	manager.SetTerminalObserver(func(ctx context.Context, terminal sessionruntime.TerminalRun) {
+		s.reconcileTerminalContextLifecycle(ctx, terminal)
+		s.startFollowUpAfterTerminal(ctx, terminal)
+	})
 	manager.SetTerminalReconciler(s.reconcileTerminalContextLifecycles)
+}
+
+func drainDeferredTurn(handle turn.RunHandle) {
+	if handle == nil {
+		return
+	}
+	events, errs := handle.Events(), handle.Errs()
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		}
+	}
 }
 
 // admitTurnRun puts a StartTurnCommand through durable admission and answers in

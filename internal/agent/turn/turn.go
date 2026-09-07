@@ -17,19 +17,19 @@ import (
 // delivery and drop the duplicate silently.
 var ErrDuplicateTurn = errors.New("turn: duplicate idempotency key")
 
-// ErrSessionBusy reports that the thread already has a run in flight, so this
-// command was not started and nothing was persisted for it.
-//
-// It is retryable by construction, and that is the whole point: a thread runs
-// one turn at a time, and the runtime holds nothing on a caller's behalf. The
-// caller redelivers through the retry mechanism it already owns — a platform
-// webhook retry, the next cron fire — and because a redelivery repeats the same
-// IdempotencyKey, the retry is the same invocation rather than a second turn.
+// ErrSessionBusy reports that the thread already has a run in flight. Runtime
+// implementations may convert this into ErrTurnDeferred by placing the full
+// command in their configured transient queue; callers without that facility
+// can still retry the unchanged command.
 //
 // It is declared here rather than reused from the runtime because this package
 // is the only agent surface Channel may import, and it must not depend on the
 // runtime that produces the condition.
 var ErrSessionBusy = errors.New("turn: thread already has a run in flight")
+
+// ErrTurnDeferred means the complete turn command was accepted by the
+// configured session runtime queue and will start after the current run ends.
+var ErrTurnDeferred = errors.New("turn: deferred until current run completes")
 
 // ErrTeamNotServed reports that the service instance does not serve the
 // command's team. The in-process runtime binds its database pool to the
@@ -51,8 +51,12 @@ const (
 // outbound assets through RunHandle.AddOutboundAssets.
 type StartTurnCommand struct {
 	SchemaVersion int
-	TeamID        string // required; the service fails closed when empty
-	Mode          Mode
+	// NoDefer is reserved for server-owned continuation attempts. A transient
+	// follow-up claim must not be copied into the generic deferred-turn queue
+	// when a terminal handoff races another admission.
+	NoDefer bool
+	TeamID  string // required; the service fails closed when empty
+	Mode    Mode
 
 	BotID                   string
 	ChatID                  string
@@ -237,4 +241,10 @@ type StopCommand struct{ TeamID, BotID, ThreadID string }
 // while waiting for a decision. Kept separate for alternate turn providers.
 type Stopper interface {
 	StopTurn(context.Context, StopCommand) (bool, error)
+}
+
+// DeferredTurnService is an optional runtime queue used by channel adapters
+// when a complete user turn arrives while its session is busy.
+type DeferredTurnService interface {
+	EnqueueDeferredTurn(context.Context, StartTurnCommand) error
 }

@@ -527,6 +527,16 @@
       "generic": "Slash command failed."
     }
   },
+  "queue": {
+    "steerAccepted": "Steer queued.",
+    "accepted": "Queued.",
+    "noActiveRun": "There is no active response to receive this input.",
+    "overloaded": "Queue admission is busy. Try again shortly.",
+    "unavailable": "Queue admission is unavailable. Try again shortly.",
+    "conflict": "This message was already submitted with different content.",
+    "invalid": "Queue input must include text.",
+    "unsupported": "Queue controls are not available in discussion sessions."
+  },
   "menu": {
     "start": "Show the welcome message",
     "help": "Show available commands",
@@ -547,6 +557,8 @@
     "skill": "View bot skills",
     "fs": "Browse workspace files",
     "access": "Inspect identity and permissions",
-    "compact": "Compact conversation context"
+    "compact": "Compact conversation context",
+    "queue": "Queue input",
+    "steer": "Steer the current response"
   }
 }

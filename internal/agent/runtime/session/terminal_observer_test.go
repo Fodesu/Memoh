@@ -313,6 +313,53 @@ func TestFinishRunReplaysAlreadyTerminalLedgerOutcome(t *testing.T) {
 	}
 }
 
+func TestAgentTerminalEventReplaysMatchingTerminalLedgerOutcome(t *testing.T) {
+	t.Parallel()
+	fixture := newAdmitFixture(t)
+	admission, err := fixture.manager.Admit(context.Background(), fixture.input("inv-terminal-event-replay", `{"text":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := fixture.runs.Finalize(context.Background(), ledger.FinalizeParams{
+		RunID: admission.RunID, FencingToken: admission.Handle.FencingToken, State: ledger.StateCompleted,
+	}); err != nil || !applied {
+		t.Fatalf("seed terminal = applied:%v err:%v", applied, err)
+	}
+
+	if _, err := fixture.manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd}); err != nil {
+		t.Fatalf("HandleAgentEvent() = %v, want matching terminal replay", err)
+	}
+	snapshot, err := fixture.manager.Snapshot(context.Background(), testBotID, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != RunStatusFinishing || snapshot.CurrentRunView.ProposedTerminalStatus != RunStatusCompleted {
+		t.Fatalf("live run after terminal replay = %#v, want finishing/completed", snapshot.CurrentRunView)
+	}
+	if err := fixture.manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, ""); err != nil {
+		t.Fatalf("FinishRun() after terminal replay = %v", err)
+	}
+}
+
+func TestAgentTerminalEventRejectsMismatchedTerminalLedgerOutcome(t *testing.T) {
+	t.Parallel()
+	fixture := newAdmitFixture(t)
+	admission, err := fixture.manager.Admit(context.Background(), fixture.input("inv-terminal-event-mismatch", `{"text":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := fixture.runs.Finalize(context.Background(), ledger.FinalizeParams{
+		RunID: admission.RunID, FencingToken: admission.Handle.FencingToken, State: ledger.StateAborted,
+	}); err != nil || !applied {
+		t.Fatalf("seed terminal = applied:%v err:%v", applied, err)
+	}
+
+	_, err = fixture.manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd})
+	if !errors.Is(err, ErrRunOwnershipLost) {
+		t.Fatalf("HandleAgentEvent() = %v, want ErrRunOwnershipLost", err)
+	}
+}
+
 func TestFinishRunObservesTerminalNewerFenceButRejectsStaleOwner(t *testing.T) {
 	t.Parallel()
 	fixture := newAdmitFixture(t)

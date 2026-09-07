@@ -87,6 +87,9 @@ type MemoryBackend struct {
 	decisionOutputs         map[string]*memoryDecisionOutput
 	decisionOutputExpiresAt map[string]time.Time
 	historyResets           map[string]ResetLease
+	deferredTurns           map[string][][]byte
+	steerQueues             map[string]steerQueueState
+	followUpQueues          map[string]followUpQueueState
 	subscribers             *subscriberSet[Event]
 	closed                  bool
 	// generation is this process's liveness incarnation. It is minted once and
@@ -109,9 +112,50 @@ func NewMemoryBackendWithTTL(stateTTL time.Duration) *MemoryBackend {
 		decisionOutputs:         make(map[string]*memoryDecisionOutput),
 		decisionOutputExpiresAt: make(map[string]time.Time),
 		historyResets:           make(map[string]ResetLease),
+		deferredTurns:           make(map[string][][]byte),
+		steerQueues:             make(map[string]steerQueueState),
+		followUpQueues:          make(map[string]followUpQueueState),
 		subscribers:             newSubscriberSet[Event](),
 		generation:              uuid.NewString(),
 	}
+}
+
+func (b *MemoryBackend) EnqueueDeferredTurn(ctx context.Context, key Key, payload []byte) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(key.BotID) == "" || strings.TrimSpace(key.SessionID) == "" || len(payload) == 0 {
+		return errors.New("deferred turn key and payload are required")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return ErrLiveQueueUnavailable
+	}
+	b.deferredTurns[key.String()] = append(b.deferredTurns[key.String()], append([]byte(nil), payload...))
+	return nil
+}
+
+func (b *MemoryBackend) DequeueDeferredTurn(ctx context.Context, key Key) ([]byte, bool, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, false, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, false, ErrLiveQueueUnavailable
+	}
+	items := b.deferredTurns[key.String()]
+	if len(items) == 0 {
+		return nil, false, nil
+	}
+	payload := append([]byte(nil), items[0]...)
+	if len(items) == 1 {
+		delete(b.deferredTurns, key.String())
+	} else {
+		b.deferredTurns[key.String()] = items[1:]
+	}
+	return payload, true, nil
 }
 
 func (b *MemoryBackend) AcquireHistoryReset(ctx context.Context, scope ResetScope, token string, ttl time.Duration) (ResetLease, bool, error) {
