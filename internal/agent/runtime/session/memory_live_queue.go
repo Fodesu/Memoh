@@ -50,21 +50,14 @@ func (b *MemoryBackend) EnqueueSteer(ctx context.Context, key Key, itemID, invoc
 	if !active || state.ClosedRunID == run.RunID {
 		return SteerItem{}, ErrQueueNoActiveRun
 	}
-	if countPendingSteers(state) >= MaxPendingQueueItems {
-		return SteerItem{}, ErrQueueCapacityExceeded
+	if !SteerRunAvailable(run) {
+		return SteerItem{}, ErrQueueSteerUnsupported
 	}
-	item := SteerItem{
-		ID: SteerItemID(itemID), BotID: key.BotID, SessionID: key.SessionID,
-		TargetRunID: run.RunID, InvocationID: invocationID, Payload: append([]byte(nil), payload...),
-		Status: QueueAccepted, Position: nextSteerPosition(state), CreatedAt: now,
+	item, err := state.enqueue(key, itemID, invocationID, run.RunID, payload, now)
+	if err == nil {
+		b.steerQueues[key.String()] = state
 	}
-	state.Items = append(state.Items, item)
-	state.UpdatedAt = now
-	if state.ClosedRunID != "" && state.ClosedRunID != run.RunID {
-		state.ClosedRunID = ""
-	}
-	b.steerQueues[key.String()] = state
-	return cloneSteerItem(item), nil
+	return item, err
 }
 
 func (b *MemoryBackend) EnqueueFollowUp(ctx context.Context, key Key, itemID, invocationID string, payload []byte) (FollowUpItem, error) {
@@ -90,18 +83,11 @@ func (b *MemoryBackend) EnqueueFollowUp(ctx context.Context, key Key, itemID, in
 	if !active {
 		return FollowUpItem{}, ErrQueueNoActiveRun
 	}
-	if countPendingFollowUps(state) >= MaxPendingQueueItems {
-		return FollowUpItem{}, ErrQueueCapacityExceeded
+	item, err := state.enqueue(key, itemID, invocationID, run.RunID, payload, now)
+	if err == nil {
+		b.followUpQueues[key.String()] = state
 	}
-	item := FollowUpItem{
-		ID: FollowUpItemID(itemID), BotID: key.BotID, SessionID: key.SessionID,
-		EnqueuedDuringRunID: run.RunID, InvocationID: invocationID, Payload: append([]byte(nil), payload...),
-		Status: QueueAccepted, Position: nextFollowUpPosition(state), CreatedAt: now,
-	}
-	state.Items = append(state.Items, item)
-	state.UpdatedAt = now
-	b.followUpQueues[key.String()] = state
-	return cloneFollowUpItem(item), nil
+	return item, err
 }
 
 func (b *MemoryBackend) PendingQueues(ctx context.Context, key Key, limit int) ([]SteerItem, []FollowUpItem, error) {
@@ -181,15 +167,11 @@ func (b *MemoryBackend) UpdateSteer(ctx context.Context, key Key, itemID SteerIt
 		return SteerItem{}, ErrQueueInvalidReference
 	}
 	state := b.steerQueues[key.String()]
-	for i := range state.Items {
-		if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-			state.Items[i].Payload = append([]byte(nil), payload...)
-			state.UpdatedAt = time.Now().UTC()
-			b.steerQueues[key.String()] = state
-			return cloneSteerItem(state.Items[i]), nil
-		}
+	item, err := state.edit(itemID, payload, time.Now().UTC())
+	if err == nil {
+		b.steerQueues[key.String()] = state
 	}
-	return SteerItem{}, ErrQueueNotPending
+	return item, err
 }
 
 func (b *MemoryBackend) UpdateFollowUp(ctx context.Context, key Key, itemID FollowUpItemID, payload []byte) (FollowUpItem, error) {
@@ -205,15 +187,11 @@ func (b *MemoryBackend) UpdateFollowUp(ctx context.Context, key Key, itemID Foll
 		return FollowUpItem{}, ErrQueueInvalidReference
 	}
 	state := b.followUpQueues[key.String()]
-	for i := range state.Items {
-		if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-			state.Items[i].Payload = append([]byte(nil), payload...)
-			state.UpdatedAt = time.Now().UTC()
-			b.followUpQueues[key.String()] = state
-			return cloneFollowUpItem(state.Items[i]), nil
-		}
+	item, err := state.edit(itemID, payload, time.Now().UTC())
+	if err == nil {
+		b.followUpQueues[key.String()] = state
 	}
-	return FollowUpItem{}, ErrQueueNotPending
+	return item, err
 }
 
 func (b *MemoryBackend) CancelSteer(ctx context.Context, key Key, itemID SteerItemID) error {
@@ -229,16 +207,11 @@ func (b *MemoryBackend) CancelSteer(ctx context.Context, key Key, itemID SteerIt
 		return ErrQueueInvalidReference
 	}
 	state := b.steerQueues[key.String()]
-	for i := range state.Items {
-		if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-			state.Items[i].Status = QueueCanceled
-			state.UpdatedAt = time.Now().UTC()
-			state.compact()
-			b.steerQueues[key.String()] = state
-			return nil
-		}
+	err := state.cancel(itemID, time.Now().UTC())
+	if err == nil {
+		b.steerQueues[key.String()] = state
 	}
-	return ErrQueueNotPending
+	return err
 }
 
 func (b *MemoryBackend) CloseSteerRun(ctx context.Context, key Key, runID string) error {
@@ -280,16 +253,11 @@ func (b *MemoryBackend) CancelFollowUp(ctx context.Context, key Key, itemID Foll
 		return ErrQueueInvalidReference
 	}
 	state := b.followUpQueues[key.String()]
-	for i := range state.Items {
-		if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-			state.Items[i].Status = QueueCanceled
-			state.UpdatedAt = time.Now().UTC()
-			state.compact()
-			b.followUpQueues[key.String()] = state
-			return nil
-		}
+	err := state.cancel(itemID, time.Now().UTC())
+	if err == nil {
+		b.followUpQueues[key.String()] = state
 	}
-	return ErrQueueNotPending
+	return err
 }
 
 func (b *MemoryBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref FollowUpPendingRef) (PromoteFollowUpResult, error) {
@@ -311,42 +279,16 @@ func (b *MemoryBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref
 	if !active || steers.ClosedRunID == run.RunID {
 		return PromoteFollowUpResult{}, ErrQueueNoActiveRun
 	}
-	follows := b.followUpQueues[key.String()]
-	if steerID := steers.PromotedFollowUpItems[string(ref.ItemID)]; steerID != "" {
-		for _, existing := range steers.Items {
-			if existing.ID == SteerItemID(steerID) {
-				return PromoteFollowUpResult{FollowUp: ref, Steer: cloneSteerItem(existing)}, nil
-			}
-		}
-		return PromoteFollowUpResult{}, ErrQueueInvalidReference
+	if !SteerRunAvailable(run) {
+		return PromoteFollowUpResult{}, ErrQueueSteerUnsupported
 	}
-	for i := range follows.Items {
-		if follows.Items[i].ID != ref.ItemID || follows.Items[i].Status != QueueAccepted {
-			continue
-		}
-		if countPendingSteers(steers) >= MaxPendingQueueItems {
-			return PromoteFollowUpResult{}, ErrQueueCapacityExceeded
-		}
-		steer := SteerItem{
-			ID: SteerItemID(uuid.NewString()), BotID: key.BotID, SessionID: key.SessionID,
-			TargetRunID: run.RunID, InvocationID: "promote:" + string(ref.ItemID),
-			Payload: append([]byte(nil), follows.Items[i].Payload...), Status: QueueAccepted,
-			Position: nextSteerPosition(steers), CreatedAt: now,
-		}
-		steers.Items = append(steers.Items, steer)
-		if steers.PromotedFollowUpItems == nil {
-			steers.PromotedFollowUpItems = make(map[string]string)
-		}
-		steers.PromotedFollowUpItems[string(ref.ItemID)] = string(steer.ID)
-		steers.UpdatedAt = now
-		follows.Items[i].Status = QueueCanceled
-		follows.UpdatedAt = now
-		follows.compact()
+	follows := b.followUpQueues[key.String()]
+	result, err := steers.promote(&follows, key, run.RunID, ref, now, uuid.NewString())
+	if err == nil {
 		b.steerQueues[key.String()] = steers
 		b.followUpQueues[key.String()] = follows
-		return PromoteFollowUpResult{FollowUp: ref, Steer: cloneSteerItem(steer)}, nil
 	}
-	return PromoteFollowUpResult{}, ErrQueueNotPending
+	return result, err
 }
 
 func (b *MemoryBackend) ClaimNextSteer(ctx context.Context, handle RunHandle, sealIfEmpty bool) (SteerItem, SteerClaimRef, bool, error) {
@@ -367,38 +309,13 @@ func (b *MemoryBackend) ClaimNextSteer(ctx context.Context, handle RunHandle, se
 	if !ok || !runMatchesHandle(snapshot.CurrentRunView, handle) || !runViewOwnedBy(snapshot.CurrentRunView, handle.OwnerID) || !isActiveRunStatus(snapshot.CurrentRunView.Status) {
 		return SteerItem{}, SteerClaimRef{}, false, ErrRunOwnershipLost
 	}
+	if !SteerRunAvailable(snapshot.CurrentRunView) {
+		return SteerItem{}, SteerClaimRef{}, false, ErrQueueSteerUnsupported
+	}
 	state := b.steerQueues[handle.key().String()]
-	for i := range state.Items {
-		item := &state.Items[i]
-		if item.Status == QueueClaimed && item.Claim != nil && item.Claim.RunID == handle.RunID {
-			if advanceSteerClaim(item, handle) {
-				state.UpdatedAt = now
-				b.steerQueues[handle.key().String()] = state
-			}
-			return cloneSteerItem(*item), *item.Claim, true, nil
-		}
-	}
-	best := -1
-	for i := range state.Items {
-		if state.Items[i].Status == QueueAccepted && state.Items[i].TargetRunID == handle.RunID &&
-			(best < 0 || state.Items[i].Position < state.Items[best].Position) {
-			best = i
-		}
-	}
-	if best < 0 {
-		if sealIfEmpty {
-			state.ClosedRunID = handle.RunID
-			state.UpdatedAt = now
-			b.steerQueues[handle.key().String()] = state
-		}
-		return SteerItem{}, SteerClaimRef{}, false, nil
-	}
-	claim := SteerClaimRef{ItemID: state.Items[best].ID, RunID: handle.RunID, OwnerID: handle.OwnerID, Generation: handle.Generation, FencingToken: handle.FencingToken, ClaimToken: uuid.NewString()}
-	state.Items[best].Status = QueueClaimed
-	state.Items[best].Claim = &claim
-	state.UpdatedAt = now
+	item, claim, claimed := state.claimNext(handle, sealIfEmpty, now)
 	b.steerQueues[handle.key().String()] = state
-	return cloneSteerItem(state.Items[best]), claim, true, nil
+	return item, claim, claimed, nil
 }
 
 func (b *MemoryBackend) ApplySteer(ctx context.Context, key Key, ref SteerClaimRef) error {
@@ -418,17 +335,11 @@ func (b *MemoryBackend) ApplySteer(ctx context.Context, key Key, ref SteerClaimR
 		return ErrRunOwnershipLost
 	}
 	state := b.steerQueues[key.String()]
-	for i := range state.Items {
-		claim := state.Items[i].Claim
-		if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-			state.Items[i].Status = QueueApplied
-			state.UpdatedAt = time.Now().UTC()
-			state.compact()
-			b.steerQueues[key.String()] = state
-			return nil
-		}
+	err := state.apply(ref, time.Now().UTC())
+	if err == nil {
+		b.steerQueues[key.String()] = state
 	}
-	return ErrQueueInvalidReference
+	return err
 }
 
 func (b *MemoryBackend) ReleaseSteer(ctx context.Context, key Key, ref SteerClaimRef) error {
@@ -448,17 +359,11 @@ func (b *MemoryBackend) ReleaseSteer(ctx context.Context, key Key, ref SteerClai
 		return ErrRunOwnershipLost
 	}
 	state := b.steerQueues[key.String()]
-	for i := range state.Items {
-		claim := state.Items[i].Claim
-		if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-			state.Items[i].Status = QueueAccepted
-			state.Items[i].Claim = nil
-			state.UpdatedAt = time.Now().UTC()
-			b.steerQueues[key.String()] = state
-			return nil
-		}
+	err := state.release(ref, time.Now().UTC())
+	if err == nil {
+		b.steerQueues[key.String()] = state
 	}
-	return ErrQueueInvalidReference
+	return err
 }
 
 func (b *MemoryBackend) ClaimNextFollowUp(ctx context.Context, key Key, triggerRunID string) (FollowUpItem, FollowUpClaimRef, bool, error) {
@@ -478,33 +383,9 @@ func (b *MemoryBackend) ClaimNextFollowUp(ctx context.Context, key Key, triggerR
 		return FollowUpItem{}, FollowUpClaimRef{}, false, err
 	}
 	state := b.followUpQueues[key.String()]
-	if state.TerminalClaims == nil {
-		state.TerminalClaims = make(map[string]string)
-	}
-	if itemID := state.TerminalClaims[triggerRunID]; itemID != "" {
-		for _, item := range state.Items {
-			if string(item.ID) == itemID && item.Status == QueueClaimed && item.Claim != nil {
-				return cloneFollowUpItem(item), *item.Claim, true, nil
-			}
-		}
-		return FollowUpItem{}, FollowUpClaimRef{}, false, nil
-	}
-	best := -1
-	for i := range state.Items {
-		if state.Items[i].Status == QueueAccepted && (best < 0 || state.Items[i].Position < state.Items[best].Position) {
-			best = i
-		}
-	}
-	if best < 0 {
-		return FollowUpItem{}, FollowUpClaimRef{}, false, nil
-	}
-	claim := FollowUpClaimRef{ItemID: state.Items[best].ID, TriggerRunID: triggerRunID, ClaimToken: uuid.NewString()}
-	state.Items[best].Status = QueueClaimed
-	state.Items[best].Claim = &claim
-	state.TerminalClaims[triggerRunID] = string(state.Items[best].ID)
-	state.UpdatedAt = time.Now().UTC()
+	item, claim, claimed := state.claimNext(triggerRunID, time.Now().UTC())
 	b.followUpQueues[key.String()] = state
-	return cloneFollowUpItem(state.Items[best]), claim, true, nil
+	return item, claim, claimed, nil
 }
 
 func (b *MemoryBackend) ApplyFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef) error {
@@ -520,17 +401,11 @@ func (b *MemoryBackend) ApplyFollowUp(ctx context.Context, key Key, ref FollowUp
 		return err
 	}
 	state := b.followUpQueues[key.String()]
-	for i := range state.Items {
-		claim := state.Items[i].Claim
-		if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-			state.Items[i].Status = QueueApplied
-			state.UpdatedAt = time.Now().UTC()
-			state.compact()
-			b.followUpQueues[key.String()] = state
-			return nil
-		}
+	err := state.apply(ref, time.Now().UTC())
+	if err == nil {
+		b.followUpQueues[key.String()] = state
 	}
-	return ErrQueueInvalidReference
+	return err
 }
 
 func (b *MemoryBackend) ReleaseFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef) error {
@@ -546,18 +421,11 @@ func (b *MemoryBackend) ReleaseFollowUp(ctx context.Context, key Key, ref Follow
 		return err
 	}
 	state := b.followUpQueues[key.String()]
-	for i := range state.Items {
-		claim := state.Items[i].Claim
-		if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-			state.Items[i].Status = QueueAccepted
-			state.Items[i].Claim = nil
-			delete(state.TerminalClaims, ref.TriggerRunID)
-			state.UpdatedAt = time.Now().UTC()
-			b.followUpQueues[key.String()] = state
-			return nil
-		}
+	err := state.release(ref, time.Now().UTC())
+	if err == nil {
+		b.followUpQueues[key.String()] = state
 	}
-	return ErrQueueInvalidReference
+	return err
 }
 
 var _ LiveQueueBackend = (*MemoryBackend)(nil)

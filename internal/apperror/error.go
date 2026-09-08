@@ -105,6 +105,7 @@ const (
 	CodeQueueRequestInvalid                      Code = "queue_request_invalid"
 	CodeQueueItemNotPending                      Code = "queue_item_not_pending"
 	CodeQueueCapacityExceeded                    Code = "queue_capacity_exceeded"
+	CodeQueueSteerUnsupported                    Code = "queue.steer_unsupported"
 
 	CodeContextLifecycleRequestInvalid         Code = "context_lifecycle.request_invalid"
 	CodeContextLifecycleAuthenticationRequired Code = "context_lifecycle.authentication_required"
@@ -521,6 +522,10 @@ var catalog = map[Code]Definition{
 	CodeAgentResponseInterrupted: {
 		HTTPStatus: http.StatusBadGateway,
 		Detail:     "The model response was interrupted. Please try again.",
+	},
+	CodeQueueSteerUnsupported: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This run cannot accept steer input. Wait for it to finish and send a new message.",
 	},
 	CodeQueueNoActiveRun: {
 		HTTPStatus: http.StatusConflict,

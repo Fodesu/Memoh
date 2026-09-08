@@ -95,7 +95,6 @@ function cloneRunView(run: RuntimeCurrentRunView): RuntimeCurrentRunView {
           forward: run.request_user_turn.forward ? { ...run.request_user_turn.forward } : undefined,
         }
       : undefined,
-    steer: run.steer ? { ...run.steer } : undefined,
     operation: run.operation
       ? {
           ...run.operation,
@@ -120,16 +119,19 @@ function emptyTranscript(): RuntimeTranscriptSlice {
   }
 }
 
+// Older snapshots carry a single request/replacement turn. Keep this wire
+// adaptation shared by full projection and incremental delta application.
+function userTurnsForRun(run: RuntimeCurrentRunView) {
+  if (run.user_turns?.length) return run.user_turns
+  const fallback = run.request_user_turn ?? run.operation?.replacement_user_turn
+  return fallback ? [{ ...fallback }] : []
+}
+
 function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptSlice {
   if (!run) return emptyTranscript()
   const turnId = run.turn_id.trim()
   const turns: UITurn[] = []
-  const fallbackUserTurn = run.request_user_turn ?? run.operation?.replacement_user_turn
-  const userTurns = run.user_turns?.length
-    ? run.user_turns
-    : fallbackUserTurn
-      ? [fallbackUserTurn]
-      : []
+  const userTurns = userTurnsForRun(run)
   const active = isRuntimeRunActive(run.status)
   const steerTurns = [...(run.steer_turns ?? [])]
     .filter(steer => steer.status === 'applied' || active)
@@ -262,7 +264,6 @@ function applyRunPatch(
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.error_code !== undefined ? { error_code: patch.error_code } : {}),
       ...(patch.error !== undefined ? { error: patch.error } : {}),
-      ...(patch.steer !== undefined ? { steer: { ...patch.steer } } : {}),
       ...(patch.updated_at !== undefined ? { updated_at: patch.updated_at } : {}),
       ...(patch.owner_lease_expires_at !== undefined
         ? { owner_lease_expires_at: patch.owner_lease_expires_at }
@@ -271,12 +272,7 @@ function applyRunPatch(
   }
 
   const messages = delta.reset_messages ? [] : next.messages
-  const fallbackUserTurn = next.request_user_turn ?? next.operation?.replacement_user_turn
-  const userTurns = next.user_turns?.length
-    ? [...next.user_turns]
-    : fallbackUserTurn
-      ? [{ ...fallbackUserTurn }]
-      : []
+  const userTurns = [...userTurnsForRun(next)]
   const steerTurns = [...(next.steer_turns ?? [])]
   for (const incoming of delta.user_turn_upserts ?? []) {
     const turnId = incoming.turn_id.trim()

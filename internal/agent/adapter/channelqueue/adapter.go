@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/application"
-	"github.com/felinics/memoh/internal/agent/runtime/session/queue"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/channel/inbound"
 )
 
@@ -50,15 +50,17 @@ func mapAdmissionError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, queue.ErrNoActiveRun):
+	case errors.Is(err, sessionruntime.ErrQueueSteerUnsupported):
+		return inbound.NewQueueCommandError(inbound.QueueCommandCodeUnsupported)
+	case errors.Is(err, sessionruntime.ErrQueueNoActiveRun):
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeNoActiveRun)
-	case errors.Is(err, queue.ErrInvocationConflict):
+	case errors.Is(err, sessionruntime.ErrQueueInvocationConflict):
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeConflict)
-	case errors.Is(err, queue.ErrAdmissionOverloaded):
+	case errors.Is(err, sessionruntime.ErrQueueAdmissionOverloaded):
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeOverloaded)
-	case errors.Is(err, queue.ErrCapacityExceeded):
+	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeCapacity)
-	case errors.Is(err, queue.ErrInvalidReference):
+	case errors.Is(err, sessionruntime.ErrQueueInvalidReference):
 		return inbound.NewQueueCommandError(inbound.QueueCommandCodeInvalid)
 	default:
 		return err

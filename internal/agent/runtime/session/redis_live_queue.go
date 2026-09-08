@@ -159,18 +159,16 @@ func (b *RedisBackend) EnqueueSteer(ctx context.Context, key Key, itemID, invoca
 		if !active || queue.ClosedRunID == run.RunID {
 			return ErrQueueNoActiveRun
 		}
-		if countPendingSteers(queue) >= MaxPendingQueueItems {
-			return ErrQueueCapacityExceeded
+		if !SteerRunAvailable(run) {
+			return ErrQueueSteerUnsupported
 		}
 		now, err := tx.Time(ctx).Result()
 		if err != nil {
 			return err
 		}
-		item = SteerItem{ID: SteerItemID(itemID), BotID: key.BotID, SessionID: key.SessionID, TargetRunID: run.RunID, InvocationID: invocationID, Payload: append([]byte(nil), payload...), Status: QueueAccepted, Position: nextSteerPosition(queue), CreatedAt: now.UTC()}
-		queue.Items = append(queue.Items, item)
-		queue.UpdatedAt = now.UTC()
-		if queue.ClosedRunID != "" && queue.ClosedRunID != run.RunID {
-			queue.ClosedRunID = ""
+		item, err = queue.enqueue(key, itemID, invocationID, run.RunID, payload, now.UTC())
+		if err != nil {
+			return err
 		}
 		return storeRedisJSON(ctx, tx, queueKey, queue, b.stateTTL)
 	})
@@ -206,16 +204,14 @@ func (b *RedisBackend) EnqueueFollowUp(ctx context.Context, key Key, itemID, inv
 		if !active {
 			return ErrQueueNoActiveRun
 		}
-		if countPendingFollowUps(queue) >= MaxPendingQueueItems {
-			return ErrQueueCapacityExceeded
-		}
 		now, err := tx.Time(ctx).Result()
 		if err != nil {
 			return err
 		}
-		item = FollowUpItem{ID: FollowUpItemID(itemID), BotID: key.BotID, SessionID: key.SessionID, EnqueuedDuringRunID: run.RunID, InvocationID: invocationID, Payload: append([]byte(nil), payload...), Status: QueueAccepted, Position: nextFollowUpPosition(queue), CreatedAt: now.UTC()}
-		queue.Items = append(queue.Items, item)
-		queue.UpdatedAt = now.UTC()
+		item, err = queue.enqueue(key, itemID, invocationID, run.RunID, payload, now.UTC())
+		if err != nil {
+			return err
+		}
 		return storeRedisJSON(ctx, tx, queueKey, queue, b.stateTTL)
 	})
 	return item, err
@@ -281,14 +277,7 @@ func (b *RedisBackend) UpdateSteer(ctx context.Context, key Key, itemID SteerIte
 		return SteerItem{}, ErrQueueInvalidReference
 	}
 	return redisMutate(ctx, b, b.steerQueueKey(key), func(state *steerQueueState, now time.Time) (SteerItem, error) {
-		for i := range state.Items {
-			if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-				state.Items[i].Payload = append([]byte(nil), payload...)
-				state.UpdatedAt = now
-				return cloneSteerItem(state.Items[i]), nil
-			}
-		}
-		return SteerItem{}, ErrQueueNotPending
+		return state.edit(itemID, payload, now)
 	})
 }
 
@@ -297,14 +286,7 @@ func (b *RedisBackend) UpdateFollowUp(ctx context.Context, key Key, itemID Follo
 		return FollowUpItem{}, ErrQueueInvalidReference
 	}
 	return redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (FollowUpItem, error) {
-		for i := range state.Items {
-			if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-				state.Items[i].Payload = append([]byte(nil), payload...)
-				state.UpdatedAt = now
-				return cloneFollowUpItem(state.Items[i]), nil
-			}
-		}
-		return FollowUpItem{}, ErrQueueNotPending
+		return state.edit(itemID, payload, now)
 	})
 }
 
@@ -313,14 +295,7 @@ func (b *RedisBackend) CancelSteer(ctx context.Context, key Key, itemID SteerIte
 		return ErrQueueInvalidReference
 	}
 	_, err := redisMutate(ctx, b, b.steerQueueKey(key), func(state *steerQueueState, now time.Time) (struct{}, error) {
-		for i := range state.Items {
-			if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-				state.Items[i].Status = QueueCanceled
-				state.UpdatedAt = now
-				return struct{}{}, nil
-			}
-		}
-		return struct{}{}, ErrQueueNotPending
+		return struct{}{}, state.cancel(itemID, now)
 	})
 	return err
 }
@@ -330,14 +305,7 @@ func (b *RedisBackend) CancelFollowUp(ctx context.Context, key Key, itemID Follo
 		return ErrQueueInvalidReference
 	}
 	_, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (struct{}, error) {
-		for i := range state.Items {
-			if state.Items[i].ID == itemID && state.Items[i].Status == QueueAccepted {
-				state.Items[i].Status = QueueCanceled
-				state.UpdatedAt = now
-				return struct{}{}, nil
-			}
-		}
-		return struct{}{}, ErrQueueNotPending
+		return struct{}{}, state.cancel(itemID, now)
 	})
 	return err
 }
@@ -364,14 +332,8 @@ func (b *RedisBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref 
 		if !active || steers.ClosedRunID == run.RunID {
 			return ErrQueueNoActiveRun
 		}
-		if steerID := steers.PromotedFollowUpItems[string(ref.ItemID)]; steerID != "" {
-			for _, existing := range steers.Items {
-				if existing.ID == SteerItemID(steerID) {
-					result = PromoteFollowUpResult{FollowUp: ref, Steer: cloneSteerItem(existing)}
-					return nil
-				}
-			}
-			return ErrQueueInvalidReference
+		if !SteerRunAvailable(run) {
+			return ErrQueueSteerUnsupported
 		}
 		follows, err := loadRedisJSON[followUpQueueState](ctx, tx, followKey)
 		if err != nil {
@@ -381,40 +343,24 @@ func (b *RedisBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref 
 		if err != nil {
 			return err
 		}
-		for i := range follows.Items {
-			if follows.Items[i].ID != ref.ItemID || follows.Items[i].Status != QueueAccepted {
-				continue
-			}
-			if countPendingSteers(steers) >= MaxPendingQueueItems {
-				return ErrQueueCapacityExceeded
-			}
-			steer := SteerItem{ID: SteerItemID(uuid.NewString()), BotID: key.BotID, SessionID: key.SessionID, TargetRunID: run.RunID, InvocationID: "promote:" + string(ref.ItemID), Payload: append([]byte(nil), follows.Items[i].Payload...), Status: QueueAccepted, Position: nextSteerPosition(steers), CreatedAt: now.UTC()}
-			steers.Items = append(steers.Items, steer)
-			if steers.PromotedFollowUpItems == nil {
-				steers.PromotedFollowUpItems = make(map[string]string)
-			}
-			steers.PromotedFollowUpItems[string(ref.ItemID)] = string(steer.ID)
-			steers.UpdatedAt = now.UTC()
-			follows.Items[i].Status = QueueCanceled
-			follows.UpdatedAt = now.UTC()
-			follows.compact()
-			steerData, err := json.Marshal(steers)
-			if err != nil {
-				return err
-			}
-			followData, err := json.Marshal(follows)
-			if err != nil {
-				return err
-			}
-			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				pipe.Set(ctx, steerKey, steerData, b.stateTTL)
-				pipe.Set(ctx, followKey, followData, b.stateTTL)
-				return nil
-			})
-			result = PromoteFollowUpResult{FollowUp: ref, Steer: cloneSteerItem(steer)}
+		result, err = steers.promote(&follows, key, run.RunID, ref, now.UTC(), uuid.NewString())
+		if err != nil {
 			return err
 		}
-		return ErrQueueNotPending
+		steerData, err := json.Marshal(steers)
+		if err != nil {
+			return err
+		}
+		followData, err := json.Marshal(follows)
+		if err != nil {
+			return err
+		}
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Set(ctx, steerKey, steerData, b.stateTTL)
+			pipe.Set(ctx, followKey, followData, b.stateTTL)
+			return nil
+		})
+		return err
 	})
 	return result, err
 }
@@ -446,49 +392,18 @@ func (b *RedisBackend) ClaimNextSteer(ctx context.Context, handle RunHandle, sea
 		if !ok || !refOK || !runMatchesHandle(snapshot.CurrentRunView, handle) || ref.FencingToken != handle.FencingToken || ref.OwnerID != handle.OwnerID || ref.Generation != handle.Generation || !isActiveRunStatus(snapshot.CurrentRunView.Status) {
 			return ErrRunOwnershipLost
 		}
+		if !SteerRunAvailable(snapshot.CurrentRunView) {
+			return ErrQueueSteerUnsupported
+		}
 		state, err := loadRedisJSON[steerQueueState](ctx, tx, queueKey)
 		if err != nil {
 			return err
-		}
-		for i := range state.Items {
-			existing := &state.Items[i]
-			if existing.Status == QueueClaimed && existing.Claim != nil && existing.Claim.RunID == handle.RunID {
-				item, claim, claimed = cloneSteerItem(*existing), *existing.Claim, true
-				if !advanceSteerClaim(existing, handle) {
-					return nil
-				}
-				now, err := tx.Time(ctx).Result()
-				if err != nil {
-					return err
-				}
-				state.UpdatedAt = now.UTC()
-				item, claim = cloneSteerItem(*existing), *existing.Claim
-				return storeRedisJSON(ctx, tx, queueKey, state, b.stateTTL)
-			}
-		}
-		best := -1
-		for i := range state.Items {
-			if state.Items[i].Status == QueueAccepted && state.Items[i].TargetRunID == handle.RunID && (best < 0 || state.Items[i].Position < state.Items[best].Position) {
-				best = i
-			}
-		}
-		if best < 0 && !sealIfEmpty {
-			return nil
 		}
 		now, err := tx.Time(ctx).Result()
 		if err != nil {
 			return err
 		}
-		if best < 0 {
-			state.ClosedRunID = handle.RunID
-			state.UpdatedAt = now.UTC()
-			return storeRedisJSON(ctx, tx, queueKey, state, b.stateTTL)
-		}
-		claim = SteerClaimRef{ItemID: state.Items[best].ID, RunID: handle.RunID, OwnerID: handle.OwnerID, Generation: handle.Generation, FencingToken: handle.FencingToken, ClaimToken: uuid.NewString()}
-		state.Items[best].Status = QueueClaimed
-		state.Items[best].Claim = &claim
-		state.UpdatedAt = now.UTC()
-		item, claimed = cloneSteerItem(state.Items[best]), true
+		item, claim, claimed = state.claimNext(handle, sealIfEmpty, now.UTC())
 		return storeRedisJSON(ctx, tx, queueKey, state, b.stateTTL)
 	})
 	return item, claim, claimed, err
@@ -511,15 +426,7 @@ func (b *RedisBackend) ApplySteer(ctx context.Context, key Key, ref SteerClaimRe
 		if !ok || !runOK || !runMatchesSteerClaim(snapshot.CurrentRunView, ref) || run.FencingToken != ref.FencingToken || run.OwnerID != ref.OwnerID || run.Generation != ref.Generation {
 			return struct{}{}, ErrRunOwnershipLost
 		}
-		for i := range state.Items {
-			claim := state.Items[i].Claim
-			if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-				state.Items[i].Status = QueueApplied
-				state.UpdatedAt = now
-				return struct{}{}, nil
-			}
-		}
-		return struct{}{}, ErrQueueInvalidReference
+		return struct{}{}, state.apply(ref, now)
 	})
 	return err
 }
@@ -553,16 +460,7 @@ func (b *RedisBackend) ReleaseSteer(ctx context.Context, key Key, ref SteerClaim
 		if !ok || !runOK || !runMatchesSteerClaim(snapshot.CurrentRunView, ref) || run.FencingToken != ref.FencingToken || run.OwnerID != ref.OwnerID || run.Generation != ref.Generation {
 			return struct{}{}, ErrRunOwnershipLost
 		}
-		for i := range state.Items {
-			claim := state.Items[i].Claim
-			if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-				state.Items[i].Status = QueueAccepted
-				state.Items[i].Claim = nil
-				state.UpdatedAt = now
-				return struct{}{}, nil
-			}
-		}
-		return struct{}{}, ErrQueueInvalidReference
+		return struct{}{}, state.release(ref, now)
 	})
 	return err
 }
@@ -584,32 +482,8 @@ func (b *RedisBackend) ClaimNextFollowUp(ctx context.Context, key Key, triggerRu
 		claimed bool
 	}
 	claimed, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (result, error) {
-		if state.TerminalClaims == nil {
-			state.TerminalClaims = make(map[string]string)
-		}
-		if itemID := state.TerminalClaims[triggerRunID]; itemID != "" {
-			for _, item := range state.Items {
-				if string(item.ID) == itemID && item.Status == QueueClaimed && item.Claim != nil {
-					return result{item: cloneFollowUpItem(item), claim: *item.Claim, claimed: true}, nil
-				}
-			}
-			return result{}, nil
-		}
-		best := -1
-		for i := range state.Items {
-			if state.Items[i].Status == QueueAccepted && (best < 0 || state.Items[i].Position < state.Items[best].Position) {
-				best = i
-			}
-		}
-		if best < 0 {
-			return result{}, nil
-		}
-		claim := FollowUpClaimRef{ItemID: state.Items[best].ID, TriggerRunID: triggerRunID, ClaimToken: uuid.NewString()}
-		state.Items[best].Status = QueueClaimed
-		state.Items[best].Claim = &claim
-		state.TerminalClaims[triggerRunID] = string(state.Items[best].ID)
-		state.UpdatedAt = now
-		return result{item: cloneFollowUpItem(state.Items[best]), claim: claim, claimed: true}, nil
+		item, claim, ok := state.claimNext(triggerRunID, now)
+		return result{item: item, claim: claim, claimed: ok}, nil
 	})
 	return claimed.item, claimed.claim, claimed.claimed, err
 }
@@ -619,15 +493,7 @@ func (b *RedisBackend) ApplyFollowUp(ctx context.Context, key Key, ref FollowUpC
 		return err
 	}
 	_, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (struct{}, error) {
-		for i := range state.Items {
-			claim := state.Items[i].Claim
-			if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-				state.Items[i].Status = QueueApplied
-				state.UpdatedAt = now
-				return struct{}{}, nil
-			}
-		}
-		return struct{}{}, ErrQueueInvalidReference
+		return struct{}{}, state.apply(ref, now)
 	})
 	return err
 }
@@ -637,17 +503,7 @@ func (b *RedisBackend) ReleaseFollowUp(ctx context.Context, key Key, ref FollowU
 		return err
 	}
 	_, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (struct{}, error) {
-		for i := range state.Items {
-			claim := state.Items[i].Claim
-			if state.Items[i].ID == ref.ItemID && state.Items[i].Status == QueueClaimed && claim != nil && *claim == ref {
-				state.Items[i].Status = QueueAccepted
-				state.Items[i].Claim = nil
-				delete(state.TerminalClaims, ref.TriggerRunID)
-				state.UpdatedAt = now
-				return struct{}{}, nil
-			}
-		}
-		return struct{}{}, ErrQueueInvalidReference
+		return struct{}{}, state.release(ref, now)
 	})
 	return err
 }

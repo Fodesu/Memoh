@@ -23993,7 +23993,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "status": {
-                    "$ref": "#/definitions/queue.Status"
+                    "$ref": "#/definitions/sessionruntime.QueueStatus"
                 },
                 "text": {
                     "type": "string"
@@ -24004,10 +24004,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "before": {
-                    "$ref": "#/definitions/queue.FollowUpPendingRef"
+                    "$ref": "#/definitions/sessionruntime.FollowUpPendingRef"
                 },
                 "item": {
-                    "$ref": "#/definitions/queue.FollowUpPendingRef"
+                    "$ref": "#/definitions/sessionruntime.FollowUpPendingRef"
                 }
             }
         },
@@ -24295,6 +24295,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.steerQueueItemResponse"
                     }
+                },
+                "steer_supported": {
+                    "type": "boolean"
                 }
             }
         },
@@ -24316,7 +24319,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "status": {
-                    "$ref": "#/definitions/queue.Status"
+                    "$ref": "#/definitions/sessionruntime.QueueStatus"
                 },
                 "target_run_id": {
                     "type": "string"
@@ -24330,10 +24333,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "before": {
-                    "$ref": "#/definitions/queue.SteerPendingRef"
+                    "$ref": "#/definitions/sessionruntime.SteerPendingRef"
                 },
                 "item": {
-                    "$ref": "#/definitions/queue.SteerPendingRef"
+                    "$ref": "#/definitions/sessionruntime.SteerPendingRef"
                 }
             }
         },
@@ -25342,39 +25345,6 @@ const docTemplate = `{
                 }
             }
         },
-        "queue.FollowUpPendingRef": {
-            "type": "object",
-            "properties": {
-                "item_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "queue.Status": {
-            "type": "string",
-            "enum": [
-                "accepted",
-                "claimed",
-                "applied",
-                "rejected",
-                "canceled"
-            ],
-            "x-enum-varnames": [
-                "Accepted",
-                "Claimed",
-                "Applied",
-                "Rejected",
-                "Canceled"
-            ]
-        },
-        "queue.SteerPendingRef": {
-            "type": "object",
-            "properties": {
-                "item_id": {
-                    "type": "string"
-                }
-            }
-        },
         "reasoning.Options": {
             "type": "object",
             "properties": {
@@ -25891,6 +25861,41 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "workdir_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "sessionruntime.FollowUpPendingRef": {
+            "type": "object",
+            "properties": {
+                "item_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "sessionruntime.QueueStatus": {
+            "type": "string",
+            "enum": [
+                "accepted",
+                "claimed",
+                "applied",
+                "rejected",
+                "expired",
+                "canceled"
+            ],
+            "x-enum-varnames": [
+                "QueueAccepted",
+                "QueueClaimed",
+                "QueueApplied",
+                "QueueRejected",
+                "QueueExpired",
+                "QueueCanceled"
+            ]
+        },
+        "sessionruntime.SteerPendingRef": {
+            "type": "object",
+            "properties": {
+                "item_id": {
                     "type": "string"
                 }
             }

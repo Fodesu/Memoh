@@ -72,7 +72,7 @@ func decisionEventID(event native.StreamEvent) string {
 	return strings.TrimSpace(event.ToolCallID)
 }
 
-func runtimeRunPatch(snapshot Snapshot, status, runError, steer, lease bool) RuntimeDelta {
+func runtimeRunPatch(snapshot Snapshot, status, runError, lease bool) RuntimeDelta {
 	run := snapshot.CurrentRunView
 	if run == nil {
 		return RuntimeDelta{}
@@ -91,10 +91,6 @@ func runtimeRunPatch(snapshot Snapshot, status, runError, steer, lease bool) Run
 		patch.ErrorCode = &code
 		value := run.Error
 		patch.Error = &value
-	}
-	if steer && run.Steer != nil {
-		value := *run.Steer
-		patch.Steer = &value
 	}
 	if lease {
 		value := time.Time{}

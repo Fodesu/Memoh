@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 
-import { createApp, nextTick, defineComponent, h } from 'vue'
+import { createApp, nextTick, defineComponent, h, type VNode } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const uiStubs = vi.hoisted(() => ({
   ButtonStub: {
     name: 'UiButtonStub',
     inheritAttrs: false,
-    setup(_: unknown, context: { attrs: Record<string, unknown>; slots: { default?: () => unknown } }) {
+    setup(_: unknown, context: { attrs: Record<string, unknown>; slots: { default?: () => VNode[] } }) {
       return () => h('button', context.attrs, context.slots.default?.())
     },
   },

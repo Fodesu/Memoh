@@ -109,6 +109,7 @@ func TestAgentStreamReopensAfterFinalSteer(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
 	var secondInput atomic.Bool
+	var observedText atomic.Int32
 	var continueAfter atomic.Bool
 	nextInputs := []sdk.Message{}
 	provider := agentStreamTestProvider(func(_ context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
@@ -128,6 +129,11 @@ func TestAgentStreamReopensAfterFinalSteer(t *testing.T) {
 		Model:    &sdk.Model{ID: "mock-model", Provider: provider},
 		Messages: []sdk.Message{sdk.UserMessage("hello")}, Identity: SessionContext{BotID: "bot-1"},
 		ContinueAfterFinal: &continueAfter, NextModelInputs: &nextInputs,
+		OnProviderStreamEventObserved: func(event StreamEvent) {
+			if event.Type == EventTextDelta {
+				observedText.Add(1)
+			}
+		},
 		OnStepCommitted: func(_ context.Context, _ int, _ *sdk.StepResult) error {
 			commits++
 			if commits == 1 {
@@ -137,11 +143,21 @@ func TestAgentStreamReopensAfterFinalSteer(t *testing.T) {
 			return nil
 		},
 	})
-	var terminal int
+	var terminal, starts int
+	var steps []int
 	for event := range events {
+		if event.Type == EventAgentStart {
+			starts++
+		}
+		if event.Type == EventStepEnd {
+			steps = append(steps, event.StepNumber)
+		}
 		if event.IsTerminal() {
 			terminal++
 		}
+	}
+	if observedText.Load() != 2 || starts != 1 || len(steps) != 2 || steps[0] != 0 || steps[1] != 1 {
+		t.Fatalf("duplicate observer/start or wrong step offset: observed=%d starts=%d steps=%v", observedText.Load(), starts, steps)
 	}
 	if calls.Load() != 2 || !secondInput.Load() || terminal != 1 {
 		t.Fatalf("calls=%d second_input=%v terminal=%d", calls.Load(), secondInput.Load(), terminal)
@@ -357,7 +373,7 @@ func TestAgentStreamPersistsInterruptedInferenceStep(t *testing.T) {
 		Messages: []sdk.Message{sdk.UserMessage("keep streaming")},
 		Identity: SessionContext{BotID: "bot-1"},
 		OnStepInterrupted: func(callbackCtx context.Context, stepIndex int, step *sdk.StepResult) error {
-			if callbackCtx.Err() != nil || stepIndex != 0 {
+			if !errors.Is(context.Cause(callbackCtx), context.Canceled) || stepIndex != 0 {
 				t.Errorf("callback context/index = %v/%d", callbackCtx.Err(), stepIndex)
 			}
 			interrupted = step

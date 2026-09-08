@@ -2,9 +2,6 @@ package application
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +11,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -24,12 +22,13 @@ import (
 // persistence. It is intentionally enabled only for admitted, fenced turns;
 // legacy calls without a runtime owner keep their terminal-snapshot behavior.
 type agentStepCommitter struct {
+	ownerContext       context.Context
 	service            *Service
 	req                ChatRequest
 	rc                 resolvedContext
 	persister          messagepkg.AgentStepPersister
 	reasoningTiming    *reasoningTimingTracker
-	queueStep          *queueStepTransaction
+	queueStep          *queueStepCoordinator
 	continueAfterFinal atomic.Bool
 	nextModelInputs    []sdk.Message
 
@@ -57,7 +56,15 @@ func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc
 	if !ok {
 		return nil
 	}
-	queueStep := newQueueStepTransaction(s, req, rc.model.ID)
+	queueStep := newQueueStepCoordinator(s, req)
+	if queueStep != nil && queueStep.steerEnabled {
+		if err := s.sessionManager.EnableSteer(ctx, req.RunHandle); err != nil {
+			queueStep.steerEnabled = false
+			if s.logger != nil {
+				s.logger.Warn("steer consumer could not be published", slog.String("run_id", req.RunID), slog.Any("error", err))
+			}
+		}
+	}
 	if req.TurnReplacement != nil && queueStep == nil {
 		return nil
 	}
@@ -74,11 +81,19 @@ func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc
 		return nil
 	}
 	return &agentStepCommitter{
-		service: s, req: req, rc: rc, persister: persister,
+		service: s, req: req, rc: rc, persister: persister, ownerContext: ctx,
 		queueStep:            queueStep,
 		turnRequestMessageID: requestMessageID,
 		nextStep:             req.StepIndexOffset,
 	}
+}
+
+func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
+	if c == nil || cfg == nil {
+		return
+	}
+	cfg.ContinueAfterFinal = &c.continueAfterFinal
+	cfg.NextModelInputs = &c.nextModelInputs
 }
 
 func (c *agentStepCommitter) commit(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
@@ -93,6 +108,11 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	if c == nil || step == nil {
 		return errors.New("agent step is missing")
 	}
+	persistCtx, ownershipErr := stepPersistenceContext(ctx, c.ownerContext)
+	if ownershipErr != nil {
+		return ownershipErr
+	}
+	ctx = persistCtx
 	messages := sdkMessagesToModelMessages(step.Messages)
 	timingState := "completed"
 	if interrupted {
@@ -158,30 +178,31 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 		inputs[i].TurnRequestMessageID = c.turnRequestMessageID
 	}
 	agentStep := messagepkg.AgentStep{RunID: c.req.RunID, Messages: inputs, Interrupted: interrupted}
-	commitHash := agentStepCommitHash(agentStep, step)
 	var persisted []messagepkg.Message
+	var queueErr error
 	if c.queueStep != nil && !interrupted {
 		stepCtx := context.WithoutCancel(ctx)
 		outcome, commitErr := c.queueStep.commit(
-			stepCtx, stepIndex, commitHash, classifyQueueStep(step), agentStep, c.persisted,
+			stepCtx, classifyQueueStep(step), agentStep, c.persisted,
 		)
-		if commitErr != nil {
+		if !outcome.historyCommitted {
 			return fail(commitErr)
 		}
+		// History is already durable even if later queue coordination failed.
+		// Record that prefix below before returning the error; a cleanup must
+		// not lose it or write the same step again.
+		queueErr = commitErr
 		persisted = outcome.persisted
-		if c.req.TurnReplacement == nil {
-			if publisher, ok := c.service.messageService.(messagepkg.AgentStepPublisher); ok {
-				publisher.PublishAgentStep(persisted)
-			}
-		}
 		c.replacementFinalized = outcome.replacementFinalized
-		if outcome.continueAfterFinal && classifyQueueStep(step) == queueStepFinal {
+		if queueErr == nil && outcome.continueAfterFinal && classifyQueueStep(step) == queueStepFinal {
 			if outcome.claimedSteer != nil {
-				c.nextModelInputs = append(c.nextModelInputs, sdk.UserMessage(continuationPayloadText(outcome.claimedSteer.Payload)))
+				c.nextModelInputs = append(c.nextModelInputs, sdk.UserMessage(QueuePayloadText(outcome.claimedSteer.Payload)))
 			}
 			c.continueAfterFinal.Store(true)
 		}
-		c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, outcome)
+		if queueErr == nil {
+			c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, outcome)
+		}
 	} else {
 		persisted, err = c.persister.PersistAgentStep(context.WithoutCancel(ctx), agentStep)
 	}
@@ -206,6 +227,9 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 		// asynchronous long-term memory extraction.
 		c.memoryPersisted = append(c.memoryPersisted, persisted...)
 		c.messages = append(c.messages, messages...)
+	}
+	if queueErr != nil {
+		return fail(queueErr)
 	}
 	return nil
 }
@@ -234,7 +258,7 @@ func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepInde
 	}
 	if outcome.claimedSteer != nil {
 		update.ClaimedSteerItemID = string(outcome.claimedSteer.ID)
-		update.ClaimedSteerText = continuationPayloadText(outcome.claimedSteer.Payload)
+		update.ClaimedSteerText = QueuePayloadText(outcome.claimedSteer.Payload)
 		update.ClaimedSteerTimestamp = outcome.claimedSteer.CreatedAt
 		// Anchor after the step that just committed. Its step_end marker was
 		// emitted by the native loop before the commit barrier ran, so the wait
@@ -249,18 +273,6 @@ func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepInde
 		c.service.logger.Warn("publish runtime queue user turns failed",
 			slog.String("run_id", c.req.RunID), slog.Any("error", err))
 	}
-}
-
-func agentStepCommitHash(step messagepkg.AgentStep, result *sdk.StepResult) string {
-	payload, err := json.Marshal(struct {
-		Step   messagepkg.AgentStep `json:"step"`
-		Result *sdk.StepResult      `json:"result"`
-	}{step, result})
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
 }
 
 func (c *agentStepCommitter) err() error {
@@ -317,4 +329,14 @@ func (c *agentStepCommitter) persistedMessages() []messagepkg.Message {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]messagepkg.Message(nil), c.persisted...)
+}
+
+// The run's owner context remains authoritative even when the SDK supplies a
+// detached cleanup context. User abort checkpoints may outlive cancellation;
+// a revoked owner must never write in the reaper's grace window.
+func stepPersistenceContext(ctx, owner context.Context) (context.Context, error) {
+	if runOwnershipLost(ctx) || runOwnershipLost(owner) {
+		return nil, sessionruntime.ErrRunOwnershipLost
+	}
+	return context.WithoutCancel(ctx), nil
 }

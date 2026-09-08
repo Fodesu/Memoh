@@ -830,8 +830,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
 	if stepCommitter != nil {
 		cfg.OnStepCommitted = stepCommitter.commit
-		cfg.ContinueAfterFinal = &stepCommitter.continueAfterFinal
-		cfg.NextModelInputs = &stepCommitter.nextModelInputs
+		stepCommitter.bindContinuation(&cfg)
 	}
 	cfg = s.prepareRunConfig(ctx, cfg)
 	terminal := s.contextLifecycleTerminal(ctx, cfg)

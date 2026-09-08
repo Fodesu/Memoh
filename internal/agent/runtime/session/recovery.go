@@ -209,6 +209,7 @@ func (m *Manager) reserveRecoveredWaitingDecision(ctx context.Context, run ledge
 		view.RunID = handle.RunID
 		view.TurnID = run.TurnID
 		view.Generation = handle.Generation
+		view.FencingToken = handle.FencingToken
 		view.Status = RunStatusWaitingDecision
 		view.OwnerID = m.ownerID
 		view.OwnerLeaseExpiresAt = &expiresAt

@@ -112,6 +112,9 @@
     "finish": "Done"
   },
   "errors": {
+    "queue": {
+      "steer_unsupported": "This run cannot accept steer input. Wait for it to finish and send a new message."
+    },
     "bot": {
       "name_taken": "This name is already taken."
     },

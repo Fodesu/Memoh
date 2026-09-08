@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,17 +35,16 @@ func encodeFollowUpCommand(cmd turn.StartTurnCommand) ([]byte, error) {
 
 func decodeFollowUpPayload(payload []byte) followUpPayload {
 	var body followUpPayload
-	if err := json.Unmarshal(payload, &body); err == nil {
-		body.Text = strings.TrimSpace(body.Text)
-		return body
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return followUpPayload{}
 	}
-	// Legacy plain-text payloads carry no JSON envelope.
-	return followUpPayload{Text: strings.TrimSpace(string(payload))}
+	body.Text = strings.TrimSpace(body.Text)
+	return body
 }
 
-// continuationPayloadText renders the user-visible text of a steer or
-// follow-up payload.
-func continuationPayloadText(payload []byte) string {
+// QueuePayloadText renders only user-visible text. Invalid/empty payloads never
+// fall back to the raw envelope, which can contain a deferred command credential.
+func QueuePayloadText(payload []byte) string {
 	body := decodeFollowUpPayload(payload)
 	if text := strings.TrimSpace(body.Text); text != "" {
 		return text
@@ -134,25 +134,63 @@ func (s *Service) startFollowUpAfterTerminal(ctx context.Context, terminal sessi
 	go s.startFollowUp(ctx, terminal)
 }
 
+// followUpStart coalesces terminal/enqueue notifications while admission is in
+// flight. Its lifetime ends before output is drained; output delivery must not
+// hold the next run's admission gate.
+type followUpStart struct {
+	mu      sync.Mutex
+	closed  bool
+	pending *sessionruntime.TerminalRun
+}
+
 func (s *Service) startFollowUp(parent context.Context, terminal sessionruntime.TerminalRun) {
 	ctx := context.WithoutCancel(parent)
 	key := sessionruntime.Key{BotID: terminal.BotID, SessionID: terminal.SessionID}
-	// One starter per session at a time. A second trigger (terminal observer
-	// plus an enqueue-time kick) would otherwise receive the same idempotent
-	// claim and could release it while the first is still admitting the turn.
-	if _, busy := s.followUpStarts.LoadOrStore(key.String(), struct{}{}); busy {
+	state := &followUpStart{}
+	for {
+		current, busy := s.followUpStarts.LoadOrStore(key.String(), state)
+		if !busy {
+			break
+		}
+		active := current.(*followUpStart)
+		active.mu.Lock()
+		if active.closed {
+			active.mu.Unlock()
+			continue
+		}
+		active.pending = &terminal
+		active.mu.Unlock()
 		return
 	}
-	defer s.followUpStarts.Delete(key.String())
+	for {
+		if handle := s.admitFollowUp(ctx, key, terminal); handle != nil {
+			// Server-owned handles need a consumer, independently of the short
+			// admission loop. Terminal observers can schedule the next item.
+			go drainDeferredTurn(handle)
+		}
+		state.mu.Lock()
+		if state.pending != nil {
+			terminal = *state.pending
+			state.pending = nil
+			state.mu.Unlock()
+			continue
+		}
+		state.closed = true
+		s.followUpStarts.CompareAndDelete(key.String(), state)
+		state.mu.Unlock()
+		return
+	}
+}
 
+func (s *Service) admitFollowUp(ctx context.Context, key sessionruntime.Key, terminal sessionruntime.TerminalRun) turn.RunHandle {
 	item, claim, ok, err := s.sessionManager.ClaimNextFollowUp(ctx, key, terminal.RunID)
 	if err != nil || !ok {
-		return
+		return nil
 	}
 	cmd, ok := s.followUpCommand(item)
 	if !ok {
 		_ = s.sessionManager.ReleaseFollowUp(ctx, key, claim)
-		return
+		return nil
 	}
 	var handle turn.RunHandle
 	for attempt := 0; ; attempt++ {
@@ -163,25 +201,23 @@ func (s *Service) startFollowUp(parent context.Context, terminal sessionruntime.
 		// ctx is detached from its parent, so only the backoff bounds the wait.
 		time.Sleep(time.Duration(1<<attempt) * 10 * time.Millisecond)
 	}
-	if err != nil {
+	if err != nil && (!errors.Is(err, turn.ErrDuplicateTurn) || errors.Is(err, sessionruntime.ErrInvocationConflict)) {
 		// The item stays accepted; the next terminal boundary claims it again.
 		_ = s.sessionManager.ReleaseFollowUp(ctx, key, claim)
 		if !errors.Is(err, turn.ErrSessionBusy) && s.logger != nil {
 			s.logger.Warn("start follow-up turn failed",
 				slog.String("item_id", string(item.ID)), slog.Any("error", err))
 		}
-		return
+		return nil
 	}
 	if err := s.sessionManager.ApplyFollowUp(ctx, key, claim); err != nil && s.logger != nil {
 		s.logger.Warn("apply transient follow-up failed",
 			slog.String("item_id", string(item.ID)),
-			slog.String("run_id", handle.RunID()),
+			slog.String("trigger_run_id", terminal.RunID),
 			slog.Any("error", err),
 		)
 	}
-	// Server-owned continuation handles have no external consumer. Drain them
-	// so the run can publish and finish through the same application path.
-	drainDeferredTurn(handle)
+	return handle
 }
 
 // followUpCommand rebuilds the StartTurnCommand for one follow-up item. A

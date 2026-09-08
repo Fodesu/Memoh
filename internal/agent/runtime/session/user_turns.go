@@ -26,6 +26,19 @@ type QueueUserTurnUpdate struct {
 	AfterStepIndex *int
 }
 
+// ContinuationStepIndex resumes the owner-local step cursor after a parked
+// decision. A recovered owner starts a new generation/cursor; it is not a
+// durable replay offset and must never be inferred from timestamps or messages.
+func (m *Manager) ContinuationStepIndex(handle RunHandle) (int, error) {
+	ctrl := m.localControlForHandle(handle.normalized())
+	if ctrl == nil {
+		return 0, ErrRunOwnershipLost
+	}
+	ctrl.stepMu.Lock()
+	defer ctrl.stepMu.Unlock()
+	return ctrl.stepConsumed, nil
+}
+
 // PublishQueueUserTurns projects one committed queue step into the live run.
 // The update is atomic so applying one steer and claiming the next cannot
 // briefly render them out of order. A claimed steer is shown only after the
@@ -71,14 +84,6 @@ func (m *Manager) PublishQueueUserTurns(ctx context.Context, handle RunHandle, u
 		run := snapshot.CurrentRunView
 		if !runMatchesHandle(run, handle) || !m.runOwnerMatches(run) || !isActiveRunStatus(run.Status) {
 			return snapshot, false, ErrRunOwnershipLost
-		}
-		if len(run.UserTurns) == 0 {
-			switch {
-			case run.RequestUserTurn != nil:
-				run.UserTurns = append(run.UserTurns, *run.RequestUserTurn)
-			case run.Operation != nil && run.Operation.ReplacementUserTurn != nil:
-				run.UserTurns = append(run.UserTurns, *run.Operation.ReplacementUserTurn)
-			}
 		}
 		changed := false
 		for _, incoming := range normalized {

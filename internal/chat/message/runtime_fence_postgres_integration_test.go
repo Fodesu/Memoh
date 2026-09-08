@@ -17,7 +17,6 @@ import (
 	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
@@ -295,12 +294,8 @@ func TestPostgresRuntimeFenceAgentReplacementStepsFinalizeVisibility(t *testing.
 		Content:              []byte(`{"role":"assistant","content":"replacement answer"}`),
 		TurnRequestMessageID: user.ID, SkipHistoryTurn: true,
 	}}}
-	var hidden []Message
-	if err := storeQueries.InTx(owner, func(txq dbstore.Queries) error {
-		var persistErr error
-		hidden, persistErr = service.PersistAgentReplacementStepTx(owner, txq, step)
-		return persistErr
-	}); err != nil {
+	hidden, err := service.PersistAgentReplacementStep(owner, step)
+	if err != nil {
 		t.Fatalf("persist hidden replacement step: %v", err)
 	}
 	visible, err := service.ListBySession(ctx, sessionID.String())
@@ -312,9 +307,7 @@ func TestPostgresRuntimeFenceAgentReplacementStepsFinalizeVisibility(t *testing.
 		OldTurnID: oldTurn.ID, ReplacementTurnID: replacementTurnID,
 		ReplacementTurnPosition: &replacementPosition, RequestMessageID: user.ID, Reason: "retry",
 	}
-	if err := storeQueries.InTx(owner, func(txq dbstore.Queries) error {
-		return service.FinalizeAgentReplacementTx(owner, txq, sessionID.String(), replacement, user.ID, hidden[0].ID)
-	}); err != nil {
+	if err := service.FinalizeAgentReplacement(owner, sessionID.String(), replacement, user.ID, hidden[0].ID); err != nil {
 		t.Fatalf("finalize replacement history: %v", err)
 	}
 	visible, err = service.ListBySession(ctx, sessionID.String())

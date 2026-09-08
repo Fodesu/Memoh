@@ -10,35 +10,24 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
-	dbstore "github.com/felinics/memoh/internal/db/store"
-	"github.com/felinics/memoh/internal/runtimefence"
 )
 
-// queueStepTransaction is a small adapter. History remains a fenced
-// PostgreSQL transaction, while queue state lives entirely in the configured
+// queueStepCoordinator orders queue consumption after history persistence.
+// History remains a fenced PostgreSQL transaction; queue state lives in the
 // session runtime backend (memory or Redis). Queue state is transient and is
 // never included in the history transaction.
-type queueStepTransaction struct {
+type queueStepCoordinator struct {
 	service              *Service
 	req                  ChatRequest
-	txPersister          messagepkg.AgentStepTxPersister
-	replacementPersister messagepkg.AgentReplacementTxPersister
-	modelID              string
+	persister            messagepkg.AgentStepPersister
+	replacementPersister messagepkg.AgentReplacementPersister
 	run                  sessionruntime.RunHandle
+	steerEnabled         bool
 	pendingSteer         *sessionruntime.SteerClaimRef
-	pendingSteerItem     *sessionruntime.SteerItem
-	pendingSteerDelivery steerDelivery
 }
 
-type steerDelivery int
-
-const (
-	steerNotPending steerDelivery = iota
-	steerDeliveredByInject
-	steerDeliveredByNextInputs
-)
-
 type queueStepOutcome struct {
+	historyCommitted     bool
 	persisted            []messagepkg.Message
 	appliedSteerItemID   string
 	claimedSteer         *sessionruntime.SteerItem
@@ -46,59 +35,49 @@ type queueStepOutcome struct {
 	replacementFinalized bool
 }
 
-func newQueueStepTransaction(s *Service, req ChatRequest, modelID string) *queueStepTransaction {
-	if s == nil || s.sessionManager == nil || s.messageService == nil || s.queries == nil {
+func newQueueStepCoordinator(s *Service, req ChatRequest) *queueStepCoordinator {
+	if req.QueueInjectCh == nil && req.TurnReplacement == nil {
 		return nil
 	}
-	txPersister, ok := s.messageService.(messagepkg.AgentStepTxPersister)
+	if s == nil || s.sessionManager == nil || s.messageService == nil || req.RunHandle.RunID == "" || req.RunHandle.OwnerID == "" || req.RunHandle.FencingToken <= 0 {
+		return nil
+	}
+	persister, ok := s.messageService.(messagepkg.AgentStepPersister)
 	if !ok {
 		return nil
 	}
-	replacementPersister, _ := s.messageService.(messagepkg.AgentReplacementTxPersister)
+	replacementPersister, _ := s.messageService.(messagepkg.AgentReplacementPersister)
 	if req.TurnReplacement != nil && replacementPersister == nil {
 		return nil
 	}
-	q := &queueStepTransaction{
-		service: s, req: req, txPersister: txPersister,
-		replacementPersister: replacementPersister, modelID: modelID,
-		run: req.RunHandle, pendingSteerDelivery: steerNotPending,
-	}
-	if req.QueueSteerClaim != nil {
-		claim := *req.QueueSteerClaim
-		q.pendingSteer = &claim
-		q.pendingSteerDelivery = steerDeliveredByInject
+	q := &queueStepCoordinator{
+		service: s, req: req, persister: persister,
+		replacementPersister: replacementPersister,
+		run:                  req.RunHandle,
+		steerEnabled:         req.QueueInjectCh != nil,
 	}
 	return q
 }
 
-func (q *queueStepTransaction) persistHistory(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
+func (q *queueStepCoordinator) persistHistory(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
 	if len(step.Messages) == 0 {
 		return nil, nil
 	}
-	var persisted []messagepkg.Message
-	err := runtimefence.InTransaction(ctx, q.service.queries, q.req.BotID, q.req.ThreadID, func(queries dbstore.Queries) error {
-		var err error
-		if q.req.TurnReplacement != nil {
-			persisted, err = q.replacementPersister.PersistAgentReplacementStepTx(ctx, queries, step)
-		} else {
-			persisted, err = q.txPersister.PersistAgentStepTx(ctx, queries, step)
-		}
-		return err
-	})
-	return persisted, err
+	if q.req.TurnReplacement != nil {
+		return q.replacementPersister.PersistAgentReplacementStep(ctx, step)
+	}
+	return q.persister.PersistAgentStep(ctx, step)
 }
 
-func (q *queueStepTransaction) releaseSteerClaim(ctx context.Context) {
+func (q *queueStepCoordinator) releaseSteerClaim(ctx context.Context) {
 	if q == nil || q.pendingSteer == nil || q.service == nil || q.service.sessionManager == nil {
 		return
 	}
 	_ = q.service.sessionManager.ReleaseSteer(ctx, sessionruntime.Key{BotID: q.run.BotID, SessionID: q.run.SessionID}, *q.pendingSteer)
 }
 
-func (q *queueStepTransaction) commit(
+func (q *queueStepCoordinator) commit(
 	ctx context.Context,
-	_ int,
-	_ string,
 	kind queueStepKind,
 	agentStep messagepkg.AgentStep,
 	previouslyPersisted []messagepkg.Message,
@@ -113,6 +92,7 @@ func (q *queueStepTransaction) commit(
 		return outcome, err
 	}
 	outcome.persisted = persisted
+	outcome.historyCommitted = true
 	if q.pendingSteer != nil {
 		if err := q.service.sessionManager.ApplySteer(ctx, sessionruntime.Key{BotID: q.run.BotID, SessionID: q.run.SessionID}, *q.pendingSteer); err != nil {
 			// The steer text is already part of the committed step. Releasing the
@@ -122,8 +102,6 @@ func (q *queueStepTransaction) commit(
 		}
 		outcome.appliedSteerItemID = string(q.pendingSteer.ItemID)
 		q.pendingSteer = nil
-		q.pendingSteerItem = nil
-		q.pendingSteerDelivery = steerNotPending
 	}
 	if kind == queueStepDeferredDecision {
 		// The loop parks after this step and its inject channel is never read
@@ -134,20 +112,22 @@ func (q *queueStepTransaction) commit(
 		return outcome, nil
 	}
 
-	item, claim, claimed, err := q.service.sessionManager.ClaimNextSteer(ctx, q.run, kind == queueStepFinal)
+	var item sessionruntime.SteerItem
+	var claim sessionruntime.SteerClaimRef
+	var claimed bool
+	if q.steerEnabled {
+		item, claim, claimed, err = q.service.sessionManager.ClaimNextSteer(ctx, q.run, kind == queueStepFinal)
+	}
 	if err != nil {
 		return outcome, err
 	}
 	if claimed {
 		q.pendingSteer = &claim
-		q.pendingSteerItem = &item
 		outcome.claimedSteer = &item
 		if kind == queueStepFinal {
-			q.pendingSteerDelivery = steerDeliveredByNextInputs
 			outcome.continueAfterFinal = true
 		} else {
-			q.pendingSteerDelivery = steerDeliveredByInject
-			text := continuationPayloadText(item.Payload)
+			text := QueuePayloadText(item.Payload)
 			if q.req.QueueInjectCh == nil {
 				q.releaseSteerClaim(ctx)
 				return outcome, errors.New("steer queue injection channel is unavailable")
@@ -170,9 +150,7 @@ func (q *queueStepTransaction) commit(
 		if assistantID == "" {
 			return outcome, errors.New("replacement assistant message was not persisted")
 		}
-		err = runtimefence.InTransaction(ctx, q.service.queries, q.req.BotID, q.req.ThreadID, func(queries dbstore.Queries) error {
-			return q.replacementPersister.FinalizeAgentReplacementTx(ctx, queries, q.req.ThreadID, *q.req.TurnReplacement, requestID, assistantID)
-		})
+		err = q.replacementPersister.FinalizeAgentReplacement(ctx, q.req.ThreadID, *q.req.TurnReplacement, requestID, assistantID)
 		if err != nil {
 			return outcome, err
 		}

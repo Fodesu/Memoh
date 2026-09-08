@@ -29,8 +29,8 @@ type Manager struct {
 	// liveness answers "is an owner still alive", which the ledger cannot. Both
 	// backends provide it; only a distributed backend has leases to expire.
 	liveness LivenessBackend
-	// runs is the durable ledger. A nil ledger means durable admission is not
-	// wired yet and the manager keeps its pre-ledger behavior.
+	// runs is required by production Admit. Backend-only tests may omit it
+	// to exercise live reservations without a durable row.
 	runs ledger.Store
 	// fence is the persistence-ownership cutover applied with each claim. It is
 	// required whenever runs is set: a claim that skipped it would leave a
@@ -53,7 +53,6 @@ type Manager struct {
 	mu                     sync.Mutex
 	controls               map[runControlKey]*runControl
 	commandHandler         func(context.Context, Command) error
-	commandReconciler      func(context.Context, Command) (bool, error)
 	decisionStore          DecisionStore
 	terminalObserver       func(context.Context, TerminalRun)
 	decisionFinalizer      func(context.Context, RunHandle) error
@@ -464,18 +463,6 @@ func (m *Manager) SetCommandHandler(handler func(context.Context, Command) error
 	m.mu.Unlock()
 }
 
-// SetCommandReconciler installs a read-only domain result checker. Unlike the
-// owner-local command handler, it may run on any server after the owner or its
-// local control disappears.
-func (m *Manager) SetCommandReconciler(reconciler func(context.Context, Command) (bool, error)) {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	m.commandReconciler = reconciler
-	m.mu.Unlock()
-}
-
 // SetDecisionStore installs the PostgreSQL-backed decision authority used by
 // every response transport and by waiting-decision recovery.
 func (m *Manager) SetDecisionStore(store DecisionStore) {
@@ -559,22 +546,27 @@ func (m *Manager) reconcileAndObserveTerminalRun(ctx context.Context, run Termin
 
 // reconcileTerminalLive repairs the Redis side of a terminal commit that
 // outlived its owner. Unlike ordinary owner release, this path is allowed after
-// lease expiry, but only while the stored run ref still carries the exact
-// durable fencing token observed by the reaper.
+// lease expiry. The backend atomically verifies the exact durable token against
+// the surviving snapshot (or the lease ref for older snapshots).
 func (m *Manager) reconcileTerminalLive(ctx context.Context, terminal TerminalRun) {
 	if m == nil || m.distributed == nil || terminal.FencingToken <= 0 {
 		return
 	}
 	key := Key{BotID: terminal.BotID, SessionID: terminal.SessionID}
-	ref, ok, err := m.distributed.LoadRunRef(ctx, key, terminal.RunID)
+	current, ok, err := m.backend.Load(ctx, key)
 	if err != nil {
-		m.logger.Warn("load runtime ref for terminal reconciliation failed", slog.Any("error", err), slog.String("run_id", terminal.RunID))
+		m.logger.Warn("load runtime snapshot for terminal reconciliation failed", slog.Any("error", err), slog.String("run_id", terminal.RunID))
 		return
 	}
-	if !ok || ref.FencingToken != terminal.FencingToken {
+	if !ok || current.CurrentRunView == nil || current.CurrentRunView.RunID != terminal.RunID {
 		return
 	}
+	run := current.CurrentRunView
 	status := liveRunStatus(ledger.State(terminal.State))
+	if run.Status == status && run.OwnerLeaseExpiresAt == nil && run.ProposedTerminalStatus == "" {
+		return
+	}
+	ref := RunRef{BotID: key.BotID, SessionID: key.SessionID, RunID: run.RunID, OwnerID: run.OwnerID, Generation: run.Generation, FencingToken: terminal.FencingToken}
 	snapshot, changed, err := m.distributed.ReconcileTerminalRun(ctx, key, ref, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
 		run := snapshot.CurrentRunView
 		if run == nil || run.RunID != ref.RunID || run.Generation != ref.Generation || run.OwnerID != ref.OwnerID {
@@ -593,7 +585,6 @@ func (m *Manager) reconcileTerminalLive(ctx context.Context, terminal TerminalRu
 			run.ErrorCode = ""
 			run.Error = ""
 		}
-		rejectPendingSteerOnRunFinish(run, now)
 		return snapshot, true, nil
 	})
 	if err != nil {
@@ -605,7 +596,7 @@ func (m *Manager) reconcileTerminalLive(ctx context.Context, terminal TerminalRu
 	if !changed {
 		return
 	}
-	delta := runtimeRunPatch(snapshot, true, true, true, true)
+	delta := runtimeRunPatch(snapshot, true, true, true)
 	if err := m.publishRuntimeDelta(ctx, snapshot, terminal.RunID, delta); err != nil {
 		m.logger.Warn("publish reconciled runtime terminal failed; subscribers will reload snapshot", slog.Any("error", err), slog.String("run_id", terminal.RunID))
 	}
@@ -812,7 +803,7 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 // startReaper is a no-op without a ledger: there is nothing durable to reap, so
-// a manager wired for live state only keeps its pre-ledger behavior.
+// backend-only tests can isolate the live reservation algorithms.
 func (m *Manager) startReaper(ctx context.Context) error {
 	if m.runs == nil || m.liveness == nil {
 		return nil
@@ -909,17 +900,6 @@ func (m *Manager) shutdown(ctx context.Context) error {
 	return errors.Join(releaseErr, controlErr, reaperErr, backendErr)
 }
 
-func (m *Manager) StartRun(ctx context.Context, botID, sessionID, runID string, abortCh chan<- struct{}, cancel context.CancelFunc, injectCh chan<- turn.InjectMessage) error {
-	_, err := m.StartRunHandle(ctx, botID, sessionID, runID, abortCh, cancel, injectCh)
-	return err
-}
-
-func (m *Manager) StartRunHandle(ctx context.Context, botID, sessionID, runID string, abortCh chan<- struct{}, cancel context.CancelFunc, injectCh chan<- turn.InjectMessage) (RunHandle, error) {
-	return m.StartRunWithAdmissionBuilderHandle(ctx, botID, sessionID, runID, func(context.Context, RunHandle) (RunAdmissionView, error) {
-		return RunAdmissionView{}, nil
-	}, abortCh, cancel, injectCh)
-}
-
 // OwnerID returns this manager's stable execution-owner identity.
 func (m *Manager) OwnerID() string {
 	if m == nil {
@@ -938,38 +918,8 @@ func (m *Manager) LivenessGeneration(ctx context.Context) (string, error) {
 	return m.livenessGeneration(ctx)
 }
 
-// StartRunWithAdmissionBuilderHandle reserves the cross-server run before
-// executing builder, then publishes the running view only after the canonical
-// request turn and optional replacement operation are ready.
-func (m *Manager) StartRunWithAdmissionBuilderHandle(ctx context.Context, botID, sessionID, runID string, builder func(context.Context, RunHandle) (RunAdmissionView, error), abortCh chan<- struct{}, cancel context.CancelFunc, injectCh chan<- turn.InjectMessage) (RunHandle, error) {
-	handle, _, err := m.startRun(ctx, runStart{
-		botID:     botID,
-		sessionID: sessionID,
-		runID:     runID,
-		builder:   builder,
-		abortCh:   abortCh,
-		cancel:    cancel,
-		injectCh:  injectCh,
-	})
-	return handle, err
-}
-
-func (m *Manager) StartRunWithAdmissionBuilderAndOwnershipHandle(ctx context.Context, botID, sessionID, runID string, builder func(context.Context, RunHandle) (RunAdmissionView, error), ownershipCancel context.CancelCauseFunc, abortCh chan<- struct{}, cancel context.CancelFunc, injectCh chan<- turn.InjectMessage) (RunHandle, error) {
-	handle, _, err := m.startRun(ctx, runStart{
-		botID:           botID,
-		sessionID:       sessionID,
-		runID:           runID,
-		builder:         builder,
-		ownershipCancel: ownershipCancel,
-		abortCh:         abortCh,
-		cancel:          cancel,
-		injectCh:        injectCh,
-	})
-	return handle, err
-}
-
 // runStart is one live reservation request. It is a struct rather than a
-// parameter list because the ledger path and the pre-ledger entry points differ
+// parameter list because durable admission and backend-only test fixtures differ
 // only in whether they carry a fencing token, and that difference should be
 // visible at the call site instead of being a positional zero.
 type runStart struct {
@@ -1131,6 +1081,7 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 			TurnID:              start.turnID,
 			InvocationID:        start.invocationID,
 			Generation:          runGeneration,
+			FencingToken:        start.fencingToken,
 			Status:              RunStatusAdmitting,
 			OwnerID:             ownerID,
 			OwnerLeaseExpiresAt: leaseExpiresAt,
@@ -1258,7 +1209,6 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 		snapshot.Seq++
 		snapshot.UpdatedAt = now
 		run.Status = RunStatusRunning
-		run.RequestUserTurn = admission.RequestUserTurn
 		run.Operation = admission.Operation
 		switch {
 		case admission.RequestUserTurn != nil:
@@ -1585,17 +1535,6 @@ func (m *Manager) resolveTerminalStatus(ctx context.Context, handle RunHandle, s
 	}
 }
 
-const steerRunFinishedError = "runtime run finished before steer was applied"
-
-func rejectPendingSteerOnRunFinish(run *CurrentRunView, now time.Time) {
-	if run == nil || run.Steer == nil || !isPendingSteerStatus(run.Steer.Status) {
-		return
-	}
-	run.Steer.Status = SteerStatusRejected
-	run.Steer.Error = steerRunFinishedError
-	run.Steer.UpdatedAt = now
-}
-
 func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, errorCode, finishMessage string) (bool, error) {
 	admissionTerminal := false
 	_, changed, err := m.releaseActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
@@ -1633,13 +1572,12 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 		snapshot.CurrentRunView.OwnerLeaseExpiresAt = nil
 		snapshot.CurrentRunView.ProposedTerminalStatus = ""
 		snapshot.CurrentRunView.FinishProposedAt = nil
-		rejectPendingSteerOnRunFinish(snapshot.CurrentRunView, now)
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
 		if admissionTerminal {
 			return RuntimeDelta{CurrentRunView: snapshot.CurrentRunView}
 		}
-		return runtimeRunPatch(snapshot, true, true, true, m.distributed != nil)
+		return runtimeRunPatch(snapshot, true, true, m.distributed != nil)
 	})
 	return changed, err
 }
@@ -1752,10 +1690,9 @@ func (m *Manager) prepareAgentTerminalEvent(
 		return agentTerminalProposal{}, nil
 	}
 	if prepared.State.Terminal() {
-		// CommitStep may durably finalize this exact run before its delayed native
-		// terminal event reaches the live projection. prepareLedgerFinish has
-		// already verified this handle's fencing token, so replay that terminal
-		// outcome only when it agrees with the event we are publishing.
+		// A repeated terminal event can meet an already-finalized ledger row.
+		// prepareLedgerFinish verified this handle's fence; only the same
+		// durable outcome may be replayed into the live projection.
 		if prepared.State != terminalLedgerState(status, errorCode, "") {
 			return agentTerminalProposal{}, ErrRunOwnershipLost
 		}
@@ -1931,7 +1868,6 @@ func (m *Manager) handleAgentEvent(ctx context.Context, handle RunHandle, event 
 				proposedAt = now
 			}
 			run.FinishProposedAt = &proposedAt
-			rejectPendingSteerOnRunFinish(run, now)
 		case native.EventAgentAbort:
 			if !terminalProposal.prepared {
 				return snapshot, true, nil
@@ -1943,7 +1879,6 @@ func (m *Manager) handleAgentEvent(ctx context.Context, handle RunHandle, event 
 				proposedAt = now
 			}
 			run.FinishProposedAt = &proposedAt
-			rejectPendingSteerOnRunFinish(run, now)
 		case native.EventError:
 			run.ErrorCode = strings.TrimSpace(event.Code)
 			run.Error = strings.TrimSpace(event.Error)
@@ -1955,11 +1890,11 @@ func (m *Manager) handleAgentEvent(ctx context.Context, handle RunHandle, event 
 	}, func(snapshot Snapshot) RuntimeDelta {
 		switch event.Type {
 		case native.EventAgentEnd, native.EventAgentAbort:
-			delta.Run = runtimeRunPatch(snapshot, true, terminalProposal.prepared, terminalProposal.prepared, false).Run
+			delta.Run = runtimeRunPatch(snapshot, true, terminalProposal.prepared, false).Run
 		case native.EventAgentStart, native.EventToolApprovalRequest, native.EventUserInputRequest:
-			delta.Run = runtimeRunPatch(snapshot, true, false, false, false).Run
+			delta.Run = runtimeRunPatch(snapshot, true, false, false).Run
 		case native.EventError, native.EventRetry:
-			delta.Run = runtimeRunPatch(snapshot, false, true, false, false).Run
+			delta.Run = runtimeRunPatch(snapshot, false, true, false).Run
 		}
 		return delta
 	})
@@ -2061,7 +1996,10 @@ func (m *Manager) liveSnapshot(ctx context.Context, botID, sessionID string) (Sn
 			return Snapshot{}, err
 		}
 	}
-	if m.distributed != nil {
+	// Durable runtimes have one terminal authority: the ledger/reaper protocol.
+	// A read-side expiry must not publish lost or delete the run ref before
+	// the reaper reconciles an already-committed finishing proposal.
+	if m.distributed != nil && m.runs == nil {
 		now, err := m.backend.Now(ctx)
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("load runtime backend time: %w", err)
@@ -2079,7 +2017,7 @@ func (m *Manager) liveSnapshot(ctx context.Context, botID, sessionID string) (Sn
 			}
 			return current, true, nil
 		}, func(snapshot Snapshot) RuntimeDelta {
-			return runtimeRunPatch(snapshot, true, true, false, true)
+			return runtimeRunPatch(snapshot, true, true, true)
 		})
 		if err != nil {
 			return Snapshot{}, err
@@ -2132,6 +2070,7 @@ func (m *Manager) hydrateSnapshotFromLedger(ctx context.Context, snapshot Snapsh
 		TurnID:       run.TurnID,
 		InvocationID: run.InvocationID,
 		Generation:   run.LiveGeneration,
+		FencingToken: run.FencingToken,
 		Status:       liveRunStatus(run.State),
 		OwnerID:      run.OwnerID,
 		StartedAt:    run.CreatedAt,

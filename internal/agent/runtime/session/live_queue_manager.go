@@ -1,6 +1,9 @@
 package sessionruntime
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 func (m *Manager) liveQueueBackend() (LiveQueueBackend, error) {
 	if m == nil || m.backend == nil {
@@ -11,6 +14,27 @@ func (m *Manager) liveQueueBackend() (LiveQueueBackend, error) {
 		return nil, ErrLiveQueueUnavailable
 	}
 	return queue, nil
+}
+
+// EnableSteer advertises an actual execution consumer, not just an allocated
+// channel. Other instances therefore reject queues aimed at old/unsupported owners.
+func (m *Manager) EnableSteer(ctx context.Context, handle RunHandle) error {
+	_, _, err := m.updateActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
+		run := snapshot.CurrentRunView
+		if !runMatchesHandle(run, handle) || !m.runOwnerMatches(run) ||
+			(run.Status != RunStatusRunning && run.Status != RunStatusWaitingDecision) {
+			return snapshot, false, ErrRunOwnershipLost
+		}
+		if run.SteerSupported {
+			return snapshot, false, nil
+		}
+		run.SteerSupported = true
+		run.UpdatedAt = now
+		snapshot.Seq++
+		snapshot.UpdatedAt = now
+		return snapshot, true, nil
+	}, func(snapshot Snapshot) RuntimeDelta { return RuntimeDelta{CurrentRunView: snapshot.CurrentRunView} })
+	return err
 }
 
 func (m *Manager) EnqueueSteer(ctx context.Context, key Key, itemID, invocationID string, payload []byte) (SteerItem, error) {

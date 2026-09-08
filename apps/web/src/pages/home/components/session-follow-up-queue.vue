@@ -13,6 +13,7 @@
         :key="item.item_id"
         :item="item"
         :busy="isBusy(item)"
+        :steer-supported="steerSupported"
         @save="save(item, $event)"
         @steer="steer(item)"
         @remove="remove(item)"
@@ -43,7 +44,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const { items, hasItems, busy, refresh, update, remove: removeItem, steer: steerItem, reorder } = useSessionFollowUpQueue(
+const { items, hasItems, steerSupported, busy, refresh, update, remove: removeItem, steer: steerItem, reorder } = useSessionFollowUpQueue(
   () => props.botId,
   () => props.sessionId,
   () => props.active ?? false,

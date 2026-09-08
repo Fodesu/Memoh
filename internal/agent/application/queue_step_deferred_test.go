@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	sessionqueue "github.com/felinics/memoh/internal/agent/runtime/session/queue"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -17,14 +16,17 @@ type nilQueries struct{ dbstore.Queries }
 // newDeferredSteerTestService builds a Service whose queue step transaction
 // can run without PostgreSQL: steps carry no messages, so history persistence
 // is skipped, and queue state lives in a memory backend with one active run.
-func newDeferredSteerTestService(t *testing.T) (*Service, sessionruntime.RunHandle) {
+func newDeferredSteerTestService(t *testing.T, backends ...sessionruntime.Backend) (*Service, sessionruntime.RunHandle) {
 	t.Helper()
-	backend := sessionruntime.NewMemoryBackend()
+	var backend sessionruntime.Backend = sessionruntime.NewMemoryBackend()
+	if len(backends) > 0 {
+		backend = backends[0]
+	}
 	key := sessionruntime.Key{BotID: "bot", SessionID: "session"}
 	_, _, err := backend.Update(context.Background(), key, func(snapshot sessionruntime.Snapshot, _ bool) (sessionruntime.Snapshot, bool, error) {
 		snapshot.BotID, snapshot.SessionID = key.BotID, key.SessionID
 		snapshot.CurrentRunView = &sessionruntime.CurrentRunView{
-			RunID: "run-1", TurnID: "turn-1", Generation: "gen-1", OwnerID: "owner-1", Status: sessionruntime.RunStatusRunning,
+			RunID: "run-1", TurnID: "turn-1", Generation: "gen-1", SteerSupported: true, Status: sessionruntime.RunStatusRunning,
 		}
 		return snapshot, true, nil
 	})
@@ -72,14 +74,14 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 
 	// Original run: the deferred step commits without touching the queue.
 	parkedInject := make(chan turn.InjectMessage, 16)
-	original := newQueueStepTransaction(service, ChatRequest{
+	original := newQueueStepCoordinator(service, ChatRequest{
 		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID,
 		RunHandle: handle, QueueInjectCh: parkedInject,
-	}, "model")
+	})
 	if original == nil {
 		t.Fatal("queue step transaction unavailable")
 	}
-	outcome, err := original.commit(ctx, 0, "", queueStepDeferredDecision, messagepkg.AgentStep{RunID: handle.RunID}, nil)
+	outcome, err := original.commit(ctx, queueStepDeferredDecision, messagepkg.AgentStep{RunID: handle.RunID}, nil)
 	if err != nil {
 		t.Fatalf("deferred commit: %v", err)
 	}
@@ -89,24 +91,24 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 	if got := drainInject(parkedInject); len(got) != 0 {
 		t.Fatalf("parked inject channel received %v", got)
 	}
-	if steers, _, err := service.sessionManager.PendingQueues(ctx, key, 0); err != nil || len(steers) != 1 || steers[0].Status != sessionqueue.Accepted {
+	if steers, _, err := service.sessionManager.PendingQueues(ctx, key, 0); err != nil || len(steers) != 1 || steers[0].Status != sessionruntime.QueueAccepted {
 		t.Fatalf("steer should stay accepted across the park: %#v, %v", steers, err)
 	}
 
-	// Continuation after the decision: a fresh request, no QueueSteerClaim,
+	// Continuation after the decision: a fresh request,
 	// a fresh inject channel. This mirrors continueToolApprovalSession.
 	continuationInject := make(chan turn.InjectMessage, 16)
-	continuation := newQueueStepTransaction(service, ChatRequest{
+	continuation := newQueueStepCoordinator(service, ChatRequest{
 		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID,
 		RunHandle: handle, QueueInjectCh: continuationInject, UserMessagePersisted: true,
-	}, "model")
+	})
 	if continuation == nil {
 		t.Fatal("continuation queue step transaction unavailable")
 	}
 
 	// Step N+1: the model call that consumed the approved tool result. Its
 	// commit claims the steer for step N+2.
-	outcome, err = continuation.commit(ctx, 1, "", queueStepToolLoop, messagepkg.AgentStep{RunID: handle.RunID}, nil)
+	outcome, err = continuation.commit(ctx, queueStepToolLoop, messagepkg.AgentStep{RunID: handle.RunID}, nil)
 	if err != nil {
 		t.Fatalf("continuation commit: %v", err)
 	}
@@ -125,7 +127,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 	}
 
 	// Step N+2 saw the steer; its commit applies the claim exactly once.
-	outcome, err = continuation.commit(ctx, 2, "", queueStepFinal, messagepkg.AgentStep{RunID: handle.RunID}, nil)
+	outcome, err = continuation.commit(ctx, queueStepFinal, messagepkg.AgentStep{RunID: handle.RunID}, nil)
 	if err != nil {
 		t.Fatalf("final commit: %v", err)
 	}
@@ -135,7 +137,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 	if _, err := service.sessionManager.UpdateSteer(ctx, key, item.ID, []byte("x")); err == nil {
 		t.Fatal("applied steer still mutable")
 	}
-	if _, err := service.EnqueueSteer(ctx, handle.BotID, handle.SessionID, "invoke-2", []byte(`{"text":"late"}`)); !errors.Is(err, sessionqueue.ErrNoActiveRun) {
+	if _, err := service.EnqueueSteer(ctx, handle.BotID, handle.SessionID, "invoke-2", []byte(`{"text":"late"}`)); !errors.Is(err, sessionruntime.ErrQueueNoActiveRun) {
 		t.Fatalf("late steer after sealed final = %v", err)
 	}
 }

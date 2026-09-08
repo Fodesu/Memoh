@@ -16,7 +16,17 @@ func modelWithProviderStreamEventObserver(model *sdk.Model, observe func(StreamE
 		return model
 	}
 	observed := *model
-	observed.Provider = providerStreamEventObserver{Provider: model.Provider, observe: observe}
+	provider := model.Provider
+	// A final-steer continuation reuses the model from the preceding call.
+	// Replace our observer instead of nesting another stream/notification loop.
+	for {
+		previous, ok := provider.(providerStreamEventObserver)
+		if !ok {
+			break
+		}
+		provider = previous.Provider
+	}
+	observed.Provider = providerStreamEventObserver{Provider: provider, observe: observe}
 	return &observed
 }
 

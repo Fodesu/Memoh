@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func liveQueueFixture(t *testing.T) (*MemoryBackend, Key, RunHandle) {
@@ -14,7 +16,7 @@ func liveQueueFixture(t *testing.T) (*MemoryBackend, Key, RunHandle) {
 	key := Key{BotID: "bot", SessionID: "session"}
 	_, _, err := b.Update(context.Background(), key, func(snapshot Snapshot, _ bool) (Snapshot, bool, error) {
 		snapshot.BotID, snapshot.SessionID = key.BotID, key.SessionID
-		snapshot.CurrentRunView = &CurrentRunView{RunID: "run-1", TurnID: "turn-1", Generation: "gen-1", OwnerID: "owner-1", Status: RunStatusRunning}
+		snapshot.CurrentRunView = &CurrentRunView{RunID: "run-1", TurnID: "turn-1", Generation: "gen-1", OwnerID: "owner-1", SteerSupported: true, Status: RunStatusRunning}
 		return snapshot, true, nil
 	})
 	if err != nil {
@@ -24,33 +26,121 @@ func liveQueueFixture(t *testing.T) (*MemoryBackend, Key, RunHandle) {
 	return b, key, handle
 }
 
-func TestMemoryLiveQueuesAreIndependentAndFIFO(t *testing.T) {
-	b, key, _ := liveQueueFixture(t)
+func TestMemoryLiveQueueContract(t *testing.T) {
+	b, key, handle := liveQueueFixture(t)
+	runLiveQueueContract(t, b, b, key, handle)
+}
+
+// Memory runs the same sequence as two independent Redis/Valkey clients.
+func runLiveQueueContract(t *testing.T, first, second LiveQueueBackend, key Key, handle RunHandle) {
+	t.Helper()
 	ctx := context.Background()
-	s1, err := b.EnqueueSteer(ctx, key, "s1", "i1", []byte("one"))
-	if err != nil {
-		t.Fatal(err)
+	steerOne, err := first.EnqueueSteer(ctx, key, "steer-1", "invoke-steer-1", []byte("one"))
+	require.NoError(t, err, "enqueue steer")
+	steerTwo, err := second.EnqueueSteer(ctx, key, "steer-2", "invoke-steer-2", []byte("two"))
+	require.NoError(t, err, "enqueue second steer")
+	follow, err := second.EnqueueFollowUp(ctx, key, "follow-1", "invoke-steer-1", []byte("follow"))
+	require.NoError(t, err, "enqueue follow-up")
+	require.NotEqual(t, string(steerOne.ID), string(follow.ID), "queue identities stay separate")
+	if steerOne.Position >= steerTwo.Position || follow.Position != 1 {
+		t.Fatalf("independent positions = steer(%d,%d) follow(%d)", steerOne.Position, steerTwo.Position, follow.Position)
 	}
-	s2, err := b.EnqueueSteer(ctx, key, "s2", "i2", []byte("two"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f1, err := b.EnqueueFollowUp(ctx, key, "f1", "i1", []byte("follow"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s1.Position >= s2.Position || s1.ID == SteerItemID(f1.ID) {
-		t.Fatalf("unexpected independent positions or ids: %#v %#v %#v", s1, s2, f1)
-	}
-	steers, follows, err := b.PendingQueues(ctx, key, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+
+	steers, follows, err := first.PendingQueues(ctx, key, 0)
+	require.NoError(t, err, "list queues from second instance")
 	if len(steers) != 2 || string(steers[0].Payload) != "one" || string(steers[1].Payload) != "two" {
 		t.Fatalf("steer FIFO = %#v", steers)
 	}
 	if len(follows) != 1 || string(follows[0].Payload) != "follow" {
 		t.Fatalf("follow-up queue = %#v", follows)
+	}
+
+	if _, err := first.ReorderSteer(ctx, key, SteerPendingRef{ItemID: steerTwo.ID}, SteerPendingRef{ItemID: steerOne.ID}); err != nil {
+		t.Fatalf("accepted-only reorder: %v", err)
+	}
+	steers, _, err = second.PendingQueues(ctx, key, 0)
+	if err != nil || len(steers) != 2 || steers[0].ID != steerTwo.ID || steers[1].ID != steerOne.ID {
+		t.Fatalf("reordered steer queue = %#v, err=%v", steers, err)
+	}
+
+	claimed, claim, ok, err := second.ClaimNextSteer(ctx, handle, false)
+	if err != nil || !ok || claimed.ID != steerTwo.ID {
+		t.Fatalf("claim steer = %#v, %#v, %v, %v", claimed, claim, ok, err)
+	}
+	replayed, replayClaim, ok, err := first.ClaimNextSteer(ctx, handle, false)
+	if err != nil || !ok || replayed.ID != claimed.ID || replayClaim != claim {
+		t.Fatalf("cross-instance claim replay = %#v, %#v, %v, %v", replayed, replayClaim, ok, err)
+	}
+	third, err := first.EnqueueSteer(ctx, key, "steer-3", "invoke-steer-3", []byte("three"))
+	require.NoError(t, err)
+	ordered, err := second.ReorderSteer(ctx, key, SteerPendingRef{ItemID: third.ID}, SteerPendingRef{ItemID: steerOne.ID})
+	require.NoError(t, err)
+	require.Len(t, ordered, 2)
+	require.Equal(t, third.ID, ordered[0].ID)
+	require.Equal(t, steerOne.ID, ordered[1].ID)
+	_, err = first.ReorderSteer(ctx, key, SteerPendingRef{ItemID: claimed.ID}, SteerPendingRef{ItemID: steerOne.ID})
+	require.ErrorIs(t, err, ErrQueueNotPending)
+	stale := claim
+	stale.OwnerID = "stale-owner"
+	if err := first.ApplySteer(ctx, key, stale); !errors.Is(err, ErrRunOwnershipLost) {
+		t.Fatalf("stale steer apply = %v", err)
+	}
+	if err := first.ApplySteer(ctx, key, claim); err != nil {
+		t.Fatalf("apply steer: %v", err)
+	}
+	if _, err := second.ReorderSteer(ctx, key, SteerPendingRef{ItemID: steerTwo.ID}, SteerPendingRef{ItemID: steerOne.ID}); !errors.Is(err, ErrQueueNotPending) {
+		t.Fatalf("claimed/applied reorder = %v", err)
+	}
+	promotable, err := first.EnqueueFollowUp(ctx, key, "follow-promote", "invoke-follow-promote", []byte("promote"))
+	require.NoError(t, err, "enqueue promotable follow-up")
+	promoted, err := second.PromoteFollowUpToSteer(ctx, key, FollowUpPendingRef{ItemID: promotable.ID})
+	require.NoError(t, err, "promote follow-up")
+	if promoted.Steer.ID == "" || string(promoted.Steer.ID) == string(promotable.ID) {
+		t.Fatalf("promotion reused follow-up identity: follow=%q steer=%q", promotable.ID, promoted.Steer.ID)
+	}
+	replayedPromotion, err := first.PromoteFollowUpToSteer(ctx, key, FollowUpPendingRef{ItemID: promotable.ID})
+	if err != nil || replayedPromotion.Steer.ID != promoted.Steer.ID {
+		t.Fatalf("promotion replay = %#v, err=%v", replayedPromotion, err)
+	}
+
+	steers, follows, err = first.PendingQueues(ctx, key, 0)
+	require.NoError(t, err)
+	require.Len(t, steers, 3)
+	require.Equal(t, promoted.Steer.ID, steers[2].ID)
+	require.Len(t, follows, 1)
+	require.Equal(t, follow.ID, follows[0].ID, "only the promoted follow-up should disappear")
+
+	followed, followClaim, ok, err := first.ClaimNextFollowUp(ctx, key, handle.RunID)
+	if err != nil || !ok || followed.ID != follow.ID {
+		t.Fatalf("claim follow-up = %#v, %#v, %v, %v", followed, followClaim, ok, err)
+	}
+	replayedFollowed, replayFollowClaim, ok, err := second.ClaimNextFollowUp(ctx, key, handle.RunID)
+	if err != nil || !ok || replayedFollowed.ID != follow.ID || replayFollowClaim != followClaim {
+		t.Fatalf("cross-instance follow-up replay = %#v, %#v, %v, %v", replayedFollowed, replayFollowClaim, ok, err)
+	}
+	require.NoError(t, first.ReleaseFollowUp(ctx, key, followClaim))
+	// Release removes the old terminal claim, allowing another trigger to claim.
+	followed, followClaim, ok, err = second.ClaimNextFollowUp(ctx, key, "after-release")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, follow.ID, followed.ID)
+	if err := second.ApplyFollowUp(ctx, key, followClaim); err != nil {
+		t.Fatalf("apply follow-up: %v", err)
+	}
+	if _, _, ok, err := first.ClaimNextFollowUp(ctx, key, "different-terminal-run"); err != nil || ok {
+		t.Fatalf("applied follow-up was claimable again: ok=%v err=%v", ok, err)
+	}
+
+	// Terminal close from another instance rejects the remaining steers and
+	// seals the run while its live snapshot is still active.
+	if err := second.CloseSteerRun(ctx, key, handle.RunID); err != nil {
+		t.Fatalf("close steer run: %v", err)
+	}
+	if steers, _, err := first.PendingQueues(ctx, key, 0); err != nil || len(steers) != 0 {
+		t.Fatalf("pending steers after close = %#v, err=%v", steers, err)
+	}
+	if _, err := first.EnqueueSteer(ctx, key, "steer-late", "invoke-steer-late", []byte("late")); !errors.Is(err, ErrQueueNoActiveRun) {
+		t.Fatalf("late steer after close = %v, want %v", err, ErrQueueNoActiveRun)
 	}
 }
 
@@ -83,30 +173,6 @@ func TestMemoryLiveQueueAcceptedOnlyMutationAndReplay(t *testing.T) {
 	}
 	if err := b.CancelSteer(ctx, key, item.ID); !errors.Is(err, ErrQueueNotPending) {
 		t.Fatalf("applied cancel error = %v", err)
-	}
-}
-
-func TestMemoryLiveQueueReorderOnlyAccepted(t *testing.T) {
-	b, key, handle := liveQueueFixture(t)
-	ctx := context.Background()
-	for _, id := range []string{"s1", "s2", "s3"} {
-		if _, err := b.EnqueueSteer(ctx, key, id, "invoke-"+id, []byte(id)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_, claim, ok, err := b.ClaimNextSteer(ctx, handle, false)
-	if err != nil || !ok {
-		t.Fatal(err)
-	}
-	items, err := b.ReorderSteer(ctx, key, SteerPendingRef{ItemID: "s3"}, SteerPendingRef{ItemID: "s2"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 2 || items[0].ID != "s3" || items[1].ID != "s2" {
-		t.Fatalf("reordered pending items = %#v", items)
-	}
-	if _, err := b.ReorderSteer(ctx, key, SteerPendingRef{ItemID: claim.ItemID}, SteerPendingRef{ItemID: "s2"}); !errors.Is(err, ErrQueueNotPending) {
-		t.Fatalf("claimed reorder error = %v", err)
 	}
 }
 
@@ -153,60 +219,6 @@ func TestMemoryLiveQueueClaimFencingAndSingleWinner(t *testing.T) {
 	}
 	if pending, _, err := b.PendingQueues(ctx, key, 0); err != nil || len(pending) != 1 || pending[0].ID != item.ID {
 		t.Fatalf("released claim not pending: %#v, %v", pending, err)
-	}
-}
-
-func TestMemoryFollowUpClaimReplayAndRelease(t *testing.T) {
-	b, key, _ := liveQueueFixture(t)
-	ctx := context.Background()
-	item, err := b.EnqueueFollowUp(ctx, key, "f1", "invoke-f", []byte("follow"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	claimed, claim, ok, err := b.ClaimNextFollowUp(ctx, key, "run-1")
-	if err != nil || !ok || claimed.ID != item.ID {
-		t.Fatalf("claim = %#v, %#v, %v, %v", claimed, claim, ok, err)
-	}
-	replayed, replayClaim, ok, err := b.ClaimNextFollowUp(ctx, key, "run-1")
-	if err != nil || !ok || replayed.ID != item.ID || replayClaim != claim {
-		t.Fatalf("claim replay = %#v, %#v, %v, %v", replayed, replayClaim, ok, err)
-	}
-	if err := b.ReleaseFollowUp(ctx, key, claim); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, ok, err := b.ClaimNextFollowUp(ctx, key, "run-2"); err != nil || !ok {
-		t.Fatalf("released follow-up was not claimable: %v, %v", ok, err)
-	}
-}
-
-func TestMemoryFollowUpPromotionKeepsQueueIdentitiesSeparate(t *testing.T) {
-	b, key, _ := liveQueueFixture(t)
-	ctx := context.Background()
-	follow, err := b.EnqueueFollowUp(ctx, key, "f1", "invoke-f", []byte("follow"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	promoted, err := b.PromoteFollowUpToSteer(ctx, key, FollowUpPendingRef{ItemID: follow.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if promoted.Steer.ID == "" || string(promoted.Steer.ID) == string(follow.ID) {
-		t.Fatalf("promotion reused follow-up identity: follow=%q steer=%q", follow.ID, promoted.Steer.ID)
-	}
-	replay, err := b.PromoteFollowUpToSteer(ctx, key, FollowUpPendingRef{ItemID: follow.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if replay.Steer.ID != promoted.Steer.ID {
-		t.Fatalf("promotion replay created a second steer: first=%q replay=%q", promoted.Steer.ID, replay.Steer.ID)
-	}
-	steers, follows, err := b.PendingQueues(ctx, key, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(steers) != 1 || steers[0].ID != promoted.Steer.ID || len(follows) != 0 {
-		t.Fatalf("promoted queues = steers:%#v follows:%#v", steers, follows)
 	}
 }
 
@@ -274,9 +286,14 @@ func TestMemoryLiveQueueCapacityBound(t *testing.T) {
 		t.Fatalf("replay at capacity = %#v, %v", replay, err)
 	}
 	// Queues are bounded independently.
-	if _, err := b.EnqueueFollowUp(ctx, key, "f1", "invoke-f1", []byte("follow")); err != nil {
-		t.Fatalf("follow-up enqueue while steer queue is full: %v", err)
-	}
+	follow, err := b.EnqueueFollowUp(ctx, key, "f1", "invoke-f1", []byte("follow"))
+	require.NoError(t, err, "follow-up enqueue while steer queue is full")
+	_, err = b.PromoteFollowUpToSteer(ctx, key, FollowUpPendingRef{ItemID: follow.ID})
+	require.ErrorIs(t, err, ErrQueueCapacityExceeded)
+	_, follows, err := b.PendingQueues(ctx, key, 0)
+	require.NoError(t, err)
+	require.Len(t, follows, 1)
+	require.Equal(t, QueueAccepted, follows[0].Status, "failed promotion must preserve the follow-up")
 	if err := b.CancelSteer(ctx, key, "s0"); err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +305,13 @@ func TestMemoryLiveQueueCapacityBound(t *testing.T) {
 func TestMemoryLiveQueueCompactsTerminalItems(t *testing.T) {
 	b, key, _ := liveQueueFixture(t)
 	ctx := context.Background()
+	item, err := b.EnqueueFollowUp(ctx, key, "f-applied", "invoke-f-applied", []byte("first"))
+	require.NoError(t, err)
+	_, claim, ok, err := b.ClaimNextFollowUp(ctx, key, "run-done")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, item.ID, claim.ItemID)
+	require.NoError(t, b.ApplyFollowUp(ctx, key, claim))
 	if _, err := b.EnqueueFollowUp(ctx, key, "keep", "invoke-keep", []byte("keep")); err != nil {
 		t.Fatal(err)
 	}
@@ -324,6 +348,16 @@ func TestMemoryLiveQueueCompactsTerminalItems(t *testing.T) {
 	if _, newest := ids[FollowUpItemID(fmt.Sprintf("f%d", total-1))]; !newest {
 		t.Fatal("newest terminal item was compacted away")
 	}
+	require.NotContains(t, ids, item.ID, "applied item should leave retention")
+	_, err = b.EnqueueFollowUp(ctx, key, "f-next", "invoke-f-next", []byte("next"))
+	require.NoError(t, err)
+	// Compaction must retain the terminal claim even after its item is gone.
+	_, _, ok, err = b.ClaimNextFollowUp(ctx, key, "run-done")
+	require.NoError(t, err)
+	require.False(t, ok, "replayed terminal must not claim a second item")
+	_, _, ok, err = b.ClaimNextFollowUp(ctx, key, "run-later")
+	require.NoError(t, err)
+	require.True(t, ok, "a new terminal can claim pending work")
 }
 
 func TestMemoryClaimNextSteerAdvancesClaimToNewOwner(t *testing.T) {
@@ -377,6 +411,9 @@ func TestMemoryLiveQueueClaimsForRealAdmission(t *testing.T) {
 	if err != nil || !admission.Started {
 		t.Fatalf("admit: %+v, %v", admission, err)
 	}
+	if err := f.manager.EnableSteer(ctx, admission.Handle); err != nil {
+		t.Fatal(err)
+	}
 	key := Key{BotID: testBotID, SessionID: testSessionID}
 	item, err := f.manager.EnqueueSteer(ctx, key, "s1", "invoke-s1", []byte(`{"text":"steer"}`))
 	if err != nil {
@@ -393,61 +430,4 @@ func TestMemoryLiveQueueClaimsForRealAdmission(t *testing.T) {
 		t.Fatalf("seal after apply = ok:%v err:%v", ok, err)
 	}
 	f.finish(t, admission)
-}
-
-func TestMemoryPromoteFollowUpRespectsSteerCapacity(t *testing.T) {
-	b, key, _ := liveQueueFixture(t)
-	ctx := context.Background()
-	for i := 0; i < MaxPendingQueueItems; i++ {
-		id := fmt.Sprintf("s%d", i)
-		if _, err := b.EnqueueSteer(ctx, key, id, "invoke-"+id, []byte(id)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	follow, err := b.EnqueueFollowUp(ctx, key, "f1", "invoke-f1", []byte("follow"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.PromoteFollowUpToSteer(ctx, key, FollowUpPendingRef{ItemID: follow.ID}); !errors.Is(err, ErrQueueCapacityExceeded) {
-		t.Fatalf("promotion past capacity = %v, want %v", err, ErrQueueCapacityExceeded)
-	}
-	if _, follows, err := b.PendingQueues(ctx, key, 0); err != nil || len(follows) != 1 || follows[0].Status != QueueAccepted {
-		t.Fatalf("follow-up must stay pending after refused promotion: %#v, %v", follows, err)
-	}
-}
-
-func TestMemoryFollowUpTerminalClaimSurvivesCompaction(t *testing.T) {
-	b, key, _ := liveQueueFixture(t)
-	ctx := context.Background()
-	item, err := b.EnqueueFollowUp(ctx, key, "f-applied", "invoke-f-applied", []byte("first"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, claim, ok, err := b.ClaimNextFollowUp(ctx, key, "run-done")
-	if err != nil || !ok || claim.ItemID != item.ID {
-		t.Fatalf("claim = %#v, %v, %v", claim, ok, err)
-	}
-	if err := b.ApplyFollowUp(ctx, key, claim); err != nil {
-		t.Fatal(err)
-	}
-	// Push the applied item out of terminal retention.
-	for i := 0; i < queueTerminalRetention+5; i++ {
-		id := FollowUpItemID(fmt.Sprintf("f%d", i))
-		if _, err := b.EnqueueFollowUp(ctx, key, string(id), "invoke-"+string(id), []byte(id)); err != nil {
-			t.Fatal(err)
-		}
-		if err := b.CancelFollowUp(ctx, key, id); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := b.EnqueueFollowUp(ctx, key, "f-next", "invoke-f-next", []byte("next")); err != nil {
-		t.Fatal(err)
-	}
-	// A repeated terminal observation for the same run must not claim again.
-	if _, _, ok, err := b.ClaimNextFollowUp(ctx, key, "run-done"); err != nil || ok {
-		t.Fatalf("repeated trigger claimed a second follow-up: ok=%v err=%v", ok, err)
-	}
-	if _, _, ok, err := b.ClaimNextFollowUp(ctx, key, "run-later"); err != nil || !ok {
-		t.Fatalf("a new terminal run could not claim the pending follow-up: ok=%v err=%v", ok, err)
-	}
 }

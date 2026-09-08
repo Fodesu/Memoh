@@ -13,7 +13,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
-	"github.com/felinics/memoh/internal/agent/runtime/session/queue"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/bots"
@@ -58,18 +58,18 @@ type updateQueueRequest struct {
 	Text string `json:"text" validate:"required"`
 }
 type steerQueueItemResponse struct {
-	ItemID      queue.SteerItemID `json:"item_id"`
-	Status      queue.Status      `json:"status"`
-	Position    int64             `json:"position"`
-	Text        string            `json:"text"`
-	TargetRunID string            `json:"target_run_id"`
+	ItemID      sessionruntime.SteerItemID `json:"item_id"`
+	Status      sessionruntime.QueueStatus `json:"status"`
+	Position    int64                      `json:"position"`
+	Text        string                     `json:"text"`
+	TargetRunID string                     `json:"target_run_id"`
 }
 type followUpQueueItemResponse struct {
-	ItemID              queue.FollowUpItemID `json:"item_id"`
-	Status              queue.Status         `json:"status"`
-	Position            int64                `json:"position"`
-	Text                string               `json:"text"`
-	EnqueuedDuringRunID string               `json:"enqueued_during_run_id"`
+	ItemID              sessionruntime.FollowUpItemID `json:"item_id"`
+	Status              sessionruntime.QueueStatus    `json:"status"`
+	Position            int64                         `json:"position"`
+	Text                string                        `json:"text"`
+	EnqueuedDuringRunID string                        `json:"enqueued_during_run_id"`
 }
 type steerQueueResponse struct {
 	Items []steerQueueItemResponse `json:"items"`
@@ -78,16 +78,17 @@ type followUpQueueResponse struct {
 	Items []followUpQueueItemResponse `json:"items"`
 }
 type sessionQueueResponse struct {
-	Steer    []steerQueueItemResponse    `json:"steer"`
-	FollowUp []followUpQueueItemResponse `json:"follow_up"`
+	SteerSupported bool                        `json:"steer_supported"`
+	Steer          []steerQueueItemResponse    `json:"steer"`
+	FollowUp       []followUpQueueItemResponse `json:"follow_up"`
 }
 type steerQueueReorderRequest struct {
-	Item   queue.SteerPendingRef `json:"item"`
-	Before queue.SteerPendingRef `json:"before"`
+	Item   sessionruntime.SteerPendingRef `json:"item"`
+	Before sessionruntime.SteerPendingRef `json:"before"`
 }
 type followUpQueueReorderRequest struct {
-	Item   queue.FollowUpPendingRef `json:"item"`
-	Before queue.FollowUpPendingRef `json:"before"`
+	Item   sessionruntime.FollowUpPendingRef `json:"item"`
+	Before sessionruntime.FollowUpPendingRef `json:"before"`
 }
 
 func (h *SessionQueueHandler) authorize(c echo.Context) (string, string, error) {
@@ -174,15 +175,17 @@ func queueAdmissionError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, queue.ErrNoActiveRun):
+	case errors.Is(err, sessionruntime.ErrQueueSteerUnsupported):
+		return apperror.New(apperror.CodeQueueSteerUnsupported, nil)
+	case errors.Is(err, sessionruntime.ErrQueueNoActiveRun):
 		return apperror.New(apperror.CodeQueueNoActiveRun, nil)
-	case errors.Is(err, queue.ErrInvocationConflict):
+	case errors.Is(err, sessionruntime.ErrQueueInvocationConflict):
 		return apperror.New(apperror.CodeSessionInvocationConflict, nil)
-	case errors.Is(err, queue.ErrAdmissionOverloaded):
+	case errors.Is(err, sessionruntime.ErrQueueAdmissionOverloaded):
 		return apperror.New(apperror.CodeQueueAdmissionOverloaded, nil)
-	case errors.Is(err, queue.ErrCapacityExceeded):
+	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
 		return apperror.New(apperror.CodeQueueCapacityExceeded, nil)
-	case errors.Is(err, queue.ErrInvalidReference):
+	case errors.Is(err, sessionruntime.ErrQueueInvalidReference):
 		return apperror.New(apperror.CodeQueueRequestInvalid, nil)
 	default:
 		return err
@@ -193,11 +196,13 @@ func queueMutationError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, queue.ErrNoActiveRun):
+	case errors.Is(err, sessionruntime.ErrQueueSteerUnsupported):
+		return apperror.New(apperror.CodeQueueSteerUnsupported, nil)
+	case errors.Is(err, sessionruntime.ErrQueueNoActiveRun):
 		return apperror.New(apperror.CodeQueueNoActiveRun, nil)
-	case errors.Is(err, queue.ErrNotPending), errors.Is(err, queue.ErrInvalidReference):
+	case errors.Is(err, sessionruntime.ErrQueueNotPending), errors.Is(err, sessionruntime.ErrQueueInvalidReference):
 		return apperror.New(apperror.CodeQueueItemNotPending, nil)
-	case errors.Is(err, queue.ErrCapacityExceeded):
+	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
 		return apperror.New(apperror.CodeQueueCapacityExceeded, nil)
 	default:
 		return err
@@ -374,8 +379,9 @@ func (h *SessionQueueHandler) ListSessionQueue(c echo.Context) error {
 		return err
 	}
 	return c.JSON(http.StatusOK, sessionQueueResponse{
-		Steer:    mapQueueItems(queues.Steer, steerQueueItemResponseFrom),
-		FollowUp: mapQueueItems(queues.FollowUp, followUpQueueItemResponseFrom),
+		SteerSupported: queues.SteerSupported,
+		Steer:          mapQueueItems(queues.Steer, steerQueueItemResponseFrom),
+		FollowUp:       mapQueueItems(queues.FollowUp, followUpQueueItemResponseFrom),
 	})
 }
 
@@ -577,19 +583,19 @@ func (h *SessionQueueHandler) PromoteFollowUpToSteer(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	result, err := h.agentService.PromoteFollowUpToSteer(c.Request().Context(), botID, sid, queue.FollowUpPendingRef{ItemID: queue.FollowUpItemID(itemID)})
+	result, err := h.agentService.PromoteFollowUpToSteer(c.Request().Context(), botID, sid, sessionruntime.FollowUpPendingRef{ItemID: sessionruntime.FollowUpItemID(itemID)})
 	if err = queueMutationError(err); err != nil {
 		return err
 	}
 	return c.JSON(http.StatusAccepted, steerQueueItemResponseFrom(result.Steer))
 }
 
-func steerQueueItemResponseFrom(item queue.SteerItem) steerQueueItemResponse {
-	return steerQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: queuePayloadText(item.Payload), TargetRunID: item.TargetRunID}
+func steerQueueItemResponseFrom(item sessionruntime.SteerItem) steerQueueItemResponse {
+	return steerQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: application.QueuePayloadText(item.Payload), TargetRunID: item.TargetRunID}
 }
 
-func followUpQueueItemResponseFrom(item queue.FollowUpItem) followUpQueueItemResponse {
-	return followUpQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: queuePayloadText(item.Payload), EnqueuedDuringRunID: item.EnqueuedDuringRunID}
+func followUpQueueItemResponseFrom(item sessionruntime.FollowUpItem) followUpQueueItemResponse {
+	return followUpQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: application.QueuePayloadText(item.Payload), EnqueuedDuringRunID: item.EnqueuedDuringRunID}
 }
 
 func mapQueueItems[T any, R any](items []T, mapItem func(T) R) []R {
@@ -598,14 +604,4 @@ func mapQueueItems[T any, R any](items []T, mapItem func(T) R) []R {
 		out = append(out, mapItem(item))
 	}
 	return out
-}
-
-func queuePayloadText(payload []byte) string {
-	var body struct {
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(payload, &body) == nil && strings.TrimSpace(body.Text) != "" {
-		return body.Text
-	}
-	return strings.TrimSpace(string(payload))
 }

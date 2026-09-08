@@ -26,7 +26,7 @@
       :title="$t('chat.queue.enqueueSteer')"
       :aria-label="$t('chat.queue.enqueueSteer')"
       class="size-7 shrink-0 text-muted-foreground"
-      :disabled="busy"
+      :disabled="busy || steerSupported === false"
       @pointerdown.prevent
       @click="emit('steer')"
     >
@@ -67,6 +67,7 @@ import type { EditableFollowUpQueueItem } from './use-session-follow-up-queue'
 const props = defineProps<{
   item: EditableFollowUpQueueItem
   busy: boolean
+  steerSupported?: boolean
 }>()
 const draft = ref(props.item.text)
 watch(() => props.item.text, value => { draft.value = value })

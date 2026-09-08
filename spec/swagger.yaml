@@ -5081,16 +5081,16 @@ definitions:
       position:
         type: integer
       status:
-        $ref: '#/definitions/queue.Status'
+        $ref: '#/definitions/sessionruntime.QueueStatus'
       text:
         type: string
     type: object
   handlers.followUpQueueReorderRequest:
     properties:
       before:
-        $ref: '#/definitions/queue.FollowUpPendingRef'
+        $ref: '#/definitions/sessionruntime.FollowUpPendingRef'
       item:
-        $ref: '#/definitions/queue.FollowUpPendingRef'
+        $ref: '#/definitions/sessionruntime.FollowUpPendingRef'
     type: object
   handlers.followUpQueueResponse:
     properties:
@@ -5283,6 +5283,8 @@ definitions:
         items:
           $ref: '#/definitions/handlers.steerQueueItemResponse'
         type: array
+      steer_supported:
+        type: boolean
     type: object
   handlers.skillsOpResponse:
     properties:
@@ -5296,7 +5298,7 @@ definitions:
       position:
         type: integer
       status:
-        $ref: '#/definitions/queue.Status'
+        $ref: '#/definitions/sessionruntime.QueueStatus'
       target_run_id:
         type: string
       text:
@@ -5305,9 +5307,9 @@ definitions:
   handlers.steerQueueReorderRequest:
     properties:
       before:
-        $ref: '#/definitions/queue.SteerPendingRef'
+        $ref: '#/definitions/sessionruntime.SteerPendingRef'
       item:
-        $ref: '#/definitions/queue.SteerPendingRef'
+        $ref: '#/definitions/sessionruntime.SteerPendingRef'
     type: object
   handlers.steerQueueResponse:
     properties:
@@ -6009,30 +6011,6 @@ definitions:
       type:
         type: string
     type: object
-  queue.FollowUpPendingRef:
-    properties:
-      item_id:
-        type: string
-    type: object
-  queue.Status:
-    enum:
-    - accepted
-    - claimed
-    - applied
-    - rejected
-    - canceled
-    type: string
-    x-enum-varnames:
-    - Accepted
-    - Claimed
-    - Applied
-    - Rejected
-    - Canceled
-  queue.SteerPendingRef:
-    properties:
-      item_id:
-        type: string
-    type: object
   reasoning.Options:
     properties:
       can_disable:
@@ -6438,6 +6416,32 @@ definitions:
       updated_at:
         type: string
       workdir_id:
+        type: string
+    type: object
+  sessionruntime.FollowUpPendingRef:
+    properties:
+      item_id:
+        type: string
+    type: object
+  sessionruntime.QueueStatus:
+    enum:
+    - accepted
+    - claimed
+    - applied
+    - rejected
+    - expired
+    - canceled
+    type: string
+    x-enum-varnames:
+    - QueueAccepted
+    - QueueClaimed
+    - QueueApplied
+    - QueueRejected
+    - QueueExpired
+    - QueueCanceled
+  sessionruntime.SteerPendingRef:
+    properties:
+      item_id:
         type: string
     type: object
   settings.Settings:

@@ -417,14 +417,6 @@ export interface RuntimeCursor {
   seq: number
 }
 
-export interface RuntimeSteerState {
-  id: string
-  status: string
-  text?: string
-  error?: string
-  created_at: string
-  updated_at: string
-}
 
 export interface RuntimeRunOperation {
   kind: 'retry' | 'edit'
@@ -457,7 +449,6 @@ export interface RuntimeCurrentRunView {
   error?: string
   proposed_terminal_status?: RuntimeRunStatus
   finish_proposed_at?: string
-  steer?: RuntimeSteerState
   operation?: RuntimeRunOperation
 }
 
@@ -484,7 +475,6 @@ export interface RuntimeCurrentRunPatch {
   status?: RuntimeRunStatus
   error_code?: string
   error?: string
-  steer?: RuntimeSteerState
   updated_at?: string
   owner_lease_expires_at?: string
 }

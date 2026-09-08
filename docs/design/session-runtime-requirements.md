@@ -167,11 +167,15 @@ run 进入终态时，终态、最终输出和 turn 投影必须形成一个一�
 - owner 进程退出、租约到期、live backend 更换或优雅关机时，reaper/关闭流程必须把提案收敛为其原始 `completed`、`aborted` 或 `failed`，不能改写为 `lost`；
 - 只有从未跨过终态提案边界的 active run 才能因 owner 消失进入 `lost`。
 
-ledger 成为终态后，系统必须以该 durable outcome 修复可能滞后的 live 投影；修复必须校验 live run ref 中保存的同一个 fencing token，不能覆盖后继 run。
+ledger 成为终态后，系统必须以该 durable outcome 修复可能滞后的 live 投影；修复必须原子校验 live snapshot 中保存的同一个 fencing token（旧 snapshot 仅在 lease ref 尚存时可使用其中的 token），不能覆盖后继 run。
 
 ### SR-TURN-001：turn 必须是显式身份
 
-每个已准入 run 必须显式关联一个服务端生成的 `turn_id`。用户消息、Agent 输出、工具事件和决策都通过该身份归属到同一个 turn。
+每个已准入 run 必须显式关联一个服务端生成的起始 `turn_id`。普通 run 的用户消息与回答归于该 turn。已应用的 steer 是同一 run 中新的用户输入，可以打开新的 canonical turn；该输入之后的 Agent 输出和工具消息归于新 turn，所有这些 turn 通过显式 `run_id` 关联，不能重新准入第二个 run。
+
+run 控制记录及其 decision 的 `turn_id` 保持起始 turn 身份，用于 owner/fence 与决策恢复校验；聊天消息的 `turn_id` 表示该消息所属的 canonical turn。客户端提交决策以 `decision_id` 和 run 身份为准，不能把临时渲染 ID 或某个显示分段的 ID 当作 run 控制身份。steer 的用户消息必须进入实际 provider 请求，并与对应完整 step 一起持久化，不能只在实时投影中展示。
+
+决策停等后，同一 owner 的续跑必须接续其已消费的 step 游标；owner 更换后游标可随 generation 重建。该游标仅服务进程内排序与投影屏障，不宣称跨进程模型采样重放。
 
 实现不能根据以下字段是否相似来决定两条消息属于同一 turn：
 
@@ -242,7 +246,9 @@ Redis 或 Valkey 不应成为单实例 OSS 部署的强制依赖。
 | terminal proposal crash | 故障注入/Server 重启 | `finishing` 在 owner 消失后收敛到原提案，不能变成 `lost` | SR-DUR-002、SR-OWN-002 |
 | decision restart | Server 重启 | decision 可恢复，回答只消费一次 | SR-DEC-001 |
 
-当前黑盒验收代码覆盖 `baseline`、`reconnect snapshot`、`reconnect abort`、`duplicate invocation`、`same-session concurrency` 和 `owner crash`。包内测试使用故障注入覆盖终态提案重试、owner 租约到期、live backend 更换和优雅关机；`concurrent subscribers`、完整进程级 `terminal proposal crash` 与 `decision restart` 仍需补充黑盒用例。
+当前黑盒代码包含基础执行、重连、多个订阅者、控制/决策重放、重复准入、busy、owner crash、decision restart、live backend loss，以及队列排序/连续消费和 steer 后决策续跑。`terminal proposal crash` 使用隔离数据库的单 invocation advisory-lock trigger，在已提交提案与最终状态更新之间阻塞，然后终止真实 owner 进程。
+
+owner/decision/terminal-proposal crash 用例由 `MEMOH_SESSION_RUNTIME_ACCEPTANCE_CRASH` 显式启用；backend-loss 用例另有开关。用例存在、编译通过或因未启用而跳过，不代表该验收已执行通过。
 
 ## 7. 通过标准
 

@@ -9,7 +9,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/runtime/session/queue"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
 func TestSessionQueueHandlerRegistersSeparateQueueRoutes(t *testing.T) {
@@ -46,24 +46,24 @@ func TestSessionQueueReorderRequestsDecodeTypedReferences(t *testing.T) {
 	steerContext := e.NewContext(httptest.NewRequest(http.MethodPut, "/", bytes.NewReader(body)), httptest.NewRecorder())
 	steerContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	steer, err := decodeSteerReorderRequest(steerContext)
-	if err != nil || steer.Item.ItemID != queue.SteerItemID(itemID) || steer.Before.ItemID != queue.SteerItemID(beforeID) {
+	if err != nil || steer.Item.ItemID != sessionruntime.SteerItemID(itemID) || steer.Before.ItemID != sessionruntime.SteerItemID(beforeID) {
 		t.Fatalf("steer reorder request = %#v, %v", steer, err)
 	}
 
 	followContext := e.NewContext(httptest.NewRequest(http.MethodPut, "/", bytes.NewReader(body)), httptest.NewRecorder())
 	followContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	follow, err := decodeFollowUpReorderRequest(followContext)
-	if err != nil || follow.Item.ItemID != queue.FollowUpItemID(itemID) || follow.Before.ItemID != queue.FollowUpItemID(beforeID) {
+	if err != nil || follow.Item.ItemID != sessionruntime.FollowUpItemID(itemID) || follow.Before.ItemID != sessionruntime.FollowUpItemID(beforeID) {
 		t.Fatalf("follow-up reorder request = %#v, %v", follow, err)
 	}
 }
 
 func TestSessionQueueResponsesDoNotUseMixedQueueKind(t *testing.T) {
-	steerJSON, err := json.Marshal(steerQueueItemResponseFrom(queue.SteerItem{ID: "steer", Status: queue.Accepted, Position: 1, Payload: []byte(`{"text":"s"}`), TargetRunID: "run-0"}))
+	steerJSON, err := json.Marshal(steerQueueItemResponseFrom(sessionruntime.SteerItem{ID: "steer", Status: sessionruntime.QueueAccepted, Position: 1, Payload: []byte(`{"text":"s"}`), TargetRunID: "run-0"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	followJSON, err := json.Marshal(followUpQueueItemResponseFrom(queue.FollowUpItem{ID: "follow", Status: queue.Accepted, Position: 2, Payload: []byte(`{"text":"f"}`), EnqueuedDuringRunID: "run-0"}))
+	followJSON, err := json.Marshal(followUpQueueItemResponseFrom(sessionruntime.FollowUpItem{ID: "follow", Status: sessionruntime.QueueAccepted, Position: 2, Payload: []byte(`{"text":"f"}`), EnqueuedDuringRunID: "run-0"}))
 	if err != nil {
 		t.Fatal(err)
 	}

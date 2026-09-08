@@ -237,8 +237,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		stepCommitter := s.newAgentStepCommitter(streamCtx, streamReq, rc)
 		configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
 		if stepCommitter != nil {
-			cfg.ContinueAfterFinal = &stepCommitter.continueAfterFinal
-			cfg.NextModelInputs = &stepCommitter.nextModelInputs
+			stepCommitter.bindContinuation(&cfg)
 		}
 		cfg = s.prepareRunConfig(streamCtx, cfg)
 		terminal := s.contextLifecycleTerminal(streamCtx, cfg)
@@ -609,8 +608,7 @@ func (s *Service) streamChatWSResultWithHooks(
 	stepCommitter := s.newAgentStepCommitter(streamCtx, req, rc)
 	configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
 	if stepCommitter != nil {
-		cfg.ContinueAfterFinal = &stepCommitter.continueAfterFinal
-		cfg.NextModelInputs = &stepCommitter.nextModelInputs
+		stepCommitter.bindContinuation(&cfg)
 	}
 	cfg = s.prepareRunConfig(streamCtx, cfg)
 	terminal := s.contextLifecycleTerminal(streamCtx, cfg)

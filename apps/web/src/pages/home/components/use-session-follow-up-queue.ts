@@ -41,6 +41,7 @@ export function useSessionFollowUpQueue(
 ) {
   const items = ref<EditableFollowUpQueueItem[]>([])
   const loading = ref(false)
+  const steerSupported = ref(false)
   const busy = ref(new Set<string>())
   const hasItems = computed(() => items.value.length > 0)
   let requestVersion = 0
@@ -86,6 +87,7 @@ export function useSessionFollowUpQueue(
       const response = await fetchSessionQueues(bot, session)
       if (version === requestVersion) {
         items.value = merge(response.steer ?? [], response.follow_up ?? [])
+        steerSupported.value = response.steer_supported === true
       }
     } finally {
       if (version === requestVersion) loading.value = false
@@ -198,5 +200,5 @@ export function useSessionFollowUpQueue(
   watch([() => toValue(active), hasItems], syncAutoRefresh)
   if (getCurrentScope()) onScopeDispose(stopAutoRefresh)
 
-  return { items, loading, busy, hasItems, refresh, update, remove, steer, reorder }
+  return { items, loading, steerSupported, busy, hasItems, refresh, update, remove, steer, reorder }
 }

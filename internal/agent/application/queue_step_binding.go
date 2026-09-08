@@ -25,6 +25,13 @@ func (s *Service) bindQueueContinuation(
 		return nil, noop, nil
 	}
 
+	stepIndex, err := s.sessionManager.ContinuationStepIndex(req.RunHandle)
+	if err != nil {
+		return nil, noop, err
+	}
+	req.StepIndexOffset = stepIndex
+	cfg.StepIndexOffset = stepIndex
+
 	queueInput := make(chan turn.InjectMessage, 16)
 	nativeInput := make(chan native.InjectMessage, 16)
 	done := make(chan struct{})
@@ -65,7 +72,6 @@ func (s *Service) bindQueueContinuation(
 		stop()
 		return nil, noop, errors.New("live queue step committer is unavailable for decision continuation")
 	}
-	cfg.ContinueAfterFinal = &committer.continueAfterFinal
-	cfg.NextModelInputs = &committer.nextModelInputs
+	committer.bindContinuation(cfg)
 	return committer, stop, nil
 }

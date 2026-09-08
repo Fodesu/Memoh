@@ -443,6 +443,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	}
 
 	prepareStep, committedStepMessages := capturePreparedStepMessages(prepareStep)
+	committedStepMessages.byStep[0] = cloneProviderMessages(cfg.initialStepInputs)
 	if readMediaState != nil {
 		committedStepMessages.addAdmissionObserver(readMediaState.reconcilePreparedMessages)
 	}
@@ -473,9 +474,8 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	// marker can name the durable step index the following commit will use.
 	emittedStep := 0
 	onStepCommitted := func(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
-		stepIndex += cfg.StepIndexOffset
 		if cfg.OnStepCommitted != nil {
-			if err := cfg.OnStepCommitted(ctx, stepIndex, committedStepMessages.decorate(stepIndex, step, toolExecutionMetadata)); err != nil {
+			if err := cfg.OnStepCommitted(ctx, cfg.StepIndexOffset+stepIndex, committedStepMessages.decorate(stepIndex, step, toolExecutionMetadata)); err != nil {
 				return err
 			}
 		}
@@ -814,7 +814,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		stepIndex := nextDurableStep
 		if step := interruptedStep.snapshot(stepIndex); step != nil {
 			step = committedStepMessages.decorate(stepIndex, step, toolExecutionMetadata)
-			if err := cfg.OnStepInterrupted(context.WithoutCancel(streamCtx), stepIndex, step); err != nil {
+			if err := cfg.OnStepInterrupted(ctx, cfg.StepIndexOffset+stepIndex, step); err != nil {
 				// An owner that lost its lease, or a run another writer already
 				// finalized, is an expected outcome of racing an abort.
 				a.logger.Warn("persist interrupted model step failed", slog.Any("error", err))
@@ -895,13 +895,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	// steer becomes the next model input instead of being stranded after the
 	// terminal event.
 	if streamClosed && !aborted && streamResult != nil && cfg.ContinueAfterFinal != nil && cfg.ContinueAfterFinal.Swap(false) {
-		cfg.Messages = append(append([]sdk.Message(nil), cfg.Messages...), streamResult.Messages...)
-		if cfg.NextModelInputs != nil {
-			cfg.Messages = append(cfg.Messages, (*cfg.NextModelInputs)...)
-			*cfg.NextModelInputs = nil
-		}
-		cfg.StepIndexOffset += len(streamResult.Steps)
-		cfg.SuppressAgentStart = true
+		cfg = appendSteerContinuation(cfg, streamResult.Messages, len(streamResult.Steps))
 		// The completed invocation must stop its emitters before the continuation
 		// starts; the continuation gets a fresh child context from the original
 		// run context so closing the old stream does not cancel it.
@@ -1062,6 +1056,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 
 	prepareStep, committedStepMessages := capturePreparedStepMessages(prepareStep)
+	committedStepMessages.byStep[0] = cloneProviderMessages(cfg.initialStepInputs)
 	if readMediaState != nil {
 		committedStepMessages.addAdmissionObserver(readMediaState.reconcilePreparedMessages)
 	}
@@ -1098,8 +1093,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	)
 	if cfg.OnStepCommitted != nil {
 		opts = append(opts, sdk.WithOnStepCommitted(func(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
-			stepIndex += cfg.StepIndexOffset
-			return cfg.OnStepCommitted(ctx, stepIndex, committedStepMessages.decorate(stepIndex, step, toolExecutionMetadata))
+			return cfg.OnStepCommitted(ctx, cfg.StepIndexOffset+stepIndex, committedStepMessages.decorate(stepIndex, step, toolExecutionMetadata))
 		}))
 	}
 
@@ -1148,13 +1142,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 	finalMessages = toolExecutionMetadata.annotate(finalMessages)
 	if cfg.ContinueAfterFinal != nil && cfg.ContinueAfterFinal.Swap(false) && len(genResult.Steps) > 0 {
-		cfg.Messages = append(append([]sdk.Message(nil), cfg.Messages...), finalMessages...)
-		if cfg.NextModelInputs != nil {
-			cfg.Messages = append(cfg.Messages, (*cfg.NextModelInputs)...)
-			*cfg.NextModelInputs = nil
-		}
-		cfg.StepIndexOffset += len(genResult.Steps)
-		cfg.SuppressAgentStart = true
+		cfg = appendSteerContinuation(cfg, finalMessages, len(genResult.Steps))
 		next, nextErr := a.runGenerate(genCtx, cfg)
 		if nextErr != nil {
 			return nil, nextErr
@@ -1171,6 +1159,55 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		Speeches:    speeches,
 		Usage:       &genResult.Usage,
 	}, nil
+}
+
+// appendSteerContinuation advances a completed invocation without changing its
+// run identity or replaying its start event. Both execution modes share this
+// input/step transition; their output delivery and finalizers remain separate.
+func appendSteerContinuation(cfg RunConfig, messages []sdk.Message, steps int) RunConfig {
+	appended := append([]sdk.Message(nil), messages...)
+	cfg.initialStepInputs = nil
+	if cfg.NextModelInputs != nil {
+		cfg.initialStepInputs = cloneProviderMessages(*cfg.NextModelInputs)
+		appended = append(appended, cfg.initialStepInputs...)
+		*cfg.NextModelInputs = nil
+	}
+	cfg.Messages = append(append([]sdk.Message(nil), cfg.Messages...), appended...)
+	cfg.StepIndexOffset += steps
+	cfg.SuppressAgentStart = true
+	if len(cfg.initialStepInputs) > 0 {
+		current := len(cfg.Messages) - 1
+		cfg.ContextCurrentUserMessageIndex = &current
+	}
+	if len(cfg.ContextSourceFrags) > 0 {
+		// The production applier renders typed sources, not cfg.Messages.
+		// Continue from the already-selected context and append this invocation's
+		// new messages, keeping system/workspace provenance intact.
+		frags := append([]contextfrag.ContextFrag(nil), cfg.ContextFrags...)
+		if len(frags) == 0 {
+			frags = append(frags, cfg.ContextSourceFrags...)
+		}
+		lastIndex := -1
+		for i := range frags {
+			if frags[i].Provenance.Index > lastIndex {
+				lastIndex = frags[i].Provenance.Index
+			}
+			if frags[i].Kind == contextfrag.KindCurrentUserMessage {
+				frags[i].Kind = contextfrag.KindConversationEvent
+				frags[i].Slot = contextfrag.SlotHistory
+			}
+		}
+		current := len(appended) - 1
+		added := contextfrag.CompileFrags(contextfrag.CompileInput{Scope: cfg.ContextScope, Messages: appended, CurrentUserMessageIndex: &current})
+		for i := range added {
+			added[i].ID = fmt.Sprintf("continuation.%d.%03d", cfg.StepIndexOffset, i)
+			added[i].Provenance.Index = lastIndex + 1 + i
+			added[i].Budget.Overflow = contextfrag.OverflowKeep
+		}
+		frags = append(frags, added...)
+		cfg.ContextSourceFrags = frags
+	}
+	return cfg
 }
 
 func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {

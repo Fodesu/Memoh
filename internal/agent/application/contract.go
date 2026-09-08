@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	sessionqueue "github.com/felinics/memoh/internal/agent/runtime/session/queue"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -93,10 +92,8 @@ type ChatRequest struct {
 	InjectCh <-chan turn.InjectMessage `json:"-"`
 	// QueueInjectCh is the execution-owned sender paired with InjectCh. Only the
 	// durable step coordinator uses it after claiming a steer item.
-	QueueInjectCh chan<- turn.InjectMessage `json:"-"`
-	// QueueSteerClaim is a live-runtime claim to re-inject after owner recovery.
-	QueueSteerClaim *sessionqueue.SteerClaimRef `json:"-"`
-	StepIndexOffset int                         `json:"-"`
+	QueueInjectCh   chan<- turn.InjectMessage `json:"-"`
+	StepIndexOffset int                       `json:"-"`
 	// PublishRuntimeEvents is set for server-owned continuations, which do not
 	// have a client runHandle pump to publish native events into the session
 	// runtime projection.

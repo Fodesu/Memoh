@@ -25,45 +25,35 @@ type agentStepQueries interface {
 // Complete steps precede abort intent; interrupted checkpoints remain writable
 // until terminal finalization for cancellation paths without recorded intent.
 func (s *DBService) PersistAgentStep(ctx context.Context, step AgentStep) ([]Message, error) {
-	botID, sessionID, err := validateAgentStep(ctx, s, step)
+	return s.persistAgentStep(ctx, step, false)
+}
+
+// PersistAgentReplacementStep keeps retry/edit output hidden until the true
+// final boundary. Both step kinds use the same fenced persistence transaction.
+func (s *DBService) PersistAgentReplacementStep(ctx context.Context, step AgentStep) ([]Message, error) {
+	return s.persistAgentStep(ctx, step, true)
+}
+
+func (s *DBService) persistAgentStep(ctx context.Context, step AgentStep, replacement bool) ([]Message, error) {
+	botID, sessionID, err := validateAgentStepMode(ctx, s, step, replacement)
 	if err != nil {
 		return nil, err
 	}
 	var persisted []Message
 	err = runtimefence.InTransaction(ctx, s.queries, botID, sessionID, func(queries dbstore.Queries) error {
 		var txErr error
-		persisted, txErr = s.PersistAgentStepTx(ctx, queries, step)
+		persisted, txErr = s.persistAgentStepTx(ctx, queries, step, replacement)
 		return txErr
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.PublishAgentStep(persisted)
-	return persisted, nil
-}
-
-// PublishAgentStep emits the post-commit notifications normally owned by
-// PersistAgentStep. Coordinator-owned transactions call this after their outer
-// commit; keeping it here preserves one publication path for all message rows.
-func (s *DBService) PublishAgentStep(messages []Message) {
-	for _, message := range messages {
-		s.publishMessageCreated(message)
+	if !replacement {
+		for _, message := range persisted {
+			s.publishMessageCreated(message)
+		}
 	}
-}
-
-// PersistAgentStepTx persists an agent step inside the caller's transaction.
-// Publishing remains the outer operation's responsibility and happens only
-// after that transaction commits.
-func (s *DBService) PersistAgentStepTx(ctx context.Context, queries dbstore.Queries, step AgentStep) ([]Message, error) {
-	return s.persistAgentStepTx(ctx, queries, step, false)
-}
-
-// PersistAgentReplacementStepTx appends a retry/edit step without projecting
-// it into visible history. The queue coordinator owns the surrounding
-// transaction, so a step and any queue claim transition succeed or roll back
-// together.
-func (s *DBService) PersistAgentReplacementStepTx(ctx context.Context, queries dbstore.Queries, step AgentStep) ([]Message, error) {
-	return s.persistAgentStepTx(ctx, queries, step, true)
+	return persisted, nil
 }
 
 func (s *DBService) persistAgentStepTx(ctx context.Context, queries dbstore.Queries, step AgentStep, replacement bool) ([]Message, error) {
@@ -124,41 +114,31 @@ func (s *DBService) persistAgentStepTx(ctx context.Context, queries dbstore.Quer
 	return persisted, nil
 }
 
-// FinalizeAgentReplacementTx makes the accumulated hidden retry/edit output
-// the canonical visible turn. It deliberately does not open a transaction;
-// the caller must run it inside the same coordinator transaction that
-// terminalizes R0 and assigns a follow-up continuation.
-func (s *DBService) FinalizeAgentReplacementTx(
-	ctx context.Context,
-	queries dbstore.Queries,
-	sessionID string,
-	replacement TurnReplacement,
-	requestMessageID string,
-	assistantMessageID string,
-) error {
-	if s == nil || s.queries == nil || queries == nil {
-		return errors.New("replacement persistence transaction is not configured")
+// FinalizeAgentReplacement atomically selects the completed replacement turn.
+// Queue coordination is transient and does not own this database transaction.
+func (s *DBService) FinalizeAgentReplacement(ctx context.Context, sessionID string, replacement TurnReplacement, requestMessageID, assistantMessageID string) error {
+	if s == nil || s.queries == nil {
+		return errors.New("replacement persistence is not configured")
 	}
-	if _, ok := runtimefence.FromContext(ctx); !ok {
+	fence, ok := runtimefence.FromContext(ctx)
+	if !ok {
 		return errors.New("agent replacement requires a runtime persistence fence")
 	}
-	requestMessageID = strings.TrimSpace(requestMessageID)
-	assistantMessageID = strings.TrimSpace(assistantMessageID)
-	if requestMessageID == "" || assistantMessageID == "" {
-		return errors.New("agent replacement requires request and assistant message ids")
-	}
-	txService := *s
-	txService.queries = queries
-	txService.publisher = nil
-	replacement.RequestMessageID = requestMessageID
-	return txService.replacePersistedRound(ctx, strings.TrimSpace(sessionID), []Message{
-		{ID: requestMessageID, Role: "user"},
-		{ID: assistantMessageID, Role: "assistant"},
-	}, replacement)
-}
-
-func validateAgentStep(ctx context.Context, s *DBService, step AgentStep) (string, string, error) {
-	return validateAgentStepMode(ctx, s, step, false)
+	return runtimefence.InTransaction(ctx, s.queries, fence.BotID, sessionID, func(queries dbstore.Queries) error {
+		requestMessageID = strings.TrimSpace(requestMessageID)
+		assistantMessageID = strings.TrimSpace(assistantMessageID)
+		if requestMessageID == "" || assistantMessageID == "" {
+			return errors.New("agent replacement requires request and assistant message ids")
+		}
+		txService := *s
+		txService.queries = queries
+		txService.publisher = nil
+		replacement.RequestMessageID = requestMessageID
+		return txService.replacePersistedRound(ctx, strings.TrimSpace(sessionID), []Message{
+			{ID: requestMessageID, Role: "user"},
+			{ID: assistantMessageID, Role: "assistant"},
+		}, replacement)
+	})
 }
 
 func validateAgentStepMode(ctx context.Context, s *DBService, step AgentStep, replacement bool) (string, string, error) {

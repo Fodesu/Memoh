@@ -4,18 +4,20 @@ import (
 	"context"
 
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
-// recordingStepPersister is shared by subagent step tests. Queue-specific
-// coordinator tests were removed; this helper only exercises ordinary history
-// step persistence.
+// recordingStepPersister records the history boundary shared by native and
+// subagent step tests, with an optional persistence failure.
 type recordingStepPersister struct {
 	*recordingMessageService
-	steps []messagepkg.AgentStep
+	steps   []messagepkg.AgentStep
+	stepErr error
 }
 
 func (s *recordingStepPersister) PersistAgentStep(_ context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
+	if s.stepErr != nil {
+		return nil, s.stepErr
+	}
 	s.steps = append(s.steps, step)
 	result := make([]messagepkg.Message, len(step.Messages))
 	for i, input := range step.Messages {
@@ -24,14 +26,10 @@ func (s *recordingStepPersister) PersistAgentStep(_ context.Context, step messag
 	return result, nil
 }
 
-func (s *recordingStepPersister) PersistAgentStepTx(ctx context.Context, _ dbstore.Queries, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
+func (s *recordingStepPersister) PersistAgentReplacementStep(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
 	return s.PersistAgentStep(ctx, step)
 }
 
-func (s *recordingStepPersister) PersistAgentReplacementStepTx(ctx context.Context, _ dbstore.Queries, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
-	return s.PersistAgentStep(ctx, step)
-}
-
-func (*recordingStepPersister) FinalizeAgentReplacementTx(context.Context, dbstore.Queries, string, messagepkg.TurnReplacement, string, string) error {
+func (*recordingStepPersister) FinalizeAgentReplacement(context.Context, string, messagepkg.TurnReplacement, string, string) error {
 	return nil
 }

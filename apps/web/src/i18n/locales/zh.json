@@ -112,6 +112,9 @@
     "finish": "完成"
   },
   "errors": {
+    "queue": {
+      "steer_unsupported": "当前运行不支持插入消息，请等它结束后再发送。"
+    },
     "bot": {
       "name_taken": "该名称已被占用。"
     },

@@ -2,8 +2,10 @@ package sessionruntime
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +47,7 @@ const (
 )
 
 var (
+	ErrQueueSteerUnsupported    = errors.New("queue: active run has no steer consumer")
 	ErrQueueNoActiveRun         = errors.New("queue: no active run")
 	ErrQueueInvalidReference    = errors.New("queue: invalid claim reference")
 	ErrQueueNotPending          = errors.New("queue: item is not an accepted pending item")
@@ -151,6 +154,11 @@ type followUpQueueState struct {
 	Items          []FollowUpItem    `json:"items"`
 	TerminalClaims map[string]string `json:"terminal_claims,omitempty"`
 	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+// SteerRunAvailable reports whether the current executor accepts new step inputs.
+func SteerRunAvailable(run *CurrentRunView) bool {
+	return run != nil && run.SteerSupported && (run.Status == RunStatusRunning || run.Status == RunStatusWaitingDecision)
 }
 
 func activeRun(snapshot Snapshot, ok bool) (*CurrentRunView, bool) {
@@ -441,82 +449,75 @@ func nextFollowUpPosition(state followUpQueueState) int64 {
 	return position + 1
 }
 
+// reorderQueuePositions sorts lightweight references to the current positions.
+// Only the returned public items need payload copies; ordering must not clone
+// a second complete queue or construct an ID-to-position map.
+func reorderQueuePositions[T any, ID ~string](items []T, item, before ID, describe func(*T) (ID, QueueStatus, *int64)) error {
+	if item == "" || item == before {
+		return ErrQueueInvalidReference
+	}
+	type positionRef struct {
+		id       ID
+		position *int64
+	}
+	pending := make([]positionRef, 0, len(items))
+	for i := range items {
+		id, status, position := describe(&items[i])
+		if status == QueueAccepted {
+			pending = append(pending, positionRef{id: id, position: position})
+		}
+	}
+	slices.SortStableFunc(pending, func(a, b positionRef) int { return cmp.Compare(*a.position, *b.position) })
+	itemIndex, beforeIndex := -1, -1
+	for i, ref := range pending {
+		if ref.id == item {
+			itemIndex = i
+		}
+		if ref.id == before {
+			beforeIndex = i
+		}
+	}
+	if itemIndex < 0 || (before != "" && beforeIndex < 0) {
+		return ErrQueueNotPending
+	}
+	moving := pending[itemIndex]
+	pending = append(pending[:itemIndex], pending[itemIndex+1:]...)
+	if before == "" {
+		beforeIndex = len(pending)
+	} else if itemIndex < beforeIndex {
+		beforeIndex--
+	}
+	pending = append(pending, moving)
+	copy(pending[beforeIndex+1:], pending[beforeIndex:len(pending)-1])
+	pending[beforeIndex] = moving
+	for i, ref := range pending {
+		*ref.position = int64(i + 1)
+	}
+	return nil
+}
+
 func reorderSteerState(state *steerQueueState, itemRef, beforeRef SteerPendingRef) ([]SteerItem, error) {
-	if state == nil || itemRef.ItemID == "" || itemRef.ItemID == beforeRef.ItemID {
+	if state == nil {
 		return nil, ErrQueueInvalidReference
 	}
-	indices := make([]int, 0, len(state.Items))
-	itemPos, beforePos := -1, -1
-	for i := range state.Items {
-		if state.Items[i].Status != QueueAccepted {
-			continue
-		}
-		indices = append(indices, i)
-		if state.Items[i].ID == itemRef.ItemID {
-			itemPos = len(indices) - 1
-		}
-		if state.Items[i].ID == beforeRef.ItemID {
-			beforePos = len(indices) - 1
-		}
-	}
-	if itemPos < 0 || (beforeRef.ItemID != "" && beforePos < 0) {
-		return nil, ErrQueueNotPending
-	}
-	order := append([]int(nil), indices...)
-	moving := order[itemPos]
-	order = append(order[:itemPos], order[itemPos+1:]...)
-	insertAt := len(order)
-	if beforeRef.ItemID != "" {
-		insertAt = 0
-		for insertAt < len(order) && state.Items[order[insertAt]].ID != beforeRef.ItemID {
-			insertAt++
-		}
-	}
-	order = append(order, 0)
-	copy(order[insertAt+1:], order[insertAt:])
-	order[insertAt] = moving
-	for position, index := range order {
-		state.Items[index].Position = int64(position + 1)
+	err := reorderQueuePositions(state.Items, itemRef.ItemID, beforeRef.ItemID, func(item *SteerItem) (SteerItemID, QueueStatus, *int64) {
+		return item.ID, item.Status, &item.Position
+	})
+	if err != nil {
+		return nil, err
 	}
 	return pendingSteers(*state, 0), nil
 }
 
 func reorderFollowUpState(state *followUpQueueState, itemRef, beforeRef FollowUpPendingRef) ([]FollowUpItem, error) {
-	if state == nil || itemRef.ItemID == "" || itemRef.ItemID == beforeRef.ItemID {
+	if state == nil {
 		return nil, ErrQueueInvalidReference
 	}
-	indices := make([]int, 0, len(state.Items))
-	itemPos, beforePos := -1, -1
-	for i := range state.Items {
-		if state.Items[i].Status != QueueAccepted {
-			continue
-		}
-		indices = append(indices, i)
-		if state.Items[i].ID == itemRef.ItemID {
-			itemPos = len(indices) - 1
-		}
-		if state.Items[i].ID == beforeRef.ItemID {
-			beforePos = len(indices) - 1
-		}
-	}
-	if itemPos < 0 || (beforeRef.ItemID != "" && beforePos < 0) {
-		return nil, ErrQueueNotPending
-	}
-	order := append([]int(nil), indices...)
-	moving := order[itemPos]
-	order = append(order[:itemPos], order[itemPos+1:]...)
-	insertAt := len(order)
-	if beforeRef.ItemID != "" {
-		insertAt = 0
-		for insertAt < len(order) && state.Items[order[insertAt]].ID != beforeRef.ItemID {
-			insertAt++
-		}
-	}
-	order = append(order, 0)
-	copy(order[insertAt+1:], order[insertAt:])
-	order[insertAt] = moving
-	for position, index := range order {
-		state.Items[index].Position = int64(position + 1)
+	err := reorderQueuePositions(state.Items, itemRef.ItemID, beforeRef.ItemID, func(item *FollowUpItem) (FollowUpItemID, QueueStatus, *int64) {
+		return item.ID, item.Status, &item.Position
+	})
+	if err != nil {
+		return nil, err
 	}
 	return pendingFollowUps(*state, 0), nil
 }

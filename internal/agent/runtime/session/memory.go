@@ -422,8 +422,12 @@ func cloneSnapshot(snapshot Snapshot) (Snapshot, error) {
 		currentRun.Messages = nil
 		snapshot.CurrentRunView = &currentRun
 	}
+	data, err := marshalSnapshot(snapshot)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	var out Snapshot
-	if err := cloneJSON(snapshot, &out); err != nil {
+	if err := unmarshalSnapshot(data, &out); err != nil {
 		return Snapshot{}, err
 	}
 	if out.CurrentRunView != nil {

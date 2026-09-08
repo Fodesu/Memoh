@@ -2900,13 +2900,13 @@ export type HandlersFollowUpQueueItemResponse = {
     enqueued_during_run_id?: string;
     item_id?: string;
     position?: number;
-    status?: QueueStatus;
+    status?: SessionruntimeQueueStatus;
     text?: string;
 };
 
 export type HandlersFollowUpQueueReorderRequest = {
-    before?: QueueFollowUpPendingRef;
-    item?: QueueFollowUpPendingRef;
+    before?: SessionruntimeFollowUpPendingRef;
+    item?: SessionruntimeFollowUpPendingRef;
 };
 
 export type HandlersFollowUpQueueResponse = {
@@ -3026,6 +3026,7 @@ export type HandlersOauthExchangeRequest = {
 export type HandlersSessionQueueResponse = {
     follow_up?: Array<HandlersFollowUpQueueItemResponse>;
     steer?: Array<HandlersSteerQueueItemResponse>;
+    steer_supported?: boolean;
 };
 
 export type HandlersSkillsOpResponse = {
@@ -3035,14 +3036,14 @@ export type HandlersSkillsOpResponse = {
 export type HandlersSteerQueueItemResponse = {
     item_id?: string;
     position?: number;
-    status?: QueueStatus;
+    status?: SessionruntimeQueueStatus;
     target_run_id?: string;
     text?: string;
 };
 
 export type HandlersSteerQueueReorderRequest = {
-    before?: QueueSteerPendingRef;
-    item?: QueueSteerPendingRef;
+    before?: SessionruntimeSteerPendingRef;
+    item?: SessionruntimeSteerPendingRef;
 };
 
 export type HandlersSteerQueueResponse = {
@@ -3478,16 +3479,6 @@ export type ProvidertemplatesModelResponse = {
     type?: string;
 };
 
-export type QueueFollowUpPendingRef = {
-    item_id?: string;
-};
-
-export type QueueStatus = 'accepted' | 'claimed' | 'applied' | 'rejected' | 'canceled';
-
-export type QueueSteerPendingRef = {
-    item_id?: string;
-};
-
 export type ReasoningOptions = {
     /**
      * CanDisable reports whether picking "off" actually reaches the model.
@@ -3793,6 +3784,16 @@ export type SessionSession = {
     type?: string;
     updated_at?: string;
     workdir_id?: string;
+};
+
+export type SessionruntimeFollowUpPendingRef = {
+    item_id?: string;
+};
+
+export type SessionruntimeQueueStatus = 'accepted' | 'claimed' | 'applied' | 'rejected' | 'expired' | 'canceled';
+
+export type SessionruntimeSteerPendingRef = {
+    item_id?: string;
 };
 
 export type SettingsSettings = {

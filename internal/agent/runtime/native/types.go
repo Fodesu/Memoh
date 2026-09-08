@@ -178,6 +178,7 @@ type RunConfig struct {
 	providerAttemptState           *providerAttemptState
 	providerMessageProvenance      preparedMessageProvenance
 	preparedStepMessages           *stepMessageCapture
+	initialStepInputs              []sdk.Message
 	contextStepFailure             func(error)
 	SessionType                    string
 	LiveToolStream                 bool
@@ -238,7 +239,8 @@ type RunConfig struct {
 
 	// OnStepInterrupted persists text/reasoning emitted by the current model
 	// call when cancellation arrives before finish-step. Tool-call steps never
-	// use this path.
+	// use this path. It retains the original run cancellation cause so the
+	// persistence adapter can reject ownership loss before detaching for IO.
 	OnStepInterrupted func(ctx context.Context, stepIndex int, step *sdk.StepResult) error
 
 	// BackgroundManager provides access to the background task system.
