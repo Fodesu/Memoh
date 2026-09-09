@@ -12,6 +12,7 @@ import (
 	"os"
 	stdpath "path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -100,6 +101,7 @@ import (
 	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
 	"github.com/felinics/memoh/internal/workspace/bridge"
+	"github.com/felinics/memoh/internal/workspacedeps"
 )
 
 func provideLogger(cfg config.Config) *slog.Logger {
@@ -695,10 +697,76 @@ func provideDisplayService(lc fx.Lifecycle, log *slog.Logger, manager *workspace
 	return service
 }
 
-func provideContainerdHandler(log *slog.Logger, manager *workspace.Manager, cfg config.Config, rc *boot.RuntimeConfig, displayService *displaypkg.Service, botService *bots.Service, accountService *accounts.Service, policyService *policy.Service) *handlers.ContainerdHandler {
+func provideContainerdHandler(log *slog.Logger, manager *workspace.Manager, cfg config.Config, rc *boot.RuntimeConfig, displayService *displaypkg.Service, botService *bots.Service, accountService *accounts.Service, policyService *policy.Service, workspaceDeps *workspacedeps.Service) *handlers.ContainerdHandler {
 	manager.SetSetupDiagnostics(botService)
 	h := handlers.NewContainerdHandler(log, manager, cfg.Workspace, rc.ContainerBackend, displayService, botService, accountService, policyService)
+	h.SetWorkspaceDependencyService(workspaceDeps)
 	return h
+}
+
+// provideWorkspaceDependencyCatalog constructs the remote catalog without
+// blocking startup on a network request. Maintenance refreshes its durable cache.
+func provideWorkspaceDependencyCatalog(cfg config.Config, queries dbstore.Queries, log *slog.Logger) (*workspacedeps.RemoteCatalog, error) {
+	provider, err := workspacedeps.NewRemoteCatalog(cfg.Supermarket.GetBaseURL(), workspacedeps.NewPostgresCatalogStore(queries), nil, log)
+	if err != nil {
+		return nil, err
+	}
+	provider.Configure(cfg.WorkspaceDependencies.CatalogRefreshInterval(), cfg.WorkspaceDependencies.Offline)
+	return provider, nil
+}
+
+func provideWorkspaceDependencyService(log *slog.Logger, manager *workspace.Manager, queries dbstore.Queries, provider *workspacedeps.RemoteCatalog, cfg config.Config) *workspacedeps.Service {
+	return workspacedeps.NewService(workspacedeps.Options{
+		Workspace: workspacedeps.NewManagerWorkspaceAccess(manager),
+		Store:     workspacedeps.NewPostgresStore(queries),
+		Provider:  provider,
+		Logger:    log,
+		Cache:     workspacedeps.NewCache(cfg.WorkspaceDependencies.DiscoveryCacheTTL()),
+		ScriptEnv: func(context.Context) []string {
+			keys := make([]string, 0, len(cfg.WorkspaceDependencies.ScriptEnv))
+			for key := range cfg.WorkspaceDependencies.ScriptEnv {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			env := make([]string, 0, len(keys))
+			for _, key := range keys {
+				env = append(env, key+"="+cfg.WorkspaceDependencies.ScriptEnv[key])
+			}
+			return env
+		},
+	})
+}
+
+func provideWorkspaceDependencyUpdateWorker(log *slog.Logger, service *workspacedeps.Service, cfg config.Config) *workspacedeps.UpdateWorker {
+	return workspacedeps.NewUpdateWorker(service, cfg.WorkspaceDependencies.UpdateCheckInterval(), log)
+}
+
+// startWorkspaceDependencyMaintenance refreshes the catalog, reconciles
+// interrupted operations, and checks upstream tool versions. The configured
+// workers detach from startup and stop with the application.
+func startWorkspaceDependencyMaintenance(lc fx.Lifecycle, log *slog.Logger, service *workspacedeps.Service, worker *workspacedeps.UpdateWorker, provider *workspacedeps.RemoteCatalog, cfg config.Config) {
+	var stopReaper func()
+	var stopCatalog func()
+	lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			stopCatalog = provider.Start(context.WithoutCancel(ctx))
+			stopReaper = workspacedeps.StartReaper(context.WithoutCancel(ctx), service, cfg.WorkspaceDependencies.ReapInterval(), log)
+			if !cfg.WorkspaceDependencies.Offline {
+				worker.Start(ctx)
+			}
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			if stopReaper != nil {
+				stopReaper()
+			}
+			worker.Stop()
+			if stopCatalog != nil {
+				stopCatalog()
+			}
+			return service.Shutdown(ctx)
+		},
+	})
 }
 
 func provideBotBackupService(log *slog.Logger, conn *pgxpool.Pool, queries dbstore.Queries, botService *bots.Service, settingsService *settings.Service, aclService *acl.Service, channelStore *channel.Store, mcpService *mcp.ConnectionService, scheduleService *schedule.Service, emailService *emailpkg.Service, providerService *providers.Service, modelsService *models.Service, searchProviderService *searchproviders.Service, fetchProviderService *fetchproviders.Service, memoryProviderService *memprovider.Service, manager *workspace.Manager, acpPool *acpagent.SessionPool, workdirStore dbstore.BotWorkdirStore) *botbackup.Service {
