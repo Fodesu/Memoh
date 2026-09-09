@@ -35,6 +35,7 @@ const (
 	RunOperationEdit  = "edit"
 
 	CommandAbort                = "abort"
+	CommandSteerWake            = "steer_wake"
 	CommandToolApprovalResponse = "tool_approval_response"
 	CommandUserInputResponse    = "user_input_response"
 	CommandHistoryReset         = "history_reset"

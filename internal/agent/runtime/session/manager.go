@@ -107,6 +107,7 @@ type runControl struct {
 	injectCh          chan<- turn.InjectMessage
 	injectMu          sync.Mutex
 	injectStopped     bool
+	steerWake         chan struct{} // guarded by Manager.mu; never closed
 	converter         *chatview.UIMessageStreamConverter
 	leaseStop         func()
 	leaseDone         chan struct{}

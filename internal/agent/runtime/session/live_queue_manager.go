@@ -2,7 +2,10 @@ package sessionruntime
 
 import (
 	"context"
+	"log/slog"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func (m *Manager) liveQueueBackend() (LiveQueueBackend, error) {
@@ -19,6 +22,9 @@ func (m *Manager) liveQueueBackend() (LiveQueueBackend, error) {
 // EnableSteer advertises an actual execution consumer, not just an allocated
 // channel. Other instances therefore reject queues aimed at old/unsupported owners.
 func (m *Manager) EnableSteer(ctx context.Context, handle RunHandle) error {
+	if m.SteerWake(handle) == nil {
+		return ErrRunOwnershipLost
+	}
 	_, _, err := m.updateActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
 		run := snapshot.CurrentRunView
 		if !runMatchesHandle(run, handle) || !m.runOwnerMatches(run) ||
@@ -42,7 +48,11 @@ func (m *Manager) EnqueueSteer(ctx context.Context, key Key, itemID, invocationI
 	if err != nil {
 		return SteerItem{}, err
 	}
-	return queue.EnqueueSteer(ctx, key, itemID, invocationID, payload)
+	item, err := queue.EnqueueSteer(ctx, key, itemID, invocationID, payload)
+	if err == nil && item.Status == QueueAccepted {
+		m.notifySteer(ctx, key, item.TargetRunID)
+	}
+	return item, err
 }
 
 func (m *Manager) EnqueueFollowUp(ctx context.Context, key Key, itemID, invocationID string, payload []byte) (FollowUpItem, error) {
@@ -114,7 +124,67 @@ func (m *Manager) PromoteFollowUpToSteer(ctx context.Context, key Key, ref Follo
 	if err != nil {
 		return PromoteFollowUpResult{}, err
 	}
-	return queue.PromoteFollowUpToSteer(ctx, key, ref)
+	result, err := queue.PromoteFollowUpToSteer(ctx, key, ref)
+	if err == nil && result.Steer.Status == QueueAccepted {
+		m.notifySteer(ctx, key, result.Steer.TargetRunID)
+	}
+	return result, err
+}
+
+// SteerWake is an owner-local, coalesced notification. The queue remains the
+// source of truth; neither duplicate notifications nor a stale wake apply input.
+func (m *Manager) SteerWake(handle RunHandle) <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ctrl := m.controls[scopedRunControlKey(handle.BotID, handle.SessionID, handle.RunID)]
+	if ctrl == nil || ctrl.generation != handle.Generation {
+		return nil
+	}
+	if ctrl.steerWake == nil {
+		ctrl.steerWake = make(chan struct{}, 1)
+	}
+	return ctrl.steerWake
+}
+
+func (m *Manager) wakeSteer(ctrl *runControl) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.controls[ctrl.key()] != ctrl || ctrl.steerWake == nil {
+		return
+	}
+	select {
+	case ctrl.steerWake <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Manager) notifySteer(ctx context.Context, key Key, runID string) {
+	// Input is already accepted. Finish the bounded notification independently
+	// of the HTTP connection, and never report a delivery error as a rejected input.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.commandTimeout())
+	defer cancel()
+	snapshot, ok, err := m.backend.Load(ctx, key)
+	if err != nil || !ok || snapshot.CurrentRunView == nil || snapshot.CurrentRunView.RunID != runID {
+		return
+	}
+	run := snapshot.CurrentRunView
+	now, err := m.backend.Now(ctx)
+	if err != nil {
+		return
+	}
+	cmd := Command{
+		Type: CommandSteerWake, ID: uuid.NewString(), BotID: key.BotID,
+		SessionID: key.SessionID, RunID: runID, Generation: run.Generation,
+		FencingToken: run.FencingToken, CreatedAt: now, ExpiresAt: now.Add(m.commandTimeout()),
+	}
+	if m.runOwnerMatches(run) {
+		err = m.applyRoutedCommand(ctx, cmd)
+	} else if m.distributed != nil {
+		err = m.dispatchRemoteCommand(ctx, run.OwnerID, cmd)
+	}
+	if err != nil {
+		m.logger.Warn("notify accepted steer failed", slog.String("run_id", runID), slog.Any("error", err))
+	}
 }
 
 func (m *Manager) ClaimNextSteer(ctx context.Context, handle RunHandle, sealIfEmpty bool) (SteerItem, SteerClaimRef, bool, error) {

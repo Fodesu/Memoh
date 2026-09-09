@@ -71,14 +71,27 @@ after the steer's turn as soon as that turn is known.
 
 - Admission records the active run as `TargetRunID`. Without an active run,
   or after the run has been sealed, admission returns `ErrQueueNoActiveRun`.
+- Native streaming admission/promotion wakes the fenced owner through the
+  existing command transport. Notifications coalesce locally; pending queue
+  state remains authoritative. Each provider admission also checks that state.
+- During model sampling (including waiting for response headers), steer cancels
+  only the current invocation. Once its SDK stream is quiescent, the application
+  persists an interrupted checkpoint, applies any input in that checkpoint,
+  and claims the next input. Execution continues with the same run and an
+  advanced step cursor, without another agent-start or a run-abort event.
+  Unfinished reasoning is projected as text rather than replaying incomplete
+  provider signatures. Failure to quiesce or persist fails the run safely.
+- The interruption gate closes before the SDK receives tool-call output or
+  finish-step. Already admitted tools and decisions are not cancelled by steer;
+  they keep their normal result/approval lifecycle before input is consumed.
 - At each committed step the application applies the previously claimed steer
   and claims the next accepted steer for the same run. During a tool loop the
   claimed text is injected into the next model request; at a final step the
   claim reopens the same run with the steer as the next model input.
 - A step that parks the run for a tool approval or user input applies the
-  previous claim but does not claim a new one. The continuation's first
-  committed step claims instead, so no claim waits unapplied across the
-  decision.
+  previous claim but does not claim a new one. The resumed invocation claims
+  at its next committed step or interruption checkpoint, so no claim waits
+  unapplied across the decision.
 - `ClaimNextSteer` returns the run's existing unapplied claim before selecting
   a new item. When the run has been reclaimed by a new owner, the stored claim
   is advanced to the new owner, generation, and fencing token; the previous
@@ -91,6 +104,23 @@ after the steer's turn as soon as that turn is known.
 
 A claim is valid only for the run's current owner, generation, and fencing
 token; applying with a stale claim returns `ErrRunOwnershipLost`.
+
+### Codex comparison
+
+Reference: OpenAI Codex commit
+[`1530f828cbaea015bc0fc53c0486e2f889a677f3`](https://github.com/openai/codex/tree/1530f828cbaea015bc0fc53c0486e2f889a677f3).
+Its `codex_thread.rs::steer_turn` requires the expected active turn and cannot
+start another turn. `session/turn_input.rs::steer_input` appends input atomically
+to the active task; `session/input_queue.rs` exposes queue activity notifications.
+The public `turn/steer` contract is distinct from `turn/interrupt`:
+https://developers.openai.com/codex/app-server#steer-an-active-turn.
+
+This is not a claim that public Codex always cancels an in-flight HTTP request:
+`core/tests/suite/pending_input.rs::user_input_does_not_preempt_after_reasoning_item`
+explicitly preserves the original response and tool call. Memoh follows the
+same run identity and safe tool boundaries, and additionally implements the
+requested force-steer behavior during native model sampling. External drivers
+and provider-specific Responses WebSocket steering are outside this mechanism.
 
 ## Follow-up
 

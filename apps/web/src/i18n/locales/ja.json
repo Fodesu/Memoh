@@ -728,7 +728,6 @@
       "fragmentSeparator": "、"
     },
     "currentBot": "現在のBot",
-    "inputPlaceholder": "質問を入力してください",
     "queue": {
       "steer": "現在の応答",
       "followUp": "次のメッセージ",
@@ -746,6 +745,7 @@
       "switchToFollowUp": "この実行の後に追加",
       "switchToSteer": "現在の実行に追加"
     },
+    "inputPlaceholder": "質問を入力してください",
     "readonlyHint": "このチャットは読み取り専用です",
     "readonlyPlaceholder": "このチャットは読み取り専用です。メッセージの送信は無効になっています。",
     "composerActions": "ファイルの追加またはエージェントの切り替え",

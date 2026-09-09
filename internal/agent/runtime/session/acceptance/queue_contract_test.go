@@ -24,6 +24,114 @@ func enqueueTestInput(t *testing.T, fixture acceptanceFixture, sessionID, kind, 
 	return item.ID
 }
 
+// Never release a blocked request to make steer pass: the new model request
+// and cancellation of its predecessor must happen while that predecessor is held.
+func TestQueueSteerPreemptsModel(t *testing.T) {
+	for _, scenario := range []string{"direct", "promoted", "silent", "consecutive", "retry", "stop_after_steer"} {
+		t.Run(scenario, func(t *testing.T) {
+			env := loadEnvironment()
+			fixture := requireFixture(t, env.mode == "cluster")
+			prepareFakeModel(t)
+			sessionID := mustCreateSession(t, fixture, "steer-preempt")
+			origin := uniqueMarker("original")
+			mode := "partial_block"
+			if scenario == "silent" {
+				mode = "block"
+			} else if scenario == "retry" {
+				mode = "retry_block"
+			}
+			conn := mustDial(t, env.primaryURL, fixture)
+			defer closeWebSocket(conn)
+			mustSubscribeAndReadSnapshot(t, conn, sessionID)
+			_, admitted := mustSendAndAccept(t, fixture, conn, sessionID, origin, directiveMode(origin, 2, 5, mode))
+			defer globalFakeModel.Release(origin)
+			waitBlocked := func(marker string, silent bool) {
+				t.Helper()
+				if silent {
+					if !globalFakeModel.WaitRequestCount(marker, 1, 5*time.Second) {
+						t.Fatal("original model request never started")
+					}
+				} else if _, err := readUntil(conn, 5*time.Second, func(e wsEvent) bool {
+					return eventsContainString([]wsEvent{e}, marker+"-chunk-01")
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitBlocked(origin, scenario == "silent")
+			mutator := fixture
+			if env.mode == "cluster" {
+				mutator.api = fixture.api.forBaseURL(env.secondaryURL)
+			}
+			markers := []string{origin}
+			count := 1
+			if scenario == "consecutive" {
+				count = 2
+			}
+			for i := 0; i < count; i++ {
+				marker := uniqueMarker("steered")
+				defer globalFakeModel.Release(marker)
+				blocked := i < count-1 || scenario == "stop_after_steer"
+				text := directive(marker, 2, 5)
+				if blocked {
+					text = directiveMode(marker, 2, 5, "partial_block")
+				}
+				started := time.Now()
+				if scenario == "promoted" {
+					id := enqueueTestInput(t, mutator, sessionID, "follow-up", text)
+					if err := mutator.api.request(http.MethodPost, "/bots/"+fixture.botID+"/sessions/"+sessionID+"/follow-up-queue/"+id+"/steer", nil, nil, http.StatusAccepted); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					enqueueTestInput(t, mutator, sessionID, "steer", text)
+				}
+				if !globalFakeModel.WaitRequestCount(marker, 1, 3*time.Second) || !globalFakeModel.WaitDisconnected(markers[len(markers)-1], time.Second) {
+					t.Fatal("steer did not replace the blocked invocation")
+				}
+				t.Logf("same_run=%s preempt=%d latency=%s", admitted.RunID, i+1, time.Since(started))
+				markers = append(markers, marker)
+				if blocked {
+					waitBlocked(marker, false)
+				}
+			}
+			terminalState := "completed"
+			if scenario == "stop_after_steer" {
+				terminalState = "aborted"
+				control := uniqueMarker("stop")
+				if err := sendAbort(conn, sessionID, admitted.RunID, control); err != nil {
+					t.Fatal(err)
+				}
+				if ack := mustReadControlAck(t, conn, control); !ack.Applied {
+					t.Fatal("steer detached continuation from run abort")
+				}
+			}
+			mustReadRunTerminal(t, conn, admitted.RunID)
+			run := mustWaitRunState(t, sessionID, origin, func(r sessionRunRecord) bool { return r.State == terminalState })
+			if run.RunID != admitted.RunID {
+				t.Fatal("steer re-admitted a run")
+			}
+			history, err := fixture.api.history(fixture.botID, sessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, marker := range markers {
+				users := 0
+				for _, msg := range objectList(history) {
+					if stringValue(msg["role"]) == "user" && valueContainsString(msg, marker) {
+						users++
+					}
+				}
+				requests := 1
+				if marker == origin && scenario == "retry" {
+					requests = 2
+				}
+				if users != 1 || globalFakeModel.RequestCount(marker) != requests {
+					t.Fatalf("%s: durable users=%d model requests=%d", marker, users, globalFakeModel.RequestCount(marker))
+				}
+			}
+		})
+	}
+}
+
 func TestQueueFollowUpsPreserveRepeatedReorderAndDrain(t *testing.T) {
 	fixture := requireFixture(t, false)
 	prepareFakeModel(t)
@@ -33,9 +141,11 @@ func TestQueueFollowUpsPreserveRepeatedReorderAndDrain(t *testing.T) {
 	conn := mustDial(t, loadEnvironment().primaryURL, fixture)
 	defer closeWebSocket(conn)
 	mustSubscribeAndReadSnapshot(t, conn, sessionID)
-	_, admitted := mustSendAndAccept(t, fixture, conn, sessionID, invocation, directiveMode(marker, 1, 0, "block"))
-	if !globalFakeModel.WaitRequestCount(marker, 1, 5*time.Second) {
-		t.Fatal("origin never reached model")
+	_, admitted := mustSendAndAccept(t, fixture, conn, sessionID, invocation, directiveMode(marker, 1, 0, "partial_block"))
+	if _, err := readUntil(conn, 5*time.Second, func(e wsEvent) bool {
+		return eventsContainString([]wsEvent{e}, marker+"-chunk-00")
+	}); err != nil {
+		t.Fatal(err)
 	}
 	defer globalFakeModel.Release(marker)
 	ids := make([]string, 3)
@@ -97,15 +207,16 @@ func testQueueSteerDecisionKeepsInputAndHistory(t *testing.T, restartOwner bool)
 	conn := mustDial(t, loadEnvironment().primaryURL, fixture)
 	defer closeWebSocket(conn)
 	mustSubscribeAndReadSnapshot(t, conn, sessionID)
-	_, admitted := mustSendAndAccept(t, fixture, conn, sessionID, invocation, directiveMode(marker, 1, 0, "block"))
-	if !globalFakeModel.WaitRequestCount(marker, 1, 5*time.Second) {
-		t.Fatal("origin never reached model")
+	_, admitted := mustSendAndAccept(t, fixture, conn, sessionID, invocation, directiveMode(marker, 1, 0, "partial_block"))
+	if _, err := readUntil(conn, 5*time.Second, func(e wsEvent) bool {
+		return eventsContainString([]wsEvent{e}, marker+"-chunk-00")
+	}); err != nil {
+		t.Fatal(err)
 	}
 	defer globalFakeModel.Release(marker)
 	steerMarker := uniqueMarker("steer-decision")
 	steerText := directiveMode(steerMarker, 2, 5, "ask_user") + " ask after steering"
 	enqueueTestInput(t, fixture, sessionID, "steer", steerText)
-	globalFakeModel.Release(marker)
 	waiting := mustWaitRunState(t, sessionID, invocation, func(run sessionRunRecord) bool { return run.State == "waiting_decision" })
 	decision := mustPendingUserInput(t, waiting)
 	answers, err := firstDecisionAnswer(decision.UIPayload)

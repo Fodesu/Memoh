@@ -90,10 +90,9 @@ type ChatRequest struct {
 	// InjectCh receives user messages between tool rounds. Remote transports
 	// use turn.RunHandle.Inject instead.
 	InjectCh <-chan turn.InjectMessage `json:"-"`
-	// QueueInjectCh is the execution-owned sender paired with InjectCh. Only the
-	// durable step coordinator uses it after claiming a steer item.
-	QueueInjectCh   chan<- turn.InjectMessage `json:"-"`
-	StepIndexOffset int                       `json:"-"`
+	// QueueSteerEnabled enables the fenced native queue consumer.
+	QueueSteerEnabled bool `json:"-"`
+	StepIndexOffset   int  `json:"-"`
 	// PublishRuntimeEvents is set for server-owned continuations, which do not
 	// have a client runHandle pump to publish native events into the session
 	// runtime projection.

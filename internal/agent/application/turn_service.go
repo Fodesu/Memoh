@@ -79,7 +79,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	req.TurnID = admission.TurnID
 	req.TurnPosition = &admission.TurnPosition
 	req.InjectCh = injectCh
-	req.QueueInjectCh = injectCh
+	req.QueueSteerEnabled = injectCh != nil
 	req.OutboundAssetCollector = func() []turn.OutboundAssetRef {
 		assetMu.Lock()
 		defer assetMu.Unlock()

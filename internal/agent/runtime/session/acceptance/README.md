@@ -121,8 +121,17 @@ registry. A skipped or merely compiled suite is not acceptance evidence.
 
 `TestQueueFollowUpsPreserveRepeatedReorderAndDrain` checks serial follow-up
 admission after two reorder operations. `TestQueueSteerDecisionKeepsInputAndHistory`
-checks a final-step steer, an ask_user pause, another steer admitted while parked,
+checks a steer, an ask_user pause, another steer admitted while parked,
 and persisted user inputs after the decision continuation.
+
+`TestQueueSteerPreemptsModel` keeps the previous HTTP model request blocked until
+test cleanup. Direct steer, follow-up promotion, silent sampling, consecutive
+steers, provider retry, and stopping the continued run must preserve the run ID
+and exactly one history input per submission. Each steer starts one successor
+model call; the retry case also checks the original request's expected retry.
+Cluster runs mutate through the
+peer Server. Releasing the original request before asserting replacement would
+test only eventual step-boundary consumption and is not a passing steer test.
 
 `TestSRDUR002PreparedFinishSurvivesProcessCrash` is opt-in with
 `MEMOH_SESSION_RUNTIME_ACCEPTANCE_CRASH=1` and requires two Servers. Its temporary

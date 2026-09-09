@@ -809,7 +809,7 @@ func (m *Manager) requestAbort(ctx context.Context, ctrl *runControl) (bool, err
 
 func (m *Manager) applyCommand(ctx context.Context, cmd Command) {
 	switch strings.TrimSpace(cmd.Type) {
-	case CommandAbort, CommandToolApprovalResponse, CommandUserInputResponse, CommandHistoryReset:
+	case CommandAbort, CommandSteerWake, CommandToolApprovalResponse, CommandUserInputResponse, CommandHistoryReset:
 		m.publishStoredCommandResult(ctx, cmd, m.executeRoutedCommand(ctx, cmd))
 	case CommandResult:
 		m.completePendingCommand(cmd)
@@ -880,6 +880,13 @@ func (m *Manager) applyRoutedCommand(ctx context.Context, cmd Command) error {
 	if strings.TrimSpace(cmd.Type) == CommandAbort {
 		_, err := m.abortLocal(commandCtx, ctrl)
 		return err
+	}
+	if strings.TrimSpace(cmd.Type) == CommandSteerWake {
+		if !run.SteerSupported || (run.Status != RunStatusRunning && run.Status != RunStatusWaitingDecision) {
+			return ErrCommandTargetNotActive
+		}
+		m.wakeSteer(ctrl)
+		return nil
 	}
 	if strings.TrimSpace(cmd.Type) == CommandHistoryReset {
 		return m.applyHistoryResetCommand(commandCtx, cmd, ctrl)
@@ -1259,7 +1266,7 @@ func (m *Manager) finishCommandExecution(commandID string, done chan struct{}) {
 
 func isDurableRoutedCommand(cmd Command) bool {
 	switch strings.TrimSpace(cmd.Type) {
-	case CommandAbort, CommandToolApprovalResponse, CommandUserInputResponse, CommandHistoryReset:
+	case CommandAbort, CommandSteerWake, CommandToolApprovalResponse, CommandUserInputResponse, CommandHistoryReset:
 		return strings.TrimSpace(cmd.ID) != ""
 	default:
 		return false

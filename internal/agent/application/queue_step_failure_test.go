@@ -10,7 +10,6 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
@@ -44,7 +43,7 @@ func TestStepCommitSeparatesHistoryFailureFromQueueFailure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true, PersistedUserMessageID: "user", QueueInjectCh: make(chan turn.InjectMessage, 1)}
+			req := ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true, PersistedUserMessageID: "user", QueueSteerEnabled: true}
 			committer := service.newAgentStepCommitter(ctx, req, resolvedContext{runConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
 			if committer == nil {
 				t.Fatal("missing fenced step committer")

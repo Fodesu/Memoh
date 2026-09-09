@@ -744,7 +744,6 @@
       "fragmentSeparator": "、"
     },
     "currentBot": "当前 Bot",
-    "inputPlaceholder": "问点什么",
     "queue": {
       "steer": "当前回复",
       "followUp": "接下来",
@@ -762,6 +761,7 @@
       "switchToFollowUp": "排到本次运行之后",
       "switchToSteer": "插入当前运行"
     },
+    "inputPlaceholder": "问点什么",
     "readonlyHint": "该聊天为只读",
     "readonlyPlaceholder": "该聊天为只读，无法发送消息",
     "composerActions": "添加文件或切换 Agent",

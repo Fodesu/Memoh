@@ -94,17 +94,43 @@ func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 	}
 	cfg.ContinueAfterFinal = &c.continueAfterFinal
 	cfg.NextModelInputs = &c.nextModelInputs
+	if c.queueStep != nil && c.queueStep.steerEnabled {
+		cfg.SteerWake = c.service.sessionManager.SteerWake(c.req.RunHandle)
+		cfg.PendingSteer = func(ctx context.Context) (bool, error) {
+			items, _, err := c.service.sessionManager.PendingQueues(ctx, sessionruntime.Key{
+				BotID: c.req.BotID, SessionID: c.req.ThreadID,
+			}, sessionruntime.MaxPendingQueueItems)
+			for _, item := range items {
+				if item.TargetRunID == c.req.RunID && item.Status == sessionruntime.QueueAccepted {
+					return true, err
+				}
+			}
+			return false, err
+		}
+		cfg.OnSteer = func(ctx context.Context, index int, step *sdk.StepResult) error {
+			return c.persist(ctx, index, step, stepSteered)
+		}
+	}
 }
 
+type stepCommitMode uint8
+
+const (
+	stepCompleted stepCommitMode = iota
+	stepInterrupted
+	stepSteered
+)
+
 func (c *agentStepCommitter) commit(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
-	return c.persist(ctx, stepIndex, step, false)
+	return c.persist(ctx, stepIndex, step, stepCompleted)
 }
 
 func (c *agentStepCommitter) interrupt(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
-	return c.persist(ctx, stepIndex, step, true)
+	return c.persist(ctx, stepIndex, step, stepInterrupted)
 }
 
-func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *sdk.StepResult, interrupted bool) error {
+func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *sdk.StepResult, mode stepCommitMode) error {
+	interrupted := mode != stepCompleted
 	if c == nil || step == nil {
 		return errors.New("agent step is missing")
 	}
@@ -126,7 +152,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	// recorded as a commit failure: the turn is already ending, and losing an
 	// unfinished snapshot must not turn an abort into a turn error.
 	fail := func(err error) error {
-		if !interrupted {
+		if mode != stepInterrupted {
 			c.commitErr = err
 		}
 		return err
@@ -139,11 +165,11 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	// provider result: final handoff and queue reconciliation are keyed to the
 	// step, not to whether the provider emitted a message. Legacy/non-durable
 	// paths retain the old cheap no-op behavior.
-	if !hasAssistantOutput && (c.queueStep == nil || interrupted) {
+	if !hasAssistantOutput && mode != stepSteered && (c.queueStep == nil || interrupted) {
 		c.nextStep++
 		return nil
 	}
-	if hasAssistantOutput && stepIndex == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
+	if (hasAssistantOutput || mode == stepSteered) && stepIndex == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
 		messages = prependTurnUserMessage(c.req, messages)
 	}
 	storeReq := c.req
@@ -180,10 +206,14 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	agentStep := messagepkg.AgentStep{RunID: c.req.RunID, Messages: inputs, Interrupted: interrupted}
 	var persisted []messagepkg.Message
 	var queueErr error
-	if c.queueStep != nil && !interrupted {
+	if c.queueStep != nil && mode != stepInterrupted {
 		stepCtx := context.WithoutCancel(ctx)
+		kind := classifyQueueStep(step)
+		if mode == stepSteered {
+			kind = queueStepSteered
+		}
 		outcome, commitErr := c.queueStep.commit(
-			stepCtx, classifyQueueStep(step), agentStep, c.persisted,
+			stepCtx, kind, agentStep, c.persisted,
 		)
 		if !outcome.historyCommitted {
 			return fail(commitErr)
@@ -194,11 +224,11 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 		queueErr = commitErr
 		persisted = outcome.persisted
 		c.replacementFinalized = outcome.replacementFinalized
-		if queueErr == nil && outcome.continueAfterFinal && classifyQueueStep(step) == queueStepFinal {
+		if queueErr == nil {
 			if outcome.claimedSteer != nil {
 				c.nextModelInputs = append(c.nextModelInputs, sdk.UserMessage(QueuePayloadText(outcome.claimedSteer.Payload)))
 			}
-			c.continueAfterFinal.Store(true)
+			c.continueAfterFinal.Store(outcome.continueAfterFinal)
 		}
 		if queueErr == nil {
 			c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, outcome)

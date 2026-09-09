@@ -33,11 +33,10 @@ func (s *Service) runNativeDecisionContinuation(ctx context.Context, req ChatReq
 	}()
 
 	continuationRC := resolvedContext{runConfig: cfg, model: models.GetResponse{ID: modelID}}
-	stepCommitter, stopQueueBinding, err := s.bindQueueContinuation(ctx, &req, &cfg, continuationRC)
+	stepCommitter, err := s.bindQueueContinuation(ctx, &req, &cfg, continuationRC)
 	if err != nil {
 		return err
 	}
-	defer stopQueueBinding()
 	reasoningTiming := newReasoningTimingTracker(nil)
 	configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
 	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, reasoningEffortForIdle(cfg))

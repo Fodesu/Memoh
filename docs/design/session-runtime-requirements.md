@@ -173,7 +173,9 @@ ledger 成为终态后，系统必须以该 durable outcome 修复可能滞后�
 
 每个已准入 run 必须显式关联一个服务端生成的起始 `turn_id`。普通 run 的用户消息与回答归于该 turn。已应用的 steer 是同一 run 中新的用户输入，可以打开新的 canonical turn；该输入之后的 Agent 输出和工具消息归于新 turn，所有这些 turn 通过显式 `run_id` 关联，不能重新准入第二个 run。
 
-run 控制记录及其 decision 的 `turn_id` 保持起始 turn 身份，用于 owner/fence 与决策恢复校验；聊天消息的 `turn_id` 表示该消息所属的 canonical turn。客户端提交决策以 `decision_id` 和 run 身份为准，不能把临时渲染 ID 或某个显示分段的 ID 当作 run 控制身份。steer 的用户消息必须进入实际 provider 请求，并与对应完整 step 一起持久化，不能只在实时投影中展示。
+run 控制记录及其 decision 的 `turn_id` 保持起始 turn 身份，用于 owner/fence 与决策恢复校验；聊天消息的 `turn_id` 表示该消息所属的 canonical turn。客户端提交决策以 `decision_id` 和 run 身份为准，不能把临时渲染 ID 或某个显示分段的 ID 当作 run 控制身份。steer 的用户消息必须进入实际 provider 请求，并与对应完整 step 或被后续 steer 中断的 checkpoint 一起持久化，不能只在实时投影中展示。
+
+Native 流式执行的 steer 必须能中断正在生成文本/推理或等待响应的模型调用，保存有效 checkpoint 后，在原 run 内加入新指令续跑。不能依赖测试先释放原模型才能消费。队列 `accepted` 只代表接收输入；owner 唤醒命令只代表控制信号送达，均不等于输入已应用。已接收的工具调用、工具执行和决策停等保持安全边界：不因 steer 取消或重复执行工具，不跳过审批；到下一次模型调用时优先处理新输入。用户 abort、owner 丢失和 `finishing` 的规则不变，steer 不得重新准入 run 或复活已终止的 run。
 
 决策停等后，同一 owner 的续跑必须接续其已消费的 step 游标；owner 更换后游标可随 generation 重建。该游标仅服务进程内排序与投影屏障，不宣称跨进程模型采样重放。
 

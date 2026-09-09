@@ -281,19 +281,28 @@ func sendEvent(ctx context.Context, ch chan<- StreamEvent, evt StreamEvent) bool
 }
 
 func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
-	cfg.Model = modelWithProviderStreamEventObserver(cfg.Model, cfg.OnProviderStreamEventObserved)
 	if cfg.ContextLifecycle == nil {
 		cfg.ContextLifecycle = contextfrag.NewLifecycleHolder()
 	}
 	streamCtx, cancel := context.WithCancelCause(ctx)
+	var steerGate *modelSteerGate
+	if cfg.PendingSteer != nil && cfg.OnSteer != nil {
+		steerGate = &modelSteerGate{cancel: cancel, ready: make(chan struct{}, 1)}
+		go a.watchSteer(streamCtx, cfg, steerGate)
+	}
+	cfg.Model = modelWithProviderStreamEventObserver(cfg.Model, cfg.OnProviderStreamEventObserved, steerGate)
 	eventGate := newStreamEmitterGate(streamCtx, ch)
 	defer func() {
 		cancel(nil)
 		eventGate.close()
 	}()
 	aborted := false
+	continued := false
 	turnError := ""
 	defer func() {
+		if continued {
+			return
+		}
 		event := hooks.EventTurnEnd
 		if aborted || strings.TrimSpace(turnError) != "" {
 			event = hooks.EventTurnError
@@ -442,6 +451,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 
+	prepareStep = prepareQueuedSteer(prepareStep, cfg)
 	prepareStep, committedStepMessages := capturePreparedStepMessages(prepareStep)
 	committedStepMessages.byStep[0] = cloneProviderMessages(cfg.initialStepInputs)
 	if readMediaState != nil {
@@ -740,7 +750,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			}
 
 		case *sdk.ErrorPart:
-			if contextStepBudgetError(streamCtx) != nil {
+			if streamCtx.Err() != nil {
 				aborted = true
 				break
 			}
@@ -780,7 +790,8 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			break
 		}
 	}
-	if ctx.Err() != nil {
+	steered := errors.Is(context.Cause(streamCtx), errModelSteered)
+	if ctx.Err() != nil || steered {
 		aborted = true
 	}
 
@@ -798,6 +809,45 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		// waiting so the caller can fence and finalize the run as aborted.
 		cancel(context.Canceled)
 		streamClosed = drainStreamUntilClosed(streamResult.Stream, streamCancelDrainGrace, interruptedStep.observe)
+	}
+
+	if steered && ctx.Err() == nil && streamClosed {
+		// The SDK is now quiescent: it cannot commit or execute a late tool.
+		// Checkpoint even a silent attempt so the original user/input admission
+		// and step cursor survive before we append the next input to this run.
+		step := interruptedStep.snapshot(nextDurableStep)
+		if step == nil {
+			step = &sdk.StepResult{}
+		}
+		step = committedStepMessages.decorate(nextDurableStep, step, toolExecutionMetadata)
+		checkpointMessages := step.Messages
+		if nextDurableStep == 0 {
+			// Initial steer inputs already live in cfg.Messages. The decorated
+			// step includes them for persistence, not a second prompt insertion.
+			checkpointMessages = checkpointMessages[min(len(cfg.initialStepInputs), len(checkpointMessages)):]
+		}
+		index := cfg.StepIndexOffset + nextDurableStep
+		sendEvent(ctx, ch, StreamEvent{Type: EventStepEnd, StepNumber: index})
+		if err := cfg.OnSteer(ctx, index, step); err == nil {
+			messages := append(steerContinuationMessages(cfg, streamResult.Steps, committedStepMessages), steerCheckpointMessages(checkpointMessages)...)
+			cfg = appendSteerContinuation(cfg, messages, nextDurableStep+1)
+			if cfg.ContinueAfterFinal != nil {
+				cfg.ContinueAfterFinal.Store(false)
+			}
+			eventGate.close()
+			continued = true
+			a.runStream(ctx, cfg, ch)
+			return
+		} else {
+			a.logger.Error("checkpoint steered model invocation failed", slog.Any("error", err))
+		}
+	}
+	if steered && ctx.Err() == nil {
+		// An unquiesced invocation or failed checkpoint cannot safely resume.
+		// Use the existing public interruption error; diagnostics stay in logs.
+		public, _ := apperror.PublicFrom(apperror.New(apperror.CodeAgentResponseInterrupted, nil), "")
+		turnError = public.Detail
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: public.Detail, Code: string(public.Code)})
 	}
 
 	// Only external cancellation can represent a user/session abort. Provider
@@ -895,12 +945,13 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	// steer becomes the next model input instead of being stranded after the
 	// terminal event.
 	if streamClosed && !aborted && streamResult != nil && cfg.ContinueAfterFinal != nil && cfg.ContinueAfterFinal.Swap(false) {
-		cfg = appendSteerContinuation(cfg, streamResult.Messages, len(streamResult.Steps))
+		cfg = appendSteerContinuation(cfg, steerContinuationMessages(cfg, streamResult.Steps, committedStepMessages), len(streamResult.Steps))
 		// The completed invocation must stop its emitters before the continuation
 		// starts; the continuation gets a fresh child context from the original
 		// run context so closing the old stream does not cancel it.
 		cancel(context.Canceled)
 		eventGate.close()
+		continued = true
 		a.runStream(ctx, cfg, ch)
 		return
 	}
@@ -1055,6 +1106,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		prepareStep = readMediaState.prepareStep
 	}
 
+	prepareStep = prepareQueuedSteer(prepareStep, cfg)
 	prepareStep, committedStepMessages := capturePreparedStepMessages(prepareStep)
 	committedStepMessages.byStep[0] = cloneProviderMessages(cfg.initialStepInputs)
 	if readMediaState != nil {
@@ -1142,7 +1194,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 	finalMessages = toolExecutionMetadata.annotate(finalMessages)
 	if cfg.ContinueAfterFinal != nil && cfg.ContinueAfterFinal.Swap(false) && len(genResult.Steps) > 0 {
-		cfg = appendSteerContinuation(cfg, finalMessages, len(genResult.Steps))
+		cfg = appendSteerContinuation(cfg, steerContinuationMessages(cfg, genResult.Steps, committedStepMessages), len(genResult.Steps))
 		next, nextErr := a.runGenerate(genCtx, cfg)
 		if nextErr != nil {
 			return nil, nextErr

@@ -2335,7 +2335,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						AgentCommand:            decision.AgentCommand,
 						RunHandle:               admittedTurn.Handle,
 						InjectCh:                admittedTurn.InjectCh,
-						QueueInjectCh:           admittedTurn.InjectCh,
+						QueueSteerEnabled:       admittedTurn.InjectCh != nil,
 					}
 					if preparedActivationReq != nil {
 						req.Messages = preparedActivationReq.Messages
@@ -2415,6 +2415,8 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					input.RunID = runRef.RunID
 					input.TurnID = admittedTurn.TurnID
 					input.TurnPosition = admittedTurn.Position
+					input.RunHandle = admittedTurn.Handle
+					input.InjectCh = admittedTurn.InjectCh
 					input.OnModelPreferenceSettled = func() {
 						writer.SendJSON(wsOutboundEvent{
 							Type:         "model_preference_settled",
@@ -2423,8 +2425,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 							SessionID:    runRef.SessionID,
 						})
 					}
-					input.RunHandle = admittedTurn.Handle
-					input.InjectCh = admittedTurn.InjectCh
 					return h.agentService.RetryLatestMessageWS(ctx, input, eventCh, abortCh)
 				},
 			)

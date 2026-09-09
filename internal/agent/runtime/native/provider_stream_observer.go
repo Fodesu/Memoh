@@ -9,10 +9,11 @@ import (
 type providerStreamEventObserver struct {
 	sdk.Provider
 	observe func(StreamEvent)
+	steer   *modelSteerGate
 }
 
-func modelWithProviderStreamEventObserver(model *sdk.Model, observe func(StreamEvent)) *sdk.Model {
-	if model == nil || model.Provider == nil || observe == nil {
+func modelWithProviderStreamEventObserver(model *sdk.Model, observe func(StreamEvent), steer *modelSteerGate) *sdk.Model {
+	if model == nil || model.Provider == nil || (observe == nil && steer == nil) {
 		return model
 	}
 	observed := *model
@@ -26,7 +27,7 @@ func modelWithProviderStreamEventObserver(model *sdk.Model, observe func(StreamE
 		}
 		provider = previous.Provider
 	}
-	observed.Provider = providerStreamEventObserver{Provider: provider, observe: observe}
+	observed.Provider = providerStreamEventObserver{Provider: provider, observe: observe, steer: steer}
 	return &observed
 }
 
@@ -34,7 +35,10 @@ func (p providerStreamEventObserver) DoStream(ctx context.Context, params sdk.Ge
 	// Every provider call begins a fresh attempt. For ordinary multi-step runs
 	// the previous step has already consumed or checkpointed its timings; for a
 	// retry this discards the failed attempt before replacement parts arrive.
-	p.observe(StreamEvent{Type: EventRetry})
+	if p.observe != nil {
+		p.observe(StreamEvent{Type: EventRetry})
+	}
+	p.steer.begin()
 	result, err := p.Provider.DoStream(ctx, params)
 	if err != nil || result == nil || result.Stream == nil {
 		return result, err
@@ -56,7 +60,10 @@ func (p providerStreamEventObserver) DoStream(ctx context.Context, params sdk.Ge
 			case <-ctx.Done():
 				return
 			}
-			if event, ok := providerPartTimingEvent(part); ok {
+			if !p.steer.observe(part) {
+				return
+			}
+			if event, ok := providerPartTimingEvent(part); ok && p.observe != nil {
 				p.observe(event)
 			}
 			select {

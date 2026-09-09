@@ -31,14 +31,14 @@ type RetryLatestMessageInput struct {
 	ReasoningEffort        string
 	WorkspaceTargetID      string
 	ToolHTTPURL            string
-	// OnModelPreferenceSettled releases subsequent picker writes once this
-	// turn's preference write-back has finished (issue #879). Same contract
-	// as ChatRequest.OnModelPreferenceSettled.
-	OnModelPreferenceSettled func()
 	// RunHandle and InjectCh are server-owned admission capabilities. They are
 	// populated only by the in-process Web runtime, never by client JSON.
 	RunHandle sessionruntime.RunHandle
 	InjectCh  chan turnpkg.InjectMessage
+	// OnModelPreferenceSettled releases subsequent picker writes once this
+	// turn's preference write-back has finished (issue #879). Same contract
+	// as ChatRequest.OnModelPreferenceSettled.
+	OnModelPreferenceSettled func()
 }
 
 type EditLatestMessageInput struct {
@@ -58,10 +58,10 @@ type EditLatestMessageInput struct {
 	ReasoningEffort        string
 	WorkspaceTargetID      string
 	ToolHTTPURL            string
-	// OnModelPreferenceSettled: see RetryLatestMessageInput.
-	OnModelPreferenceSettled func()
 	RunHandle              sessionruntime.RunHandle
 	InjectCh               chan turnpkg.InjectMessage
+	// OnModelPreferenceSettled: see RetryLatestMessageInput.
+	OnModelPreferenceSettled func()
 }
 
 func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMessageInput, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) error {
@@ -102,7 +102,7 @@ func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMes
 		WorkspaceTargetID:            strings.TrimSpace(input.WorkspaceTargetID),
 		ToolHTTPURL:                  strings.TrimSpace(input.ToolHTTPURL),
 		InjectCh:                     input.InjectCh,
-		QueueInjectCh:                input.InjectCh,
+		QueueSteerEnabled:            input.InjectCh != nil,
 		ReusePersistedUserMessage:    true,
 		PersistedUserMessageID:       requestMessage.ID,
 		SkipHistoryTurn:              true,
@@ -149,7 +149,7 @@ func (s *Service) EditLatestMessageWS(ctx context.Context, input EditLatestMessa
 		WorkspaceTargetID:            strings.TrimSpace(input.WorkspaceTargetID),
 		ToolHTTPURL:                  strings.TrimSpace(input.ToolHTTPURL),
 		InjectCh:                     input.InjectCh,
-		QueueInjectCh:                input.InjectCh,
+		QueueSteerEnabled:            input.InjectCh != nil,
 		SkipHistoryTurn:              true,
 		HistoryCutoffBeforeMessageID: strings.TrimSpace(turn.RequestMessageID),
 		OnModelPreferenceSettled:     input.OnModelPreferenceSettled,

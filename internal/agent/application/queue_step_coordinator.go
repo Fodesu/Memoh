@@ -8,7 +8,6 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -36,7 +35,7 @@ type queueStepOutcome struct {
 }
 
 func newQueueStepCoordinator(s *Service, req ChatRequest) *queueStepCoordinator {
-	if req.QueueInjectCh == nil && req.TurnReplacement == nil {
+	if !req.QueueSteerEnabled && req.TurnReplacement == nil {
 		return nil
 	}
 	if s == nil || s.sessionManager == nil || s.messageService == nil || req.RunHandle.RunID == "" || req.RunHandle.OwnerID == "" || req.RunHandle.FencingToken <= 0 {
@@ -54,7 +53,7 @@ func newQueueStepCoordinator(s *Service, req ChatRequest) *queueStepCoordinator 
 		service: s, req: req, persister: persister,
 		replacementPersister: replacementPersister,
 		run:                  req.RunHandle,
-		steerEnabled:         req.QueueInjectCh != nil,
+		steerEnabled:         req.QueueSteerEnabled,
 	}
 	return q
 }
@@ -106,9 +105,9 @@ func (q *queueStepCoordinator) commit(
 	if kind == queueStepDeferredDecision {
 		// The loop parks after this step and its inject channel is never read
 		// again. A claim taken here would sit unapplied across the decision, and
-		// across any owner change while the run waits. The continuation's first
-		// committed step claims instead, so the steer enters the request after
-		// the decision result exactly as a tool-loop claim would.
+		// across any owner change while the run waits. The resumed execution
+		// claims at its next complete step or model-interruption checkpoint,
+		// keeping the approved tool result ahead of the new input.
 		return outcome, nil
 	}
 
@@ -124,20 +123,8 @@ func (q *queueStepCoordinator) commit(
 	if claimed {
 		q.pendingSteer = &claim
 		outcome.claimedSteer = &item
-		if kind == queueStepFinal {
+		if kind == queueStepFinal || kind == queueStepSteered {
 			outcome.continueAfterFinal = true
-		} else {
-			text := QueuePayloadText(item.Payload)
-			if q.req.QueueInjectCh == nil {
-				q.releaseSteerClaim(ctx)
-				return outcome, errors.New("steer queue injection channel is unavailable")
-			}
-			select {
-			case q.req.QueueInjectCh <- turn.InjectMessage{Text: text, HeaderifiedText: text}:
-			default:
-				q.releaseSteerClaim(ctx)
-				return outcome, errors.New("steer queue injection channel is full")
-			}
 		}
 	} else if q.req.TurnReplacement != nil && kind == queueStepFinal {
 		allPersisted := append([]messagepkg.Message(nil), previouslyPersisted...)
@@ -165,6 +152,7 @@ const (
 	queueStepToolLoop         queueStepKind = "tool_loop"
 	queueStepDeferredDecision queueStepKind = "deferred_decision"
 	queueStepFinal            queueStepKind = "final"
+	queueStepSteered          queueStepKind = "steered"
 )
 
 func classifyQueueStep(step *sdk.StepResult) queueStepKind {

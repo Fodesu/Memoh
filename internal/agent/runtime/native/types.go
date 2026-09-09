@@ -206,6 +206,13 @@ type RunConfig struct {
 	// step found steer input. Native runtime uses it to reopen the same run.
 	ContinueAfterFinal *atomic.Bool
 	NextModelInputs    *[]sdk.Message
+
+	// SteerWake announces queue changes; PendingSteer rechecks the authoritative
+	// queue. OnSteer checkpoints a stopped model attempt and claims its next input.
+	// These callbacks retain the run context, unlike the cancelled invocation.
+	SteerWake          <-chan struct{}
+	PendingSteer       func(context.Context) (bool, error)
+	OnSteer            func(context.Context, int, *sdk.StepResult) error
 	SuppressAgentStart bool
 
 	// PromptCacheTTL controls prompt caching for this run. Empty or
