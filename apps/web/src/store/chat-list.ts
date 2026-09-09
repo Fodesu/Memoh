@@ -71,6 +71,7 @@ export const useChatStore = defineStore('chat', () => {
   const {
     rememberBackgroundTask,
     applyPendingBackgroundEventsToTool,
+    backgroundTaskFor,
   } = backgroundTasks
   const views = createChatViews({
     currentBotId,
@@ -170,6 +171,11 @@ export const useChatStore = defineStore('chat', () => {
     touchKnownSession,
     updateKnownSessionTitle,
     refreshSessionsList,
+    refreshSessionMessages: async (botId, targetSessionId) => {
+      if (chatViews.getSession(botId, targetSessionId)) {
+        await refreshCurrentSession(botId, targetSessionId)
+      }
+    },
   })
   // `loadingChats` covers the bot-level boot path (sessions list fetch), so
   // the sidebar can show its skeleton + suppress its empty-state placeholder
@@ -600,6 +606,7 @@ export const useChatStore = defineStore('chat', () => {
     startupSendFailure, startupSendFailureFor,
     commandEvent, commandEventForScope, rememberCommandEvent, showCommandError,
     fsChangedAt, markFsChanged, affectsPath, fsEventForPath,
+    backgroundTaskFor,
     initialize, initializeWithRecovery, refreshBots, selectBot, selectSession, createNewSession,
     selectDraft, userSentInSession, draftViewRequested, applyDraftViewRequest,
     forkedSessionRequested, guiToolUseRequested, deletedSession,

@@ -250,6 +250,15 @@
                 />
               </div>
 
+              <!-- Missing dependency: manager review and installation entry. -->
+              <DependencyMissingBlock
+                v-else-if="isDependencyMissingBlock(node.block)"
+                :block="(node.block as ErrorBlock)"
+                :bot-id="botId"
+                :bot-name="botName"
+                :session-id="sessionId"
+              />
+
               <!-- Error block -->
               <div
                 v-else-if="node.block.type === 'error' && (node.block.code || node.block.content)"
@@ -381,6 +390,8 @@ import AttachmentBlock from './attachment-block.vue'
 import CollapsibleUserText from './collapsible-user-text.vue'
 import MessageActions from './message-actions.vue'
 import BackgroundTaskBlock from './background-task-block.vue'
+import DependencyMissingBlock from './dependency-missing-block.vue'
+import { isDependencyMissingBlock } from './dependency-missing'
 import ChannelBadge from '@/components/chat-list/channel-badge/index.vue'
 import { useUserStore } from '@/store/user'
 import { useI18n } from 'vue-i18n'
@@ -419,6 +430,7 @@ const emit = defineEmits<{
 const props = defineProps<{
   message: ChatMessage
   botId?: string
+  sessionId?: string
   // Group layout for third-party synced threads: every turn left-aligned with
   // an avatar + sender name + channel badge (including the bot's own replies).
   channelThread?: boolean

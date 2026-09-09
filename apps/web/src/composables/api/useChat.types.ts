@@ -34,6 +34,8 @@ export interface SessionTouchedEvent {
   type: 'session_touched'
   session_id: string
   updated_at?: string
+  /** A persisted background notification may arrive without a live turn. */
+  reason?: 'background_task'
 }
 
 export interface SessionTitleChangedEvent {
@@ -279,6 +281,9 @@ export interface UIErrorMessage {
   type: 'error'
   code?: string
   content: string
+  // Machine-readable parameters of the feedback behind `code` (e.g. dep_id,
+  // required_version, install_task_id for agent_dependency_missing).
+  args?: Record<string, string>
 }
 
 // Runtime degradation notice (tools unavailable, an interaction declined).
@@ -288,6 +293,9 @@ export interface UINoticeMessage {
   type: 'notice'
   name?: string
   content: string
+  // Machine-readable parameters of the notice (the runtime_notice event's
+  // string metadata), for renderers that act on a specific `name`.
+  args?: Record<string, string>
 }
 
 export type UIMessage = UITextMessage | UIReasoningMessage | UIToolMessage | UIAttachmentsMessage | UIErrorMessage | UINoticeMessage
