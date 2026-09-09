@@ -144,7 +144,8 @@
       "response_timeout": "The model did not respond in time. Please try again.",
       "response_interrupted": "The model response was interrupted. Please try again."
     },
-    "queue_no_active_run": "The current response has ended. The message is still queued.",
+    "queue_request_invalid": "Enter text after /steer or /queue in an existing conversation.",
+    "queue_no_active_run": "The current response has ended. Send this as a new message.",
     "queue_admission_overloaded": "The queue is busy. Please retry shortly.",
     "queue_admission_unavailable": "Queue admission is temporarily unavailable. Please retry shortly.",
     "queue_item_not_pending": "This message is no longer pending in the queue.",

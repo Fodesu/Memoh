@@ -27,7 +27,7 @@ func enqueueTestInput(t *testing.T, fixture acceptanceFixture, sessionID, kind, 
 // Never release a blocked request to make steer pass: the new model request
 // and cancellation of its predecessor must happen while that predecessor is held.
 func TestQueueSteerPreemptsModel(t *testing.T) {
-	for _, scenario := range []string{"direct", "promoted", "silent", "consecutive", "retry", "stop_after_steer"} {
+	for _, scenario := range []string{"direct", "promoted", "silent", "consecutive", "retry", "stop_after_steer", "websocket"} {
 		t.Run(scenario, func(t *testing.T) {
 			env := loadEnvironment()
 			fixture := requireFixture(t, env.mode == "cluster")
@@ -79,6 +79,10 @@ func TestQueueSteerPreemptsModel(t *testing.T) {
 				if scenario == "promoted" {
 					id := enqueueTestInput(t, mutator, sessionID, "follow-up", text)
 					if err := mutator.api.request(http.MethodPost, "/bots/"+fixture.botID+"/sessions/"+sessionID+"/follow-up-queue/"+id+"/steer", nil, nil, http.StatusAccepted); err != nil {
+						t.Fatal(err)
+					}
+				} else if scenario == "websocket" {
+					if err := sendChat(conn, sessionID, uniqueMarker("slash-steer"), "/steer "+text); err != nil {
 						t.Fatal(err)
 					}
 				} else {
@@ -311,5 +315,72 @@ ORDER BY min(turn_position)`, sessionID, admitted.RunID)
 	}
 	if segments != 3 {
 		t.Fatalf("got %d durable turn segments, want origin + steer + post-decision steer", segments)
+	}
+}
+
+func TestQueueWebSocketFollowUpReplayAndValidation(t *testing.T) {
+	fixture := requireFixture(t, false)
+	prepareFakeModel(t)
+	sessionID := mustCreateSession(t, fixture, "slash-queue")
+	origin := uniqueMarker("slash-origin")
+	conn := mustDial(t, loadEnvironment().primaryURL, fixture)
+	defer closeWebSocket(conn)
+	mustSubscribeAndReadSnapshot(t, conn, sessionID)
+	_, run := mustSendAndAccept(t, fixture, conn, sessionID, origin, directiveMode(origin, 2, 5, "partial_block"))
+	defer globalFakeModel.Release(origin)
+	if !globalFakeModel.WaitRequestCount(origin, 1, 5*time.Second) {
+		t.Fatal("original request did not start")
+	}
+	marker := uniqueMarker("slash-follow-up")
+	invocation := uniqueMarker("slash-queue")
+	command := func(input map[string]any, wantType, wantCode string) {
+		t.Helper()
+		input["type"], input["session_id"] = "message", sessionID
+		if err := conn.WriteJSON(input); err != nil {
+			t.Fatal(err)
+		}
+		events, err := readUntil(conn, 5*time.Second, func(e wsEvent) bool {
+			return e.InvocationID == input["invocation_id"] && (e.Type == "command_result" || e.Type == "command_error")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		last := events[len(events)-1]
+		if last.Type != wantType || (wantCode != "" && last.Error["code"] != wantCode) {
+			t.Fatalf("command result: %+v", last)
+		}
+	}
+	for range 2 {
+		command(map[string]any{"invocation_id": invocation, "text": "/queue " + directive(marker, 2, 5)}, "command_result", "")
+	}
+	command(map[string]any{"invocation_id": invocation, "text": "/queue changed"}, "command_error", "session_runtime.invocation_conflict")
+	for _, selector := range []string{"steer", "queue"} {
+		command(map[string]any{"invocation_id": uniqueMarker("empty"), "text": "/" + selector}, "command_error", "queue_request_invalid")
+		command(map[string]any{"invocation_id": uniqueMarker("files"), "text": "/" + selector + " text", "attachments": []map[string]any{{"type": "file"}}}, "command_error", "slash_attachments_unsupported")
+		command(map[string]any{"invocation_id": uniqueMarker("skills"), "text": "/" + selector + " text", "requested_skills": []map[string]any{{"name": "skill"}}}, "command_error", "invalid_skill_slash_syntax")
+	}
+	if globalFakeModel.RequestCount(marker) != 0 {
+		t.Fatal("/queue preempted active run")
+	}
+	var queue struct {
+		Items []struct {
+			ID   string `json:"item_id"`
+			Text string `json:"text"`
+		} `json:"items"`
+	}
+	if err := fixture.api.request(http.MethodGet, "/bots/"+fixture.botID+"/sessions/"+sessionID+"/follow-up-queue", nil, &queue, http.StatusOK); err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.Items) != 1 || queue.Items[0].Text != directive(marker, 2, 5) {
+		t.Fatalf("duplicate/literal slash payload: %+v", queue)
+	}
+	globalFakeModel.Release(origin)
+	mustReadRunCompleted(t, conn, run.RunID)
+	mustWaitRunState(t, sessionID, "follow-up:"+queue.Items[0].ID, func(r sessionRunRecord) bool { return r.State == "completed" })
+	if globalFakeModel.RequestCount(marker) != 1 {
+		t.Fatal("follow-up did not execute exactly once")
+	}
+	for _, selector := range []string{"steer", "queue"} {
+		command(map[string]any{"invocation_id": uniqueMarker("idle"), "text": "/" + selector + " too late"}, "command_error", "queue_no_active_run")
 	}
 }

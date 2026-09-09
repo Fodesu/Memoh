@@ -968,7 +968,7 @@
                         variant="brand"
                         shape="circle"
                         :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending || composerHasNoModel)"
-                        :aria-label="streaming && showSend ? $t('chat.queue.enqueueFollowUp') : (streaming ? 'Stop generating response' : 'Send message')"
+                        :aria-label="streaming && showSend ? $t(composerQueueCommand?.mode === 'steer' ? 'chat.queue.enqueueSteer' : 'chat.queue.enqueueFollowUp') : (streaming ? 'Stop generating response' : 'Send message')"
                         class="size-full"
                         @click="handleSendButton"
                       >
@@ -1092,8 +1092,8 @@ import { useComposerPair } from '../composables/useComposerPair'
 import { COMPOSER_MASK_BELOW_PX, useComposerLayout } from '../composables/useComposerLayout'
 import { provideChatViewTarget } from '../composables/useChatViewContext'
 import { provideConnectorLogos } from '../composables/useConnectorLogos'
-import { enqueueFollowUpQueue, fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
-import { SessionQueueSubmissionGate } from './session-queue-submission'
+import { enqueueSteerQueue, enqueueFollowUpQueue, fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
+import { parseSessionQueueCommand, SessionQueueSubmissionGate } from './session-queue-submission'
 import { commandResultPresentation, isCommandResultItemVisible, resolveCommandResultSelection } from './slash-command-result'
 import { captureChatPaneSendContext, clearComposerPairDraft, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig, welcomeSendConsumedDraft } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
@@ -1817,7 +1817,8 @@ const slashPanelOpen = computed(() =>
   && !loadingMessages.value
   && inputText.value.trimStart().startsWith('/')
   && !slashPanelSuppressedPrefix.value
-  && !inputText.value.includes('\n'),
+  && !inputText.value.includes('\n')
+  && !composerQueueCommand.value?.text,
 )
 function slashMatches(label: string, description = ''): boolean {
   const query = slashQuery.value
@@ -2777,6 +2778,7 @@ const {
 
 const inputText = ref('')
 const queueSubmissionGate = new SessionQueueSubmissionGate()
+const composerQueueCommand = computed(() => parseSessionQueueCommand(inputText.value, composerACPAvailableCommands.value))
 const composerPlaceholder = computed(() => {
   if (activeChatReadOnly.value) return t('chat.readonlyHint')
   if (!streaming.value) return t('chat.inputPlaceholder')
@@ -3506,24 +3508,39 @@ async function handleSend() {
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
   const skills = [...requestedSkills.value]
-  if (streaming.value) {
+  const queueCommand = composerQueueCommand.value
+  if (queueCommand) {
+    if (files.length || skills.length) {
+      composerError.value = files.length
+        ? t('chat.slash.attachmentsUnsupported')
+        : t('chat.slash.errorMessages.invalid_skill_slash_syntax')
+      return
+    }
+    if (!queueCommand.text || !activeSessionId.value) {
+      composerError.value = t('errors.queue_request_invalid')
+      return
+    }
+  }
+  if (streaming.value || queueCommand) {
     if (!text || files.length || skills.length || !currentBotId.value || !activeSessionId.value || activeChatReadOnly.value) return
     const botId = currentBotId.value
     const sessionId = activeSessionId.value
-    const mode = 'follow-up' as const
+    const mode = queueCommand?.mode ?? 'follow-up'
+    const queueText = queueCommand?.text ?? text
     const sentDraftKey = inputDraftKey.value
     const sentContext = captureChatPaneSendContext(
       paneTarget.value,
       inputDraftKey.value || 'chat',
     )
-    const submission = queueSubmissionGate.begin({ botId, sessionId, mode, text })
+    const submission = queueSubmissionGate.begin({ botId, sessionId, mode, text: queueText })
     if (!submission) return
 
     composerError.value = ''
     inputText.value = ''
     saveInputDraft(sentDraftKey, '')
     try {
-      await enqueueFollowUpQueue(botId, sessionId, text, submission.invocationId)
+      const enqueue = mode === 'steer' ? enqueueSteerQueue : enqueueFollowUpQueue
+      await enqueue(botId, sessionId, queueText, submission.invocationId)
       queueSubmissionGate.succeed(submission)
       queueLocalRefresh.value++
     } catch (error) {

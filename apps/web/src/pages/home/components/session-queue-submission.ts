@@ -55,3 +55,13 @@ export class SessionQueueSubmissionGate {
     this.retry = submission
   }
 }
+
+// Match only complete selectors. A live ACP command keeps its own authority.
+export function parseSessionQueueCommand(text: string, agentCommands: readonly { name?: string }[] = []) {
+  const match = /^\/(steer|queue)(?:\s+([\s\S]*))?$/i.exec(text.trim())
+  if (!match || agentCommands.some(command => command.name === match[1])) return null
+  return {
+    mode: match[1]!.toLowerCase() === 'steer' ? 'steer' as const : 'follow-up' as const,
+    text: (match[2] ?? '').trim(),
+  }
+}

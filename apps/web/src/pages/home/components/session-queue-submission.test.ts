@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SessionQueueSubmissionGate, type SessionQueueSubmissionInput } from './session-queue-submission'
+import { parseSessionQueueCommand, SessionQueueSubmissionGate, type SessionQueueSubmissionInput } from './session-queue-submission'
 
 const input: SessionQueueSubmissionInput = {
   botId: 'bot-1',
@@ -49,5 +49,28 @@ describe('SessionQueueSubmissionGate', () => {
 
     gate.fail(second)
     expect(gate.begin({ ...input, mode: 'follow-up' })?.invocationId).toBe(invocation3)
+  })
+})
+
+describe('queue slash routing', () => {
+  it.each([
+    ['/steer change direction', { mode: 'steer', text: 'change direction' }],
+    [' /StEeR  保留  空格\n第二行 ', { mode: 'steer', text: '保留  空格\n第二行' }],
+    ['/queue --flag "a  b"', { mode: 'follow-up', text: '--flag "a  b"' }],
+    ['/steer', { mode: 'steer', text: '' }],
+    ['/queue\n ', { mode: 'follow-up', text: '' }],
+    ['/steering text', null],
+    ['/queue/path text', null],
+    ['/queue@other text', null],
+    ['ordinary follow-up', null],
+  ])('classifies %j without changing its payload', (text, expected) => {
+    expect(parseSessionQueueCommand(text as string)).toEqual(expected)
+  })
+
+  it('preserves exact live ACP command authority', () => {
+    const commands = [{ name: 'steer' }, { name: 'queue' }]
+    expect(parseSessionQueueCommand('/steer agent args', commands)).toBeNull()
+    expect(parseSessionQueueCommand('/queue agent args', commands)).toBeNull()
+    expect(parseSessionQueueCommand('/STEER memoh args', commands)?.mode).toBe('steer')
   })
 })
