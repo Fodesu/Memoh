@@ -265,6 +265,30 @@ func (*MatrixAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*MatrixAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "matrix identity discovery failed",
+		MissingIdentityMessage:     "matrix identity discovery returned no user id",
+	}
+}
+
+func (a *MatrixAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
+	cfg, err := parseConfig(credentials)
+	if err != nil {
+		return nil, "", err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	userID, err := a.discoverSelf(callCtx, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	return map[string]any{"user_id": userID}, userID, nil
+}
+
 func (*MatrixAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return normalizeConfig(raw)
 }
@@ -306,21 +330,26 @@ func (a *MatrixAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 }
 
 func (a *MatrixAdapter) validateConnection(ctx context.Context, cfg Config) error {
+	_, err := a.discoverSelf(ctx, cfg)
+	return err
+}
+
+func (a *MatrixAdapter) discoverSelf(ctx context.Context, cfg Config) (string, error) {
 	if err := a.validateHomeserver(ctx, cfg); err != nil {
-		return err
+		return "", err
 	}
 	whoami, err := a.validateAccessToken(ctx, cfg)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resolvedUserID := strings.TrimSpace(whoami.UserID)
 	if resolvedUserID == "" {
-		return errors.New("matrix access token check failed: homeserver returned empty user_id")
+		return "", errors.New("matrix access token check failed: homeserver returned empty user_id")
 	}
 	if !strings.EqualFold(resolvedUserID, strings.TrimSpace(cfg.UserID)) {
-		return fmt.Errorf("matrix access token check failed: token belongs to %s, expected %s", resolvedUserID, strings.TrimSpace(cfg.UserID))
+		return "", fmt.Errorf("matrix access token check failed: token belongs to %s, expected %s", resolvedUserID, strings.TrimSpace(cfg.UserID))
 	}
-	return nil
+	return resolvedUserID, nil
 }
 
 func (a *MatrixAdapter) validateHomeserver(ctx context.Context, cfg Config) error {

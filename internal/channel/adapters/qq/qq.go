@@ -2,6 +2,7 @@ package qq
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,11 +20,12 @@ import (
 )
 
 const (
-	defaultAPIBaseURL   = "https://api.sgroup.qq.com"
-	qqOAuthEndpoint     = "https://bots.qq.com/app/getAppAccessToken"
-	defaultChunkLimit   = 2000
-	defaultReadTimeout  = 45 * time.Second
-	defaultWriteTimeout = 15 * time.Second
+	defaultAPIBaseURL     = "https://api.sgroup.qq.com"
+	qqOAuthEndpoint       = "https://bots.qq.com/app/getAppAccessToken"
+	defaultChunkLimit     = 2000
+	defaultReadTimeout    = 45 * time.Second
+	defaultWriteTimeout   = 15 * time.Second
+	qqVerificationTimeout = 15 * time.Second
 )
 
 type assetOpener interface {
@@ -152,6 +154,49 @@ func (*QQAdapter) Descriptor() channel.Descriptor {
 			},
 		},
 	}
+}
+
+func (*QQAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "app_id",
+		DiscoveryErrorMessage:      "qq bot credential verification failed",
+		MissingIdentityMessage:     "qq bot credential verification returned no app id",
+	}
+}
+
+// DiscoverSelf validates the app credentials by acquiring an access token.
+// QQ does not expose a separate current-bot identity endpoint, so the app ID is
+// used as the stable external identity.
+func (a *QQAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
+	cfg, err := parseConfig(credentials)
+	if err != nil {
+		return nil, "", err
+	}
+	httpClient := a.httpClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
+	tokenURL := strings.TrimSpace(a.tokenURL)
+	if tokenURL == "" {
+		tokenURL = qqOAuthEndpoint
+	}
+	callCtx, cancel := context.WithTimeout(ctx, qqVerificationTimeout)
+	defer cancel()
+	client := &qqClient{
+		appID:        cfg.AppID,
+		clientSecret: cfg.AppSecret,
+		httpClient:   httpClient,
+		logger:       a.logger,
+		apiBaseURL:   a.apiBaseURL,
+		tokenURL:     tokenURL,
+		msgSeq:       make(map[string]int),
+	}
+	if _, err := client.accessToken(callCtx); err != nil {
+		return nil, "", fmt.Errorf("qq discover self: %w", err)
+	}
+	return map[string]any{"app_id": cfg.AppID}, cfg.AppID, nil
 }
 
 func (*QQAdapter) ResolveOutboundCapabilities(cfg channel.ChannelConfig, target string, base channel.ChannelCapabilities) channel.ChannelCapabilities {

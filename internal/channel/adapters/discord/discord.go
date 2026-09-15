@@ -22,6 +22,7 @@ import (
 
 const (
 	inboundDedupTTL            = time.Minute
+	discordVerificationTimeout = 15 * time.Second
 	discordMaxLength           = 2000
 	discordMaxURLActionButtons = 25
 	discordMaxURLActionLabel   = 80
@@ -109,6 +110,44 @@ func (*DiscordAdapter) Descriptor() channel.Descriptor {
 			},
 		},
 	}
+}
+
+func (*DiscordAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "discord bot identity discovery failed",
+		MissingIdentityMessage:     "discord bot identity discovery returned no user id",
+	}
+}
+
+// DiscoverSelf validates the bot token against Discord's authenticated-user
+// endpoint without opening a long-lived gateway connection.
+func (*DiscordAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
+	cfg, err := parseConfig(credentials)
+	if err != nil {
+		return nil, "", err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, discordVerificationTimeout)
+	defer cancel()
+	session, err := discordgo.New("Bot " + cfg.BotToken)
+	if err != nil {
+		return nil, "", err
+	}
+	user, err := session.User("@me", discordgo.WithContext(callCtx))
+	if err != nil {
+		return nil, "", fmt.Errorf("discord discover self: %w", err)
+	}
+	userID := strings.TrimSpace(user.ID)
+	if userID == "" {
+		return nil, "", errors.New("discord discover self returned empty user id")
+	}
+	identity := map[string]any{"user_id": userID}
+	if username := strings.TrimSpace(user.Username); username != "" {
+		identity["username"] = username
+	}
+	return identity, userID, nil
 }
 
 func (a *DiscordAdapter) getOrCreateSession(token, configID string) (*discordgo.Session, error) {

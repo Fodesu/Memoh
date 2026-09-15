@@ -30,6 +30,8 @@ type DingTalkAdapter struct {
 	webhookCache *sessionWebhookCache
 }
 
+const dingtalkVerificationTimeout = 15 * time.Second
+
 // NewDingTalkAdapter creates a new DingTalkAdapter.
 func NewDingTalkAdapter(log *slog.Logger) *DingTalkAdapter {
 	if log == nil {
@@ -88,6 +90,16 @@ func (*DingTalkAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*DingTalkAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "app_key",
+		DiscoveryErrorMessage:      "dingtalk bot credential verification failed",
+		MissingIdentityMessage:     "dingtalk bot credential verification returned no app key",
+	}
+}
+
 // NormalizeConfig validates and normalizes a DingTalk channel config map.
 func (*DingTalkAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return normalizeConfig(raw)
@@ -123,8 +135,13 @@ func (a *DingTalkAdapter) DiscoverSelf(ctx context.Context, credentials map[stri
 	if err != nil {
 		return nil, "", err
 	}
+	callCtx, cancel := context.WithTimeout(ctx, dingtalkVerificationTimeout)
+	defer cancel()
 	cli := newAPIClient(cfg.AppKey, cfg.AppSecret)
-	info, err := cli.getBotInfo(ctx, cfg.AppKey)
+	if _, err := cli.getToken(callCtx); err != nil {
+		return nil, "", fmt.Errorf("dingtalk verify credentials: %w", err)
+	}
+	info, err := cli.getBotInfo(callCtx, cfg.AppKey)
 	if err != nil {
 		a.logger.Warn("dingtalk: getBotInfo failed, using appKey as identity",
 			slog.String("app_key", cfg.AppKey),

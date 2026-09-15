@@ -30,6 +30,7 @@ const (
 	slackMaxButtonText          = 75
 	slackMaxButtonURL           = 3000
 	channelNameTTL              = 5 * time.Minute
+	slackVerificationTimeout    = 15 * time.Second
 )
 
 // assetOpener reads stored asset bytes by content hash.
@@ -179,6 +180,16 @@ func (*SlackAdapter) Descriptor() channel.Descriptor {
 				{Label: "User ID", Example: "U0123456789"},
 			},
 		},
+	}
+}
+
+func (*SlackAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "slack bot identity discovery failed",
+		MissingIdentityMessage:     "slack bot identity discovery returned no user id",
 	}
 }
 
@@ -1073,27 +1084,37 @@ func (a *SlackAdapter) resolveOutboundTarget(ctx context.Context, api *slack.Cli
 	return strings.TrimSpace(conversation.ID), nil
 }
 
-func (a *SlackAdapter) DiscoverSelf(_ context.Context, credentials map[string]any) (map[string]any, string, error) {
+func (a *SlackAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
 	cfg, err := parseConfig(credentials)
 	if err != nil {
 		return nil, "", err
 	}
 
-	api := a.newAPIClient(cfg)
-	resp, err := api.AuthTest()
+	callCtx, cancel := context.WithTimeout(ctx, slackVerificationTimeout)
+	defer cancel()
+	api := a.newAPIClient(cfg, slack.OptionAppLevelToken(cfg.AppToken))
+	resp, err := api.AuthTestContext(callCtx)
 	if err != nil {
 		return nil, "", fmt.Errorf("slack auth test: %w", err)
 	}
+	if _, socketURL, err := api.StartSocketModeContext(callCtx); err != nil {
+		return nil, "", fmt.Errorf("slack app token test: %w", err)
+	} else if strings.TrimSpace(socketURL) == "" {
+		return nil, "", errors.New("slack app token test returned no socket URL")
+	}
 
+	userID := strings.TrimSpace(resp.UserID)
+	if userID == "" {
+		return nil, "", errors.New("slack auth test returned empty user id")
+	}
 	identity := map[string]any{
-		"user_id":  resp.UserID,
+		"user_id":  userID,
 		"bot_id":   resp.BotID,
 		"team_id":  resp.TeamID,
 		"username": resp.User,
 		"team":     resp.Team,
 	}
-
-	return identity, resp.UserID, nil
+	return identity, userID, nil
 }
 
 func (*SlackAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {

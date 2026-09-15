@@ -19,12 +19,13 @@ import (
 )
 
 const (
-	misskeyMaxNoteLength   = 3000
-	misskeyReconnectDelay  = 5 * time.Second
-	misskeyPingInterval    = 30 * time.Second
-	misskeyWriteTimeout    = 10 * time.Second
-	misskeyReadBufferSize  = 1 << 16
-	misskeyWriteBufferSize = 1 << 16
+	misskeyMaxNoteLength       = 3000
+	misskeyReconnectDelay      = 5 * time.Second
+	misskeyPingInterval        = 30 * time.Second
+	misskeyWriteTimeout        = 10 * time.Second
+	misskeyReadBufferSize      = 1 << 16
+	misskeyWriteBufferSize     = 1 << 16
+	misskeyVerificationTimeout = 15 * time.Second
 )
 
 // MisskeyAdapter implements the channel.Adapter interfaces for Misskey.
@@ -104,6 +105,16 @@ func (*MisskeyAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*MisskeyAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "misskey identity discovery failed",
+		MissingIdentityMessage:     "misskey identity discovery returned no user id",
+	}
+}
+
 // --- ConfigNormalizer ---
 
 // NormalizeConfig validates and normalizes a Misskey channel configuration map.
@@ -148,7 +159,9 @@ func (*MisskeyAdapter) DiscoverSelf(ctx context.Context, credentials map[string]
 	if err != nil {
 		return nil, "", err
 	}
-	me, err := getMe(ctx, cfg)
+	callCtx, cancel := context.WithTimeout(ctx, misskeyVerificationTimeout)
+	defer cancel()
+	me, err := getMe(callCtx, cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("misskey discover self: %w", err)
 	}

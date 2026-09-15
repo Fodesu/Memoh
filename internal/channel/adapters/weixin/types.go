@@ -202,6 +202,18 @@ type SendTypingRequest struct {
 	BaseInfo     BaseInfo `json:"base_info,omitempty"`
 }
 
+// NotifyRequest is the notifystart / notifystop request body.
+type NotifyRequest struct {
+	BaseInfo BaseInfo `json:"base_info,omitempty"`
+}
+
+// NotifyResponse is the notifystart / notifystop response body.
+type NotifyResponse struct {
+	Ret     int    `json:"ret"`
+	ErrCode int    `json:"errcode,omitempty"`
+	ErrMsg  string `json:"errmsg,omitempty"`
+}
+
 // QRCodeResponse from get_bot_qrcode.
 type QRCodeResponse struct {
 	QRCode           string `json:"qrcode"`

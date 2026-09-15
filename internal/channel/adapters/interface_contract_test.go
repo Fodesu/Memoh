@@ -1,14 +1,18 @@
 package adapters_test
 
 import (
+	"testing"
+
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/adapters/dingtalk"
 	"github.com/felinics/memoh/internal/channel/adapters/discord"
 	"github.com/felinics/memoh/internal/channel/adapters/feishu"
+	"github.com/felinics/memoh/internal/channel/adapters/line"
 	localadapter "github.com/felinics/memoh/internal/channel/adapters/local"
 	"github.com/felinics/memoh/internal/channel/adapters/matrix"
 	"github.com/felinics/memoh/internal/channel/adapters/misskey"
 	"github.com/felinics/memoh/internal/channel/adapters/qq"
+	"github.com/felinics/memoh/internal/channel/adapters/slack"
 	"github.com/felinics/memoh/internal/channel/adapters/telegram"
 	"github.com/felinics/memoh/internal/channel/adapters/wechatoa"
 	"github.com/felinics/memoh/internal/channel/adapters/wecom"
@@ -39,4 +43,60 @@ var (
 	_ channel.StreamSender = (*wechatoa.WeChatOAAdapter)(nil)
 	_ channel.StreamSender = (*wecom.WeComAdapter)(nil)
 	_ channel.StreamSender = (*weixin.WeixinAdapter)(nil)
+
+	_ channel.SelfIdentityPolicyProvider = (*dingtalk.DingTalkAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*discord.DiscordAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*feishu.FeishuAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*line.Adapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*matrix.MatrixAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*misskey.MisskeyAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*qq.QQAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*slack.SlackAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*telegram.TelegramAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*wechatoa.WeChatOAAdapter)(nil)
+	_ channel.SelfIdentityPolicyProvider = (*wecom.WeComAdapter)(nil)
+
+	_ channel.ConfigVerifier = (*weixin.WeixinAdapter)(nil)
 )
+
+func TestEnabledChannelAdaptersRequireCredentialVerification(t *testing.T) {
+	t.Parallel()
+
+	reg := channel.NewRegistry()
+	reg.MustRegister(telegram.NewTelegramAdapter(nil))
+	reg.MustRegister(discord.NewDiscordAdapter(nil))
+	reg.MustRegister(qq.NewQQAdapter(nil))
+	reg.MustRegister(matrix.NewMatrixAdapter(nil))
+	reg.MustRegister(feishu.NewFeishuAdapter(nil))
+	reg.MustRegister(slack.NewSlackAdapter(nil))
+	reg.MustRegister(wecom.NewWeComAdapter(nil))
+	reg.MustRegister(dingtalk.NewDingTalkAdapter(nil))
+	reg.MustRegister(wechatoa.NewWeChatOAAdapter(nil))
+	reg.MustRegister(line.NewAdapter(nil))
+	reg.MustRegister(weixin.NewWeixinAdapter(nil))
+	reg.MustRegister(localadapter.NewWebAdapter(nil))
+	reg.MustRegister(misskey.NewMisskeyAdapter(nil))
+
+	required := []channel.ChannelType{
+		telegram.Type,
+		discord.Type,
+		qq.Type,
+		matrix.Type,
+		feishu.Type,
+		slack.Type,
+		wecom.Type,
+		dingtalk.Type,
+		wechatoa.Type,
+		line.Type,
+		weixin.Type,
+		misskey.Type,
+	}
+	for _, channelType := range required {
+		if !reg.RequiresVerificationOnEnable(channelType) {
+			t.Errorf("%s should require credential verification before enable", channelType)
+		}
+	}
+	if reg.RequiresVerificationOnEnable(localadapter.WebType) {
+		t.Fatal("web channel should not require platform credential verification")
+	}
+}

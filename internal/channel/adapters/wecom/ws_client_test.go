@@ -14,6 +14,37 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestWSClientVerifyAuth(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		var subscribeFrame WSFrame
+		if err := conn.ReadJSON(&subscribeFrame); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(WSFrame{
+			Headers: WSHeaders{ReqID: subscribeFrame.Headers.ReqID},
+			ErrCode: 0,
+		})
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+
+	client := NewWSClient(WSClientOptions{
+		URL:        "ws" + strings.TrimPrefix(server.URL, "http"),
+		AckTimeout: 200 * time.Millisecond,
+	})
+	if err := client.VerifyAuth(context.Background(), AuthCredentials{BotID: "bot", Credential: "sec"}); err != nil {
+		t.Fatalf("VerifyAuth error = %v", err)
+	}
+}
+
 func TestWSClientRun_ReconnectsAfterDisconnect(t *testing.T) {
 	t.Parallel()
 

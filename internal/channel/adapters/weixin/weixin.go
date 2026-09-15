@@ -109,6 +109,23 @@ func (*WeixinAdapter) BuildUserConfig(identity channel.Identity) map[string]any 
 	return buildUserConfig(identity)
 }
 
+// VerifyConfig checks the bot token against WeChat's notifystart endpoint.
+// Personal WeChat has no current-bot identity API, and getupdates would consume
+// inbound messages, so verification is explicit and identity-free.
+func (a *WeixinAdapter) VerifyConfig(ctx context.Context, credentials map[string]any) error {
+	cfg, err := parseConfig(credentials)
+	if err != nil {
+		return err
+	}
+	if a == nil || a.client == nil {
+		return errors.New("weixin client is not configured")
+	}
+	if err := a.client.NotifyStart(ctx, cfg); err != nil {
+		return fmt.Errorf("weixin verify credentials: %w", err)
+	}
+	return nil
+}
+
 // -- Receiver (long-poll) --
 
 func (a *WeixinAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, handler channel.InboundHandler) (channel.Connection, error) {

@@ -290,6 +290,16 @@ func (*TelegramAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*TelegramAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "telegram bot identity discovery failed",
+		MissingIdentityMessage:     "telegram bot identity discovery returned no user id",
+	}
+}
+
 // NormalizeConfig validates and normalizes a Telegram channel configuration map.
 func (*TelegramAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return normalizeConfig(raw)

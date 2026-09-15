@@ -170,6 +170,28 @@ func (c *Client) GetConfig(ctx context.Context, cfg adapterConfig, userID, conte
 	return &resp, nil
 }
 
+// NotifyStart tells the WeChat backend that a client is coming online.
+// The endpoint does not consume inbound messages, so it is safe to use as a
+// credential probe before a configuration is persisted.
+func (c *Client) NotifyStart(ctx context.Context, cfg adapterConfig) error {
+	body, err := json.Marshal(NotifyRequest{BaseInfo: buildBaseInfo()})
+	if err != nil {
+		return err
+	}
+	raw, err := c.apiPost(ctx, cfg.BaseURL, "ilink/bot/msg/notifystart", body, cfg.Token, defaultConfigTimeout)
+	if err != nil {
+		return err
+	}
+	var resp NotifyResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return fmt.Errorf("weixin notifystart decode: %w", err)
+	}
+	if resp.Ret != 0 || resp.ErrCode != 0 {
+		return fmt.Errorf("weixin notifystart failed: %s (ret: %d, code: %d)", strings.TrimSpace(resp.ErrMsg), resp.Ret, resp.ErrCode)
+	}
+	return nil
+}
+
 // SendTyping sends or cancels the typing indicator.
 func (c *Client) SendTyping(ctx context.Context, cfg adapterConfig, userID, typingTicket string, status int) error {
 	body, err := json.Marshal(SendTypingRequest{

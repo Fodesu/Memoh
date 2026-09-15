@@ -3,15 +3,19 @@ package wechatoa
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/felinics/memoh/internal/channel"
 )
 
 const Type channel.ChannelType = "wechatoa"
+
+const wechatoaVerificationTimeout = 15 * time.Second
 
 type WeChatOAAdapter struct {
 	logger *slog.Logger
@@ -90,6 +94,16 @@ func (*WeChatOAAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*WeChatOAAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "app_id",
+		DiscoveryErrorMessage:      "wechat official account credential verification failed",
+		MissingIdentityMessage:     "wechat official account verification returned no app id",
+	}
+}
+
 func (*WeChatOAAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return normalizeConfig(raw)
 }
@@ -114,11 +128,19 @@ func (*WeChatOAAdapter) BuildUserConfig(identity channel.Identity) map[string]an
 	return buildUserConfig(identity)
 }
 
-func (*WeChatOAAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
-	_ = ctx
+func (a *WeChatOAAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
 	cfg, err := parseConfig(credentials)
 	if err != nil {
 		return nil, "", err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, wechatoaVerificationTimeout)
+	defer cancel()
+	client, err := a.clientForConfig(credentials)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := client.getAccessToken(callCtx); err != nil {
+		return nil, "", fmt.Errorf("wechatoa discover self: %w", err)
 	}
 	id := strings.TrimSpace(cfg.AppID)
 	return map[string]any{"app_id": id}, id, nil

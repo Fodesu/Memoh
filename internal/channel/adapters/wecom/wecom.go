@@ -15,6 +15,8 @@ import (
 
 const Type channel.ChannelType = "wecom"
 
+const wecomVerificationTimeout = 15 * time.Second
+
 type wsClientFactory func(opts WSClientOptions) *WSClient
 
 type WeComAdapter struct {
@@ -86,6 +88,16 @@ func (*WeComAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*WeComAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "bot_id",
+		DiscoveryErrorMessage:      "wecom bot credential verification failed",
+		MissingIdentityMessage:     "wecom bot credential verification returned no bot id",
+	}
+}
+
 func (*WeComAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return normalizeConfig(raw)
 }
@@ -108,18 +120,37 @@ func (*WeComAdapter) BuildUserConfig(identity channel.Identity) map[string]any {
 	return buildUserConfig(identity)
 }
 
-func (*WeComAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
-	_ = ctx
+func (a *WeComAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
 	cfg, err := parseConfig(credentials)
 	if err != nil {
 		return nil, "", err
 	}
+	callCtx, cancel := context.WithTimeout(ctx, wecomVerificationTimeout)
+	defer cancel()
+	factory := a.newWSClient
+	if factory == nil {
+		factory = NewWSClient
+	}
+	client := factory(WSClientOptions{
+		URL:               cfg.WSURL,
+		Logger:            a.logger,
+		AckTimeout:        time.Duration(secondsOrDefault(cfg.AckTimeoutSeconds, 8)) * time.Second,
+		WriteTimeout:      time.Duration(secondsOrDefault(cfg.WriteTimeoutSeconds, 8)) * time.Second,
+		ReadTimeout:       time.Duration(secondsOrDefault(cfg.ReadTimeoutSeconds, 70)) * time.Second,
+		HeartbeatInterval: time.Duration(secondsOrDefault(cfg.HeartbeatSeconds, 30)) * time.Second,
+	})
+	defer func() { _ = client.Close() }()
+	if err := client.VerifyAuth(callCtx, AuthCredentials{
+		BotID:      cfg.BotID,
+		Credential: cfg.Credential,
+	}); err != nil {
+		return nil, "", fmt.Errorf("wecom verify credentials: %w", err)
+	}
 	externalID := strings.TrimSpace(cfg.BotID)
-	identity := map[string]any{
+	return map[string]any{
 		"bot_id":   externalID,
 		"aibot_id": externalID,
-	}
-	return identity, externalID, nil
+	}, externalID, nil
 }
 
 func (a *WeComAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, handler channel.InboundHandler) (channel.Connection, error) {
