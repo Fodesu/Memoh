@@ -133,6 +133,9 @@ func (a *WeChatOAAdapter) DiscoverSelf(ctx context.Context, credentials map[stri
 	if err != nil {
 		return nil, "", err
 	}
+	if _, err := newSecurityVerifier(cfg.Token, cfg.EncodingAESKey, cfg.AppID); err != nil {
+		return nil, "", fmt.Errorf("wechatoa validate webhook security: %w", err)
+	}
 	callCtx, cancel := context.WithTimeout(ctx, wechatoaVerificationTimeout)
 	defer cancel()
 	client, err := a.clientForConfig(credentials)

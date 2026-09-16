@@ -49,6 +49,9 @@ func (s *Store) UpsertConfig(ctx context.Context, botID string, channelType Chan
 	}
 	normalized, err := s.registry.NormalizeConfig(channelType, req.Credentials)
 	if err != nil {
+		if s.registry.RequiresVerificationOnEnable(channelType) {
+			return ChannelConfig{}, fmt.Errorf("%s configuration verification failed: %w: %w", channelType, ErrChannelDiscoveryFailed, err)
+		}
 		return ChannelConfig{}, err
 	}
 	credentialsPayload, err := json.Marshal(normalized)
