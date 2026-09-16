@@ -49,7 +49,7 @@ func TestDiscoverSelfVerifiesChangedSecretDespiteCachedToken(t *testing.T) {
 		default:
 			return nil, fmt.Errorf("unexpected request: %s", r.URL.Path)
 		}
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})
 	cfg := Config{AppID: uuid.NewString(), AppSecret: "valid", Region: regionFeishu}
 	// A running connection has already cached a token for this App ID.
