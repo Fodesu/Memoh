@@ -2,7 +2,6 @@ package channel_test
 
 import (
 	"context"
-	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -100,48 +99,5 @@ func TestGetAttachmentResolver_Unsupported(t *testing.T) {
 	resolver, ok := reg.GetAttachmentResolver(testChannelType)
 	if ok || resolver != nil {
 		t.Fatalf("GetAttachmentResolver(test) = (%v, %v), want (nil, false)", resolver, ok)
-	}
-}
-
-type verifyMockAdapter struct {
-	err error
-}
-
-func (*verifyMockAdapter) Type() channel.ChannelType {
-	return channel.ChannelType("verify-test")
-}
-
-func (*verifyMockAdapter) Descriptor() channel.Descriptor {
-	return channel.Descriptor{Type: channel.ChannelType("verify-test"), DisplayName: "VerifyTest"}
-}
-
-func (m *verifyMockAdapter) VerifyConfig(_ context.Context, _ map[string]any) error {
-	return m.err
-}
-
-func TestVerifyConfigAndRequiresVerificationOnEnable(t *testing.T) {
-	t.Parallel()
-
-	reg := channel.NewRegistry()
-	reg.MustRegister(&verifyMockAdapter{err: errors.New("bad credentials")})
-
-	if !reg.RequiresVerificationOnEnable(channel.ChannelType("verify-test")) {
-		t.Fatal("expected ConfigVerifier adapters to require verification on enable")
-	}
-	supported, err := reg.VerifyConfig(context.Background(), channel.ChannelType("verify-test"), map[string]any{})
-	if !supported {
-		t.Fatal("expected VerifyConfig to be supported")
-	}
-	if err == nil || err.Error() != "bad credentials" {
-		t.Fatalf("VerifyConfig error = %v", err)
-	}
-
-	reg = newTestConfigRegistry()
-	if reg.RequiresVerificationOnEnable(testChannelType) {
-		t.Fatal("adapters without a verifier should not require verification")
-	}
-	supported, err = reg.VerifyConfig(context.Background(), testChannelType, map[string]any{})
-	if supported || err != nil {
-		t.Fatalf("VerifyConfig unsupported = (%v, %v)", supported, err)
 	}
 }

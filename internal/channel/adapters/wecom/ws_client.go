@@ -113,39 +113,6 @@ func (c *WSClient) Run(ctx context.Context, auth AuthCredentials, onFrame func(c
 	}
 }
 
-// VerifyAuth performs a one-shot websocket subscribe handshake and then
-// disconnects. It is used to validate credentials before a config is persisted.
-func (c *WSClient) VerifyAuth(ctx context.Context, auth AuthCredentials) error {
-	if err := auth.Validate(); err != nil {
-		return err
-	}
-	conn, resp, err := c.dial(ctx)
-	if err != nil {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-		return err
-	}
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
-	c.setConn(conn)
-	sessionCtx, cancel := context.WithCancel(ctx)
-	defer func() {
-		cancel()
-		_ = conn.Close()
-		c.clearConn()
-		c.failAllWaiters(errors.New("wecom websocket disconnected"))
-	}()
-
-	readErrCh := make(chan error, 1)
-	go c.readLoop(sessionCtx, nil, readErrCh)
-	if err := c.authenticate(sessionCtx, auth); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (c *WSClient) runSession(ctx context.Context, auth AuthCredentials, onFrame func(context.Context, WSFrame) error) error {
 	conn, resp, err := c.dial(ctx)
 	if err != nil {

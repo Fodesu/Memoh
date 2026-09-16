@@ -1,10 +1,6 @@
 package weixin
 
 import (
-	"context"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/felinics/memoh/internal/channel"
@@ -70,52 +66,4 @@ func TestWeixinAdapter_Interfaces(_ *testing.T) {
 	var _ channel.AttachmentResolver = adapter
 	// ProcessingStatusNotifier
 	var _ channel.ProcessingStatusNotifier = adapter
-	// ConfigVerifier
-	var _ channel.ConfigVerifier = adapter
-}
-
-func TestVerifyConfigSuccess(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ilink/bot/msg/notifystart" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer bot-token" {
-			t.Fatalf("authorization = %q", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ret":0}`))
-	}))
-	defer server.Close()
-
-	adapter := NewWeixinAdapter(nil)
-	if err := adapter.VerifyConfig(context.Background(), map[string]any{
-		"token":   "bot-token",
-		"baseUrl": server.URL,
-	}); err != nil {
-		t.Fatalf("VerifyConfig error = %v", err)
-	}
-}
-
-func TestVerifyConfigRejectsInvalidToken(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ret":-1,"errmsg":"invalid token"}`))
-	}))
-	defer server.Close()
-
-	adapter := NewWeixinAdapter(nil)
-	err := adapter.VerifyConfig(context.Background(), map[string]any{
-		"token":   "bad-token",
-		"baseUrl": server.URL,
-	})
-	if err == nil {
-		t.Fatal("expected VerifyConfig to fail")
-	}
-	if !strings.Contains(err.Error(), "weixin verify credentials") {
-		t.Fatalf("unexpected error: %v", err)
-	}
 }

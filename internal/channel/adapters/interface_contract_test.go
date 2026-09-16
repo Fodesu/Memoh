@@ -54,9 +54,6 @@ var (
 	_ channel.SelfIdentityPolicyProvider = (*slack.SlackAdapter)(nil)
 	_ channel.SelfIdentityPolicyProvider = (*telegram.TelegramAdapter)(nil)
 	_ channel.SelfIdentityPolicyProvider = (*wechatoa.WeChatOAAdapter)(nil)
-	_ channel.SelfIdentityPolicyProvider = (*wecom.WeComAdapter)(nil)
-
-	_ channel.ConfigVerifier = (*weixin.WeixinAdapter)(nil)
 )
 
 func TestEnabledChannelAdaptersRequireCredentialVerification(t *testing.T) {
@@ -84,19 +81,21 @@ func TestEnabledChannelAdaptersRequireCredentialVerification(t *testing.T) {
 		matrix.Type,
 		feishu.Type,
 		slack.Type,
-		wecom.Type,
 		dingtalk.Type,
 		wechatoa.Type,
 		line.Type,
-		weixin.Type,
 		misskey.Type,
 	}
 	for _, channelType := range required {
-		if !reg.RequiresVerificationOnEnable(channelType) {
+		if !reg.SelfIdentityPolicy(channelType).RequireDiscoveryOnEnable {
 			t.Errorf("%s should require credential verification before enable", channelType)
 		}
 	}
-	if reg.RequiresVerificationOnEnable(localadapter.WebType) {
-		t.Fatal("web channel should not require platform credential verification")
+	// Saving configuration must not open a competing subscription or
+	// announce a client startup before the connection lifecycle takes over.
+	for _, channelType := range []channel.ChannelType{localadapter.WebType, wecom.Type, weixin.Type} {
+		if reg.SelfIdentityPolicy(channelType).RequireDiscoveryOnEnable {
+			t.Errorf("%s should not require platform credential discovery before save", channelType)
+		}
 	}
 }

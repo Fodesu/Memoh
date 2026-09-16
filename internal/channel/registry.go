@@ -320,35 +320,6 @@ func (r *Registry) DiscoverSelf(ctx context.Context, channelType ChannelType, cr
 	return discoverer.DiscoverSelf(ctx, credentials)
 }
 
-// VerifyConfig validates credentials for adapters whose verification endpoint
-// does not return a platform identity. The bool reports whether the adapter
-// supports explicit verification.
-func (r *Registry) VerifyConfig(ctx context.Context, channelType ChannelType, credentials map[string]any) (bool, error) {
-	adapter, ok := r.Get(channelType)
-	if !ok {
-		return false, fmt.Errorf("unsupported channel type: %s", channelType)
-	}
-	verifier, ok := adapter.(ConfigVerifier)
-	if !ok {
-		return false, nil
-	}
-	return true, verifier.VerifyConfig(ctx, credentials)
-}
-
-// RequiresVerificationOnEnable reports whether enabling the channel requires
-// a synchronous platform-side credential check.
-func (r *Registry) RequiresVerificationOnEnable(channelType ChannelType) bool {
-	if r.SelfIdentityPolicy(channelType).RequireDiscoveryOnEnable {
-		return true
-	}
-	adapter, ok := r.Get(channelType)
-	if !ok {
-		return false
-	}
-	_, ok = adapter.(ConfigVerifier)
-	return ok
-}
-
 // SelfIdentityPolicy returns adapter-specific persistence requirements for
 // discovered platform bot identity. Most adapters use the zero-value best-effort
 // policy; webhook adapters that cannot route safely without self identity can

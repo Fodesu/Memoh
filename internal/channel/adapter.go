@@ -160,12 +160,6 @@ type SelfDiscoverer interface {
 	DiscoverSelf(ctx context.Context, credentials map[string]any) (identity map[string]any, externalID string, err error)
 }
 
-// ConfigVerifier validates platform credentials when the platform does not
-// expose a suitable self-identity endpoint.
-type ConfigVerifier interface {
-	VerifyConfig(ctx context.Context, credentials map[string]any) error
-}
-
 // SelfIdentityPolicy describes adapter-specific requirements for persisting a
 // platform bot identity discovered from credentials.
 type SelfIdentityPolicy struct {

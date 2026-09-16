@@ -49,7 +49,7 @@ func (s *Store) UpsertConfig(ctx context.Context, botID string, channelType Chan
 	}
 	normalized, err := s.registry.NormalizeConfig(channelType, req.Credentials)
 	if err != nil {
-		if s.registry.RequiresVerificationOnEnable(channelType) {
+		if s.registry.SelfIdentityPolicy(channelType).RequireDiscoveryOnEnable {
 			return ChannelConfig{}, fmt.Errorf("%s configuration verification failed: %w: %w", channelType, ErrChannelDiscoveryFailed, err)
 		}
 		return ChannelConfig{}, err
@@ -83,11 +83,6 @@ func (s *Store) UpsertConfig(ctx context.Context, botID string, channelType Chan
 			return ChannelConfig{}, err
 		}
 	} else {
-		if !disabled {
-			if supported, verifyErr := s.registry.VerifyConfig(ctx, channelType, normalized); supported && verifyErr != nil {
-				return ChannelConfig{}, fmt.Errorf("%s configuration verification failed: %w: %w", channelType, ErrChannelDiscoveryFailed, verifyErr)
-			}
-		}
 		selfIdentity = req.SelfIdentity
 		if selfIdentity == nil {
 			selfIdentity = map[string]any{}
@@ -168,7 +163,7 @@ func (s *Store) UpdateConfigDisabled(ctx context.Context, botID string, channelT
 	if channelType == "" {
 		return ChannelConfig{}, errors.New("channel type is required")
 	}
-	if s.registry.RequiresVerificationOnEnable(channelType) && !disabled {
+	if s.registry.SelfIdentityPolicy(channelType).RequireDiscoveryOnEnable && !disabled {
 		cfg, err := s.ResolveEffectiveConfig(ctx, botID, channelType)
 		if err != nil {
 			return ChannelConfig{}, err
