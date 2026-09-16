@@ -118,6 +118,12 @@ export function createChatBootstrap(deps: ChatBootstrapDeps) {
           deps.sessionsCursor.value = response.nextCursor
           deps.hasMoreSessions.value = response.nextCursor !== null
 
+          // Schedule changes and background-created sessions use the bot-wide
+          // activity stream. Start it after applying the initial list snapshot,
+          // but before restoring a specific view or opening the WebSocket, so a
+          // failure in either path cannot disable every live list update.
+          deps.startBotSessionsActivityStream(botId)
+
           const restoredSessionId = (deps.sessionId.value ?? '').trim()
           const restoredExplicitSession = restoredSessionId
             && deps.explicitSessionSelection.value
@@ -173,7 +179,6 @@ export function createChatBootstrap(deps: ChatBootstrapDeps) {
           }
 
           deps.startWebSocket(botId)
-          deps.startBotSessionsActivityStream(botId)
           if (deps.sessionId.value) {
             deps.startSessionRuntime(botId, deps.sessionId.value)
           }

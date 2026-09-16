@@ -652,6 +652,40 @@ function interruptedRunStoreScript(): RuntimeTestUpdate[] {
 
 describe('chat-list store', () => {
 
+  it('starts bot activity before a restored session finishes loading', async () => {
+    const restored = deferred<{
+      id: string
+      bot_id: string
+      title: string
+      type: 'chat'
+    }>()
+    api.fetchSession.mockReturnValueOnce(restored.promise)
+    const selection = useChatSelectionStore()
+    selection.setBot('bot-1')
+    selection.setSession('session-restored', { explicitSelection: true })
+    const store = useChatStore()
+
+    const initializing = store.initialize()
+    await flushPromises()
+
+    expect(api.streamBotSessionsActivityEvents).toHaveBeenCalledWith(
+      'bot-1',
+      expect.any(AbortSignal),
+      expect.any(Function),
+    )
+    expect(api.connectWebSocket).not.toHaveBeenCalled()
+
+    restored.resolve({
+      id: 'session-restored',
+      bot_id: 'bot-1',
+      title: 'Restored session',
+      type: 'chat',
+    })
+    await initializing
+
+    expect(api.connectWebSocket).toHaveBeenCalledWith('bot-1', expect.any(Function))
+  })
+
   it('selects the first ready bot during initialization when none is selected', async () => {
       api.fetchBots.mockResolvedValueOnce([
         { id: 'bot-creating', status: 'creating', name: 'Creating' },
