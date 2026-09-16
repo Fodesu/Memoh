@@ -311,8 +311,23 @@ func (*FeishuAdapter) DiscoverSelf(ctx context.Context, credentials map[string]a
 	}
 	callCtx, cancel := context.WithTimeout(ctx, feishuDiscoveryTimeout)
 	defer cancel()
-	client := cfg.newClient()
-	resp, err := client.Get(callCtx, "/open-apis/bot/v3/info", nil, larkcore.AccessTokenTypeTenant)
+	// The SDK caches tenant tokens by App ID, not App Secret. Verification must
+	// exchange the submitted credentials and use that token without the cache.
+	client := cfg.newClient(lark.WithEnableTokenCache(false))
+	token, err := client.GetTenantAccessTokenBySelfBuiltApp(callCtx, &larkcore.SelfBuiltTenantAccessTokenReq{
+		AppID: cfg.AppID, AppSecret: cfg.AppSecret,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("feishu discover self: verify credentials: %w", err)
+	}
+	if !token.Success() {
+		return nil, "", fmt.Errorf("feishu discover self: verify credentials: %w", token.CodeError)
+	}
+	if strings.TrimSpace(token.TenantAccessToken) == "" {
+		return nil, "", errors.New("feishu discover self: empty tenant access token")
+	}
+	resp, err := client.Get(callCtx, "/open-apis/bot/v3/info", nil, larkcore.AccessTokenTypeTenant,
+		larkcore.WithTenantAccessToken(token.TenantAccessToken))
 	if err != nil {
 		return nil, "", fmt.Errorf("feishu discover self: %w", err)
 	}
