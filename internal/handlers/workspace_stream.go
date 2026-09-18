@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/felinics/memoh/internal/botworkspace"
@@ -19,6 +21,13 @@ type workspaceIntents interface {
 	Observe(ctx context.Context, botID string) (botworkspace.Workspace, error)
 }
 
+// workspaceStatus is the manager slice that describes a settled workspace for
+// the terminal "complete" event.
+type workspaceStatus interface {
+	GetContainerInfo(ctx context.Context, botID string) (*workspace.ContainerStatus, error)
+	HasPreservedData(botID string) bool
+}
+
 // workspaceStreamOutcome is what a provisioning stream ended with.
 type workspaceStreamOutcome struct {
 	Workspace botworkspace.Workspace
@@ -29,13 +38,21 @@ type workspaceStreamOutcome struct {
 	// workspace settled; nothing more can be sent. The reconciler keeps
 	// converging the intent regardless.
 	Disconnected bool
+	// Progress is the backend's "complete" progress event when this instance
+	// observed it. It carries what only the provisioner knows (whether the
+	// preserved archive was consumed); everything else about the workspace is
+	// read back from the manager so the outcome does not depend on the
+	// in-process subscription.
+	Progress *botworkspace.ProgressEvent
 }
 
 // streamWorkspaceProvisioning relays reconciler progress for one intent to an
 // SSE writer until the workspace settles. Live progress (pull layers, phases)
 // comes from the in-process subscription; the outcome itself comes from the
 // repository through await, so a stream served by another Server instance,
-// or one that missed events, still ends correctly.
+// or one that missed events, still ends correctly. The terminal "complete"
+// event is the caller's to send (see workspaceCompleteEvent) once the
+// workspace is present.
 //
 // events must have been subscribed before the intent was recorded.
 func streamWorkspaceProvisioning(
@@ -60,6 +77,7 @@ func streamWorkspaceProvisioning(
 		done <- awaited{w: w, err: err}
 	}()
 
+	var progress *botworkspace.ProgressEvent
 	// relay writes one event; false means the client is gone.
 	relay := func(ev botworkspace.ProgressEvent) bool {
 		switch ev.Type {
@@ -74,21 +92,10 @@ func streamWorkspaceProvisioning(
 		case "restoring":
 			return send(createContainerRestoringEvent{Type: "restoring"})
 		case "complete":
-			return send(createContainerCompleteEvent{
-				Type: "complete",
-				Container: CreateContainerResponse{
-					ContainerID:      ev.ContainerID,
-					WorkspaceBackend: ev.WorkspaceBackend,
-					RuntimeBackend:   ev.RuntimeBackend,
-					ContainerPath:    ev.ContainerPath,
-					Image:            ev.Image,
-					Snapshotter:      ev.Snapshotter,
-					CDIDevices:       ev.CDIDevices,
-					Started:          ev.Started,
-					DataRestored:     ev.DataRestored,
-					HasPreservedData: ev.HasPreservedData,
-				},
-			})
+			// Kept for the caller; the settled workspace is described from the
+			// manager once await confirms it.
+			ev := ev
+			progress = &ev
 		case botworkspace.EventReady, botworkspace.EventError:
 			// Terminal events are authoritative only through await, so a stale
 			// subscriber event from a previous generation cannot end the stream
@@ -97,7 +104,7 @@ func streamWorkspaceProvisioning(
 		return true
 	}
 	// drain relays progress that was published before await observed the
-	// settled row, so the client still sees the final "complete" step.
+	// settled row, so the client still sees every intermediate step.
 	drain := func() bool {
 		for {
 			select {
@@ -131,12 +138,67 @@ func streamWorkspaceProvisioning(
 			}
 			w := res.w
 			if w.Observed != botworkspace.ObservedFailed {
-				return workspaceStreamOutcome{Workspace: w}
+				return workspaceStreamOutcome{Workspace: w, Progress: progress}
 			}
 			sendWorkspaceFailure(send, sendError, w, requestID)
 			return workspaceStreamOutcome{Workspace: w, Failed: true, ErrorSent: true}
 		}
 	}
+}
+
+// workspaceCompleteEvent describes a present workspace for the terminal
+// "complete" event. The manager's view is authoritative; the provisioner's
+// progress event fills in what the manager cannot know (data_restored) and
+// stands in entirely when no manager is wired. ok is false when nothing can
+// describe the workspace.
+func workspaceCompleteEvent(ctx context.Context, log *slog.Logger, status workspaceStatus, botID string, outcome workspaceStreamOutcome) (createContainerCompleteEvent, bool) {
+	response := CreateContainerResponse{
+		Image:   outcome.Workspace.Image,
+		Started: outcome.Workspace.Observed == botworkspace.ObservedRunning,
+	}
+	described := false
+	if p := outcome.Progress; p != nil {
+		response.ContainerID = p.ContainerID
+		response.WorkspaceBackend = p.WorkspaceBackend
+		response.RuntimeBackend = p.RuntimeBackend
+		response.ContainerPath = p.ContainerPath
+		response.CDIDevices = p.CDIDevices
+		response.Snapshotter = p.Snapshotter
+		response.DataRestored = p.DataRestored
+		response.HasPreservedData = p.HasPreservedData
+		if strings.TrimSpace(p.Image) != "" {
+			response.Image = p.Image
+		}
+		described = true
+	}
+	if status != nil {
+		info, err := status.GetContainerInfo(ctx, botID)
+		switch {
+		case err != nil:
+			if log != nil {
+				log.Warn("describe workspace after provisioning failed", slog.String("bot_id", botID), slog.Any("error", err))
+			}
+			response.HasPreservedData = status.HasPreservedData(botID)
+		default:
+			response.ContainerID = info.ContainerID
+			response.WorkspaceBackend = info.WorkspaceBackend
+			response.RuntimeBackend = info.RuntimeBackend
+			response.ContainerPath = info.ContainerPath
+			response.CDIDevices = info.CDIDevices
+			response.HasPreservedData = info.HasPreservedData
+			if strings.TrimSpace(info.Snapshotter) != "" {
+				response.Snapshotter = info.Snapshotter
+			}
+			if strings.TrimSpace(info.Image) != "" {
+				response.Image = info.Image
+			}
+			described = true
+		}
+	}
+	if !described {
+		return createContainerCompleteEvent{}, false
+	}
+	return createContainerCompleteEvent{Type: "complete", Container: response}, true
 }
 
 // sendWorkspaceFailure emits the stable error event for a failed observation.

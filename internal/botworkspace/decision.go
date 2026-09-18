@@ -43,6 +43,9 @@ func Decide(w Workspace, now time.Time) Action {
 		if w.Observed == ObservedAbsent && w.ObservedGeneration >= w.DesiredGeneration {
 			return ActionNone
 		}
+		if w.Observed == ObservedFailed && w.NextAttemptAt.After(now) {
+			return ActionWait
+		}
 		return ActionTeardown
 	default:
 		switch w.Observed {
@@ -80,9 +83,6 @@ func NextBackoff(now time.Time, attempts int32, base, capDuration time.Duration)
 	}
 	return now.Add(d)
 }
-
-// farFuture parks a row that must not be retried until the intent changes.
-var farFuture = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // DeriveBotStatus maps the workspace state onto bots.status. ok is false when
 // the bot's status must not be touched (the workspace is absent on purpose or

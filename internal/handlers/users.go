@@ -54,9 +54,12 @@ type UsersHandler struct {
 	channelRuntime channel.Runtime
 	registry       *channel.Registry
 	workspaceSetup botCreateWorkspace
-	runtimeResets  runtimeResetService
-	credentials    *agentcredential.Service
-	logger         *slog.Logger
+	// workspaceStatus describes the settled workspace for the "complete"
+	// event; nil falls back to the provisioner's progress event.
+	workspaceStatus workspaceStatus
+	runtimeResets   runtimeResetService
+	credentials     *agentcredential.Service
+	logger          *slog.Logger
 }
 
 // NewUsersHandler creates a UsersHandler with channel identity support.
@@ -78,6 +81,12 @@ func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bo
 
 func (h *UsersHandler) SetRuntimeResetService(closer runtimeResetService) {
 	h.runtimeResets = closer
+}
+
+// SetWorkspaceStatus wires the manager view used to describe a provisioned
+// workspace in the creation stream.
+func (h *UsersHandler) SetWorkspaceStatus(status workspaceStatus) {
+	h.workspaceStatus = status
 }
 
 func (h *UsersHandler) SetCredentialService(service *agentcredential.Service) {
@@ -565,6 +574,11 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	}, httpx.RequestID(c), sendError)
 	if outcome.Failed || outcome.Disconnected {
 		return nil
+	}
+	if complete, ok := workspaceCompleteEvent(streamCtx, h.logger, h.workspaceStatus, bot.ID, outcome); ok {
+		if !send(complete) {
+			return nil
+		}
 	}
 
 	readyBot, err := h.botService.Get(streamCtx, bot.ID)

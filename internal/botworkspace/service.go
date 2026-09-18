@@ -42,18 +42,19 @@ type BotStatusWriter interface {
 
 // Options tune the reconciler. Zero values take the defaults.
 type Options struct {
-	Owner            string
-	Interval         time.Duration
-	Lease            time.Duration
-	DriftInterval    time.Duration
-	BackoffBase      time.Duration
-	BackoffCap       time.Duration
-	MaxAttempts      int32
-	Batch            int32
-	Concurrency      int
-	ProvisionTimeout time.Duration
-	TeardownTimeout  time.Duration
-	WriteTimeout     time.Duration
+	Owner             string
+	Interval          time.Duration
+	Lease             time.Duration
+	DriftInterval     time.Duration
+	BackoffBase       time.Duration
+	BackoffCap        time.Duration
+	MaxAttempts       int32
+	SlowRetryInterval time.Duration
+	Batch             int32
+	Concurrency       int
+	ProvisionTimeout  time.Duration
+	TeardownTimeout   time.Duration
+	WriteTimeout      time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -71,12 +72,18 @@ func (o Options) withDefaults() Options {
 		o.DriftInterval = 5 * time.Minute
 	}
 	// Retry schedule: 10s, 20s, 40s, 80s, 90s, 90s (±20% jitter), about 5.5
-	// minutes from the first failure to parking. One attempt is itself
+	// minutes of fast retries from the first failure. One attempt is itself
 	// expensive (image pull, container start, bridge wait), so it does not
 	// start as fast as a cheap API retry; the cap matches the longest an
 	// upstream operation is expected to stay in flight (the Cloud control
 	// plane's 90s connect deadline) and the direction Kubernetes took for
 	// CrashLoopBackOff (KEP-4603 lowers the default cap to 60s).
+	//
+	// Once the fast budget is spent the outcome is reported to the user, and
+	// the row keeps retrying every SlowRetryInterval so an outage that outlasts
+	// the fast window (registry down, runtime restarting) heals without anyone
+	// pressing retry. A Kubernetes controller never gives up either; the slow
+	// cadence bounds the cost of a workspace that will never come up.
 	if o.BackoffBase <= 0 {
 		o.BackoffBase = 10 * time.Second
 	}
@@ -85,6 +92,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.MaxAttempts <= 0 {
 		o.MaxAttempts = 6
+	}
+	if o.SlowRetryInterval <= 0 {
+		o.SlowRetryInterval = 15 * time.Minute
 	}
 	if o.Batch <= 0 {
 		o.Batch = 20
@@ -238,10 +248,10 @@ func (s *Service) publish(botID string, ev ProgressEvent) {
 }
 
 // Await blocks until the workspace has a final answer for an intent at least
-// as new as generation, polling the repository. A failure that still has an
-// automatic retry scheduled is not final: Await keeps waiting so a transient
-// error that recovers on the next attempt never reaches the caller as a
-// failure. It works across Server instances.
+// as new as generation, polling the repository. A failure still inside its
+// fast retry budget is not final: Await keeps waiting so a transient error
+// that recovers on the next attempt never reaches the caller as a failure.
+// It works across Server instances.
 func (s *Service) Await(ctx context.Context, botID string, generation int64) (Workspace, error) {
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
@@ -250,7 +260,7 @@ func (s *Service) Await(ctx context.Context, botID string, generation int64) (Wo
 		if err != nil {
 			return Workspace{}, err
 		}
-		if w.DesiredGeneration >= generation && w.Final() {
+		if w.DesiredGeneration >= generation && w.Final(s.opts.MaxAttempts) {
 			return w, nil
 		}
 		select {
@@ -507,9 +517,17 @@ func (s *Service) provision(ctx context.Context, log *slog.Logger, w Workspace) 
 
 func (s *Service) fail(ctx context.Context, log *slog.Logger, w Workspace, step *StepError) {
 	attempts := w.Attempts + 1
-	next := farFuture
-	if step.Retryable && attempts < s.opts.MaxAttempts {
+	var next time.Time
+	switch {
+	case step.Retryable && attempts < s.opts.MaxAttempts:
 		next = s.nextAttempt(attempts)
+	default:
+		// The fast budget is spent (or the failure is not worth spending it
+		// on): report the outcome now and fall back to the slow cadence.
+		if attempts < s.opts.MaxAttempts {
+			attempts = s.opts.MaxAttempts
+		}
+		next = s.slowRetryAt()
 	}
 	message := sanitize(step.Err)
 	log.Error("workspace provisioning failed",
@@ -549,7 +567,7 @@ func (s *Service) teardown(ctx context.Context, log *slog.Logger, w Workspace) {
 		next := s.nextAttempt(attempts)
 		if attempts >= s.opts.MaxAttempts {
 			observed = ObservedFailed
-			next = farFuture
+			next = s.slowRetryAt()
 		}
 		log.Error("workspace teardown failed", slog.Int("attempt", int(attempts)), slog.Any("error", err))
 		if _, werr := s.writeObserved(ctx, cur, ObservedWrite{
@@ -610,8 +628,18 @@ const backoffJitter = 0.2
 func (s *Service) nextAttempt(attempts int32) time.Time {
 	now := s.now()
 	d := NextBackoff(now, attempts, s.opts.BackoffBase, s.opts.BackoffCap).Sub(now)
+	return now.Add(s.jittered(d))
+}
+
+// slowRetryAt schedules the next background attempt once the fast budget is
+// spent.
+func (s *Service) slowRetryAt() time.Time {
+	return s.now().Add(s.jittered(s.opts.SlowRetryInterval))
+}
+
+func (s *Service) jittered(d time.Duration) time.Duration {
 	factor := 1 - backoffJitter + 2*backoffJitter*s.rnd()
-	return now.Add(time.Duration(float64(d) * factor))
+	return time.Duration(float64(d) * factor)
 }
 
 // writeObserved persists an observation on a fresh short-lived context so an

@@ -81,26 +81,28 @@ func (w Workspace) Settled() bool {
 		return false
 	}
 	if w.Desired == DesiredAbsent {
-		// A teardown that exhausted its retries parks the row as failed; that
-		// is a definite (negative) answer, not a state still in motion.
+		// A teardown that spent its fast retries is recorded as failed; that
+		// is a definite (negative) answer, even though slow retries continue.
 		return w.Observed == ObservedAbsent || w.Observed == ObservedFailed
 	}
 	return true
 }
 
-// RetryPending reports whether a failed observation still has an automatic
-// retry scheduled (as opposed to being parked until the intent changes).
-func (w Workspace) RetryPending() bool {
-	return w.Observed == ObservedFailed &&
-		!w.NextAttemptAt.IsZero() && w.NextAttemptAt.Before(farFuture)
+// RetryPending reports whether a failed observation is still inside its fast
+// retry budget of maxAttempts. Attempts counts the budget consumed: a
+// non-retryable failure consumes all of it at once. Beyond the budget the
+// reconciler keeps retrying at a slow cadence, but that is background
+// self-healing and no longer holds up callers.
+func (w Workspace) RetryPending(maxAttempts int32) bool {
+	return w.Observed == ObservedFailed && w.Attempts < maxAttempts
 }
 
 // Final reports whether the observation is the last word on the current
-// intent: settled, and not a failure the reconciler is about to retry. Callers
-// that relay an outcome to a user wait for Final so a transient failure that
-// recovers on the next attempt never surfaces as a failure.
-func (w Workspace) Final() bool {
-	return w.Settled() && !w.RetryPending()
+// intent: settled, and not a failure the reconciler is about to retry soon.
+// Callers that relay an outcome to a user wait for Final so a transient
+// failure that recovers on the next attempt never surfaces as a failure.
+func (w Workspace) Final(maxAttempts int32) bool {
+	return w.Settled() && !w.RetryPending(maxAttempts)
 }
 
 // ProgressEvent mirrors the workspace setup progress the SSE creation stream

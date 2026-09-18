@@ -356,21 +356,42 @@ func TestProvisionRetryableFailureBacksOffThenRecovers(t *testing.T) {
 	}
 }
 
-func TestProvisionNonRetryableFailureParksUntilNewIntent(t *testing.T) {
+func TestProvisionNonRetryableFailureSpendsBudgetAndSlowRetries(t *testing.T) {
 	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Retryable: false, Err: errors.New("pull access denied")}}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
 	_, _ = svc.EnsurePresent(ctx, bot, "bad:image")
 	_, _ = svc.ReconcileOnce(ctx)
 	w := repo.get(bot)
-	if w.Observed != ObservedFailed || !w.NextAttemptAt.Equal(farFuture) {
-		t.Fatalf("non-retryable failure must park the row: %+v", w)
+	// The whole fast budget is consumed at once so Await answers now, and the
+	// next attempt is on the slow cadence.
+	if w.Observed != ObservedFailed || w.Attempts != 3 || w.RetryPending(3) {
+		t.Fatalf("non-retryable failure must consume the fast budget: %+v", w)
 	}
-	clk.advance(24 * time.Hour)
+	if !w.NextAttemptAt.Equal(clk.now().Add(15 * time.Minute)) {
+		t.Fatalf("slow retry = %s after failure, want +15m", w.NextAttemptAt.Sub(clk.now()))
+	}
 	if n, _ := svc.ReconcileOnce(ctx); n != 0 {
-		t.Fatalf("parked row was claimed (%d)", n)
+		t.Fatalf("row claimed before its slow retry (%d)", n)
 	}
-	// A new intent (user changed the image) makes it due again.
+	// The image shows up later; the slow retry picks it up without a new intent.
+	clk.advance(16 * time.Minute)
+	backend.provisionErr = nil
+	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
+		t.Fatalf("slow retry not claimed (%d)", n)
+	}
+	if w := repo.get(bot); w.Observed != ObservedRunning || w.Attempts != 0 || !w.EverReady {
+		t.Fatalf("after slow retry: %+v", w)
+	}
+}
+
+func TestNewIntentResetsRetryBudget(t *testing.T) {
+	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Retryable: false, Err: errors.New("pull access denied")}}
+	svc, repo, _, _ := newTestService(t, backend)
+	ctx := context.Background()
+	_, _ = svc.EnsurePresent(ctx, bot, "bad:image")
+	_, _ = svc.ReconcileOnce(ctx)
+	// A new intent (user changed the image) is due immediately with a fresh budget.
 	backend.provisionErr = nil
 	if _, err := svc.EnsurePresent(ctx, bot, "good:image"); err != nil {
 		t.Fatal(err)
@@ -389,15 +410,28 @@ func TestProvisionExhaustsAttempts(t *testing.T) {
 	ctx := context.Background()
 	_, _ = svc.EnsurePresent(ctx, bot, "")
 	for i := 0; i < 3; i++ {
+		if i > 0 {
+			clk.advance(time.Hour)
+		}
 		_, _ = svc.ReconcileOnce(ctx)
-		clk.advance(time.Hour)
 	}
 	w := repo.get(bot)
-	if w.Attempts != 3 || !w.NextAttemptAt.Equal(farFuture) {
+	if w.Attempts != 3 || w.RetryPending(3) {
 		t.Fatalf("after max attempts: %+v", w)
 	}
+	// Fast retries were 30s, 1m; the third failure falls back to the slow cadence.
+	if !w.NextAttemptAt.Equal(clk.now().Add(15 * time.Minute)) {
+		t.Fatalf("slow retry = %s after the last fast attempt, want +15m", w.NextAttemptAt.Sub(clk.now()))
+	}
 	if n, _ := svc.ReconcileOnce(ctx); n != 0 {
-		t.Fatalf("exhausted row was claimed (%d)", n)
+		t.Fatalf("row claimed before its slow retry (%d)", n)
+	}
+	clk.advance(16 * time.Minute)
+	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
+		t.Fatalf("slow retry not claimed (%d)", n)
+	}
+	if w := repo.get(bot); w.Attempts != 4 || !w.NextAttemptAt.Equal(clk.now().Add(15*time.Minute)) {
+		t.Fatalf("after a failed slow retry: %+v", w)
 	}
 }
 
@@ -603,7 +637,10 @@ func TestDefaultRetrySchedule(t *testing.T) {
 		total += got[i]
 	}
 	if total > 6*time.Minute {
-		t.Fatalf("first failure to parking = %s, want under 6 minutes", total)
+		t.Fatalf("fast retry window = %s, want under 6 minutes", total)
+	}
+	if o.SlowRetryInterval != 15*time.Minute {
+		t.Fatalf("slow retry interval = %s, want 15m", o.SlowRetryInterval)
 	}
 }
 
@@ -620,24 +657,24 @@ func TestBackoffJitterStaysWithinBounds(t *testing.T) {
 	}
 }
 
-func TestFinalDistinguishesPendingRetryFromParkedFailure(t *testing.T) {
-	now := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
-	pending := Workspace{Desired: DesiredPresent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1, NextAttemptAt: now.Add(10 * time.Second)}
-	if !pending.Settled() || pending.Final() {
-		t.Fatalf("a failure with a scheduled retry is settled but not final: settled=%v final=%v", pending.Settled(), pending.Final())
+func TestFinalDistinguishesFastRetryFromSpentBudget(t *testing.T) {
+	const budget = int32(3)
+	pending := Workspace{Desired: DesiredPresent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1, Attempts: 1}
+	if !pending.Settled() || pending.Final(budget) {
+		t.Fatalf("a failure inside the fast budget is settled but not final: settled=%v final=%v", pending.Settled(), pending.Final(budget))
 	}
-	parked := pending
-	parked.NextAttemptAt = farFuture
-	if !parked.Final() {
-		t.Fatal("a parked failure is final")
+	spent := pending
+	spent.Attempts = budget
+	if !spent.Final(budget) {
+		t.Fatal("a failure past the fast budget is final even though slow retries continue")
 	}
 	running := Workspace{Desired: DesiredPresent, DesiredGeneration: 1, Observed: ObservedRunning, ObservedGeneration: 1}
-	if !running.Final() {
+	if !running.Final(budget) {
 		t.Fatal("running is final")
 	}
-	absentParked := Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1, NextAttemptAt: farFuture}
-	if absentParked.RetryPending() || !absentParked.Final() {
-		t.Fatal("a parked teardown failure has no retry pending and is final")
+	absentSpent := Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1, Attempts: budget}
+	if absentSpent.RetryPending(budget) || !absentSpent.Final(budget) {
+		t.Fatal("a teardown failure past the fast budget has no fast retry pending and is final")
 	}
 }
 
@@ -654,7 +691,7 @@ func TestAwaitWaitsThroughRetryableFailure(t *testing.T) {
 	w, _ := svc.EnsurePresent(ctx, bot, "")
 
 	_, _ = svc.ReconcileOnce(ctx)
-	if got := repo.get(bot); !got.RetryPending() {
+	if got := repo.get(bot); !got.RetryPending(3) {
 		t.Fatalf("precondition: expected a pending retry, got %+v", got)
 	}
 	awaited := make(chan Workspace, 1)
@@ -682,7 +719,7 @@ func TestAwaitWaitsThroughRetryableFailure(t *testing.T) {
 	}
 }
 
-func TestAwaitReturnsParkedFailure(t *testing.T) {
+func TestAwaitReturnsNonRetryableFailure(t *testing.T) {
 	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Retryable: false, Err: errors.New("pull access denied")}}
 	svc, _, _, _ := newTestService(t, backend)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -690,8 +727,8 @@ func TestAwaitReturnsParkedFailure(t *testing.T) {
 	w, _ := svc.EnsurePresent(ctx, bot, "bad:image")
 	_, _ = svc.ReconcileOnce(ctx)
 	final, err := svc.Await(ctx, bot, w.DesiredGeneration)
-	if err != nil || final.Observed != ObservedFailed || final.RetryPending() {
-		t.Fatalf("Await() = %+v, %v; want a parked failure", final, err)
+	if err != nil || final.Observed != ObservedFailed || final.RetryPending(3) {
+		t.Fatalf("Await() = %+v, %v; want the failure without a fast retry pending", final, err)
 	}
 }
 
@@ -871,10 +908,10 @@ func TestAwaitReturnsExhaustedTeardownFailure(t *testing.T) {
 		clk.advance(time.Hour)
 	}
 	if got := repo.get(bot); got.Observed != ObservedFailed || got.LastErrorPhase != PhaseTeardown {
-		t.Fatalf("precondition: teardown should be parked as failed, got %+v", got)
+		t.Fatalf("precondition: teardown should be recorded as failed, got %+v", got)
 	}
 	final, err := svc.Await(ctx, bot, w.DesiredGeneration)
 	if err != nil || final.Observed != ObservedFailed || final.Desired != DesiredAbsent {
-		t.Fatalf("Await() = %+v, %v; want the parked teardown failure", final, err)
+		t.Fatalf("Await() = %+v, %v; want the teardown failure", final, err)
 	}
 }

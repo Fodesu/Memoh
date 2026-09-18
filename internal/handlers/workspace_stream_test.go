@@ -77,8 +77,15 @@ func (m *restoreWorkspaceManager) RestorePreservedData(context.Context, string) 
 	return nil
 }
 
-func (*restoreWorkspaceManager) GetContainerInfo(context.Context, string) (*workspace.ContainerStatus, error) {
-	return &workspace.ContainerStatus{ContainerID: "workspace-status", WorkspaceBackend: bridge.WorkspaceBackendContainer}, nil
+func (m *restoreWorkspaceManager) GetContainerInfo(context.Context, string) (*workspace.ContainerStatus, error) {
+	return &workspace.ContainerStatus{
+		ContainerID:      "workspace-status",
+		WorkspaceBackend: bridge.WorkspaceBackendContainer,
+		RuntimeBackend:   "io.containerd.runc.v2",
+		Image:            "debian:bookworm-slim",
+		Snapshotter:      "overlayfs",
+		HasPreservedData: m.preserved,
+	}, nil
 }
 
 func newRestoreContainerHandler(t *testing.T, ownerID, botID string, manager containerWorkspace, ws workspaceIntents) *ContainerdHandler {
@@ -139,11 +146,34 @@ func TestCreateContainerRestoresPreservedDataWhenRequested(t *testing.T) {
 	if container["has_preserved_data"] != false {
 		t.Fatalf("complete has_preserved_data = %#v, want false", container["has_preserved_data"])
 	}
-	if container["container_id"] != "workspace-"+botID {
-		t.Fatalf("complete container_id = %#v, want the reconciler's value", container["container_id"])
+	// The manager's view of the settled workspace is authoritative.
+	if container["container_id"] != "workspace-status" {
+		t.Fatalf("complete container_id = %#v, want the manager's value", container["container_id"])
 	}
-	if container["snapshotter"] != "overlayfs" {
-		t.Fatalf("complete snapshotter = %#v, want overlayfs", container["snapshotter"])
+	if container["snapshotter"] != "overlayfs" || container["runtime_backend"] != "io.containerd.runc.v2" {
+		t.Fatalf("complete container = %#v, want manager snapshotter and runtime", container)
+	}
+}
+
+// The terminal event does not depend on this instance having seen the
+// reconciler's "complete" progress: a stream served next to another instance
+// still describes the workspace from the manager.
+func TestCreateContainerDescribesWorkspaceWithoutProgressEvent(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000106"
+	botID := "00000000-0000-0000-0000-000000000206"
+	manager := &restoreWorkspaceManager{}
+	ws := &createBotStreamWorkspace{events: []workspace.ContainerSetupEvent{{Type: "creating"}}}
+	handler := newRestoreContainerHandler(t, ownerID, botID, manager, ws)
+
+	events := callCreateContainer(t, handler, ownerID, botID, `{}`)
+
+	complete, ok := findEventType(events, "complete")
+	if !ok {
+		t.Fatalf("complete event missing: %#v", events)
+	}
+	container := complete["container"].(map[string]any)
+	if container["container_id"] != "workspace-status" || container["started"] != true || container["data_restored"] != false {
+		t.Fatalf("complete container = %#v", container)
 	}
 }
 
