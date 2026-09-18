@@ -9814,6 +9814,7 @@ paths:
       tags:
       - containerd
     post:
+      description: Records the intent for a running workspace and streams the
       parameters:
       - description: Bot ID
         in: path
@@ -9839,7 +9840,7 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Create and start workspace for bot
+      summary: Create workspace for bot
       tags:
       - containerd
   /bots/{bot_id}/container/browser/sessions:
