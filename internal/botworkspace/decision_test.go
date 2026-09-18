@@ -22,35 +22,13 @@ func TestDecide(t *testing.T) {
 		{"absent/running tears down", Workspace{Desired: DesiredAbsent, Observed: ObservedRunning}, ActionTeardown},
 		{"absent/failed tears down", Workspace{Desired: DesiredAbsent, Observed: ObservedFailed}, ActionTeardown},
 		{"absent/removing resumes", Workspace{Desired: DesiredAbsent, Observed: ObservedRemoving}, ActionTeardown},
-		{"absent/absent settles", Workspace{Desired: DesiredAbsent, Observed: ObservedAbsent}, ActionNone},
+		{"absent/absent settles once observed", Workspace{Desired: DesiredAbsent, DesiredGeneration: 2, Observed: ObservedAbsent, ObservedGeneration: 2}, ActionNone},
+		{"absent with unobserved default column tears down", Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedAbsent, ObservedGeneration: 0}, ActionTeardown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Decide(tc.w, now); got != tc.want {
 				t.Fatalf("Decide() = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
-// MayDeleteData is the safety boundary of the whole model; enumerate it.
-func TestMayDeleteData(t *testing.T) {
-	cases := []struct {
-		name      string
-		w         Workspace
-		preserved bool
-		want      bool
-	}{
-		{"explicit absent always allowed", Workspace{Desired: DesiredAbsent, EverReady: true}, true, true},
-		{"never ready, no archive: replaceable", Workspace{Desired: DesiredPresent, EverReady: false}, false, true},
-		{"never ready but archive exists: keep", Workspace{Desired: DesiredPresent, EverReady: false}, true, false},
-		{"was ready once: keep", Workspace{Desired: DesiredPresent, EverReady: true}, false, false},
-		{"was ready and archive exists: keep", Workspace{Desired: DesiredPresent, EverReady: true}, true, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := MayDeleteData(tc.w, tc.preserved); got != tc.want {
-				t.Fatalf("MayDeleteData() = %v, want %v", got, tc.want)
 			}
 		})
 	}

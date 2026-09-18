@@ -176,7 +176,7 @@ func (m *Manager) waitTaskRunning(ctx context.Context, containerID string, timeo
 // ---------------------------------------------------------------------------
 
 // EnsureRunning verifies the container exists and its task is running.
-// If the container is missing, it rebuilds via SetupBotContainer.
+// A missing container is reported as ErrContainerNotFound.
 // If the task is stopped, it restarts and sets up networking.
 func (m *Manager) EnsureRunning(ctx context.Context, botID string) error {
 	if m.remote != nil {
@@ -191,23 +191,20 @@ func (m *Manager) EnsureRunning(ctx context.Context, botID string) error {
 // EnsureNativeRunning manages only the server-owned container workspace,
 // regardless of which target is currently Primary.
 func (m *Manager) EnsureNativeRunning(ctx context.Context, botID string) error {
+	// Creating a workspace is the botworkspace reconciler's job alone: it
+	// records intent and owns the data-safety rules. A missing container is
+	// reported, never rebuilt here, so a workspace the user removed (or one
+	// the reconciler is about to remove) cannot be resurrected by a start or
+	// by a tool call that needs the container.
 	containerID, err := m.ContainerID(ctx, botID)
 	if err != nil {
-		if errors.Is(err, ErrContainerNotFound) {
-			m.logger.Warn("container missing, rebuilding", slog.String("bot_id", botID))
-			return m.SetupBotContainer(ctx, botID)
-		}
 		return err
 	}
-
-	_, err = m.service.GetContainer(ctx, containerID)
-	if err != nil {
-		if !ctr.IsNotFound(err) {
-			return err
+	if _, err := m.service.GetContainer(ctx, containerID); err != nil {
+		if ctr.IsNotFound(err) {
+			return fmt.Errorf("%w: container %s is missing in the runtime", ErrContainerNotFound, containerID)
 		}
-		m.logger.Warn("container missing in containerd, rebuilding",
-			slog.String("bot_id", botID), slog.String("container_id", containerID))
-		return m.SetupBotContainer(ctx, botID)
+		return err
 	}
 
 	taskInfo, err := m.service.GetTaskInfo(ctx, containerID)
@@ -343,7 +340,7 @@ func (m *Manager) GetContainerInfo(ctx context.Context, botID string) (*Containe
 }
 
 // ---------------------------------------------------------------------------
-// Container lifecycle (bots.ContainerLifecycle interface)
+// Container lifecycle (botworkspace.Backend teardown + startup reconcile)
 // ---------------------------------------------------------------------------
 
 type ContainerSetupEvent struct {
@@ -362,30 +359,6 @@ type ContainerSetupEvent struct {
 }
 
 type ContainerSetupProgress func(ContainerSetupEvent)
-
-// SetupBotContainer creates/starts the container and upserts the DB record.
-func (m *Manager) SetupBotContainer(ctx context.Context, botID string) error {
-	return m.setupBotContainer(ctx, botID, nil)
-}
-
-func (m *Manager) SetupBotContainerWithProgress(ctx context.Context, botID string, progress ContainerSetupProgress) error {
-	return m.setupBotContainer(ctx, botID, progress)
-}
-
-func (m *Manager) setupBotContainer(ctx context.Context, botID string, progress ContainerSetupProgress) error {
-	emit := func(event ContainerSetupEvent) {
-		if progress != nil {
-			progress(event)
-		}
-	}
-	// Shared with the botworkspace reconciler (reconcile_backend.go); the
-	// phase-attributed error is unwrapped here so legacy callers keep seeing
-	// the underlying runtime error.
-	if err := m.provisionWorkspace(ctx, botID, "", emit); err != nil {
-		return errors.Unwrap(err)
-	}
-	return nil
-}
 
 // CleanupBotContainer removes the container and DB record for a bot.
 // When preserveData is true, /data is exported to a backup archive before deletion.

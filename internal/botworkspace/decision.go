@@ -36,7 +36,11 @@ func (a Action) String() string {
 func Decide(w Workspace, now time.Time) Action {
 	switch w.Desired {
 	case DesiredAbsent:
-		if w.Observed == ObservedAbsent {
+		// "absent" is also the column default, so it only counts as an answer
+		// once the observation has caught up with this intent. Until then the
+		// backend is asked to tear down; the call is idempotent and a missing
+		// workspace is success.
+		if w.Observed == ObservedAbsent && w.ObservedGeneration >= w.DesiredGeneration {
 			return ActionNone
 		}
 		return ActionTeardown
@@ -55,22 +59,11 @@ func Decide(w Workspace, now time.Time) Action {
 	}
 }
 
-// MayDeleteData is the single authorization rule for destroying a workspace
-// that carries data. It is deliberately narrow:
-//
-//  1. The user asked for the workspace to be absent (bot deleted, workspace
-//     deleted). preserve_data is honoured by the teardown itself.
-//  2. The workspace never became ready and no preserved-data archive exists,
-//     so a half-provisioned container can be replaced before retrying.
-//
-// Everything else keeps the container: a workspace that was ready once is
-// reused or repaired, never recreated behind the user's back.
-func MayDeleteData(w Workspace, hasPreservedData bool) bool {
-	if w.Desired == DesiredAbsent {
-		return true
-	}
-	return !w.EverReady && !hasPreservedData
-}
+// Data safety: no automated step deletes workspace data. A teardown happens
+// only for an explicit absent intent, honouring its preserve_data flag; a
+// retry reuses whatever the previous attempt left behind, and when it must
+// replace a container built from a different image it exports the data first
+// (see Service.replaceStaleContainer).
 
 // NextBackoff returns when the next attempt may run after attempt number
 // `attempts` (1-based) failed. Exponential from base, capped.
