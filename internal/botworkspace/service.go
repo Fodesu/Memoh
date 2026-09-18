@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/felinics/memoh/internal/config"
+	"github.com/felinics/memoh/internal/redact"
 )
 
 // Backend performs the workspace operations for one runtime (containerd,
@@ -594,14 +595,25 @@ func (s *Service) teardown(ctx context.Context, log *slog.Logger, w Workspace) {
 	log.Info("workspace removed")
 }
 
-// detectDrift re-inspects running workspaces that have not been touched for
-// a drift interval so a vanished container is re-provisioned.
+// detectDrift re-inspects settled workspaces that have not been touched for a
+// drift interval so a vanished container is re-provisioned. Stopped rows are
+// scanned as well: Decide leaves a stopped workspace alone and nothing rebuilds
+// a missing container on demand any more, so a workspace removed behind our
+// back would otherwise stay stopped forever while the bot still reports ready.
+// A stopped workspace whose container is still there is left untouched, so a
+// user's stop is never undone by the scan itself.
 func (s *Service) detectDrift(ctx context.Context) {
+	for _, observed := range []string{ObservedRunning, ObservedStopped} {
+		s.detectDriftIn(ctx, observed)
+	}
+}
+
+func (s *Service) detectDriftIn(ctx context.Context, observed string) {
 	listCtx, cancel := context.WithTimeout(ctx, s.opts.WriteTimeout)
-	rows, err := s.repo.ListByObserved(listCtx, ObservedRunning, 500)
+	rows, err := s.repo.ListByObserved(listCtx, observed, 500)
 	cancel()
 	if err != nil {
-		s.log.Warn("drift scan failed", slog.Any("error", err))
+		s.log.Warn("drift scan failed", slog.String("observed", observed), slog.Any("error", err))
 		return
 	}
 	cutoff := s.now().Add(-s.opts.DriftInterval)
@@ -745,6 +757,10 @@ func sanitize(err error) string {
 	if msg == "" {
 		return "workspace operation failed"
 	}
+	// last_error is persisted and shown to the user in the bot's runtime
+	// checks, so the credentials an upstream error quotes (a private registry
+	// reference, a signed URL) are masked before the message is stored.
+	msg = redact.Diagnostic(msg)
 	if r := []rune(msg); len(r) > maxErrorRunes {
 		msg = string(r[:maxErrorRunes])
 	}

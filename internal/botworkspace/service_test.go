@@ -3,6 +3,7 @@ package botworkspace
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -587,6 +588,71 @@ func TestObserveRecordsUserStop(t *testing.T) {
 	}
 	if status.get(bot) != BotStatusReady {
 		t.Fatalf("stopped bot status = %q", status.get(bot))
+	}
+}
+
+func TestDriftScanRepairsVanishedStoppedWorkspace(t *testing.T) {
+	backend := &fakeBackend{}
+	svc, repo, _, clk := newTestService(t, backend)
+	ctx := context.Background()
+	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.ReconcileOnce(ctx)
+
+	// The user stops the workspace; the row settles as stopped and no pass
+	// touches it again.
+	backend.running = false
+	if _, err := svc.Observe(ctx, bot); err != nil {
+		t.Fatal(err)
+	}
+	if w := repo.get(bot); w.Observed != ObservedStopped {
+		t.Fatalf("stop not observed: %+v", w)
+	}
+
+	// A stopped workspace that is still there stays stopped: the scan must not
+	// undo the user's stop.
+	clk.advance(svc.opts.DriftInterval + time.Minute)
+	svc.detectDrift(ctx)
+	if w := repo.get(bot); w.Observed != ObservedStopped {
+		t.Fatalf("scan disturbed a healthy stopped workspace: %+v", w)
+	}
+
+	// It vanishes behind our back. Without the scan the row would stay stopped
+	// forever while the bot reports ready.
+	backend.exists = false
+	clk.advance(svc.opts.DriftInterval + time.Minute)
+	svc.detectDrift(ctx)
+	if w := repo.get(bot); w.Observed != ObservedAbsent {
+		t.Fatalf("drift on a stopped workspace not recorded: %+v", w)
+	}
+	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
+		t.Fatalf("drifted row not claimed (%d)", n)
+	}
+	if w := repo.get(bot); w.Observed != ObservedRunning {
+		t.Fatalf("drift not repaired: %+v", w)
+	}
+	if len(backend.teardowns) != 0 {
+		t.Fatalf("drift repair must not tear down: %v", backend.teardowns)
+	}
+}
+
+func TestFailureMessageRedactsCredentials(t *testing.T) {
+	backend := &fakeBackend{provisionErr: errors.New(
+		"pull https://admin:s3cr3t@registry.example.com/v2/memoh?token=abc123: unauthorized")}
+	svc, repo, _, _ := newTestService(t, backend)
+	ctx := context.Background()
+	_, _ = svc.EnsurePresent(ctx, bot, "img:1")
+	_, _ = svc.ReconcileOnce(ctx)
+
+	// last_error reaches the user through the bot's runtime checks, so the
+	// credentials the upstream error quoted must not survive the write.
+	got := repo.get(bot).LastError
+	for _, secret := range []string{"s3cr3t", "abc123"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("last_error leaked %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, "***") {
+		t.Fatalf("last_error was not redacted: %s", got)
 	}
 }
 
