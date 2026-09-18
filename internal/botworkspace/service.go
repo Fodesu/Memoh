@@ -287,19 +287,32 @@ func (s *Service) Observe(ctx context.Context, botID string) (Workspace, error) 
 	if observed == w.Observed {
 		return w, nil
 	}
+	var (
+		updated Workspace
+		werr    error
+	)
 	if w.Desired == DesiredPresent && observed == ObservedAbsent && !insp.Exists {
 		// Drift: the workspace vanished. Make the row due so the loop
 		// re-provisions it; ever_ready stays as it was.
-		return s.writeObserved(ctx, w, ObservedWrite{
+		updated, werr = s.writeObserved(ctx, w, ObservedWrite{
 			Observed: ObservedAbsent, ObservedGeneration: w.ObservedGeneration,
 			LastError: "workspace not found on the backend", LastErrorPhase: "",
 			Attempts: 0, NextAttemptAt: s.now(), ReleaseLease: true,
 		})
+	} else {
+		// A user-driven start of a failed workspace is a recovery: the row
+		// becomes running and ready, and bots.status must follow, or a bot
+		// with a healthy workspace stays "failed" forever.
+		updated, werr = s.writeObserved(ctx, w, ObservedWrite{
+			Observed: observed, ObservedGeneration: w.ObservedGeneration, MarkReady: observed == ObservedRunning,
+			Attempts: 0, NextAttemptAt: s.now(), ReleaseLease: true,
+		})
 	}
-	return s.writeObserved(ctx, w, ObservedWrite{
-		Observed: observed, ObservedGeneration: w.ObservedGeneration, MarkReady: observed == ObservedRunning,
-		Attempts: w.Attempts, NextAttemptAt: w.NextAttemptAt, ReleaseLease: true,
-	})
+	if werr != nil {
+		return updated, werr
+	}
+	s.deriveBotStatus(ctx, updated)
+	return updated, nil
 }
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
@@ -369,7 +382,11 @@ func (s *Service) reconcileOnce(ctx context.Context, wg *sync.WaitGroup) (int, e
 	started := 0
 	for _, w := range rows {
 		if !s.markRunning(w.BotID) {
-			s.release(ctx, w.BotID)
+			// This instance is still processing the row (its lease expired but
+			// the goroutine is alive). Do not release: Release matches by
+			// owner and would strip the lease from the running goroutine. The
+			// claim bumped the version, so that goroutine's next write fails
+			// the version check and it backs off on its own.
 			continue
 		}
 		started++

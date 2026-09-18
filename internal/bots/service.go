@@ -180,8 +180,17 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 	if err := s.attachCheckSummary(ctx, &bot, asSQLCBot(row)); err != nil {
 		return Bot{}, err
 	}
-	if req.SkipLifecycle || s.workspaceIntents == nil {
+	if req.SkipLifecycle {
 		return bot, nil
+	}
+	if s.workspaceIntents == nil {
+		// No workspace subsystem is wired (tests, partial deployments). Keep
+		// the bot usable instead of leaving it in creating with nothing that
+		// would ever change that status.
+		if err := s.updateStatus(ctx, bot.ID, BotStatusReady); err != nil {
+			return Bot{}, err
+		}
+		return s.Get(ctx, bot.ID)
 	}
 	// The workspace is provisioned by the reconciler; the request only
 	// records the intent. A failed provisioning leaves the bot in status

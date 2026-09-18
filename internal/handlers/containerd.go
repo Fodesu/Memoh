@@ -620,7 +620,10 @@ func (h *ContainerdHandler) DeleteContainer(c echo.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		return newI18nHTTPError(http.StatusAccepted, "workspace_delete_pending", "bots.container.deleteFailed", "workspace removal is still in progress")
+		return c.JSON(http.StatusAccepted, map[string]any{
+			"code":    "workspace_delete_pending",
+			"message": "workspace removal is still in progress",
+		})
 	}
 	if final.Observed != botworkspace.ObservedAbsent {
 		message := strings.TrimSpace(final.LastError)

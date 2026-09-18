@@ -829,3 +829,28 @@ func TestStaleClaimantNeverTouchesBackend(t *testing.T) {
 		t.Fatalf("stale claimant touched the backend: provisions=%d teardowns=%v", backend.provisions, backend.teardowns)
 	}
 }
+
+func TestObserveAfterManualStartRecoversFailedBot(t *testing.T) {
+	// The bot failed to provision; the user starts the container by hand and
+	// it comes up. Observe must record running and lift bots.status out of
+	// failed, since nothing else will ever revisit this row.
+	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Retryable: false, Err: errors.New("pull denied")}}
+	svc, repo, status, _ := newTestService(t, backend)
+	ctx := context.Background()
+	_, _ = svc.EnsurePresent(ctx, bot, "bad:image")
+	_, _ = svc.ReconcileOnce(ctx)
+	if status.get(bot) != BotStatusFailed {
+		t.Fatalf("precondition: bot status = %q, want failed", status.get(bot))
+	}
+	backend.exists, backend.running = true, true
+	if _, err := svc.Observe(ctx, bot); err != nil {
+		t.Fatal(err)
+	}
+	w := repo.get(bot)
+	if w.Observed != ObservedRunning || !w.EverReady || w.Attempts != 0 {
+		t.Fatalf("after observe: %+v", w)
+	}
+	if status.get(bot) != BotStatusReady {
+		t.Fatalf("bot status = %q, want ready after the workspace came up", status.get(bot))
+	}
+}
