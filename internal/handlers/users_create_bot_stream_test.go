@@ -430,7 +430,7 @@ func (w *createBotStreamWorkspace) EnsurePresent(_ context.Context, botID, image
 			w.publish(botID, botworkspace.ProgressEvent{
 				Type: ev.Type, Image: ev.Image, Message: ev.Message, Layers: ev.Layers,
 				ContainerID: ev.ContainerID, WorkspaceBackend: ev.WorkspaceBackend, RuntimeBackend: ev.RuntimeBackend,
-				ContainerPath: ev.ContainerPath, CDIDevices: ev.CDIDevices, Started: ev.Started,
+				ContainerPath: ev.ContainerPath, CDIDevices: ev.CDIDevices, Snapshotter: ev.Snapshotter, Started: ev.Started,
 				DataRestored: ev.DataRestored, HasPreservedData: ev.HasPreservedData,
 			})
 		}

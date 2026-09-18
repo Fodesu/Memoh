@@ -3810,9 +3810,12 @@ definitions:
       image:
         type: string
       restore_data:
+        description: |-
+          RestoreData imports the preserved /data archive into the new workspace
+          once it is running. Backends that expose snapshot mounts restore the
+          archive while starting regardless of this flag; the flag matters for
+          backends that restore through the bridge.
         type: boolean
-      snapshotter:
-        type: string
     type: object
   handlers.CreateContainerResponse:
     properties:

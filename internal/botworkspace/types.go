@@ -81,7 +81,9 @@ func (w Workspace) Settled() bool {
 		return false
 	}
 	if w.Desired == DesiredAbsent {
-		return w.Observed == ObservedAbsent
+		// A teardown that exhausted its retries parks the row as failed; that
+		// is a definite (negative) answer, not a state still in motion.
+		return w.Observed == ObservedAbsent || w.Observed == ObservedFailed
 	}
 	return true
 }
@@ -89,7 +91,7 @@ func (w Workspace) Settled() bool {
 // RetryPending reports whether a failed observation still has an automatic
 // retry scheduled (as opposed to being parked until the intent changes).
 func (w Workspace) RetryPending() bool {
-	return w.Desired == DesiredPresent && w.Observed == ObservedFailed &&
+	return w.Observed == ObservedFailed &&
 		!w.NextAttemptAt.IsZero() && w.NextAttemptAt.Before(farFuture)
 }
 
@@ -114,6 +116,7 @@ type ProgressEvent struct {
 	RuntimeBackend   string
 	ContainerPath    string
 	CDIDevices       []string
+	Snapshotter      string
 	Started          bool
 	DataRestored     bool
 	HasPreservedData bool

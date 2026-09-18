@@ -353,6 +353,7 @@ type ContainerSetupEvent struct {
 	RuntimeBackend   string
 	ContainerPath    string
 	CDIDevices       []string
+	Snapshotter      string
 	Started          bool
 	DataRestored     bool
 	HasPreservedData bool

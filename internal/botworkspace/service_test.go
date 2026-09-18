@@ -635,9 +635,9 @@ func TestFinalDistinguishesPendingRetryFromParkedFailure(t *testing.T) {
 	if !running.Final() {
 		t.Fatal("running is final")
 	}
-	absentIntent := Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1, NextAttemptAt: now}
-	if absentIntent.RetryPending() {
-		t.Fatal("RetryPending only applies to a present intent")
+	absentParked := Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1, NextAttemptAt: farFuture}
+	if absentParked.RetryPending() || !absentParked.Final() {
+		t.Fatal("a parked teardown failure has no retry pending and is final")
 	}
 }
 
@@ -852,5 +852,29 @@ func TestObserveAfterManualStartRecoversFailedBot(t *testing.T) {
 	}
 	if status.get(bot) != BotStatusReady {
 		t.Fatalf("bot status = %q, want ready after the workspace came up", status.get(bot))
+	}
+}
+
+func TestAwaitReturnsExhaustedTeardownFailure(t *testing.T) {
+	// A teardown that keeps failing must eventually give Await a definite
+	// answer instead of making callers wait out their whole budget.
+	backend := &fakeBackend{}
+	svc, repo, _, clk := newTestService(t, backend)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.ReconcileOnce(ctx)
+	backend.teardownErr = errors.New("provider refuses")
+	w, _ := svc.RequestAbsent(ctx, bot, false)
+	for i := 0; i < 3; i++ { // MaxAttempts in newTestService
+		_, _ = svc.ReconcileOnce(ctx)
+		clk.advance(time.Hour)
+	}
+	if got := repo.get(bot); got.Observed != ObservedFailed || got.LastErrorPhase != PhaseTeardown {
+		t.Fatalf("precondition: teardown should be parked as failed, got %+v", got)
+	}
+	final, err := svc.Await(ctx, bot, w.DesiredGeneration)
+	if err != nil || final.Observed != ObservedFailed || final.Desired != DesiredAbsent {
+		t.Fatalf("Await() = %+v, %v; want the parked teardown failure", final, err)
 	}
 }

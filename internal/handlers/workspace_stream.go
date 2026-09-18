@@ -25,6 +25,10 @@ type workspaceStreamOutcome struct {
 	Failed    bool
 	// ErrorSent is true when an error event was already written to the stream.
 	ErrorSent bool
+	// Disconnected is true when the client stopped reading before the
+	// workspace settled; nothing more can be sent. The reconciler keeps
+	// converging the intent regardless.
+	Disconnected bool
 }
 
 // streamWorkspaceProvisioning relays reconciler progress for one intent to an
@@ -42,30 +46,35 @@ func streamWorkspaceProvisioning(
 	requestID string,
 	sendError func(code, i18nKey, message string),
 ) workspaceStreamOutcome {
+	// The await runs on a child context so a client that disconnects mid-way
+	// releases this goroutine instead of holding it for the whole budget.
+	awaitCtx, cancelAwait := context.WithCancel(ctx)
+	defer cancelAwait()
 	type awaited struct {
 		w   botworkspace.Workspace
 		err error
 	}
 	done := make(chan awaited, 1)
 	go func() {
-		w, err := await(ctx)
+		w, err := await(awaitCtx)
 		done <- awaited{w: w, err: err}
 	}()
 
-	relay := func(ev botworkspace.ProgressEvent) {
+	// relay writes one event; false means the client is gone.
+	relay := func(ev botworkspace.ProgressEvent) bool {
 		switch ev.Type {
 		case "pulling":
-			send(createContainerPullingEvent{Type: "pulling", Image: ev.Image})
+			return send(createContainerPullingEvent{Type: "pulling", Image: ev.Image})
 		case "pull_progress":
-			send(createContainerPullProgressEvent{Type: "pull_progress", Layers: ev.Layers})
+			return send(createContainerPullProgressEvent{Type: "pull_progress", Layers: ev.Layers})
 		case "pull_skipped", "pull_delegated":
-			send(createContainerPullStatusEvent{Type: ev.Type, Image: ev.Image, Message: ev.Message})
+			return send(createContainerPullStatusEvent{Type: ev.Type, Image: ev.Image, Message: ev.Message})
 		case "creating":
-			send(createContainerCreatingEvent{Type: "creating"})
+			return send(createContainerCreatingEvent{Type: "creating"})
 		case "restoring":
-			send(createContainerRestoringEvent{Type: "restoring"})
+			return send(createContainerRestoringEvent{Type: "restoring"})
 		case "complete":
-			send(createContainerCompleteEvent{
+			return send(createContainerCompleteEvent{
 				Type: "complete",
 				Container: CreateContainerResponse{
 					ContainerID:      ev.ContainerID,
@@ -73,6 +82,7 @@ func streamWorkspaceProvisioning(
 					RuntimeBackend:   ev.RuntimeBackend,
 					ContainerPath:    ev.ContainerPath,
 					Image:            ev.Image,
+					Snapshotter:      ev.Snapshotter,
 					CDIDevices:       ev.CDIDevices,
 					Started:          ev.Started,
 					DataRestored:     ev.DataRestored,
@@ -84,16 +94,19 @@ func streamWorkspaceProvisioning(
 			// subscriber event from a previous generation cannot end the stream
 			// early.
 		}
+		return true
 	}
 	// drain relays progress that was published before await observed the
 	// settled row, so the client still sees the final "complete" step.
-	drain := func() {
+	drain := func() bool {
 		for {
 			select {
 			case ev := <-events:
-				relay(ev)
+				if !relay(ev) {
+					return false
+				}
 			default:
-				return
+				return true
 			}
 		}
 	}
@@ -101,9 +114,13 @@ func streamWorkspaceProvisioning(
 	for {
 		select {
 		case ev := <-events:
-			relay(ev)
+			if !relay(ev) {
+				return workspaceStreamOutcome{Disconnected: true}
+			}
 		case res := <-done:
-			drain()
+			if !drain() {
+				return workspaceStreamOutcome{Workspace: res.w, Disconnected: true}
+			}
 			if res.err != nil {
 				if errors.Is(res.err, context.DeadlineExceeded) || errors.Is(res.err, context.Canceled) {
 					sendError("workspace_setup_timeout", "bots.create.failedSubtitle", "workspace setup is still in progress; check the bot's workspace page")

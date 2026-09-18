@@ -89,8 +89,12 @@ func TestSettled(t *testing.T) {
 	if !(Workspace{Desired: DesiredPresent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1}).Settled() {
 		t.Fatal("failed is a settled answer to a present intent")
 	}
-	if (Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1}).Settled() {
-		t.Fatal("failed is not a settled answer to an absent intent")
+	parkedTeardown := Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedFailed, ObservedGeneration: 1, NextAttemptAt: farFuture}
+	if !parkedTeardown.Settled() || !parkedTeardown.Final() {
+		t.Fatalf("a parked teardown failure must be settled and final: settled=%v final=%v", parkedTeardown.Settled(), parkedTeardown.Final())
+	}
+	if (Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedRemoving, ObservedGeneration: 1}).Settled() {
+		t.Fatal("removing is not a settled answer to an absent intent")
 	}
 	if !(Workspace{Desired: DesiredAbsent, DesiredGeneration: 1, Observed: ObservedAbsent, ObservedGeneration: 1}).Settled() {
 		t.Fatal("absent/absent must be settled")

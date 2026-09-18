@@ -23153,10 +23153,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "restore_data": {
+                    "description": "RestoreData imports the preserved /data archive into the new workspace\nonce it is running. Backends that expose snapshot mounts restore the\narchive while starting regardless of this flag; the flag matters for\nbackends that restore through the bridge.",
                     "type": "boolean"
-                },
-                "snapshotter": {
-                    "type": "string"
                 }
             }
         },

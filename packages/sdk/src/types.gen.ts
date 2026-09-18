@@ -2158,8 +2158,13 @@ export type HandlersContextUsage = {
 export type HandlersCreateContainerRequest = {
     gpu?: HandlersContainerGpuRequest;
     image?: string;
+    /**
+     * RestoreData imports the preserved /data archive into the new workspace
+     * once it is running. Backends that expose snapshot mounts restore the
+     * archive while starting regardless of this flag; the flag matters for
+     * backends that restore through the bridge.
+     */
     restore_data?: boolean;
-    snapshotter?: string;
 };
 
 export type HandlersCreateContainerResponse = {

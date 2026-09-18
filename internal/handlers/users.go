@@ -563,7 +563,7 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	outcome := streamWorkspaceProvisioning(streamCtx, send, events, func(ctx context.Context) (botworkspace.Workspace, error) {
 		return h.workspaceSetup.Await(ctx, bot.ID, intent.DesiredGeneration)
 	}, httpx.RequestID(c), sendError)
-	if outcome.Failed {
+	if outcome.Failed || outcome.Disconnected {
 		return nil
 	}
 

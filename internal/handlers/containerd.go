@@ -51,7 +51,10 @@ type ContainerGPURequest struct {
 }
 
 type CreateContainerRequest struct {
-	Snapshotter string               `json:"snapshotter,omitempty"`
+	// RestoreData imports the preserved /data archive into the new workspace
+	// once it is running. Backends that expose snapshot mounts restore the
+	// archive while starting regardless of this flag; the flag matters for
+	// backends that restore through the bridge.
 	RestoreData bool                 `json:"restore_data,omitempty"`
 	Image       string               `json:"image,omitempty"`
 	GPU         *ContainerGPURequest `json:"gpu,omitempty"`
@@ -440,15 +443,79 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 		return nil
 	}
 
+	// When the client asked for a restore, the "complete" event is held back
+	// until the archive has been imported, so the client sees one final step
+	// that already reports data_restored.
+	var held *createContainerCompleteEvent
+	relaySend := send
+	if req.RestoreData {
+		relaySend = func(payload any) bool {
+			if ev, ok := payload.(createContainerCompleteEvent); ok {
+				held = &ev
+				return true
+			}
+			return send(payload)
+		}
+	}
+
 	streamCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceStreamBudget)
 	defer cancel()
-	streamWorkspaceProvisioning(streamCtx, send, events, func(ctx context.Context) (botworkspace.Workspace, error) {
+	outcome := streamWorkspaceProvisioning(streamCtx, relaySend, events, func(ctx context.Context) (botworkspace.Workspace, error) {
 		return h.workspaces.Await(ctx, botID, intent.DesiredGeneration)
 	}, httpx.RequestID(c), func(code, _ string, message string) {
 		// Workspace-page errors use the container i18n namespace.
 		sendError(code, "bots.container.createFailed", message)
 	})
+	if outcome.Failed || outcome.Disconnected || !req.RestoreData {
+		return nil
+	}
+
+	dataRestored := false
+	if h.manager.HasPreservedData(botID) {
+		send(createContainerRestoringEvent{Type: "restoring"})
+		if err := h.manager.RestorePreservedData(streamCtx, botID); err != nil {
+			h.logger.Error("restore preserved data failed", slog.String("bot_id", botID), slog.Any("error", err))
+			sendError("workspace_restore_failed", "bots.container.createFailed", "restore preserved data failed: "+err.Error())
+			return nil
+		}
+		dataRestored = true
+	}
+	complete := h.completeEventAfterRestore(streamCtx, botID, held, outcome.Workspace.Image)
+	complete.Container.DataRestored = complete.Container.DataRestored || dataRestored
+	complete.Container.HasPreservedData = h.manager.HasPreservedData(botID)
+	send(complete)
 	return nil
+}
+
+// completeEventAfterRestore returns the held "complete" event, or rebuilds one
+// from the current workspace status when the progress event was not observed
+// on this instance.
+func (h *ContainerdHandler) completeEventAfterRestore(ctx context.Context, botID string, held *createContainerCompleteEvent, image string) createContainerCompleteEvent {
+	if held != nil {
+		return *held
+	}
+	event := createContainerCompleteEvent{
+		Type: "complete",
+		Container: CreateContainerResponse{
+			Image:       image,
+			Snapshotter: h.cfg.Snapshotter,
+			Started:     true,
+		},
+	}
+	status, err := h.manager.GetContainerInfo(ctx, botID)
+	if err != nil {
+		h.logger.Warn("load container status after restore failed", slog.String("bot_id", botID), slog.Any("error", err))
+		return event
+	}
+	event.Container.ContainerID = status.ContainerID
+	event.Container.WorkspaceBackend = status.WorkspaceBackend
+	event.Container.RuntimeBackend = status.RuntimeBackend
+	event.Container.ContainerPath = status.ContainerPath
+	event.Container.CDIDevices = status.CDIDevices
+	if strings.TrimSpace(status.Image) != "" {
+		event.Container.Image = status.Image
+	}
+	return event
 }
 
 // GetContainer godoc
