@@ -378,94 +378,12 @@ func (m *Manager) setupBotContainer(ctx context.Context, botID string, progress 
 			progress(event)
 		}
 	}
-
-	image, err := m.resolveWorkspaceImage(ctx, botID)
-	if err != nil {
-		m.logger.Error("setup bot container: resolve image failed",
-			slog.String("bot_id", botID),
-			slog.Any("error", err))
-		return err
+	// Shared with the botworkspace reconciler (reconcile_backend.go); the
+	// phase-attributed error is unwrapped here so legacy callers keep seeing
+	// the underlying runtime error.
+	if err := m.provisionWorkspace(ctx, botID, "", emit); err != nil {
+		return errors.Unwrap(err)
 	}
-	emit(ContainerSetupEvent{Type: "pulling", Image: image})
-	result, err := m.PrepareImageForCreate(ctx, image, &ctr.PullImageOptions{
-		Unpack:        true,
-		StorageDriver: m.cfg.Snapshotter,
-		OnProgress: func(p ctr.PullProgress) {
-			emit(ContainerSetupEvent{Type: "pull_progress", Layers: p.Layers})
-		},
-	})
-	if err != nil {
-		m.logger.Error("setup bot container: prepare image failed",
-			slog.String("bot_id", botID),
-			slog.String("image", image),
-			slog.Any("error", err))
-		return err
-	}
-	if strings.TrimSpace(result.ImageRef) != "" {
-		image = result.ImageRef
-	}
-	switch result.Mode {
-	case ImagePrepareSkipped:
-		emit(ContainerSetupEvent{Type: "pull_skipped", Image: image, Message: result.Message})
-	case ImagePrepareDelegated:
-		emit(ContainerSetupEvent{Type: "pull_delegated", Image: image, Message: result.Message})
-	}
-	gpu, err := m.resolveWorkspaceGPU(ctx, botID)
-	if err != nil {
-		return err
-	}
-
-	emit(ContainerSetupEvent{Type: "creating"})
-	hadPreservedData := m.HasPreservedData(botID)
-	if hadPreservedData {
-		emit(ContainerSetupEvent{Type: "restoring"})
-	}
-
-	if err := m.StartWithResolvedConfig(ctx, botID, image, gpu); err != nil {
-		m.logger.Error("setup bot container: start failed",
-			slog.String("bot_id", botID),
-			slog.Any("error", err))
-		return err
-	}
-	if err := m.WaitForWorkspaceReady(ctx, botID); err != nil {
-		m.logger.Error("setup bot container: bridge not ready",
-			slog.String("bot_id", botID),
-			slog.Any("error", err))
-		return err
-	}
-	if err := m.InitializeNativeWorkspace(ctx, botID); err != nil {
-		m.logger.Error("setup bot container: workspace initialization failed",
-			slog.String("bot_id", botID),
-			slog.Any("error", err))
-		return err
-	}
-	if err := m.RememberWorkspaceImage(ctx, botID, image); err != nil {
-		m.logger.Warn("setup bot container: remember workspace image failed",
-			slog.String("bot_id", botID),
-			slog.String("image", image),
-			slog.Any("error", err))
-	}
-
-	containerID := m.resolveContainerID(ctx, botID)
-	m.upsertContainerRecord(ctx, botID, containerID, "running", image)
-	event := ContainerSetupEvent{
-		Type:             "complete",
-		Image:            image,
-		ContainerID:      containerID,
-		WorkspaceBackend: workspaceBackendFromRecord(""),
-		Started:          true,
-		DataRestored:     hadPreservedData && !m.HasPreservedData(botID),
-		HasPreservedData: m.HasPreservedData(botID),
-	}
-	if status, err := m.GetContainerInfo(ctx, botID); err == nil {
-		event.ContainerID = status.ContainerID
-		event.WorkspaceBackend = status.WorkspaceBackend
-		event.RuntimeBackend = status.RuntimeBackend
-		event.ContainerPath = status.ContainerPath
-		event.CDIDevices = status.CDIDevices
-		event.HasPreservedData = status.HasPreservedData
-	}
-	emit(event)
 	return nil
 }
 
@@ -522,14 +440,13 @@ func (m *Manager) ReconcileContainers(ctx context.Context) {
 					slog.String("container_id", containerID), slog.Any("error", err))
 				continue
 			}
-			// Container missing in containerd — rebuild.
-			m.logger.Warn("reconcile: container missing, rebuilding",
+			// Container missing in the runtime. Re-provisioning is the
+			// botworkspace reconciler's job (drift detection observes the
+			// workspace as absent and provisions it again without deleting
+			// anything); here we only record what we saw.
+			m.logger.Warn("reconcile: container missing; left to the workspace reconciler",
 				slog.String("bot_id", botID), slog.String("container_id", containerID))
-			if setupErr := m.SetupBotContainer(ctx, botID); setupErr != nil {
-				m.logger.Error("reconcile: rebuild failed",
-					slog.String("bot_id", botID), slog.Any("error", setupErr))
-				m.markContainerStatus(ctx, botID, "error")
-			}
+			m.markContainerStatus(ctx, botID, "missing")
 			continue
 		}
 
