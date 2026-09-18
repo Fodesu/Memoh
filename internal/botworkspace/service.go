@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/felinics/memoh/internal/config"
 )
 
 // Backend performs the workspace operations for one runtime (containerd,
@@ -354,13 +356,16 @@ func (s *Service) ReconcileOnce(ctx context.Context) (int, error) {
 }
 
 func (s *Service) reconcileOnce(ctx context.Context, wg *sync.WaitGroup) (int, error) {
+	limit := s.freeSlots()
+	if limit == 0 {
+		return 0, nil
+	}
 	claimCtx, cancel := context.WithTimeout(ctx, s.opts.WriteTimeout)
-	rows, err := s.repo.Claim(claimCtx, s.opts.Owner, s.opts.Lease, s.opts.Batch)
+	rows, err := s.repo.Claim(claimCtx, s.opts.Owner, s.opts.Lease, limit)
 	cancel()
 	if err != nil {
 		return 0, err
 	}
-	sem := make(chan struct{}, s.opts.Concurrency)
 	started := 0
 	for _, w := range rows {
 		if !s.markRunning(w.BotID) {
@@ -369,15 +374,29 @@ func (s *Service) reconcileOnce(ctx context.Context, wg *sync.WaitGroup) (int, e
 		}
 		started++
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(w Workspace) {
 			defer wg.Done()
-			defer func() { <-sem }()
 			defer s.unmarkRunning(w.BotID)
 			s.reconcileOne(ctx, w)
 		}(w)
 	}
 	return started, nil
+}
+
+// freeSlots is how many rows a pass may claim: a claimed row holds a lease,
+// so claiming more than can start immediately would park leased rows in a
+// queue until the lease expires and another instance takes them over.
+func (s *Service) freeSlots() int32 {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	free := s.opts.Concurrency - len(s.running)
+	if free <= 0 {
+		return 0
+	}
+	if free > int(s.opts.Batch) {
+		return s.opts.Batch
+	}
+	return int32(free) //nolint:gosec // free <= Batch, which is an int32
 }
 
 func (s *Service) markRunning(botID string) bool {
@@ -420,20 +439,9 @@ func (s *Service) reconcileOne(ctx context.Context, w Workspace) {
 }
 
 func (s *Service) provision(ctx context.Context, log *slog.Logger, w Workspace) {
-	opCtx, cancel := context.WithTimeout(ctx, s.opts.ProvisionTimeout)
-	defer cancel()
-	stopRenew := s.renewLoop(opCtx, w.BotID)
-	defer stopRenew()
-
-	// A half-provisioned workspace from a previous attempt is replaced only
-	// when the authorization rule allows it; otherwise the backend reuses it.
-	if w.Observed == ObservedFailed && MayDeleteData(w, s.backend.HasPreservedData(w.BotID)) {
-		if err := s.backend.Teardown(opCtx, w.BotID, false); err != nil {
-			s.fail(ctx, log, w, &StepError{Phase: PhaseTeardown, Retryable: true, Err: err})
-			return
-		}
-	}
-
+	// The version-checked transition into provisioning comes first: a stale
+	// claimant whose lease another instance took over fails here and never
+	// touches the backend.
 	cur, err := s.writeObserved(ctx, w, ObservedWrite{
 		Observed: ObservedProvisioning, ObservedGeneration: w.DesiredGeneration,
 		Attempts: w.Attempts, NextAttemptAt: s.now(), ReleaseLease: false,
@@ -444,6 +452,14 @@ func (s *Service) provision(ctx context.Context, log *slog.Logger, w Workspace) 
 		return
 	}
 	s.deriveBotStatus(ctx, cur)
+
+	opCtx, cancel := s.leasedContext(ctx, w.BotID, s.opts.ProvisionTimeout)
+	defer cancel()
+
+	if err := s.replaceStaleContainer(opCtx, log, cur); err != nil {
+		s.fail(ctx, log, cur, &StepError{Phase: PhaseTeardown, Retryable: true, Err: err})
+		return
+	}
 
 	err = s.backend.Provision(opCtx, w.BotID, w.Image, func(ev ProgressEvent) { s.publish(w.BotID, ev) })
 	if err != nil {
@@ -497,11 +513,6 @@ func (s *Service) fail(ctx context.Context, log *slog.Logger, w Workspace, step 
 }
 
 func (s *Service) teardown(ctx context.Context, log *slog.Logger, w Workspace) {
-	opCtx, cancel := context.WithTimeout(ctx, s.opts.TeardownTimeout)
-	defer cancel()
-	stopRenew := s.renewLoop(opCtx, w.BotID)
-	defer stopRenew()
-
 	cur, err := s.writeObserved(ctx, w, ObservedWrite{
 		Observed: ObservedRemoving, ObservedGeneration: w.DesiredGeneration,
 		Attempts: w.Attempts, NextAttemptAt: s.now(), ReleaseLease: false,
@@ -511,6 +522,9 @@ func (s *Service) teardown(ctx context.Context, log *slog.Logger, w Workspace) {
 		s.release(ctx, w.BotID)
 		return
 	}
+
+	opCtx, cancel := s.leasedContext(ctx, w.BotID, s.opts.TeardownTimeout)
+	defer cancel()
 
 	if err := s.backend.Teardown(opCtx, w.BotID, w.PreserveData); err != nil {
 		attempts := cur.Attempts + 1
@@ -602,12 +616,16 @@ func (s *Service) release(ctx context.Context, botID string) {
 	}
 }
 
-func (s *Service) renewLoop(ctx context.Context, botID string) func() {
+// leasedContext bounds a backend operation by timeout and by lease: it keeps
+// renewing the row's lease while the operation runs, and cancels the context
+// as soon as a renewal fails (another instance took the row over), so two
+// instances never drive the same workspace at once.
+func (s *Service) leasedContext(parent context.Context, botID string, timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	interval := s.opts.Lease / 3
 	if interval < time.Second {
 		interval = time.Second
 	}
-	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -615,19 +633,43 @@ func (s *Service) renewLoop(ctx context.Context, botID string) func() {
 			select {
 			case <-ctx.Done():
 				return
-			case <-done:
-				return
 			case <-ticker.C:
-				rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
-				if err := s.repo.Renew(rctx, botID, s.opts.Owner, s.opts.Lease); err != nil {
-					s.log.Warn("renew lease failed", slog.String("bot_id", botID), slog.Any("error", err))
+				rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
+				err := s.repo.Renew(rctx, botID, s.opts.Owner, s.opts.Lease)
+				rcancel()
+				if err != nil {
+					s.log.Warn("lease lost; abandoning operation", slog.String("bot_id", botID), slog.Any("error", err))
+					cancel()
+					return
 				}
-				cancel()
 			}
 		}
 	}()
-	var once sync.Once
-	return func() { once.Do(func() { close(done) }) }
+	return ctx, cancel
+}
+
+// replaceStaleContainer handles a never-ready workspace whose previous attempt
+// left a container built from a different image than the one now requested.
+// The container is exported and removed so the retry builds from the right
+// image; the export keeps any data a previous attempt restored into it (the
+// preserved-data archive is consumed by the restore, so the container may be
+// the only copy). A container built from the requested image, and any
+// workspace that was ready once, is reused as is.
+func (s *Service) replaceStaleContainer(ctx context.Context, log *slog.Logger, w Workspace) error {
+	if w.EverReady || strings.TrimSpace(w.Image) == "" {
+		return nil
+	}
+	insp, err := s.backend.Inspect(ctx, w.BotID)
+	if err != nil {
+		return err
+	}
+	requested := config.NormalizeImageRef(w.Image)
+	if !insp.Exists || insp.Image == "" || config.NormalizeImageRef(insp.Image) == requested {
+		return nil
+	}
+	log.Info("replacing container built from a different image",
+		slog.String("current_image", insp.Image), slog.String("requested_image", w.Image))
+	return s.backend.Teardown(ctx, w.BotID, true)
 }
 
 func (s *Service) deriveBotStatus(ctx context.Context, w Workspace) {

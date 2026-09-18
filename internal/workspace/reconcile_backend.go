@@ -38,18 +38,22 @@ func (m *Manager) Teardown(ctx context.Context, botID string, preserve bool) err
 // Inspect implements botworkspace.Backend.
 func (m *Manager) Inspect(ctx context.Context, botID string) (botworkspace.Inspection, error) {
 	containerID := m.resolveContainerID(ctx, botID)
-	if _, err := m.service.GetContainer(ctx, containerID); err != nil {
+	info, err := m.service.GetContainer(ctx, containerID)
+	if err != nil {
 		if ctr.IsNotFound(err) {
 			return botworkspace.Inspection{}, nil
 		}
 		return botworkspace.Inspection{}, err
 	}
-	return botworkspace.Inspection{Exists: true, Running: m.isTaskRunning(ctx, containerID)}, nil
+	return botworkspace.Inspection{
+		Exists:  true,
+		Running: m.isTaskRunning(ctx, containerID),
+		Image:   config.NormalizeImageRef(strings.TrimSpace(info.Image)),
+	}, nil
 }
 
 // provisionWorkspace runs the setup steps and attributes failures to phases.
-// setupBotContainer (the legacy ContainerLifecycle path) delegates here so
-// both entry points share one implementation.
+// It is the only code path that creates a bot workspace.
 func (m *Manager) provisionWorkspace(ctx context.Context, botID, imageOverride string, emit func(ContainerSetupEvent)) error {
 	image := strings.TrimSpace(imageOverride)
 	if image == "" {

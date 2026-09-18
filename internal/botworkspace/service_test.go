@@ -14,6 +14,9 @@ type memRepo struct {
 	mu   sync.Mutex
 	rows map[string]*Workspace
 	now  func() time.Time
+	// beforeWrite runs (under the lock) before every observed write; tests
+	// use it to simulate a concurrent takeover.
+	beforeWrite func(w *Workspace)
 }
 
 func newMemRepo(now func() time.Time) *memRepo {
@@ -128,6 +131,9 @@ func (r *memRepo) WriteObserved(_ context.Context, u ObservedWrite) (Workspace, 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	w, ok := r.rows[u.BotID]
+	if ok && r.beforeWrite != nil {
+		r.beforeWrite(w)
+	}
 	if !ok || w.LeaseOwner != u.Owner || w.Version != u.ExpectedVersion {
 		return Workspace{}, ErrVersionConflict
 	}
@@ -176,13 +182,14 @@ type fakeBackend struct {
 	teardownErr   error
 	exists        bool
 	running       bool
+	image         string
 	preserved     bool
 	provisions    int
 	teardowns     []bool // preserve flag per call
 	inspects      int
 }
 
-func (b *fakeBackend) Provision(_ context.Context, _ string, _ string, progress func(ProgressEvent)) error {
+func (b *fakeBackend) Provision(_ context.Context, _ string, image string, progress func(ProgressEvent)) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.provisions++
@@ -199,6 +206,7 @@ func (b *fakeBackend) Provision(_ context.Context, _ string, _ string, progress 
 		return b.provisionErr
 	}
 	b.exists, b.running = true, true
+	b.image = image
 	if progress != nil {
 		progress(ProgressEvent{Type: "complete"})
 	}
@@ -220,7 +228,7 @@ func (b *fakeBackend) Inspect(context.Context, string) (Inspection, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.inspects++
-	return Inspection{Exists: b.exists, Running: b.running}, nil
+	return Inspection{Exists: b.exists, Running: b.running, Image: b.image}, nil
 }
 
 func (b *fakeBackend) HasPreservedData(string) bool {
@@ -341,9 +349,10 @@ func TestProvisionRetryableFailureBacksOffThenRecovers(t *testing.T) {
 	if status.get(bot) != BotStatusReady {
 		t.Fatalf("bot status = %q, want ready", status.get(bot))
 	}
-	// The never-ready half-provisioned container was replaced before retrying.
-	if len(backend.teardowns) != 1 || backend.teardowns[0] {
-		t.Fatalf("teardowns before retry = %v, want one non-preserving teardown", backend.teardowns)
+	// The retry reuses whatever the previous attempt left behind; nothing is
+	// deleted unless the requested image changed.
+	if len(backend.teardowns) != 0 {
+		t.Fatalf("teardowns before retry = %v, want none", backend.teardowns)
 	}
 }
 
@@ -683,5 +692,140 @@ func TestAwaitReturnsParkedFailure(t *testing.T) {
 	final, err := svc.Await(ctx, bot, w.DesiredGeneration)
 	if err != nil || final.Observed != ObservedFailed || final.RetryPending() {
 		t.Fatalf("Await() = %+v, %v; want a parked failure", final, err)
+	}
+}
+
+func TestRetryReplacesContainerBuiltFromOtherImagePreservingData(t *testing.T) {
+	// A never-ready workspace failed once and left a container built from the
+	// old image; the user retries with a new image. The old container may hold
+	// data restored from a consumed archive, so it is exported before removal.
+	backend := &fakeBackend{provisionErrs: []error{
+		&StepError{Phase: PhaseBridge, Retryable: true, Err: errors.New("bridge timeout")},
+		nil,
+	}}
+	svc, repo, _, clk := newTestService(t, backend)
+	ctx := context.Background()
+	_, _ = svc.EnsurePresent(ctx, bot, "img:old")
+	_, _ = svc.ReconcileOnce(ctx)
+	// Simulate the container the failed attempt left behind.
+	backend.exists, backend.image = true, "img:old"
+	if repo.get(bot).EverReady {
+		t.Fatal("precondition: workspace must never have been ready")
+	}
+	if _, err := svc.EnsurePresent(ctx, bot, "img:new"); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Minute)
+	_, _ = svc.ReconcileOnce(ctx)
+	if len(backend.teardowns) != 1 || !backend.teardowns[0] {
+		t.Fatalf("teardowns = %v, want exactly one preserving teardown", backend.teardowns)
+	}
+	if w := repo.get(bot); w.Observed != ObservedRunning || backend.image != "img:new" {
+		t.Fatalf("after retry: %+v image=%s", w, backend.image)
+	}
+}
+
+func TestRetryReusesContainerBuiltFromSameImage(t *testing.T) {
+	backend := &fakeBackend{provisionErrs: []error{
+		&StepError{Phase: PhaseBridge, Retryable: true, Err: errors.New("bridge timeout")},
+		nil,
+	}}
+	svc, repo, _, clk := newTestService(t, backend)
+	ctx := context.Background()
+	_, _ = svc.EnsurePresent(ctx, bot, "img:same")
+	_, _ = svc.ReconcileOnce(ctx)
+	backend.exists, backend.image = true, "img:same"
+	clk.advance(time.Minute)
+	_, _ = svc.ReconcileOnce(ctx)
+	if len(backend.teardowns) != 0 {
+		t.Fatalf("same image must be reused, got teardowns %v", backend.teardowns)
+	}
+	if w := repo.get(bot); w.Observed != ObservedRunning {
+		t.Fatalf("after retry: %+v", w)
+	}
+}
+
+func TestAbsentIntentOnUnknownBotStillTearsDown(t *testing.T) {
+	// A bot with no row (created before the table existed, or whose intent
+	// write failed) must not be assumed absent from the column default: the
+	// backend is asked, idempotently, and only then is the intent answered.
+	backend := &fakeBackend{exists: true, running: true}
+	svc, repo, _, _ := newTestService(t, backend)
+	ctx := context.Background()
+	w, err := svc.RequestAbsent(ctx, bot, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := repo.get(bot); got.Observed != ObservedAbsent || got.ObservedGeneration != 0 {
+		t.Fatalf("precondition: fresh row should carry the default observation, got %+v", got)
+	}
+	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
+		t.Fatalf("fresh absent intent not claimed (%d)", n)
+	}
+	if len(backend.teardowns) != 1 {
+		t.Fatalf("teardowns = %v, want one", backend.teardowns)
+	}
+	final := repo.get(bot)
+	if final.Observed != ObservedAbsent || final.ObservedGeneration != w.DesiredGeneration || !final.Settled() {
+		t.Fatalf("after teardown: %+v", final)
+	}
+	if backend.exists {
+		t.Fatal("backend container survived an absent intent")
+	}
+}
+
+func TestClaimNeverExceedsFreeConcurrency(t *testing.T) {
+	backend := &fakeBackend{}
+	clk := &clock{t: time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)}
+	repo := newMemRepo(clk.now)
+	svc := New(repo, backend, nil, Options{Owner: "test", Concurrency: 2, Batch: 10})
+	svc.now = clk.now
+	svc.rnd = func() float64 { return 0.5 }
+	ctx := context.Background()
+	bots := []string{"00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"}
+	for _, id := range bots {
+		_, _ = svc.EnsurePresent(ctx, id, "")
+	}
+	n, _ := svc.ReconcileOnce(ctx)
+	if n != 2 {
+		t.Fatalf("first pass claimed %d rows, want the 2 free slots", n)
+	}
+	// Exactly one row is still waiting, and it must not be holding a lease it
+	// cannot use.
+	waiting := 0
+	for _, id := range bots {
+		w := repo.get(id)
+		if w.Observed == ObservedRunning {
+			continue
+		}
+		waiting++
+		if w.LeaseOwner != "" {
+			t.Fatalf("unprocessed row %s holds a lease: %+v", id, w)
+		}
+	}
+	if waiting != 1 {
+		t.Fatalf("waiting rows = %d, want 1", waiting)
+	}
+	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
+		t.Fatalf("second pass claimed %d rows, want 1", n)
+	}
+}
+
+func TestStaleClaimantNeverTouchesBackend(t *testing.T) {
+	// Another instance took the row over between our claim and our first
+	// write: the version check fails and no backend call is made.
+	backend := &fakeBackend{exists: true, image: "img:old"}
+	svc, repo, _, _ := newTestService(t, backend)
+	ctx := context.Background()
+	_, _ = svc.EnsurePresent(ctx, bot, "img:new")
+	repo.beforeWrite = func(w *Workspace) {
+		w.LeaseOwner = "other-instance"
+		w.Version++
+	}
+	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
+		t.Fatalf("claimed %d, want 1", n)
+	}
+	if backend.provisions != 0 || len(backend.teardowns) != 0 {
+		t.Fatalf("stale claimant touched the backend: provisions=%d teardowns=%v", backend.provisions, backend.teardowns)
 	}
 }

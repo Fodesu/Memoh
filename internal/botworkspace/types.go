@@ -135,6 +135,8 @@ const (
 type Inspection struct {
 	Exists  bool
 	Running bool
+	// Image is the container's image reference when it exists.
+	Image string
 }
 
 // StepError attributes a backend failure to a phase and says whether the
