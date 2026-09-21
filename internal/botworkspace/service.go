@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/felinics/memoh/internal/config"
+	"github.com/felinics/memoh/internal/reconcile"
 	"github.com/felinics/memoh/internal/redact"
 )
 
@@ -58,20 +56,19 @@ type Options struct {
 	WriteTimeout      time.Duration
 }
 
+// reconcileOptions maps the shared loop/backoff tuning onto the reconcile
+// package; Now and Rand call through the Service so tests can pin them after
+// construction.
+func (o Options) reconcileOptions(now func() time.Time, rnd func() float64) reconcile.Options {
+	return reconcile.Options{
+		Owner: o.Owner, Interval: o.Interval, Lease: o.Lease,
+		BackoffBase: o.BackoffBase, BackoffCap: o.BackoffCap, MaxAttempts: o.MaxAttempts,
+		SlowRetryInterval: o.SlowRetryInterval, Batch: o.Batch, Concurrency: o.Concurrency,
+		WriteTimeout: o.WriteTimeout, Now: now, Rand: rnd,
+	}
+}
+
 func (o Options) withDefaults() Options {
-	if o.Owner == "" {
-		host, _ := os.Hostname()
-		o.Owner = strings.TrimSpace(host) + "/" + uuid.NewString()[:8]
-	}
-	if o.Interval <= 0 {
-		o.Interval = 15 * time.Second
-	}
-	if o.Lease <= 0 {
-		o.Lease = 2 * time.Minute
-	}
-	if o.DriftInterval <= 0 {
-		o.DriftInterval = 5 * time.Minute
-	}
 	// Retry schedule: 10s, 20s, 40s, 80s, 90s, 90s (±20% jitter), about 5.5
 	// minutes of fast retries from the first failure. One attempt is itself
 	// expensive (image pull, container start, bridge wait), so it does not
@@ -85,23 +82,15 @@ func (o Options) withDefaults() Options {
 	// the fast window (registry down, runtime restarting) heals without anyone
 	// pressing retry. A Kubernetes controller never gives up either; the slow
 	// cadence bounds the cost of a workspace that will never come up.
-	if o.BackoffBase <= 0 {
-		o.BackoffBase = 10 * time.Second
-	}
-	if o.BackoffCap <= 0 {
-		o.BackoffCap = 90 * time.Second
-	}
-	if o.MaxAttempts <= 0 {
-		o.MaxAttempts = 6
-	}
-	if o.SlowRetryInterval <= 0 {
-		o.SlowRetryInterval = 15 * time.Minute
-	}
-	if o.Batch <= 0 {
-		o.Batch = 20
-	}
-	if o.Concurrency <= 0 {
-		o.Concurrency = 4
+	//
+	// The shared values live in reconcile.Options.WithDefaults; only the
+	// workspace-specific timeouts are defaulted here.
+	base := o.reconcileOptions(nil, nil).WithDefaults()
+	o.Owner, o.Interval, o.Lease = base.Owner, base.Interval, base.Lease
+	o.BackoffBase, o.BackoffCap, o.MaxAttempts = base.BackoffBase, base.BackoffCap, base.MaxAttempts
+	o.SlowRetryInterval, o.Batch, o.Concurrency, o.WriteTimeout = base.SlowRetryInterval, base.Batch, base.Concurrency, base.WriteTimeout
+	if o.DriftInterval <= 0 {
+		o.DriftInterval = 5 * time.Minute
 	}
 	if o.ProvisionTimeout <= 0 {
 		o.ProvisionTimeout = 15 * time.Minute
@@ -109,13 +98,12 @@ func (o Options) withDefaults() Options {
 	if o.TeardownTimeout <= 0 {
 		o.TeardownTimeout = 5 * time.Minute
 	}
-	if o.WriteTimeout <= 0 {
-		o.WriteTimeout = 15 * time.Second
-	}
 	return o
 }
 
-// Service is the reconciler plus the intent API.
+// Service is the reconciler plus the intent API. The generic machinery
+// (claim loop, leases, backoff, event fan-out) comes from internal/reconcile;
+// this type owns what a workspace row means and what to do with it.
 type Service struct {
 	repo    Repository
 	backend Backend
@@ -125,22 +113,14 @@ type Service struct {
 	// rnd feeds the backoff jitter; tests pin it.
 	rnd func() float64
 
+	loop    *reconcile.Loop[Workspace]
+	backoff reconcile.Backoff
+	broker  *reconcile.Broker[ProgressEvent]
+
 	statusMu sync.RWMutex
 	status   BotStatusWriter
 
-	subsMu sync.Mutex
-	subs   map[string]map[chan ProgressEvent]struct{}
-
-	kick      chan struct{}
 	lastDrift time.Time
-
-	runMu   sync.Mutex
-	running map[string]struct{}
-
-	stop   chan struct{}
-	done   chan struct{}
-	startd sync.Once
-	stopd  sync.Once
 }
 
 // New builds a Service. The loop starts with Start.
@@ -148,19 +128,22 @@ func New(repo Repository, backend Backend, log *slog.Logger, opts Options) *Serv
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{
+	s := &Service{
 		repo:    repo,
 		backend: backend,
 		log:     log.With(slog.String("component", "botworkspace")),
 		opts:    opts.withDefaults(),
 		now:     time.Now,
 		rnd:     rand.Float64,
-		subs:    make(map[string]map[chan ProgressEvent]struct{}),
-		kick:    make(chan struct{}, 1),
-		running: make(map[string]struct{}),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		broker:  reconcile.NewBroker[ProgressEvent](64),
 	}
+	// Now/Rand call through the Service fields so a test that pins s.now or
+	// s.rnd after New steers the loop and the backoff as well.
+	ropts := s.opts.reconcileOptions(func() time.Time { return s.now() }, func() float64 { return s.rnd() })
+	s.backoff = ropts.Backoff()
+	s.loop = reconcile.NewLoop(repo, func(w Workspace) string { return w.BotID }, s.reconcileOne, s.log, ropts)
+	s.loop.SetAfterPass(s.maybeDetectDrift)
+	return s
 }
 
 // SetBotStatusWriter wires bots.status derivation (setter injection avoids an
@@ -208,49 +191,16 @@ func (s *Service) Get(ctx context.Context, botID string) (Workspace, error) {
 }
 
 // Kick wakes the loop for an immediate pass.
-func (s *Service) Kick() {
-	select {
-	case s.kick <- struct{}{}:
-	default:
-	}
-}
+func (s *Service) Kick() { s.loop.Kick() }
 
 // Subscribe streams progress and terminal events for a bot to an in-process
 // listener. Events are dropped when the listener falls behind; Await is the
 // reliable way to learn the outcome.
 func (s *Service) Subscribe(botID string) (<-chan ProgressEvent, func()) {
-	ch := make(chan ProgressEvent, 64)
-	s.subsMu.Lock()
-	if s.subs[botID] == nil {
-		s.subs[botID] = make(map[chan ProgressEvent]struct{})
-	}
-	s.subs[botID][ch] = struct{}{}
-	s.subsMu.Unlock()
-	var once sync.Once
-	return ch, func() {
-		once.Do(func() {
-			s.subsMu.Lock()
-			if set, ok := s.subs[botID]; ok {
-				delete(set, ch)
-				if len(set) == 0 {
-					delete(s.subs, botID)
-				}
-			}
-			s.subsMu.Unlock()
-		})
-	}
+	return s.broker.Subscribe(botID)
 }
 
-func (s *Service) publish(botID string, ev ProgressEvent) {
-	s.subsMu.Lock()
-	defer s.subsMu.Unlock()
-	for ch := range s.subs[botID] {
-		select {
-		case ch <- ev:
-		default:
-		}
-	}
-}
+func (s *Service) publish(botID string, ev ProgressEvent) { s.broker.Publish(botID, ev) }
 
 // Await blocks until the workspace has a final answer for an intent at least
 // as new as generation, polling the repository. A failure still inside its
@@ -258,22 +208,10 @@ func (s *Service) publish(botID string, ev ProgressEvent) {
 // that recovers on the next attempt never reaches the caller as a failure.
 // It works across Server instances.
 func (s *Service) Await(ctx context.Context, botID string, generation int64) (Workspace, error) {
-	ticker := time.NewTicker(400 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		w, err := s.repo.Get(ctx, botID)
-		if err != nil {
-			return Workspace{}, err
-		}
-		if w.DesiredGeneration >= generation && w.Final(s.opts.MaxAttempts) {
-			return w, nil
-		}
-		select {
-		case <-ctx.Done():
-			return w, ctx.Err()
-		case <-ticker.C:
-		}
-	}
+	return reconcile.Await(ctx, 400*time.Millisecond,
+		func(ctx context.Context) (Workspace, error) { return s.repo.Get(ctx, botID) },
+		func(w Workspace) bool { return w.DesiredGeneration >= generation && w.Final(s.opts.MaxAttempts) },
+	)
 }
 
 // Observe refreshes the observation for one bot from the backend (after a
@@ -333,118 +271,22 @@ func (s *Service) Observe(ctx context.Context, botID string) (Workspace, error) 
 // ─── Loop ────────────────────────────────────────────────────────────────────
 
 // Start launches the loop; it returns immediately.
-func (s *Service) Start(ctx context.Context) error {
-	s.startd.Do(func() {
-		go s.loop(context.WithoutCancel(ctx))
-	})
-	return nil
-}
+func (s *Service) Start(ctx context.Context) error { return s.loop.Start(ctx) }
 
 // Stop asks the loop to exit and waits for in-flight passes to release their
 // leases (bounded by ctx).
-func (s *Service) Stop(ctx context.Context) error {
-	s.stopd.Do(func() { close(s.stop) })
-	select {
-	case <-s.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s *Service) loop(ctx context.Context) {
-	defer close(s.done)
-	ticker := time.NewTicker(s.opts.Interval)
-	defer ticker.Stop()
-	var wg sync.WaitGroup
-	for {
-		select {
-		case <-s.stop:
-			wg.Wait()
-			return
-		case <-ticker.C:
-		case <-s.kick:
-		}
-		if _, err := s.reconcileOnce(ctx, &wg); err != nil {
-			s.log.ErrorContext(ctx, "reconcile pass failed", slog.Any("error", err))
-		}
-		if s.now().Sub(s.lastDrift) >= s.opts.DriftInterval {
-			s.lastDrift = s.now()
-			s.detectDrift(ctx)
-		}
-	}
-}
+func (s *Service) Stop(ctx context.Context) error { return s.loop.Stop(ctx) }
 
 // ReconcileOnce runs a single pass synchronously (tests, admin tooling).
-func (s *Service) ReconcileOnce(ctx context.Context) (int, error) {
-	var wg sync.WaitGroup
-	n, err := s.reconcileOnce(ctx, &wg)
-	wg.Wait()
-	return n, err
-}
+func (s *Service) ReconcileOnce(ctx context.Context) (int, error) { return s.loop.ReconcileOnce(ctx) }
 
-func (s *Service) reconcileOnce(ctx context.Context, wg *sync.WaitGroup) (int, error) {
-	limit := s.freeSlots()
-	if limit == 0 {
-		return 0, nil
+// maybeDetectDrift rides on the loop's ticker and runs the drift scan once
+// per DriftInterval.
+func (s *Service) maybeDetectDrift(ctx context.Context) {
+	if s.now().Sub(s.lastDrift) >= s.opts.DriftInterval {
+		s.lastDrift = s.now()
+		s.detectDrift(ctx)
 	}
-	claimCtx, cancel := context.WithTimeout(ctx, s.opts.WriteTimeout)
-	rows, err := s.repo.Claim(claimCtx, s.opts.Owner, s.opts.Lease, limit)
-	cancel()
-	if err != nil {
-		return 0, err
-	}
-	started := 0
-	for _, w := range rows {
-		if !s.markRunning(w.BotID) {
-			// This instance is still processing the row (its lease expired but
-			// the goroutine is alive). Do not release: Release matches by
-			// owner and would strip the lease from the running goroutine. The
-			// claim bumped the version, so that goroutine's next write fails
-			// the version check and it backs off on its own.
-			continue
-		}
-		started++
-		wg.Add(1)
-		go func(w Workspace) {
-			defer wg.Done()
-			defer s.unmarkRunning(w.BotID)
-			s.reconcileOne(ctx, w)
-		}(w)
-	}
-	return started, nil
-}
-
-// freeSlots is how many rows a pass may claim: a claimed row holds a lease,
-// so claiming more than can start immediately would park leased rows in a
-// queue until the lease expires and another instance takes them over.
-func (s *Service) freeSlots() int32 {
-	s.runMu.Lock()
-	defer s.runMu.Unlock()
-	free := s.opts.Concurrency - len(s.running)
-	if free <= 0 {
-		return 0
-	}
-	if free > int(s.opts.Batch) {
-		return s.opts.Batch
-	}
-	return int32(free) //nolint:gosec // free <= Batch, which is an int32
-}
-
-func (s *Service) markRunning(botID string) bool {
-	s.runMu.Lock()
-	defer s.runMu.Unlock()
-	if _, ok := s.running[botID]; ok {
-		return false
-	}
-	s.running[botID] = struct{}{}
-	return true
-}
-
-func (s *Service) unmarkRunning(botID string) {
-	s.runMu.Lock()
-	defer s.runMu.Unlock()
-	delete(s.running, botID)
 }
 
 func (s *Service) reconcileOne(ctx context.Context, w Workspace) {
@@ -521,19 +363,10 @@ func (s *Service) provision(ctx context.Context, log *slog.Logger, w Workspace) 
 }
 
 func (s *Service) fail(ctx context.Context, log *slog.Logger, w Workspace, step *StepError) {
-	attempts := w.Attempts + 1
-	var next time.Time
-	switch {
-	case step.Retryable && attempts < s.opts.MaxAttempts:
-		next = s.nextAttempt(attempts)
-	default:
-		// The fast budget is spent (or the failure is not worth spending it
-		// on): report the outcome now and fall back to the slow cadence.
-		if attempts < s.opts.MaxAttempts {
-			attempts = s.opts.MaxAttempts
-		}
-		next = s.slowRetryAt()
-	}
+	// A retryable failure inside the fast budget schedules the next attempt;
+	// anything else spends the budget so the outcome is reported now, and the
+	// row falls back to the slow cadence.
+	attempts, next := s.backoff.Spend(w.Attempts, step.Retryable)
 	message := sanitize(step.Err)
 	log.ErrorContext(ctx, "workspace provisioning failed",
 		slog.String("phase", step.Phase), slog.Bool("retryable", step.Retryable),
@@ -569,10 +402,10 @@ func (s *Service) teardown(ctx context.Context, log *slog.Logger, w Workspace) {
 	if err := s.backend.Teardown(opCtx, w.BotID, w.PreserveData); err != nil {
 		attempts := cur.Attempts + 1
 		observed := ObservedRemoving
-		next := s.nextAttempt(attempts)
+		next := s.backoff.NextAttempt(attempts)
 		if attempts >= s.opts.MaxAttempts {
 			observed = ObservedFailed
-			next = s.slowRetryAt()
+			next = s.backoff.SlowRetryAt()
 		}
 		log.ErrorContext(ctx, "workspace teardown failed", slog.Int("attempt", int(attempts)), slog.Any("error", err))
 		if _, werr := s.writeObserved(ctx, cur, ObservedWrite{
@@ -635,78 +468,26 @@ func (s *Service) detectDriftIn(ctx context.Context, observed string) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// backoffJitter spreads retries of rows that failed together (a registry
-// hiccup across many bots, several Server instances) over ±20% so they do not
-// come back as one spike.
-const backoffJitter = 0.2
-
-// nextAttempt schedules the retry after attempt number `attempts` failed.
-func (s *Service) nextAttempt(attempts int32) time.Time {
-	now := s.now()
-	d := NextBackoff(now, attempts, s.opts.BackoffBase, s.opts.BackoffCap).Sub(now)
-	return now.Add(s.jittered(d))
-}
-
-// slowRetryAt schedules the next background attempt once the fast budget is
-// spent.
-func (s *Service) slowRetryAt() time.Time {
-	return s.now().Add(s.jittered(s.opts.SlowRetryInterval))
-}
-
-func (s *Service) jittered(d time.Duration) time.Duration {
-	factor := 1 - backoffJitter + 2*backoffJitter*s.rnd()
-	return time.Duration(float64(d) * factor)
-}
-
 // writeObserved persists an observation on a fresh short-lived context so an
 // exhausted operation context can never lose the outcome.
 func (s *Service) writeObserved(ctx context.Context, w Workspace, write ObservedWrite) (Workspace, error) {
 	write.BotID = w.BotID
 	write.Owner = s.opts.Owner
 	write.ExpectedVersion = w.Version
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
+	wctx, cancel := reconcile.WriteContext(ctx, s.opts.WriteTimeout)
 	defer cancel()
 	return s.repo.WriteObserved(wctx, write)
 }
 
-func (s *Service) release(ctx context.Context, botID string) {
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
-	defer cancel()
-	if err := s.repo.Release(rctx, botID, s.opts.Owner); err != nil {
-		s.log.WarnContext(ctx, "release lease failed", slog.String("bot_id", botID), slog.Any("error", err))
-	}
-}
+func (s *Service) release(ctx context.Context, botID string) { s.loop.Release(ctx, botID) }
 
-// leasedContext bounds a backend operation by timeout and by lease: it keeps
-// renewing the row's lease while the operation runs, and cancels the context
-// as soon as a renewal fails (another instance took the row over), so two
-// instances never drive the same workspace at once.
+// nextAttempt schedules the retry after attempt number `attempts` failed.
+func (s *Service) nextAttempt(attempts int32) time.Time { return s.backoff.NextAttempt(attempts) }
+
+// leasedContext bounds a backend operation by timeout and by lease; see
+// reconcile.Loop.LeasedContext.
 func (s *Service) leasedContext(parent context.Context, botID string, timeout time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	interval := s.opts.Lease / 3
-	if interval < time.Second {
-		interval = time.Second
-	}
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
-				err := s.repo.Renew(rctx, botID, s.opts.Owner, s.opts.Lease)
-				rcancel()
-				if err != nil {
-					s.log.WarnContext(parent, "lease lost; abandoning operation", slog.String("bot_id", botID), slog.Any("error", err))
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-	return ctx, cancel
+	return s.loop.LeasedContext(parent, botID, timeout)
 }
 
 // replaceStaleContainer handles a never-ready workspace whose previous attempt
@@ -744,7 +525,7 @@ func (s *Service) deriveBotStatus(ctx context.Context, w Workspace) {
 	if !ok {
 		return
 	}
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
+	wctx, cancel := reconcile.WriteContext(ctx, s.opts.WriteTimeout)
 	defer cancel()
 	if err := writer.SetBotStatusFromWorkspace(wctx, w.BotID, status); err != nil {
 		s.log.WarnContext(ctx, "derive bot status failed", slog.String("bot_id", w.BotID), slog.String("status", status), slog.Any("error", err))

@@ -1,6 +1,10 @@
 package botworkspace
 
-import "time"
+import (
+	"time"
+
+	"github.com/felinics/memoh/internal/reconcile"
+)
 
 // Action is what the reconciler does with a claimed row.
 type Action int
@@ -69,19 +73,10 @@ func Decide(w Workspace, now time.Time) Action {
 // (see Service.replaceStaleContainer).
 
 // NextBackoff returns when the next attempt may run after attempt number
-// `attempts` (1-based) failed. Exponential from base, capped.
+// `attempts` (1-based) failed. Exponential from base, capped. Kept as a
+// package-level name for callers and tests; the policy lives in reconcile.
 func NextBackoff(now time.Time, attempts int32, base, capDuration time.Duration) time.Time {
-	if attempts < 1 {
-		attempts = 1
-	}
-	d := base
-	for i := int32(1); i < attempts && d < capDuration; i++ {
-		d *= 2
-	}
-	if d > capDuration {
-		d = capDuration
-	}
-	return now.Add(d)
+	return reconcile.NextBackoff(now, attempts, base, capDuration)
 }
 
 // DeriveBotStatus maps the workspace state onto bots.status. ok is false when
