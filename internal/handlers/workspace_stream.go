@@ -19,6 +19,9 @@ type workspaceIntents interface {
 	Subscribe(botID string) (<-chan botworkspace.ProgressEvent, func())
 	Await(ctx context.Context, botID string, generation int64) (botworkspace.Workspace, error)
 	Observe(ctx context.Context, botID string) (botworkspace.Workspace, error)
+	// Get reads the recorded intent without touching the backend; ErrNotFound
+	// when the bot has none yet.
+	Get(ctx context.Context, botID string) (botworkspace.Workspace, error)
 }
 
 // workspaceStatus is the manager slice that describes a settled workspace for

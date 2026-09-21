@@ -183,6 +183,34 @@ describe('useBotCreateProgressStore', () => {
     expect(store.lines.map(l => l.kind)).toEqual(['command', 'bot-created', 'error', 'pulling', 'creating', 'applying-settings', 'ready'])
   })
 
+  it('re-posts a lost create with the same Idempotency-Key and mints a new key for a fresh start', async () => {
+    const bot = { id: 'bot-1', name: 'ada' }
+    postBotsStream
+      .mockRejectedValueOnce(new Error('network connection lost'))
+      .mockResolvedValue(streamOf([{ type: 'bot_created', bot }, { type: 'ready', bot }]))
+
+    const store = useBotCreateProgressStore()
+    await store.start({ name: 'ada', display_name: 'Ada' })
+    expect(store.status).toBe('error')
+    expect(store.bot).toBeNull()
+    expect(store.canRetry).toBe(true)
+
+    await store.retry()
+    expect(store.status).toBe('ready')
+    expect(postBotsStream).toHaveBeenCalledTimes(2)
+    const keys = postBotsStream.mock.calls.map(call => (call[0] as { headers: Record<string, string> }).headers['Idempotency-Key'])
+    // The retry replays the same request so the server returns the Bot the
+    // lost request created instead of taking a second slot.
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(keys[1]).toBe(keys[0])
+
+    store.reset()
+    await store.start({ name: 'bob', display_name: 'Bob' })
+    const fresh = (postBotsStream.mock.calls[2][0] as { headers: Record<string, string> }).headers['Idempotency-Key']
+    expect(fresh).toMatch(/^[0-9a-f-]{36}$/)
+    expect(fresh).not.toBe(keys[0])
+  })
+
   it('stays in the workspace error when the retried workspace fails again', async () => {
     const bot = { id: 'bot-1', name: 'ada' }
     postBotsStream.mockResolvedValue(streamOf([

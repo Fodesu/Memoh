@@ -79,3 +79,14 @@ func IsUniqueViolation(err error) bool {
 	}
 	return false
 }
+
+// UniqueViolationConstraint returns the name of the UNIQUE constraint or index
+// err violated, or "" when err is not a unique violation. Callers use it to
+// tell apart several unique indexes on the same table.
+func UniqueViolationConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return pgErr.ConstraintName
+	}
+	return ""
+}

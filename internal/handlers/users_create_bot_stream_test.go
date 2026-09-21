@@ -89,6 +89,71 @@ func TestCreateBotStreamsLifecycleWhenSSERequested(t *testing.T) {
 	}
 }
 
+// A retried create carrying the same Idempotency-Key attaches to the Bot the
+// first request made: no second insert, and the stream still ends in ready.
+func TestCreateBotStreamReplaysBotForIdempotencyKey(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	db := &createBotStreamDB{ownerID: ownerID, botID: botID, requestIDKnown: true}
+	ws := &createBotStreamWorkspace{}
+	handler := &UsersHandler{
+		service:        newTestCreateBotAccountService(ownerID),
+		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(db))),
+		workspaceSetup: ws,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"display_name": "Stream Bot", "wait_for_ready": true}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(echo.HeaderAccept, "text/event-stream")
+	req.Header.Set("Idempotency-Key", "retry-1")
+	rec := httptest.NewRecorder()
+	if err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID)); err != nil {
+		t.Fatalf("CreateBot() error = %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if db.inserts != 0 {
+		t.Fatalf("inserts = %d, want 0 for a replayed create", db.inserts)
+	}
+	events := decodeSSEEvents(t, rec.Body.String())
+	if len(events) < 2 || events[0]["type"] != "bot_created" || events[len(events)-1]["type"] != "ready" {
+		t.Fatalf("events = %#v, want bot_created … ready", events)
+	}
+	if got := eventBotID(events[0]); got != botID {
+		t.Fatalf("replayed bot id = %q, want %q", got, botID)
+	}
+	// The first request never recorded an intent, so the replay records one.
+	if len(ws.intents) != 1 || ws.intents[0] != botID {
+		t.Fatalf("intents = %v, want one for %s", ws.intents, botID)
+	}
+}
+
+// The JSON path answers a replay with 200 and the existing Bot.
+func TestCreateBotReplaysBotForIdempotencyKeyJSON(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	db := &createBotStreamDB{ownerID: ownerID, botID: botID, requestIDKnown: true}
+	handler := &UsersHandler{
+		service:        newTestCreateBotAccountService(ownerID),
+		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(db))),
+		workspaceSetup: &createBotStreamWorkspace{},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"display_name": "Stream Bot", "request_id": "retry-1"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	if err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID)); err != nil {
+		t.Fatalf("CreateBot() error = %v", err)
+	}
+	if rec.Code != http.StatusOK || db.inserts != 0 {
+		t.Fatalf("status = %d inserts = %d, body=%s", rec.Code, db.inserts, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), botID) {
+		t.Fatalf("body = %s, want the existing bot", rec.Body.String())
+	}
+}
+
 func TestCreateBotStreamRequiresWorkspaceLifecycle(t *testing.T) {
 	ownerID := "00000000-0000-0000-0000-000000000103"
 
@@ -414,6 +479,15 @@ type createBotStreamWorkspace struct {
 	intents []string
 }
 
+func (w *createBotStreamWorkspace) Get(_ context.Context, botID string) (botworkspace.Workspace, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if final, ok := w.final[botID]; ok {
+		return final, nil
+	}
+	return botworkspace.Workspace{}, botworkspace.ErrNotFound
+}
+
 func (w *createBotStreamWorkspace) EnsurePresent(_ context.Context, botID, image string) (botworkspace.Workspace, error) {
 	w.mu.Lock()
 	if w.final == nil {
@@ -527,6 +601,10 @@ type createBotStreamDB struct {
 	status            string
 	metadata          []byte
 	persistedMetadata []byte
+	// requestIDKnown makes the idempotency lookup return the bot, as if an
+	// earlier request with the same key had created it.
+	requestIDKnown bool
+	inserts        int
 }
 
 func (d *createBotStreamDB) Exec(_ context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
@@ -544,7 +622,13 @@ func (d *createBotStreamDB) QueryRow(_ context.Context, query string, args ...an
 	switch {
 	case strings.Contains(query, "FROM users") && strings.Contains(query, "id = $1"):
 		return &createBotStreamRow{scanFunc: func(_ ...any) error { return nil }}
+	case strings.Contains(query, "create_request_id = $2"):
+		if d.requestIDKnown {
+			return d.botRow(bots.BotStatusCreating)
+		}
+		return &createBotStreamRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
 	case strings.Contains(query, "INSERT INTO bots"):
+		d.inserts++
 		if len(args) > 6 {
 			if payload, ok := args[6].([]byte); ok {
 				d.metadata = append([]byte(nil), payload...)

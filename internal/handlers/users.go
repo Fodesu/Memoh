@@ -411,8 +411,10 @@ func (h *UsersHandler) RemoveMember(c echo.Context) error {
 // @Summary Create bot user
 // @Description Create a bot user owned by current user (or admin-specified owner)
 // @Tags bots
+// @Param Idempotency-Key header string false "Client-generated key for this creation. Repeating a request with the same key returns the Bot it already created (200) instead of creating another; also accepted as body field request_id."
 // @Param payload body bots.CreateBotRequest true "Bot payload"
 // @Success 201 {object} bots.Bot
+// @Success 200 {object} bots.Bot "The Bot a previous request with the same Idempotency-Key created"
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 409 {object} apperror.Problem
@@ -426,6 +428,9 @@ func (h *UsersHandler) CreateBot(c echo.Context) error {
 	var req bots.CreateBotRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if key := strings.TrimSpace(c.Request().Header.Get(idempotencyKeyHeader)); key != "" {
+		req.RequestID = key
 	}
 	ownerID := channelIdentityID
 	ownerFromToken := true
@@ -457,6 +462,20 @@ func (h *UsersHandler) CreateBot(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid ACP metadata: "+err.Error())
 		}
 	}
+	if req.RequestID != "" {
+		// A retry of a request whose response was lost: hand back the Bot it
+		// created. The SSE path re-attaches to that Bot's workspace progress.
+		existing, ok, err := h.botService.FindByCreateRequest(c.Request().Context(), ownerID, req.RequestID)
+		if err != nil {
+			return createBotHTTPError(err, ownerFromToken)
+		}
+		if ok {
+			if acceptsEventStream(c) {
+				return h.replayBotStream(c, existing)
+			}
+			return c.JSON(http.StatusOK, scrubBotForResponse(existing))
+		}
+	}
 	if acceptsEventStream(c) {
 		return h.createBotStream(c, ownerID, ownerFromToken, req)
 	}
@@ -474,6 +493,10 @@ func (h *UsersHandler) CreateBot(c echo.Context) error {
 	//
 	return c.JSON(http.StatusCreated, scrubBotForResponse(resp))
 }
+
+// idempotencyKeyHeader carries the client's creation key; see
+// bots.CreateBotRequest.RequestID.
+const idempotencyKeyHeader = "Idempotency-Key"
 
 func acceptsEventStream(c echo.Context) bool {
 	return strings.Contains(strings.ToLower(c.Request().Header.Get(echo.HeaderAccept)), "text/event-stream")
@@ -499,7 +522,7 @@ func createBotHTTPError(err error, ownerFromToken bool) error {
 	if errors.Is(err, bots.ErrBotNameTaken) {
 		return apperror.New(apperror.CodeBotNameTaken, map[string]string{"field": "name"})
 	}
-	if errors.Is(err, bots.ErrBotNameInvalid) || errors.Is(err, bots.ErrBotNameReserved) {
+	if errors.Is(err, bots.ErrBotNameInvalid) || errors.Is(err, bots.ErrBotNameReserved) || errors.Is(err, bots.ErrBotCreateRequestInvalid) {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -522,7 +545,36 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	if err != nil {
 		return createBotHTTPError(err, ownerFromToken)
 	}
+	image := workspaceImageFromCreateRequest(req)
+	return h.streamBotWorkspaceSetup(c, flusher, bot, func(ctx context.Context) (botworkspace.Workspace, error) {
+		return h.workspaceSetup.EnsurePresent(ctx, bot.ID, image)
+	})
+}
 
+// replayBotStream serves an SSE create for a Bot that an earlier request with
+// the same idempotency key already created: no new row, no new intent unless
+// the first request died before recording one.
+func (h *UsersHandler) replayBotStream(c echo.Context, bot bots.Bot) error {
+	flusher, ok := c.Response().Writer.(http.Flusher)
+	if !ok {
+		return echo.NewHTTPError(http.StatusInternalServerError, "streaming not supported")
+	}
+	if h.workspaceSetup == nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "workspace lifecycle not configured")
+	}
+	return h.streamBotWorkspaceSetup(c, flusher, bot, func(ctx context.Context) (botworkspace.Workspace, error) {
+		w, err := h.workspaceSetup.Get(ctx, bot.ID)
+		if errors.Is(err, botworkspace.ErrNotFound) {
+			return h.workspaceSetup.EnsurePresent(ctx, bot.ID, workspaceImageFromMetadata(bot.Metadata))
+		}
+		return w, err
+	})
+}
+
+// streamBotWorkspaceSetup relays a Bot's workspace provisioning as the create
+// SSE stream: bot_created, progress, complete, ready (or a terminal error).
+// recordIntent yields the intent whose generation the stream awaits.
+func (h *UsersHandler) streamBotWorkspaceSetup(c echo.Context, flusher http.Flusher, bot bots.Bot, recordIntent func(context.Context) (botworkspace.Workspace, error)) error {
 	setSSEHeaders(c)
 	c.Response().WriteHeader(http.StatusOK)
 	writer := c.Response().Writer
@@ -559,7 +611,7 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 
 	// Recording the intent must not depend on the client staying connected.
 	intentCtx, cancelIntent := context.WithTimeout(context.WithoutCancel(c.Request().Context()), 15*time.Second)
-	intent, err := h.workspaceSetup.EnsurePresent(intentCtx, bot.ID, workspaceImageFromCreateRequest(req))
+	intent, err := recordIntent(intentCtx)
 	cancelIntent()
 	if err != nil {
 		h.logger.ErrorContext(c.Request().Context(), "record workspace intent failed",
@@ -600,7 +652,11 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 // workspaceImageFromCreateRequest reads the optional workspace.image preference
 // from the create request metadata.
 func workspaceImageFromCreateRequest(req bots.CreateBotRequest) string {
-	section, ok := req.Metadata["workspace"].(map[string]any)
+	return workspaceImageFromMetadata(req.Metadata)
+}
+
+func workspaceImageFromMetadata(metadata map[string]any) string {
+	section, ok := metadata["workspace"].(map[string]any)
 	if !ok {
 		return ""
 	}

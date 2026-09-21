@@ -184,6 +184,128 @@ func TestCreateRejectsUnknownACLPreset(t *testing.T) {
 	}
 }
 
+// createRequestDB fakes the queries Create issues, keyed on SQL fragments:
+// owner lookup, idempotency lookup, name lookup and the insert.
+func createRequestDB(t *testing.T, lookupHit bool, insertErr error) (*fakeDBTX, *int, *int) {
+	t.Helper()
+	ownerUUID := mustParseUUID("00000000-0000-0000-0000-000000000001")
+	botUUID := mustParseUUID("00000000-0000-0000-0000-000000000002")
+	inserts, lookups := 0, 0
+	db := &fakeDBTX{
+		queryRowFunc: func(_ context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users") && strings.Contains(sql, "id = $1"):
+				return &fakeRow{scanFunc: func(_ ...any) error { return nil }}
+			case strings.Contains(sql, "create_request_id = $2"):
+				lookups++
+				if owner, ok := args[0].(pgtype.UUID); !ok || owner != ownerUUID {
+					t.Fatalf("idempotency lookup owner = %#v, want %v", args[0], ownerUUID)
+				}
+				if lookupHit || inserts > 0 {
+					return makeBotRow(botUUID, ownerUUID)
+				}
+				return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
+			case strings.Contains(sql, "INSERT INTO bots"):
+				inserts++
+				if insertErr != nil {
+					return &fakeRow{scanFunc: func(_ ...any) error { return insertErr }}
+				}
+				return makeCreateBotRow(botUUID, ownerUUID)
+			default:
+				return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+	return db, &inserts, &lookups
+}
+
+func makeCreateBotRow(botID, ownerUserID pgtype.UUID) *fakeRow {
+	return &fakeRow{scanFunc: func(dest ...any) error {
+		if len(dest) != 15 {
+			return pgx.ErrNoRows
+		}
+		*dest[0].(*pgtype.UUID) = botID
+		*dest[1].(*pgtype.UUID) = ownerUserID
+		*dest[2].(*string) = "test-bot"
+		*dest[3].(*pgtype.Text) = pgtype.Text{}
+		*dest[4].(*pgtype.Text) = pgtype.Text{}
+		*dest[5].(*pgtype.Text) = pgtype.Text{}
+		*dest[6].(*bool) = true
+		*dest[7].(*string) = BotStatusCreating
+		*dest[8].(*string) = "medium"
+		*dest[9].(*pgtype.UUID) = pgtype.UUID{}
+		*dest[10].(*pgtype.UUID) = pgtype.UUID{}
+		*dest[11].(*pgtype.UUID) = pgtype.UUID{}
+		*dest[12].(*[]byte) = []byte(`{}`)
+		*dest[13].(*pgtype.Timestamptz) = pgtype.Timestamptz{}
+		*dest[14].(*pgtype.Timestamptz) = pgtype.Timestamptz{}
+		return nil
+	}}
+}
+
+// The same idempotency key returns the Bot the first request created; no
+// second row, and the name check never runs.
+func TestCreateReplaysBotForSameRequestID(t *testing.T) {
+	db, inserts, lookups := createRequestDB(t, true, nil)
+	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
+
+	bot, err := svc.Create(context.Background(), "00000000-0000-0000-0000-000000000001", CreateBotRequest{
+		Name: "taken-name", RequestID: "req-1", SkipLifecycle: true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if bot.ID != "00000000-0000-0000-0000-000000000002" || *inserts != 0 || *lookups != 1 {
+		t.Fatalf("bot=%q inserts=%d lookups=%d", bot.ID, *inserts, *lookups)
+	}
+}
+
+// Two identical requests race past the lookup: the loser's insert hits the
+// idempotency index and it returns the winner's Bot instead of a name error.
+func TestCreateReturnsExistingBotWhenRequestIDRaces(t *testing.T) {
+	db, inserts, lookups := createRequestDB(t, false, &pgconn.PgError{Code: "23505", ConstraintName: botCreateRequestIndex})
+	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
+
+	bot, err := svc.Create(context.Background(), "00000000-0000-0000-0000-000000000001", CreateBotRequest{
+		DisplayName: "Racer", RequestID: "req-1", SkipLifecycle: true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if bot.ID != "00000000-0000-0000-0000-000000000002" || *inserts != 1 || *lookups != 2 {
+		t.Fatalf("bot=%q inserts=%d lookups=%d", bot.ID, *inserts, *lookups)
+	}
+}
+
+// A unique violation on the name index is still a name conflict, key or not.
+func TestCreateStillReportsNameTakenWithRequestID(t *testing.T) {
+	db, _, _ := createRequestDB(t, false, &pgconn.PgError{Code: "23505", ConstraintName: "idx_bots_name"})
+	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
+
+	_, err := svc.Create(context.Background(), "00000000-0000-0000-0000-000000000001", CreateBotRequest{
+		DisplayName: "Racer", RequestID: "req-1", SkipLifecycle: true,
+	})
+	if !errors.Is(err, ErrBotNameTaken) {
+		t.Fatalf("Create() error = %v, want ErrBotNameTaken", err)
+	}
+}
+
+func TestCreateRejectsMalformedRequestID(t *testing.T) {
+	db, inserts, _ := createRequestDB(t, false, nil)
+	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
+	for _, id := range []string{strings.Repeat("x", 129), "bad\nkey"} {
+		_, err := svc.Create(context.Background(), "00000000-0000-0000-0000-000000000001", CreateBotRequest{
+			DisplayName: "Racer", RequestID: id, SkipLifecycle: true,
+		})
+		if !errors.Is(err, ErrBotCreateRequestInvalid) {
+			t.Fatalf("Create(%q) error = %v, want ErrBotCreateRequestInvalid", id, err)
+		}
+	}
+	if *inserts != 0 {
+		t.Fatalf("inserts = %d, want 0", *inserts)
+	}
+}
+
 func TestCreateTreatsStoreNotFoundAsMissingOwner(t *testing.T) {
 	ownerUUID := mustParseUUID("00000000-0000-0000-0000-000000000001")
 	createCalled := false

@@ -48,6 +48,9 @@ var (
 	ErrBotNameTaken      = errors.New("bot name already taken")
 	ErrBotNameInvalid    = errors.New("bot name is invalid")
 	ErrBotNameReserved   = errors.New("bot name is reserved")
+	// ErrBotCreateRequestInvalid rejects an idempotency key that is too long or
+	// not printable.
+	ErrBotCreateRequestInvalid = errors.New("bot create request id is invalid")
 )
 
 // NewService creates a new bot service.
@@ -123,6 +126,20 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 	if _, err := acl.ResolvePreset(aclPresetKey); err != nil {
 		return Bot{}, err
 	}
+	requestID, err := normalizeCreateRequestID(req.RequestID)
+	if err != nil {
+		return Bot{}, err
+	}
+	if requestID != "" {
+		// A replay of a request whose response was lost: the bot already
+		// exists, so return it rather than colliding on the name or taking a
+		// second slot. Wins over the name check on purpose.
+		if existing, ok, err := s.findByCreateRequest(ctx, ownerUUID, requestID); err != nil {
+			return Bot{}, err
+		} else if ok {
+			return existing, nil
+		}
+	}
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
 		displayName = "bot-" + uuid.NewString()
@@ -149,17 +166,25 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 		return Bot{}, err
 	}
 	row, err := s.queries.CreateBot(ctx, sqlc.CreateBotParams{
-		OwnerUserID: ownerUUID,
-		Name:        botName,
-		DisplayName: pgtype.Text{String: displayName, Valid: displayName != ""},
-		AvatarUrl:   pgtype.Text{String: avatarURL, Valid: avatarURL != ""},
-		Timezone:    timezoneValue,
-		IsActive:    isActive,
-		Metadata:    payload,
-		Status:      BotStatusCreating,
+		OwnerUserID:     ownerUUID,
+		Name:            botName,
+		DisplayName:     pgtype.Text{String: displayName, Valid: displayName != ""},
+		AvatarUrl:       pgtype.Text{String: avatarURL, Valid: avatarURL != ""},
+		Timezone:        timezoneValue,
+		IsActive:        isActive,
+		Metadata:        payload,
+		Status:          BotStatusCreating,
+		CreateRequestID: pgtype.Text{String: requestID, Valid: requestID != ""},
 	})
 	if err != nil {
 		if db.IsUniqueViolation(err) {
+			// Two identical requests raced past the lookup above; the loser
+			// returns the bot the winner inserted.
+			if requestID != "" && db.UniqueViolationConstraint(err) == botCreateRequestIndex {
+				if existing, ok, lookupErr := s.findByCreateRequest(ctx, ownerUUID, requestID); lookupErr == nil && ok {
+					return existing, nil
+				}
+			}
 			return Bot{}, ErrBotNameTaken
 		}
 		return Bot{}, err
@@ -343,6 +368,69 @@ func (s *Service) CheckNameAvailability(ctx context.Context, name, excludeBotID 
 
 // nameTaken reports whether the normalized name is already used by a bot other
 // than excludeBotID.
+// botCreateRequestIndex is the unique index behind the idempotency key; its
+// violation means "this key already created a bot", not a name collision.
+const botCreateRequestIndex = "idx_bots_create_request"
+
+const maxCreateRequestIDLen = 128
+
+// normalizeCreateRequestID trims the client's idempotency key and rejects
+// values that could not have come from a well-behaved client (overlong or
+// containing control characters). Empty means "no key".
+func normalizeCreateRequestID(raw string) (string, error) {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return "", nil
+	}
+	if len(id) > maxCreateRequestIDLen {
+		return "", ErrBotCreateRequestInvalid
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return "", ErrBotCreateRequestInvalid
+		}
+	}
+	return id, nil
+}
+
+// FindByCreateRequest returns the bot a previous Create with the same
+// idempotency key produced for this owner, if any.
+func (s *Service) FindByCreateRequest(ctx context.Context, ownerUserID, requestID string) (Bot, bool, error) {
+	if s.queries == nil {
+		return Bot{}, false, errors.New("bot queries not configured")
+	}
+	ownerUUID, err := db.ParseUUID(strings.TrimSpace(ownerUserID))
+	if err != nil {
+		return Bot{}, false, err
+	}
+	id, err := normalizeCreateRequestID(requestID)
+	if err != nil || id == "" {
+		return Bot{}, false, err
+	}
+	return s.findByCreateRequest(ctx, ownerUUID, id)
+}
+
+func (s *Service) findByCreateRequest(ctx context.Context, ownerUUID pgtype.UUID, requestID string) (Bot, bool, error) {
+	row, err := s.queries.GetBotByCreateRequest(ctx, sqlc.GetBotByCreateRequestParams{
+		OwnerUserID:     ownerUUID,
+		CreateRequestID: pgtype.Text{String: requestID, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Bot{}, false, nil
+		}
+		return Bot{}, false, err
+	}
+	bot, err := toBot(asSQLCBot(row))
+	if err != nil {
+		return Bot{}, false, err
+	}
+	if err := s.attachCheckSummary(ctx, &bot, asSQLCBot(row)); err != nil {
+		return Bot{}, false, err
+	}
+	return bot, true, nil
+}
+
 func (s *Service) nameTaken(ctx context.Context, normalized, excludeBotID string) (bool, error) {
 	existing, err := s.queries.GetBotByName(ctx, normalized)
 	if err != nil {
@@ -794,6 +882,8 @@ func asSQLCBot(v any) sqlc.Bot {
 	case sqlc.CreateBotRow:
 		return sqlc.Bot{ID: r.ID, OwnerUserID: r.OwnerUserID, Name: r.Name, DisplayName: r.DisplayName, AvatarUrl: r.AvatarUrl, Timezone: r.Timezone, IsActive: r.IsActive, Status: r.Status, ReasoningEffort: r.ReasoningEffort, ChatModelID: r.ChatModelID, SearchProviderID: r.SearchProviderID, MemoryProviderID: r.MemoryProviderID, Metadata: r.Metadata, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 	case sqlc.GetBotByIDRow:
+		return sqlc.Bot{ID: r.ID, OwnerUserID: r.OwnerUserID, Name: r.Name, DisplayName: r.DisplayName, AvatarUrl: r.AvatarUrl, Timezone: r.Timezone, IsActive: r.IsActive, Status: r.Status, ReasoningEffort: r.ReasoningEffort, ChatModelID: r.ChatModelID, SearchProviderID: r.SearchProviderID, MemoryProviderID: r.MemoryProviderID, CompactionEnabled: r.CompactionEnabled, CompactionThreshold: r.CompactionThreshold, CompactionModelID: r.CompactionModelID, Metadata: r.Metadata, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+	case sqlc.GetBotByCreateRequestRow:
 		return sqlc.Bot{ID: r.ID, OwnerUserID: r.OwnerUserID, Name: r.Name, DisplayName: r.DisplayName, AvatarUrl: r.AvatarUrl, Timezone: r.Timezone, IsActive: r.IsActive, Status: r.Status, ReasoningEffort: r.ReasoningEffort, ChatModelID: r.ChatModelID, SearchProviderID: r.SearchProviderID, MemoryProviderID: r.MemoryProviderID, CompactionEnabled: r.CompactionEnabled, CompactionThreshold: r.CompactionThreshold, CompactionModelID: r.CompactionModelID, Metadata: r.Metadata, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 	case sqlc.GetBotByNameRow:
 		return sqlc.Bot{ID: r.ID, OwnerUserID: r.OwnerUserID, Name: r.Name, DisplayName: r.DisplayName, AvatarUrl: r.AvatarUrl, Timezone: r.Timezone, IsActive: r.IsActive, Status: r.Status, ReasoningEffort: r.ReasoningEffort, ChatModelID: r.ChatModelID, SearchProviderID: r.SearchProviderID, MemoryProviderID: r.MemoryProviderID, CompactionEnabled: r.CompactionEnabled, CompactionThreshold: r.CompactionThreshold, CompactionModelID: r.CompactionModelID, Metadata: r.Metadata, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}

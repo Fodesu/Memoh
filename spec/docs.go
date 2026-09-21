@@ -414,6 +414,12 @@ const docTemplate = `{
                 "summary": "Create bot user",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Client-generated key for this creation. Repeating a request with the same key returns the Bot it already created (200) instead of creating another; also accepted as body field request_id.",
+                        "name": "Idempotency-Key",
+                        "in": "header"
+                    },
+                    {
                         "description": "Bot payload",
                         "name": "payload",
                         "in": "body",
@@ -424,6 +430,12 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
+                    "200": {
+                        "description": "The Bot a previous request with the same Idempotency-Key created",
+                        "schema": {
+                            "$ref": "#/definitions/bots.Bot"
+                        }
+                    },
                     "201": {
                         "description": "Created",
                         "schema": {
@@ -18823,6 +18835,10 @@ const docTemplate = `{
                     "additionalProperties": {}
                 },
                 "name": {
+                    "type": "string"
+                },
+                "request_id": {
+                    "description": "RequestID is the client's idempotency key for this creation (also\naccepted as the Idempotency-Key header). Retrying with the same key\nreturns the bot the first request created instead of creating another.",
                     "type": "string"
                 },
                 "timezone": {

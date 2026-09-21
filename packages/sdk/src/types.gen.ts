@@ -769,6 +769,12 @@ export type BotsCreateBotRequest = {
         [key: string]: unknown;
     };
     name?: string;
+    /**
+     * RequestID is the client's idempotency key for this creation (also
+     * accepted as the Idempotency-Key header). Retrying with the same key
+     * returns the bot the first request created instead of creating another.
+     */
+    request_id?: string;
     timezone?: string;
     wait_for_ready?: boolean;
 };
@@ -4613,6 +4619,12 @@ export type PostBotsData = {
      * Bot payload
      */
     body: BotsCreateBotRequest;
+    headers?: {
+        /**
+         * Client-generated key for this creation. Repeating a request with the same key returns the Bot it already created (200) instead of creating another; also accepted as body field request_id.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/bots';
@@ -4640,6 +4652,10 @@ export type PostBotsErrors = {
 export type PostBotsError = PostBotsErrors[keyof PostBotsErrors];
 
 export type PostBotsResponses = {
+    /**
+     * The Bot a previous request with the same Idempotency-Key created
+     */
+    200: BotsBot;
     /**
      * Created
      */

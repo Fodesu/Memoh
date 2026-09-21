@@ -1286,6 +1286,12 @@ definitions:
         type: object
       name:
         type: string
+      request_id:
+        description: |-
+          RequestID is the client's idempotency key for this creation (also
+          accepted as the Idempotency-Key header). Retrying with the same key
+          returns the bot the first request created instead of creating another.
+        type: string
       timezone:
         type: string
       wait_for_ready:
@@ -7598,6 +7604,12 @@ paths:
     post:
       description: Create a bot user owned by current user (or admin-specified owner)
       parameters:
+      - description: Client-generated key for this creation. Repeating a request with
+          the same key returns the Bot it already created (200) instead of creating
+          another; also accepted as body field request_id.
+        in: header
+        name: Idempotency-Key
+        type: string
       - description: Bot payload
         in: body
         name: payload
@@ -7605,6 +7617,10 @@ paths:
         schema:
           $ref: '#/definitions/bots.CreateBotRequest'
       responses:
+        "200":
+          description: The Bot a previous request with the same Idempotency-Key created
+          schema:
+            $ref: '#/definitions/bots.Bot'
         "201":
           description: Created
           schema:

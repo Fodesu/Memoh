@@ -49,6 +49,10 @@ type CreateBotRequest struct {
 	Metadata      map[string]any `json:"metadata,omitempty"`
 	WaitForReady  bool           `json:"wait_for_ready,omitempty"`
 	SkipLifecycle bool           `json:"-"`
+	// RequestID is the client's idempotency key for this creation (also
+	// accepted as the Idempotency-Key header). Retrying with the same key
+	// returns the bot the first request created instead of creating another.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // UpdateBotRequest is the input for updating a bot.
