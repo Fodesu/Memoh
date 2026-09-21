@@ -23,6 +23,7 @@ import type {
   SendMessageResult,
   SendMessageStage,
 } from './types'
+import { isStaleTurnErrorCode, runLeftNoHistory } from './replacement-recovery'
 
 type Transcript = ReturnType<typeof createTranscriptController>
 
@@ -61,18 +62,6 @@ export class CommandStreamError extends StreamFailureError {
   }
 }
 
-// The server refused the replacement because the client's picture of the
-// tail is stale: the named turn is no longer the latest, or it has no reply
-// on record. The only repair is to reload history; the composer keeps its
-// text and shows the code's message.
-const STALE_TURN_ERROR_CODES = new Set([
-  'session_runtime.turn_not_latest',
-  'session_runtime.turn_incomplete',
-])
-
-export function isStaleTurnErrorCode(code: string | undefined): boolean {
-  return Boolean(code && STALE_TURN_ERROR_CODES.has(code))
-}
 
 interface TrackStreamInput {
   onModelPreferenceSettled?: () => void
@@ -537,7 +526,7 @@ export function createChatSend(deps: ChatSendDeps) {
       } else {
         deps.finalizeStreamFailure(assistantTurn, botId, targetSessionId, failure)
       }
-      if (isStaleTurnErrorCode(errorCode)) {
+      if (isStaleTurnErrorCode(errorCode) || (stage === 'stream' && runLeftNoHistory(failure instanceof StreamFailureError ? failure.feedback : undefined))) {
         await deps.refreshCurrentSession(botId, targetSessionId)
       }
       return { ok: false, stage, error: reason, errorCode }
@@ -630,7 +619,7 @@ export function createChatSend(deps: ChatSendDeps) {
       } else {
         deps.finalizeStreamFailure(assistantTurn, botId, targetSessionId, failure)
       }
-      if (isStaleTurnErrorCode(errorCode)) {
+      if (isStaleTurnErrorCode(errorCode) || (stage === 'stream' && runLeftNoHistory(failure instanceof StreamFailureError ? failure.feedback : undefined))) {
         await deps.refreshCurrentSession(botId, targetSessionId)
       }
       return { ok: false, stage, error: reason, errorCode, restoreInput: text }

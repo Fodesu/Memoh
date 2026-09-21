@@ -124,8 +124,12 @@ func TestLocaleCatalogAlignment(t *testing.T) {
 			if err := json.Unmarshal(raw, &root); err != nil {
 				t.Fatalf("decode %s: %v", path, err)
 			}
+			rawErrors, ok := root["errors"]
+			if !ok {
+				t.Fatalf("%s has no top-level \"errors\" object", path)
+			}
 			var errorsNode map[string]any
-			if err := json.Unmarshal(root["errors"], &errorsNode); err != nil {
+			if err := json.Unmarshal(rawErrors, &errorsNode); err != nil {
 				t.Fatalf("decode %s errors: %v", path, err)
 			}
 			leaves := make(map[string]struct{})

@@ -364,6 +364,7 @@ function applyRunPatch(
       ...(patch.owner_lease_expires_at !== undefined
         ? { owner_lease_expires_at: patch.owner_lease_expires_at }
         : {}),
+      ...(patch.persisted_turn !== undefined ? { persisted_turn: patch.persisted_turn } : {}),
     }
   }
 

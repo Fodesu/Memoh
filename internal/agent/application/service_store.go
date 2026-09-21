@@ -164,7 +164,12 @@ func (s *Service) notePersistedTurn(ctx context.Context, req ChatRequest, reques
 	if s == nil || s.recordPersistedTurn == nil || req.RunHandle.FencingToken <= 0 || len(persisted) == 0 {
 		return
 	}
+	// Continuations (tool approval, ask_user) rebuild the request without the
+	// admission's turn fields; the handle still names the run's turn.
 	turnID := strings.TrimSpace(req.TurnID)
+	if turnID == "" {
+		turnID = strings.TrimSpace(req.RunHandle.TurnID)
+	}
 	if turnID == "" {
 		return
 	}
@@ -185,9 +190,14 @@ func (s *Service) publishPersistedTurn(ctx context.Context, handle sessionruntim
 		return
 	}
 	if err := s.recordPersistedTurn(context.WithoutCancel(ctx), handle, turn); err != nil && s.logger != nil {
-		s.logger.WarnContext(ctx, "persisted turn was not recorded on the run",
+		// History is durable but the live view will not say so: a client that
+		// sees this run settle treats the send as unsent and may resend it.
+		// The ids are logged so the duplicate can be traced back to this run.
+		s.logger.ErrorContext(ctx, "persisted turn was not recorded on the run",
 			slog.String("run_id", handle.RunID),
 			slog.String("turn_id", turn.TurnID),
+			slog.String("request_message_id", turn.RequestMessageID),
+			slog.String("assistant_message_id", turn.AssistantMessageID),
 			slog.Any("error", err),
 		)
 	}

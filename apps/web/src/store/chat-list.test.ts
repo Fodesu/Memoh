@@ -211,9 +211,7 @@ function publishRuntimeUpdate(
     run.error_code = update.error_code
     if (update.persisted_turn) run.persisted_turn = update.persisted_turn
     run.updated_at = now
-    // A run patch cannot carry the persisted turn; the server publishes a full
-    // view when it records one, so mirror that here.
-    delta = publishedRun && !update.persisted_turn
+    delta = publishedRun
       ? {
           run: {
             run_id: runId,
@@ -221,6 +219,7 @@ function publishRuntimeUpdate(
             error: update.error,
             error_code: update.error_code,
             updated_at: now,
+            ...(update.persisted_turn ? { persisted_turn: update.persisted_turn } : {}),
           },
         }
       : { current_run_view: run }
@@ -2555,6 +2554,49 @@ describe('chat-list store', () => {
       })
       expect(api.fetchMessagesUI).toHaveBeenCalledTimes(2)
       expect(store.messages.map(message => message.id)).toEqual(['user-1', 'assistant-old', 'user-2', 'assistant-new'])
+    })
+
+  // A retry that streamed output and then failed without writing its round
+  // has cut the old tail off screen while history still holds it. Nothing on
+  // screen is a valid replacement target, so the store reloads history.
+  it('reloads history when a retry fails mid-stream without writing its round', async () => {
+      h.sendUpdates = [
+        runtime.started,
+        runtime.message({ id: 0, type: 'text', content: 'partial' }),
+        runtime.failedUnpersisted('provider hung up', 'agent.response_interrupted'),
+      ]
+      api.fetchSessions.mockResolvedValueOnce({
+        items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+        nextCursor: null,
+      })
+      const page = [
+        {
+          id: 'user-1',
+          turn_id: 'turn-fx-4-5',
+          role: 'user',
+          text: 'hello',
+          attachments: [],
+          timestamp: '2026-05-17T08:00:00.000Z',
+        },
+        {
+          id: 'assistant-old',
+          turn_id: 'turn-fx-4-5',
+          role: 'assistant',
+          messages: [{ id: 1, type: 'text', content: 'old answer' }],
+          timestamp: '2026-05-17T08:00:01.000Z',
+          streaming: false,
+        },
+      ]
+      api.fetchMessagesUI.mockResolvedValueOnce(page).mockResolvedValueOnce(page)
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      await flushPromises()
+      const result = await store.retryLatestAssistant('turn-fx-4-5')
+
+      expect(result).toMatchObject({ ok: false, stage: 'stream' })
+      expect(api.fetchMessagesUI).toHaveBeenCalledTimes(2)
+      expect(store.messages.map(message => message.id)).toEqual(['user-1', 'assistant-old'])
     })
 
   // The retry/edit turns must release the composer pair write barrier as soon

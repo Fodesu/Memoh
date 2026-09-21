@@ -381,6 +381,9 @@ type CurrentRunPatch struct {
 	Error               *string    `json:"error,omitempty"`
 	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
 	OwnerLeaseExpiresAt *time.Time `json:"owner_lease_expires_at,omitempty"`
+	// PersistedTurn is set only by RecordPersistedTurn; a patch without it
+	// leaves the view's recorded turn untouched.
+	PersistedTurn *PersistedTurnView `json:"persisted_turn,omitempty"`
 }
 
 type RuntimeMessageAppend struct {

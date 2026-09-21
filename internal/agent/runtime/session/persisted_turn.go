@@ -34,6 +34,14 @@ func (m *Manager) RecordPersistedTurn(ctx context.Context, handle RunHandle, tur
 		snapshot.Seq++
 		snapshot.UpdatedAt = now
 		return snapshot, true, nil
-	}, func(snapshot Snapshot) RuntimeDelta { return RuntimeDelta{CurrentRunView: snapshot.CurrentRunView} })
+	}, func(snapshot Snapshot) RuntimeDelta {
+		// A patch, not the full view: step-committing runs record a turn on
+		// every step, and republishing the whole message stream each time
+		// would cost every subscriber O(steps × content).
+		run := snapshot.CurrentRunView
+		updatedAt := run.UpdatedAt
+		recorded := *run.PersistedTurn
+		return RuntimeDelta{Run: &CurrentRunPatch{RunID: run.RunID, UpdatedAt: &updatedAt, PersistedTurn: &recorded}}
+	})
 	return err
 }

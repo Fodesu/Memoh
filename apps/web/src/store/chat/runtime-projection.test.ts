@@ -589,13 +589,14 @@ describe('persisted turn', () => {
     expect(state.transcript.streaming).toBe(true)
   })
 
-  it('carries the persisted turn from a full-view delta into the terminal patch', () => {
+  it('carries the persisted turn from a run patch into the terminal patch', () => {
     let state = reduceRuntimeProjection(createEmptyRuntimeProjection('session-1'), snapshot(runView()))
     state = reduceRuntimeProjection(state, delta(5, {
-      current_run_view: runView({
-        status: 'running',
+      run: {
+        run_id: 'run-1',
+        updated_at: '2026-07-27T08:00:00.500Z',
         persisted_turn: { turn_id: 'turn-1', request_message_id: 'user-1', assistant_message_id: 'assistant-1' },
-      }),
+      },
     }))
     state = reduceRuntimeProjection(state, delta(6, {
       run: { run_id: 'run-1', status: 'errored', error_code: 'agent.response_timeout', updated_at: '2026-07-27T08:00:01.000Z' },

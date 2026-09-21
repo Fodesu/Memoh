@@ -540,6 +540,7 @@ export interface RuntimeCurrentRunPatch {
   error?: string
   updated_at?: string
   owner_lease_expires_at?: string
+  persisted_turn?: RuntimePersistedTurn
 }
 
 export interface RuntimeMessageAppend {
