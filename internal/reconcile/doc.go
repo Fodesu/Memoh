@@ -4,7 +4,13 @@
 // exponential backoff with a fast budget and a slow cadence, keyed in-process
 // event fan-out, and a poll-until-final helper.
 //
-// The first user is internal/botworkspace; internal/botsetup builds on the
-// same primitives. Nothing here knows what a row means: the store decides
-// which rows are due, the handler decides what to do with one.
+// The first user is internal/botworkspace; the package is shaped so a second
+// per-bot intent table (the post-create setup) can reuse it without a copy.
+// Nothing here knows what a row means: the store decides which rows are due,
+// the handler decides what to do with one.
+//
+// Broker and Await overlap with internal/agent/decision.Waiter, which pairs a
+// one-shot notification with a store poll. A reconciler needs a stream of
+// progress events per key plus a separate "is it final yet" poll, so the two
+// are kept apart rather than stretching Waiter's one-value contract.
 package reconcile

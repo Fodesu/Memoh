@@ -130,6 +130,19 @@ func TestLoopSkipsRowStillRunningInThisProcess(t *testing.T) {
 	wg.Wait()
 }
 
+func TestStopBeforeStartReturnsImmediately(t *testing.T) {
+	loop := NewLoop(&memStore{}, func(r row) string { return r.key }, func(context.Context, row) {}, nil, Options{Owner: "test"})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := loop.Stop(ctx); err != nil {
+		t.Fatalf("Stop() before Start = %v, want nil", err)
+	}
+	// A late Start after Stop must not launch a loop that nobody will stop.
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLeasedContextCancelsWhenRenewalFails(t *testing.T) {
 	store := &memStore{lost: map[string]bool{"a": true}}
 	loop := NewLoop(store, func(r row) string { return r.key }, func(context.Context, row) {}, nil, Options{Owner: "test", Lease: 3 * time.Second})

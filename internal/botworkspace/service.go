@@ -64,7 +64,7 @@ func (o Options) reconcileOptions(now func() time.Time, rnd func() float64) reco
 		Owner: o.Owner, Interval: o.Interval, Lease: o.Lease,
 		BackoffBase: o.BackoffBase, BackoffCap: o.BackoffCap, MaxAttempts: o.MaxAttempts,
 		SlowRetryInterval: o.SlowRetryInterval, Batch: o.Batch, Concurrency: o.Concurrency,
-		WriteTimeout: o.WriteTimeout, Now: now, Rand: rnd,
+		WriteTimeout: o.WriteTimeout, Now: now, Rand: rnd, KeyField: "bot_id",
 	}
 }
 
@@ -140,9 +140,9 @@ func New(repo Repository, backend Backend, log *slog.Logger, opts Options) *Serv
 	// Now/Rand call through the Service fields so a test that pins s.now or
 	// s.rnd after New steers the loop and the backoff as well.
 	ropts := s.opts.reconcileOptions(func() time.Time { return s.now() }, func() float64 { return s.rnd() })
+	ropts.AfterPass = s.maybeDetectDrift
 	s.backoff = ropts.Backoff()
 	s.loop = reconcile.NewLoop(repo, func(w Workspace) string { return w.BotID }, s.reconcileOne, s.log, ropts)
-	s.loop.SetAfterPass(s.maybeDetectDrift)
 	return s
 }
 

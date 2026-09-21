@@ -8,9 +8,17 @@ import (
 )
 
 // Store is the lease-bearing claim queue the Loop drains. Claim returns up to
-// limit rows that are due and unleased, leased to owner for lease; the store
-// decides what "due" means. Renew fails when the row is no longer leased to
-// owner (another instance took it over). Release drops owner's lease.
+// limit rows that are due and whose lease is free or expired, leased to owner
+// for lease; the store decides what "due" means. Two invariants the Loop
+// relies on, and every implementation must keep (see bot_workspaces.sql):
+//
+//   - Claim takes over an expired lease and bumps the row's version, so a
+//     handler still running under the old lease fails its next
+//     version-checked write instead of racing the new claimant.
+//   - Renew fails when the row is no longer leased to owner (another instance
+//     took it over); LeasedContext turns that into cancellation.
+//
+// Release drops owner's lease.
 type Store[T any] interface {
 	Claim(ctx context.Context, owner string, lease time.Duration, limit int32) ([]T, error)
 	Renew(ctx context.Context, key, owner string, lease time.Duration) error
@@ -28,17 +36,16 @@ type Loop[T any] struct {
 	log    *slog.Logger
 	opts   Options
 
-	afterPass func(context.Context)
-
 	kick chan struct{}
 
 	runMu   sync.Mutex
 	running map[string]struct{}
 
-	stop   chan struct{}
-	done   chan struct{}
-	startd sync.Once
-	stopd  sync.Once
+	lifeMu  sync.Mutex
+	started bool
+	stopped bool
+	stop    chan struct{}
+	done    chan struct{}
 }
 
 // NewLoop builds a Loop over store; key names a row, handle processes one
@@ -60,16 +67,6 @@ func NewLoop[T any](store Store[T], key func(T) string, handle func(context.Cont
 	}
 }
 
-// Options returns the effective (defaulted) options.
-func (l *Loop[T]) Options() Options { return l.opts }
-
-// Owner is this instance's lease owner id.
-func (l *Loop[T]) Owner() string { return l.opts.Owner }
-
-// SetAfterPass registers a hook that runs after every pass of the loop (not
-// after ReconcileOnce), for periodic work that rides on the same ticker.
-func (l *Loop[T]) SetAfterPass(fn func(context.Context)) { l.afterPass = fn }
-
 // Kick wakes the loop for an immediate pass.
 func (l *Loop[T]) Kick() {
 	select {
@@ -78,18 +75,31 @@ func (l *Loop[T]) Kick() {
 	}
 }
 
-// Start launches the loop; it returns immediately.
+// Start launches the loop; it returns immediately. A second Start, or a Start
+// after Stop, is a no-op.
 func (l *Loop[T]) Start(ctx context.Context) error {
-	l.startd.Do(func() {
-		go l.run(context.WithoutCancel(ctx))
-	})
+	l.lifeMu.Lock()
+	defer l.lifeMu.Unlock()
+	if l.started || l.stopped {
+		return nil
+	}
+	l.started = true
+	go l.run(context.WithoutCancel(ctx))
 	return nil
 }
 
 // Stop asks the loop to exit and waits for in-flight handlers to finish
-// (bounded by ctx).
+// (bounded by ctx). Stopping a loop that never started returns at once.
 func (l *Loop[T]) Stop(ctx context.Context) error {
-	l.stopd.Do(func() { close(l.stop) })
+	l.lifeMu.Lock()
+	if !l.stopped {
+		l.stopped = true
+		close(l.stop)
+		if !l.started {
+			close(l.done)
+		}
+	}
+	l.lifeMu.Unlock()
 	select {
 	case <-l.done:
 		return nil
@@ -114,8 +124,8 @@ func (l *Loop[T]) run(ctx context.Context) {
 		if _, err := l.pass(ctx, &wg); err != nil {
 			l.log.ErrorContext(ctx, "reconcile pass failed", slog.Any("error", err))
 		}
-		if l.afterPass != nil {
-			l.afterPass(ctx)
+		if l.opts.AfterPass != nil {
+			l.opts.AfterPass(ctx)
 		}
 	}
 }
@@ -200,7 +210,7 @@ func (l *Loop[T]) Release(ctx context.Context, key string) {
 	rctx, cancel := WriteContext(ctx, l.opts.WriteTimeout)
 	defer cancel()
 	if err := l.store.Release(rctx, key, l.opts.Owner); err != nil {
-		l.log.WarnContext(ctx, "release lease failed", slog.String("key", key), slog.Any("error", err))
+		l.log.WarnContext(ctx, "release lease failed", slog.String(l.opts.KeyField, key), slog.Any("error", err))
 	}
 }
 
@@ -226,7 +236,7 @@ func (l *Loop[T]) LeasedContext(parent context.Context, key string, timeout time
 				err := l.store.Renew(rctx, key, l.opts.Owner, l.opts.Lease)
 				rcancel()
 				if err != nil {
-					l.log.WarnContext(parent, "lease lost; abandoning operation", slog.String("key", key), slog.Any("error", err))
+					l.log.WarnContext(parent, "lease lost; abandoning operation", slog.String(l.opts.KeyField, key), slog.Any("error", err))
 					cancel()
 					return
 				}

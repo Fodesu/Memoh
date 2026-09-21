@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"context"
 	"math/rand/v2"
 	"os"
 	"strings"
@@ -36,6 +37,14 @@ type Options struct {
 	// are read on every use, a caller may swap them after construction.
 	Now  func() time.Time
 	Rand func() float64
+	// KeyField names the row key in the Loop's log records ("bot_id" for a
+	// per-bot table) so operators can keep filtering on the field the rest of
+	// the consumer's logs use. Defaults to "key".
+	KeyField string
+	// AfterPass, when set, runs after every pass of the started loop (not after
+	// ReconcileOnce), for periodic work that rides on the same ticker. It is
+	// fixed at construction; there is no setter to race with the loop.
+	AfterPass func(context.Context)
 }
 
 // WithDefaults fills zero fields. The retry schedule defaults are those the
@@ -78,6 +87,9 @@ func (o Options) WithDefaults() Options {
 	}
 	if o.Rand == nil {
 		o.Rand = rand.Float64
+	}
+	if o.KeyField == "" {
+		o.KeyField = "key"
 	}
 	return o
 }

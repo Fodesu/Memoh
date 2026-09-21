@@ -24,7 +24,9 @@ func NextBackoff(now time.Time, attempts int32, base, capDuration time.Duration)
 }
 
 // Backoff is the retry policy: a fast exponential budget of MaxAttempts, then
-// a slow fixed cadence that never gives up.
+// a slow fixed cadence that never gives up. Build it with Options.Backoff() so
+// every field is defaulted; a zero MaxAttempts or SlowRetryInterval would
+// spend the budget on the first failure and retry immediately.
 type Backoff struct {
 	Base              time.Duration
 	Cap               time.Duration
