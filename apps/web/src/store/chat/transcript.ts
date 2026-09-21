@@ -528,6 +528,13 @@ export function createTranscriptController({
     // Every turn still on screen survives; the window decides the rest.
     const resolved = admissibleRuntimeTurns(messages, slice, reconcileRuntimeTurns(existing, incoming))
     if (resolved.length === 0) return true
+    // A settled run that recorded no history turn is an unsent send. Its frame
+    // may settle turns already on screen (the failed reply stops streaming and
+    // shows its error), but it introduces none: history has nothing to replace
+    // them with, so a session opened later must not render a round that was
+    // never written, and a replacement that never landed must not cut the
+    // tail it was meant to replace.
+    if (slice.unpersisted && existing.length === 0) return true
 
     const operationAnchor = slice.operation?.replace_from_message_id?.trim() ?? ''
     const anchor = operationAnchor

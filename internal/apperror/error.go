@@ -108,6 +108,7 @@ const (
 	CodeRuntimeControlRequestInvalid             Code = "runtime_control.request_invalid"
 	CodeExternalRuntimeAuthRequired              Code = "external_runtime.auth_required"
 	CodeExternalRuntimeUnavailable               Code = "external_runtime.unavailable"
+	CodeExternalRuntimeSessionResumeFailed       Code = "external_runtime.session_resume_failed"
 	CodeToolApprovalForbidden                    Code = "tool_approval.forbidden"
 	CodeToolApprovalNotFound                     Code = "tool_approval.not_found"
 	CodeToolApprovalExpired                      Code = "tool_approval.expired"
@@ -121,6 +122,11 @@ const (
 	CodeSessionBusy                              Code = "session_runtime.session_busy"
 	CodeSessionInvocationConflict                Code = "session_runtime.invocation_conflict"
 	CodeSessionHistoryInconsistent               Code = "session_runtime.history_inconsistent"
+	CodeSessionTurnNotLatest                     Code = "session_runtime.turn_not_latest"
+	CodeSessionTurnIncomplete                    Code = "session_runtime.turn_incomplete"
+	CodeSessionResetUnavailable                  Code = "session_runtime.reset_unavailable"
+	CodeSessionResetConflict                     Code = "session_runtime.reset_conflict"
+	CodeHistoryDeleteFailed                      Code = "history.delete_failed"
 	CodeAgentResponseTimeout                     Code = "agent.response_timeout"
 	CodeAgentResponseInterrupted                 Code = "agent.response_interrupted"
 	CodeAgentProviderOverloaded                  Code = "agent.provider_overloaded"
@@ -494,6 +500,14 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusServiceUnavailable,
 		Detail:     "The external agent runtime for this session is not available on this server.",
 	},
+	// The driver could not carry the external agent's own session (Codex
+	// rollout, Claude Code transcript) across turns: restoring it, resuming
+	// its thread, or checkpointing it failed. The turn is treated as not run;
+	// the user retries or starts a fresh conversation.
+	CodeExternalRuntimeSessionResumeFailed: {
+		HTTPStatus: http.StatusBadGateway,
+		Detail:     "The external agent session could not be resumed. Try again or start a new conversation.",
+	},
 	CodeACPModelSelectionUnsupported: {
 		HTTPStatus: http.StatusBadRequest,
 		Detail:     "This external agent does not support model selection.",
@@ -589,9 +603,39 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusConflict,
 		Detail:     "This request was already submitted with different content.",
 	},
+	// history_inconsistent is reserved for server-side persistence faults:
+	// a round could not be written, or its commit outcome is unknown. Client
+	// state that has merely gone stale is reported by the 409 codes below.
 	CodeSessionHistoryInconsistent: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "The conversation history could not be reconciled. Refresh and try again.",
+	},
+	// The client named a turn that is no longer the latest visible turn (or
+	// was never persisted). Reloading the conversation resolves it.
+	CodeSessionTurnNotLatest: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This message is no longer the latest in the conversation. Reload and try again.",
+	},
+	// The latest turn has a request message but no assistant reply on record,
+	// so it can be edited but not retried.
+	CodeSessionTurnIncomplete: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This message has no reply on record yet. Reload the conversation, then edit the message instead of retrying it.",
+	},
+	// The server was deployed without the runtime reset coordinator; only an
+	// operator can fix it.
+	CodeSessionResetUnavailable: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Detail:     "Conversation history cannot be reset on this server. Contact an administrator.",
+	},
+	// Another operation holds or took over the history reset lease.
+	CodeSessionResetConflict: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "The conversation is busy with another operation. Please try again shortly.",
+	},
+	CodeHistoryDeleteFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The conversation history could not be deleted. Please try again.",
 	},
 	CodeAgentResponseTimeout: {
 		HTTPStatus: http.StatusGatewayTimeout,

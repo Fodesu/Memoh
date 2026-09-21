@@ -799,7 +799,7 @@ func (h *UsersHandler) UpdateBot(c echo.Context) error {
 	}
 	if shouldResetRuntimes && h.runtimeResets == nil {
 		return apperror.Wrap(
-			apperror.CodeSessionHistoryInconsistent,
+			apperror.CodeSessionResetUnavailable,
 			errors.New("runtime reset is not configured"),
 			nil,
 		)
@@ -807,7 +807,7 @@ func (h *UsersHandler) UpdateBot(c echo.Context) error {
 	if shouldResetRuntimes {
 		resetCtx, releaseRuntimeReset, resetErr := h.runtimeResets.BeginBotHistoryReset(c.Request().Context(), bot.ID)
 		if resetErr != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, resetErr, nil)
+			return apperror.Wrap(apperror.CodeSessionResetConflict, resetErr, nil)
 		}
 		defer releaseRuntimeReset()
 		c.SetRequest(c.Request().WithContext(resetCtx))
@@ -820,7 +820,7 @@ func (h *UsersHandler) UpdateBot(c echo.Context) error {
 	}
 	if err != nil {
 		if leaseErr := runtimefence.ResetLeaseFailure(c.Request().Context(), err); leaseErr != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, leaseErr, nil)
+			return apperror.Wrap(apperror.CodeSessionResetConflict, leaseErr, nil)
 		}
 		return updateBotHTTPError(err)
 	}
@@ -961,14 +961,14 @@ func (h *UsersHandler) DeleteBot(c echo.Context) error {
 		var resetCtx context.Context
 		resetCtx, releaseRuntimeReset, err = h.runtimeResets.BeginBotHistoryReset(c.Request().Context(), botID)
 		if err != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+			return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
 		}
 		defer releaseRuntimeReset()
 		c.SetRequest(c.Request().WithContext(resetCtx))
 	}
 	if err := h.botService.Delete(c.Request().Context(), botID); err != nil {
 		if leaseErr := runtimefence.ResetLeaseFailure(c.Request().Context(), err); leaseErr != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, leaseErr, nil)
+			return apperror.Wrap(apperror.CodeSessionResetConflict, leaseErr, nil)
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "bot not found")

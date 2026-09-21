@@ -708,7 +708,7 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 	ctx := c.Request().Context()
 	if h.runtimeResets == nil {
 		return apperror.Wrap(
-			apperror.CodeSessionHistoryInconsistent,
+			apperror.CodeSessionResetUnavailable,
 			errors.New("runtime reset is not configured"),
 			nil,
 		)
@@ -723,11 +723,11 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 		}
 		ctx, release, resetErr := h.runtimeResets.BeginSessionHistoryReset(ctx, botID, sessionID)
 		if resetErr != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, resetErr, nil)
+			return apperror.Wrap(apperror.CodeSessionResetConflict, resetErr, nil)
 		}
 		defer release()
 		if err := h.messageService.DeleteBySession(ctx, sessionID); err != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+			return apperror.Wrap(apperror.CodeHistoryDeleteFailed, err, nil)
 		}
 		if h.projectionCache != nil {
 			h.projectionCache.DropSession(sessionID)
@@ -735,11 +735,11 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 	} else {
 		ctx, release, resetErr := h.runtimeResets.BeginBotHistoryReset(ctx, botID)
 		if resetErr != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, resetErr, nil)
+			return apperror.Wrap(apperror.CodeSessionResetConflict, resetErr, nil)
 		}
 		defer release()
 		if err := h.messageService.DeleteByBot(ctx, botID); err != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+			return apperror.Wrap(apperror.CodeHistoryDeleteFailed, err, nil)
 		}
 		if h.projectionCache != nil {
 			h.projectionCache.DropAll()

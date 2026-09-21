@@ -495,6 +495,20 @@ export interface RuntimeCurrentRunView {
   proposed_terminal_status?: RuntimeRunStatus
   finish_proposed_at?: string
   operation?: RuntimeRunOperation
+  // The history turn this run has written, recorded by the server the moment
+  // a round lands. Absent on a settled run means the run wrote nothing: the
+  // send is unsent, so the client restores the draft instead of offering a
+  // retry on a turn history does not have.
+  persisted_turn?: RuntimePersistedTurn
+}
+
+export interface RuntimePersistedTurn {
+  turn_id: string
+  position?: number
+  request_message_id?: string
+  // Empty while only the request message is on record: the turn can be
+  // edited but not retried.
+  assistant_message_id?: string
 }
 
 export interface RuntimeSteerTurnView {

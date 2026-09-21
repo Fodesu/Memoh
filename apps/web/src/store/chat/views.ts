@@ -4,6 +4,7 @@ import {
   locateMessageUI,
 } from '@/composables/api/useChat'
 import type { RuntimeProjectionState } from './runtime-projection'
+import { isRuntimeRunActive } from './runtime-projection'
 import { isRuntimeRunStreaming, runOwnsTurn } from './runtime-projection'
 import { createAssistantStreamRegistry } from './assistant-streams'
 import type { createTranscriptController } from './transcript'
@@ -189,6 +190,22 @@ export function createChatViews(deps: ChatViewsDeps) {
   const assistantStreams = createAssistantStreamRegistry({
     finishAssistantTurn: turn => { transcriptForTurn(turn)?.finishAssistantTurn(turn) },
   })
+
+  // A settled run that recorded no persisted turn is an unsent send: its turn
+  // exists only in the live projection, so retry and edit must not target it.
+  // The database twin that a refresh would fetch does not exist.
+  function isTurnUnpersisted(sessionId: string, turnId: string): boolean {
+    const sid = sessionId.trim()
+    const id = turnId.trim()
+    if (!sid || !id) return false
+    const run = runtimeProjectionProbe(sid)?.currentRunView
+    return Boolean(
+      run
+      && run.turn_id.trim() === id
+      && !isRuntimeRunActive(run.status)
+      && !run.persisted_turn,
+    )
+  }
 
   function isSessionStreaming(
     botId: string | null | undefined,
@@ -421,6 +438,7 @@ export function createChatViews(deps: ChatViewsDeps) {
     findMessageIdByExternalId,
     locateMessageByExternalId,
     isSessionStreaming,
+    isTurnUnpersisted,
     streamingSessionId,
     streamingSessionIds,
     streaming,

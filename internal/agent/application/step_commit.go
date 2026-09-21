@@ -253,6 +253,12 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	if c.replacementFinalized {
 		c.service.publishReplacementMessageCreated(c.req.BotID, c.persisted)
 	}
+	// Step rows of a replacement run stay hidden until the replacement is
+	// published; recording them earlier would hand the client a retry anchor
+	// that history does not yet show.
+	if c.req.TurnReplacement == nil || c.replacementFinalized {
+		c.service.notePersistedTurn(ctx, c.req, c.turnRequestMessageID, c.persisted)
+	}
 	if !interrupted {
 		// Unfinished reasoning/text is history context, not a fact source for
 		// asynchronous long-term memory extraction.

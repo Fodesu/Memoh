@@ -12,6 +12,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -82,6 +83,11 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 	if persistErr != nil {
 		return persisted, persistErr
 	}
+	// A replacement run's rows are not the session's history until ReplaceTurn
+	// publishes them; replacePersistedTurn records that outcome itself.
+	if req.TurnReplacement == nil {
+		s.notePersistedTurn(ctx, req, req.PersistedUserMessageID, persisted)
+	}
 	if len(persisted) != len(filtered) {
 		if opts.RequireCompletePersist {
 			return persisted, fmt.Errorf("persisted %d of %d messages", len(persisted), len(filtered))
@@ -146,6 +152,45 @@ func lastAssistantMessageIndex(messages []ModelMessage) int {
 		}
 	}
 	return -1
+}
+
+// notePersistedTurn tells the Session Runtime which history turn the run has
+// written so far. Persisted rows do not carry their turn identity (only list
+// queries populate it), so the turn comes from the admission on the request.
+// Requests without a run handle (discuss rounds, legacy stores) have no live
+// view to update and are skipped. A failure here is logged only: history is
+// already durable, and the run's terminal state is decided elsewhere.
+func (s *Service) notePersistedTurn(ctx context.Context, req ChatRequest, requestMessageID string, persisted []messagepkg.Message) {
+	if s == nil || s.recordPersistedTurn == nil || req.RunHandle.FencingToken <= 0 || len(persisted) == 0 {
+		return
+	}
+	turnID := strings.TrimSpace(req.TurnID)
+	if turnID == "" {
+		return
+	}
+	requestMessageID = strings.TrimSpace(requestMessageID)
+	if requestMessageID == "" {
+		requestMessageID = firstUserID(persisted)
+	}
+	s.publishPersistedTurn(ctx, req.RunHandle, sessionruntime.PersistedTurnView{
+		TurnID:             turnID,
+		Position:           req.TurnPosition,
+		RequestMessageID:   requestMessageID,
+		AssistantMessageID: lastPersistedAssistantMessageID(persisted),
+	})
+}
+
+func (s *Service) publishPersistedTurn(ctx context.Context, handle sessionruntime.RunHandle, turn sessionruntime.PersistedTurnView) {
+	if s == nil || s.recordPersistedTurn == nil || handle.FencingToken <= 0 {
+		return
+	}
+	if err := s.recordPersistedTurn(context.WithoutCancel(ctx), handle, turn); err != nil && s.logger != nil {
+		s.logger.WarnContext(ctx, "persisted turn was not recorded on the run",
+			slog.String("run_id", handle.RunID),
+			slog.String("turn_id", turn.TurnID),
+			slog.Any("error", err),
+		)
+	}
 }
 
 func lastPersistedAssistantMessageID(messages []messagepkg.Message) string {

@@ -156,6 +156,7 @@ type Service struct {
 	contextLifecycleCandidatesMu      sync.Mutex
 	contextLifecycleCandidates        map[contextLifecycleCandidateKey]contextLifecycleCandidate
 	publishTurnEvent                  func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
+	recordPersistedTurn               func(context.Context, sessionruntime.RunHandle, sessionruntime.PersistedTurnView) error
 	turnHooks                         *turnRuntimeHooks
 	sessionManager                    *sessionruntime.Manager
 	// followUpStarts holds one in-flight follow-up starter per session key.

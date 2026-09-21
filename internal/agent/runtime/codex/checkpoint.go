@@ -280,7 +280,7 @@ func readRolloutMeta(ctx context.Context, fs checkpointFS, root, rel string) (ro
 }
 
 func checkpointError(err error) error {
-	return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+	return apperror.Wrap(apperror.CodeExternalRuntimeSessionResumeFailed, err, nil)
 }
 
 func validateRolloutPath(rel string) error {

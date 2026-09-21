@@ -204,10 +204,12 @@ func (h *BotBackupHandler) Import(c echo.Context) error {
 	}
 	result, err := h.service.Import(c.Request().Context(), userID, raw, opts, c.FormValue("passphrase"))
 	if err != nil {
-		if errors.Is(err, runtimefence.ErrResetLeaseLost) ||
-			errors.Is(err, runtimefence.ErrTransactionsUnsupported) ||
+		if errors.Is(err, runtimefence.ErrResetLeaseLost) {
+			return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
+		}
+		if errors.Is(err, runtimefence.ErrTransactionsUnsupported) ||
 			errors.Is(err, botbackup.ErrHistoryResetUnavailable) {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+			return apperror.Wrap(apperror.CodeSessionResetUnavailable, err, nil)
 		}
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}

@@ -972,14 +972,14 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			}
 			if h.runtimeResets == nil {
 				return apperror.Wrap(
-					apperror.CodeSessionHistoryInconsistent,
+					apperror.CodeSessionResetUnavailable,
 					errors.New("runtime reset is not configured"),
 					nil,
 				)
 			}
 			resetCtx, releaseRuntimeReset, err := h.runtimeResets.BeginSessionHistoryReset(c.Request().Context(), botID, sessionID)
 			if err != nil {
-				return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+				return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
 			}
 			defer releaseRuntimeReset()
 			c.SetRequest(c.Request().WithContext(resetCtx))
@@ -1013,7 +1013,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 					return echo.NewHTTPError(http.StatusConflict, "session agent cannot be changed after messages are sent")
 				}
 				if leaseErr := runtimefence.ResetLeaseFailure(c.Request().Context(), err); leaseErr != nil {
-					return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, leaseErr, nil)
+					return apperror.Wrap(apperror.CodeSessionResetConflict, leaseErr, nil)
 				}
 				return sessionServiceError(err)
 			}
@@ -1053,7 +1053,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 		result, err = h.sessionService.UpdateTitle(c.Request().Context(), sessionID, *req.Title)
 		if err != nil {
 			if leaseErr := runtimefence.ResetLeaseFailure(c.Request().Context(), err); leaseErr != nil {
-				return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, leaseErr, nil)
+				return apperror.Wrap(apperror.CodeSessionResetConflict, leaseErr, nil)
 			}
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
@@ -1097,7 +1097,7 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 	var releaseRuntimeReset func()
 	if session.IsACPRuntime(existing) && h.runtimeResets == nil {
 		return apperror.Wrap(
-			apperror.CodeSessionHistoryInconsistent,
+			apperror.CodeSessionResetUnavailable,
 			errors.New("runtime reset is not configured"),
 			nil,
 		)
@@ -1106,7 +1106,7 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 		var resetCtx context.Context
 		resetCtx, releaseRuntimeReset, err = h.runtimeResets.BeginSessionHistoryReset(c.Request().Context(), botID, sessionID)
 		if err != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+			return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
 		}
 		defer releaseRuntimeReset()
 		c.SetRequest(c.Request().WithContext(resetCtx))
@@ -1115,8 +1115,8 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "agent runtime service unavailable")
 	}
 	if err := h.sessionService.SoftDelete(c.Request().Context(), sessionID); err != nil {
-		if releaseRuntimeReset != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+		if leaseErr := runtimefence.ResetLeaseFailure(c.Request().Context(), err); leaseErr != nil {
+			return apperror.Wrap(apperror.CodeSessionResetConflict, leaseErr, nil)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}

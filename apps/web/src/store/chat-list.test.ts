@@ -10,6 +10,7 @@ import type {
   UIStreamEventHandler,
   UITurn,
   UIUserTurn,
+  RuntimePersistedTurn,
 } from '@/composables/api/useChat'
 import { REASONING_EFFORT_DISABLE } from '@/pages/bots/components/reasoning-effort'
 import { AUTH_SESSION_CLEARED_EVENT } from '@/lib/auth-session'
@@ -78,14 +79,24 @@ function flushPromises() {
 }
 
 type RuntimeTestUpdate =
-  | { kind: 'run', status: RuntimeRunStatus, error?: string }
+  | { kind: 'run', status: RuntimeRunStatus, error?: string, error_code?: string, persisted_turn?: RuntimePersistedTurn }
   | { kind: 'message', message: UIMessage }
   | { kind: 'user_turn', turn: UIUserTurn }
+  // The server refused the request before a run existed: an `error` frame
+  // addressed by invocation carrying a stable public code.
+  | { kind: 'refused', code: string, message: string }
 
 const runtime = {
   started: { kind: 'run', status: 'running' } as RuntimeTestUpdate,
   completed: { kind: 'run', status: 'completed' } as RuntimeTestUpdate,
   failed: (error: string): RuntimeTestUpdate => ({ kind: 'run', status: 'errored', error }),
+  // Every errored run carries a code; whether history has the turn is a
+  // separate fact the server records as persisted_turn.
+  failedUnpersisted: (error: string, code: string): RuntimeTestUpdate =>
+    ({ kind: 'run', status: 'errored', error, error_code: code }),
+  failedPersisted: (error: string, code: string, turn: RuntimePersistedTurn): RuntimeTestUpdate =>
+    ({ kind: 'run', status: 'errored', error, error_code: code, persisted_turn: turn }),
+  refused: (code: string, message: string): RuntimeTestUpdate => ({ kind: 'refused', code, message }),
   message: (message: UIMessage): RuntimeTestUpdate => ({ kind: 'message', message }),
   userTurn: (turn: UIUserTurn): RuntimeTestUpdate => ({ kind: 'user_turn', turn }),
 }
@@ -184,16 +195,31 @@ function publishRuntimeUpdate(
   }
   const run = runtime.run!
   let delta: RuntimeDelta
+  if (update.kind === 'refused') {
+    onEvent({
+      type: 'error',
+      invocation_id: run.invocation_id,
+      session_id: sessionId,
+      message: update.message,
+      feedback: { code: update.code, args: {}, detail: update.message },
+    })
+    return
+  }
   if (update.kind === 'run') {
     run.status = update.status
     run.error = update.error
+    run.error_code = update.error_code
+    if (update.persisted_turn) run.persisted_turn = update.persisted_turn
     run.updated_at = now
-    delta = publishedRun
+    // A run patch cannot carry the persisted turn; the server publishes a full
+    // view when it records one, so mirror that here.
+    delta = publishedRun && !update.persisted_turn
       ? {
           run: {
             run_id: runId,
             status: update.status,
             error: update.error,
+            error_code: update.error_code,
             updated_at: now,
           },
         }
@@ -2025,6 +2051,55 @@ describe('chat-list store', () => {
       expect(store.startupSendFailure).toBeNull()
     })
 
+  // The server records which history turn a run wrote. Without it the send
+  // is unsent: the composer takes the draft back and nothing on screen offers
+  // a retry against a turn the database does not have.
+  it('restores the draft when a run errors before any turn is persisted', async () => {
+      h.sendUpdates = [
+        runtime.started,
+        runtime.failedUnpersisted('rejected key', 'agent.provider_auth_failed'),
+      ]
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      const result = await store.sendMessage('hello')
+
+      expect(result).toMatchObject({ ok: false, stage: 'startup', restoreInput: 'hello' })
+      expect(store.startupSendFailure).toMatchObject({ restoreInput: 'hello' })
+      // The failed reply stays visible with its reason, but the turn it names
+      // was never written, so it is not a replacement target.
+      expect(store.isTurnUnpersisted('session-1', `turn-${wsRunId(-1)}`)).toBe(true)
+    })
+
+  it('keeps a failed reply retryable when its turn reached history', async () => {
+      const turnId = 'turn-run-1'
+      h.sendUpdates = [
+        runtime.started,
+        runtime.failedPersisted('timed out', 'agent.response_timeout', {
+          turn_id: turnId,
+          position: 1,
+          request_message_id: 'user-1',
+          assistant_message_id: 'assistant-1',
+        }),
+      ]
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      const result = await store.sendMessage('hello')
+
+      expect(result).toMatchObject({ ok: false, stage: 'stream' })
+      expect(store.startupSendFailure).toBeNull()
+      expect(store.messages).toHaveLength(2)
+      expect(store.messages[0]).toMatchObject({ role: 'user', text: 'hello', turnId })
+      expect(store.messages[1]).toMatchObject({
+        role: 'assistant',
+        turnId,
+        streaming: false,
+        messages: [{ type: 'error', code: 'agent.response_timeout' }],
+      })
+      expect(store.isTurnUnpersisted('session-1', turnId)).toBe(false)
+    })
+
   it('replaces the latest assistant immediately when retry starts', async () => {
       h.sendUpdates = [runtime.started]
       api.fetchSessions.mockResolvedValueOnce({
@@ -2419,6 +2494,67 @@ describe('chat-list store', () => {
 
       expect(result).toMatchObject({ ok: false, stage: 'startup', error: 'model failed' })
       expect(store.messages.map(message => message.id)).toEqual(['user-1', 'assistant-old'])
+    })
+
+  // A stale-turn refusal means the client's picture of the tail is out of
+  // date; the fix is to reload history, which the store does on its own.
+  it('reloads history when a retry is refused as stale', async () => {
+      h.sendUpdates = [runtime.refused('session_runtime.turn_not_latest', 'This message is no longer the latest in the conversation. Reload and try again.')]
+      api.fetchSessions.mockResolvedValueOnce({
+        items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
+        nextCursor: null,
+      })
+      const stale = [
+        {
+          id: 'user-1',
+          turn_id: 'turn-fx-4-2',
+          role: 'user',
+          text: 'hello',
+          attachments: [],
+          timestamp: '2026-05-17T08:00:00.000Z',
+        },
+        {
+          id: 'assistant-old',
+          turn_id: 'turn-fx-4-2',
+          role: 'assistant',
+          messages: [{ id: 1, type: 'text', content: 'old answer' }],
+          timestamp: '2026-05-17T08:00:01.000Z',
+          streaming: false,
+        },
+      ]
+      const reloaded = [
+        ...stale,
+        {
+          id: 'user-2',
+          turn_id: 'turn-fx-4-3',
+          role: 'user',
+          text: 'from another tab',
+          attachments: [],
+          timestamp: '2026-05-17T08:00:02.000Z',
+        },
+        {
+          id: 'assistant-new',
+          turn_id: 'turn-fx-4-3',
+          role: 'assistant',
+          messages: [{ id: 1, type: 'text', content: 'newer answer' }],
+          timestamp: '2026-05-17T08:00:03.000Z',
+          streaming: false,
+        },
+      ]
+      api.fetchMessagesUI.mockResolvedValueOnce(stale).mockResolvedValueOnce(reloaded)
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      await flushPromises()
+      const result = await store.retryLatestAssistant('turn-fx-4-2')
+
+      expect(result).toMatchObject({
+        ok: false,
+        stage: 'startup',
+        errorCode: 'session_runtime.turn_not_latest',
+      })
+      expect(api.fetchMessagesUI).toHaveBeenCalledTimes(2)
+      expect(store.messages.map(message => message.id)).toEqual(['user-1', 'assistant-old', 'user-2', 'assistant-new'])
     })
 
   // The retry/edit turns must release the composer pair write barrier as soon

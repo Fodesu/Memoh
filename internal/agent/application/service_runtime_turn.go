@@ -1012,7 +1012,7 @@ func isRuntimeConfigurationError(err error) bool {
 	switch apperror.CodeOf(err) {
 	case apperror.CodeExternalRuntimeAuthRequired, apperror.CodeExternalRuntimeUnavailable,
 		apperror.CodeRuntimeControlGoalRequiresDefaultMode,
-		apperror.CodeSessionHistoryInconsistent,
+		apperror.CodeExternalRuntimeSessionResumeFailed,
 		apperror.CodeACPModelSelectionUnsupported, apperror.CodeACPModelIDRequired,
 		apperror.CodeACPModelUnavailable, apperror.CodeACPReasoningUnsupported,
 		apperror.CodeACPReasoningEffortRequired, apperror.CodeACPReasoningUnavailable,

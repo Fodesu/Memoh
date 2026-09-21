@@ -164,6 +164,7 @@
     "queue_admission_overloaded": "队列当前繁忙，请稍后重试。",
     "queue_admission_unavailable": "队列服务暂时不可用，请稍后重试。",
     "queue_item_not_pending": "这条消息已不在待处理队列中。",
+    "queue_capacity_exceeded": "该会话队列已满，请取消或等待待处理项完成后再添加。",
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
@@ -274,7 +275,14 @@
     "session_runtime": {
       "session_busy": "这个会话还在处理上一条消息，请稍后再试。",
       "invocation_conflict": "这条消息已用不同内容提交过，请刷新会话查看已保存的内容。",
-      "history_inconsistent": "会话历史无法正确合并，请刷新后重试。"
+      "history_inconsistent": "会话历史无法正确合并，请刷新后重试。",
+      "turn_not_latest": "这条消息已不是会话中的最新一条，请刷新后重试。",
+      "turn_incomplete": "这条消息尚未记录回复，请刷新会话后改为编辑该消息，而不是重试。",
+      "reset_unavailable": "当前服务器无法重置会话历史，请联系管理员。",
+      "reset_conflict": "会话正在执行其他操作，请稍后再试。"
+    },
+    "history": {
+      "delete_failed": "会话历史删除失败，请重试。"
     },
     "context_lifecycle": {
       "request_invalid": "上下文生命周期请求无效，请检查后重试。",
@@ -285,7 +293,8 @@
     },
     "external_runtime": {
       "auth_required": "Codex 尚未连接账号。请前往 Agent 设置连接 ChatGPT，或配置 API Key。",
-      "unavailable": "外部 Agent 运行时暂不可用。请检查 Agent 配置和工作区后重试。"
+      "unavailable": "外部 Agent 运行时暂不可用。请检查 Agent 配置和工作区后重试。",
+      "session_resume_failed": "外部 Agent 会话无法恢复，请重试或新开一个会话。"
     },
     "app": {
       "not_found": "未找到该应用安装记录。",

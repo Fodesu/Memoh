@@ -324,7 +324,7 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 	workDir := strings.TrimSpace(metadataString(input.RuntimeMetadata, "project_path"))
 	storedSessionID, err = d.ensureResumableSession(ctx, client, input, storedSessionID)
 	if err != nil {
-		return external.PromptResult{}, apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+		return external.PromptResult{}, apperror.Wrap(apperror.CodeExternalRuntimeSessionResumeFailed, err, nil)
 	}
 	// The mount must survive a caller disconnect exactly as long as the CLI
 	// process does (the interrupt handshake still runs tools).

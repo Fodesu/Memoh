@@ -30,6 +30,10 @@ export interface RuntimeTranscriptSlice {
   steerTurnIds?: string[]
   status: RuntimeCurrentRunView['status'] | null
   operation: RuntimeRunOperation | null
+  // The run settled without recording a history turn: an unsent send. The
+  // frame may settle turns already on screen, but it must not introduce any,
+  // since history has nothing to replace them with.
+  unpersisted?: boolean
   turns: UITurn[]
   streaming: boolean
 }
@@ -298,6 +302,7 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
     steerTurnIds,
     status: run.status,
     operation: run.operation ? { ...run.operation } : null,
+    unpersisted: !active && !run.persisted_turn,
     turns,
     streaming: isRuntimeRunActive(run.status),
   }

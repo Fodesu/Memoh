@@ -300,6 +300,22 @@ type CurrentRunView struct {
 	ProposedTerminalStatus string            `json:"proposed_terminal_status,omitempty"`
 	FinishProposedAt       *time.Time        `json:"finish_proposed_at,omitempty"`
 	Operation              *RunOperationView `json:"operation,omitempty"`
+	// PersistedTurn names the history turn this run has written so far. The
+	// application records it at the moment a round lands in history, before
+	// the run is finished, so the terminal view tells a subscriber whether the
+	// run left a durable turn behind. Absent on a terminal run means nothing
+	// was written: the send is unsent and the client restores its draft.
+	PersistedTurn *PersistedTurnView `json:"persisted_turn,omitempty"`
+}
+
+// PersistedTurnView is the durable identity of a run's history turn as the
+// application persisted it. AssistantMessageID stays empty while only the
+// request message is on record, which lets a client offer edit but not retry.
+type PersistedTurnView struct {
+	TurnID             string `json:"turn_id" validate:"required" format:"uuid"`
+	Position           *int64 `json:"position,omitempty"`
+	RequestMessageID   string `json:"request_message_id,omitempty"`
+	AssistantMessageID string `json:"assistant_message_id,omitempty"`
 }
 
 type SteerTurnView struct {

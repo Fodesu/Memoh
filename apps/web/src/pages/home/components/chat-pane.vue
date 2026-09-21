@@ -1549,13 +1549,24 @@ const activeSupportsTurnReplacement = computed(() => activeChatTarget.value.runt
 // The turn id, not a message id: a turn carries it from admission, so the
 // affordance is live the moment the round exists rather than after the
 // database twin of that round has been fetched back.
+// A turn the server never wrote to history (a run that errored before any
+// round landed) has nothing for retry or edit to replace; the server would
+// refuse it as stale. Such a turn yields no affordance at all rather than
+// falling through to the previous round, which is not the tail the user sees.
+function replaceableTurnId(message: ChatMessage): string {
+  const turnId = message.turnId?.trim() ?? ''
+  if (!turnId) return ''
+  if (chatStore.isTurnUnpersisted(paneTarget.value.sessionId ?? '', turnId)) return ''
+  return turnId
+}
+
 const latestRetryableAssistantTurnId = computed(() => {
   if (streaming.value || loadingMessages.value || activeChatReadOnly.value) return ''
   if (!activeSupportsTurnReplacement.value) return ''
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const message = messages.value[i]
     if (message?.role === 'assistant' && !message.streaming && !message.__optimistic) {
-      return message.turnId?.trim() ?? ''
+      return replaceableTurnId(message)
     }
   }
   return ''
@@ -1567,7 +1578,7 @@ const latestEditableUserTurnId = computed(() => {
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const message = messages.value[i]
     if (message?.role === 'user' && !message.streaming && !message.__optimistic) {
-      return message.turnId?.trim() ?? ''
+      return replaceableTurnId(message)
     }
   }
   return ''

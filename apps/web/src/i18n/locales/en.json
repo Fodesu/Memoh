@@ -164,6 +164,7 @@
     "queue_admission_overloaded": "The queue is busy. Please retry shortly.",
     "queue_admission_unavailable": "Queue admission is temporarily unavailable. Please retry shortly.",
     "queue_item_not_pending": "This message is no longer pending in the queue.",
+    "queue_capacity_exceeded": "This session queue is full. Cancel or wait for pending items before adding more.",
     "profile": {
       "request_invalid": "The profile update request is invalid.",
       "title_model_invalid": "The selected title model is unavailable or is not a chat model.",
@@ -274,7 +275,14 @@
     "session_runtime": {
       "session_busy": "This conversation is still working on your previous message. Please try again in a moment.",
       "invocation_conflict": "This message was already sent with different content. Reload the conversation to see what was saved.",
-      "history_inconsistent": "The conversation history could not be reconciled. Refresh and try again."
+      "history_inconsistent": "The conversation history could not be reconciled. Refresh and try again.",
+      "turn_not_latest": "This message is no longer the latest in the conversation. Reload and try again.",
+      "turn_incomplete": "This message has no reply on record yet. Reload the conversation, then edit the message instead of retrying it.",
+      "reset_unavailable": "Conversation history cannot be reset on this server. Contact an administrator.",
+      "reset_conflict": "The conversation is busy with another operation. Please try again shortly."
+    },
+    "history": {
+      "delete_failed": "The conversation history could not be deleted. Please try again."
     },
     "context_lifecycle": {
       "request_invalid": "The context lifecycle request is invalid.",
@@ -285,7 +293,8 @@
     },
     "external_runtime": {
       "auth_required": "Codex is not connected yet. Open Agent settings to connect ChatGPT or configure an API key.",
-      "unavailable": "The external Agent runtime is unavailable. Check the Agent setup and workspace, then try again."
+      "unavailable": "The external Agent runtime is unavailable. Check the Agent setup and workspace, then try again.",
+      "session_resume_failed": "The external Agent session could not be resumed. Try again or start a new conversation."
     },
     "app": {
       "not_found": "This App installation was not found.",
