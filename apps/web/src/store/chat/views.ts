@@ -191,9 +191,10 @@ export function createChatViews(deps: ChatViewsDeps) {
     finishAssistantTurn: turn => { transcriptForTurn(turn)?.finishAssistantTurn(turn) },
   })
 
-  // A settled run that recorded no persisted turn is an unsent send: its turn
+  // A failed run that recorded no persisted turn is an unsent send: its turn
   // exists only in the live projection, so retry and edit must not target it.
-  // The database twin that a refresh would fetch does not exist.
+  // The database twin that a refresh would fetch does not exist. A completed
+  // run is never treated this way: completion implies its round was written.
   function isTurnUnpersisted(sessionId: string, turnId: string): boolean {
     const sid = sessionId.trim()
     const id = turnId.trim()
@@ -203,6 +204,7 @@ export function createChatViews(deps: ChatViewsDeps) {
       run
       && run.turn_id.trim() === id
       && !isRuntimeRunActive(run.status)
+      && run.status !== 'completed'
       && !run.persisted_turn,
     )
   }

@@ -571,6 +571,15 @@ describe('persisted turn', () => {
     expect(state.transcript.turns.map(turn => turn.role)).toEqual(['user', 'assistant'])
   })
 
+  it('never flags a completed run: completion implies its round was written', () => {
+    const state = reduceRuntimeProjection(
+      createEmptyRuntimeProjection('session-1'),
+      snapshot(runView({ status: 'completed', messages: [{ id: 0, type: 'text', content: 'done' }] })),
+    )
+    expect(state.transcript.unpersisted).toBe(false)
+    expect(state.transcript.turns.map(turn => turn.role)).toEqual(['user', 'assistant'])
+  })
+
   it('never flags an active run, whose turn may still be written', () => {
     const state = reduceRuntimeProjection(
       createEmptyRuntimeProjection('session-1'),
