@@ -503,8 +503,8 @@ export interface RuntimeCurrentRunView {
 }
 
 // The turn id is the whole signal: history holds this run's turn. Anything
-// more about the turn is read from history. Transitional, see
-// docs/design/turn-history-event-log.md.
+// more about the turn is read from history. Transitional until turn state
+// lives in one event log shared by history and the live view.
 export interface RuntimePersistedTurn {
   turn_id: string
 }

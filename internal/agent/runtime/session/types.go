@@ -311,8 +311,8 @@ type CurrentRunView struct {
 // PersistedTurnView names the history turn a run has written. It carries the
 // turn id only: the client needs to know that history holds the turn, and
 // everything else about it comes from history itself. This field is a bridge
-// until turn state lives in one event log shared by history and the live view
-// (docs/design/turn-history-event-log.md); keep it minimal so it can go.
+// until turn state lives in one event log shared by history and the live view;
+// keep it minimal so it can go.
 type PersistedTurnView struct {
 	TurnID string `json:"turn_id" validate:"required" format:"uuid"`
 }
