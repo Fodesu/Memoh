@@ -462,26 +462,17 @@ func (h *UsersHandler) CreateBot(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid ACP metadata: "+err.Error())
 		}
 	}
-	if req.RequestID != "" {
-		// A retry of a request whose response was lost: hand back the Bot it
-		// created. The SSE path re-attaches to that Bot's workspace progress.
-		existing, ok, err := h.botService.FindByCreateRequest(c.Request().Context(), ownerID, req.RequestID)
-		if err != nil {
-			return createBotHTTPError(err, ownerFromToken)
-		}
-		if ok {
-			if acceptsEventStream(c) {
-				return h.replayBotStream(c, existing)
-			}
-			return c.JSON(http.StatusOK, scrubBotForResponse(existing))
-		}
-	}
 	if acceptsEventStream(c) {
 		return h.createBotStream(c, ownerID, ownerFromToken, req)
 	}
-	resp, err := h.botService.Create(c.Request().Context(), ownerID, req)
+	resp, replayed, err := h.botService.CreateOrReplay(c.Request().Context(), ownerID, req)
 	if err != nil {
 		return createBotHTTPError(err, ownerFromToken)
+	}
+	if replayed {
+		// A retry of a request whose response was lost, or the loser of a race
+		// against an identical request: the Bot already exists, answer 200.
+		return c.JSON(http.StatusOK, scrubBotForResponse(resp))
 	}
 	// Mirror UpdateBot: when a bot is created with ACP metadata (e.g. the
 	// onboarding flow creates the bot directly with an api_key agent), write the
@@ -541,9 +532,14 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	// the subscription is in place before the reconciler starts emitting.
 	req.WaitForReady = false
 	req.SkipLifecycle = true
-	bot, err := h.botService.Create(c.Request().Context(), ownerID, req)
+	bot, replayed, err := h.botService.CreateOrReplay(c.Request().Context(), ownerID, req)
 	if err != nil {
 		return createBotHTTPError(err, ownerFromToken)
+	}
+	if replayed {
+		// The Bot already exists (lost response or lost race): re-attach to its
+		// workspace progress instead of recording a second intent on it.
+		return h.replayBotStream(c, bot)
 	}
 	image := workspaceImageFromCreateRequest(req)
 	return h.streamBotWorkspaceSetup(c, flusher, bot, func(ctx context.Context) (botworkspace.Workspace, error) {

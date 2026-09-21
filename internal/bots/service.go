@@ -108,36 +108,45 @@ func (s *Service) AuthorizeAccess(ctx context.Context, userID, botID string, isA
 
 // Create creates a new bot owned by owner user.
 func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotRequest) (Bot, error) {
+	bot, _, err := s.CreateOrReplay(ctx, ownerUserID, req)
+	return bot, err
+}
+
+// CreateOrReplay is Create that also reports whether the returned Bot was
+// created by an earlier request with the same RequestID (a replay) rather than
+// by this call, so the HTTP layer can answer 200 instead of 201 in every replay
+// case, including two identical requests racing past the lookup.
+func (s *Service) CreateOrReplay(ctx context.Context, ownerUserID string, req CreateBotRequest) (Bot, bool, error) {
 	if s.queries == nil {
-		return Bot{}, errors.New("bot queries not configured")
+		return Bot{}, false, errors.New("bot queries not configured")
 	}
 	ownerID := strings.TrimSpace(ownerUserID)
 	if ownerID == "" {
-		return Bot{}, errors.New("owner user id is required")
+		return Bot{}, false, errors.New("owner user id is required")
 	}
 	ownerUUID, err := db.ParseUUID(ownerID)
 	if err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	if err := s.ensureUserExists(ctx, ownerUUID); err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	aclPresetKey := acl.NormalizePresetKey(req.AclPreset)
 	if _, err := acl.ResolvePreset(aclPresetKey); err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	requestID, err := normalizeCreateRequestID(req.RequestID)
 	if err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	if requestID != "" {
 		// A replay of a request whose response was lost: the bot already
 		// exists, so return it rather than colliding on the name or taking a
 		// second slot. Wins over the name check on purpose.
 		if existing, ok, err := s.findByCreateRequest(ctx, ownerUUID, requestID); err != nil {
-			return Bot{}, err
+			return Bot{}, false, err
 		} else if ok {
-			return existing, nil
+			return existing, true, nil
 		}
 	}
 	displayName := strings.TrimSpace(req.DisplayName)
@@ -146,7 +155,7 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 	}
 	botName, err := s.resolveName(ctx, req.Name, displayName, "")
 	if err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	avatarURL := strings.TrimSpace(req.AvatarURL)
 	isActive := true
@@ -155,7 +164,7 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 	}
 	timezoneValue, err := normalizeOptionalTimezone(req.Timezone)
 	if err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	metadata := req.Metadata
 	if metadata == nil {
@@ -163,7 +172,7 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 	}
 	payload, err := json.Marshal(metadata)
 	if err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	row, err := s.queries.CreateBot(ctx, sqlc.CreateBotParams{
 		OwnerUserID:     ownerUUID,
@@ -182,61 +191,63 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 			// returns the bot the winner inserted.
 			if requestID != "" && db.UniqueViolationConstraint(err) == botCreateRequestIndex {
 				if existing, ok, lookupErr := s.findByCreateRequest(ctx, ownerUUID, requestID); lookupErr == nil && ok {
-					return existing, nil
+					return existing, true, nil
 				}
 			}
-			return Bot{}, ErrBotNameTaken
+			return Bot{}, false, ErrBotNameTaken
 		}
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	bot, err := toBot(asSQLCBot(row))
 	if err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	if err := acl.ApplyPreset(ctx, s.queries, bot.ID, ownerID, aclPresetKey); err != nil {
 		if cleanupErr := s.queries.DeleteBotByID(ctx, row.ID); cleanupErr != nil {
-			return Bot{}, errors.Join(
+			return Bot{}, false, errors.Join(
 				fmt.Errorf("apply acl preset: %w", err),
 				fmt.Errorf("cleanup bot after acl preset failure: %w", cleanupErr),
 			)
 		}
-		return Bot{}, fmt.Errorf("apply acl preset: %w", err)
+		return Bot{}, false, fmt.Errorf("apply acl preset: %w", err)
 	}
 	if err := s.attachCheckSummary(ctx, &bot, asSQLCBot(row)); err != nil {
-		return Bot{}, err
+		return Bot{}, false, err
 	}
 	if req.SkipLifecycle {
-		return bot, nil
+		return bot, false, nil
 	}
 	if s.workspaceIntents == nil {
 		// No workspace subsystem is wired (tests, partial deployments). Keep
 		// the bot usable instead of leaving it in creating with nothing that
 		// would ever change that status.
 		if err := s.updateStatus(ctx, bot.ID, BotStatusReady); err != nil {
-			return Bot{}, err
+			return Bot{}, false, err
 		}
-		return s.Get(ctx, bot.ID)
+		got, err := s.Get(ctx, bot.ID)
+		return got, false, err
 	}
 	// The workspace is provisioned by the reconciler; the request only
 	// records the intent. A failed provisioning leaves the bot in status
 	// failed with its diagnostics, never stranded in creating.
 	generation, err := s.workspaceIntents.EnsurePresent(ctx, bot.ID, workspaceImageFromMetadata(metadata))
 	if err != nil {
-		return Bot{}, fmt.Errorf("record workspace intent: %w", err)
+		return Bot{}, false, fmt.Errorf("record workspace intent: %w", err)
 	}
 	if !req.WaitForReady {
-		return bot, nil
+		return bot, false, nil
 	}
 	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), botLifecycleOperationTimeout)
 	defer cancel()
 	outcome, err := s.workspaceIntents.AwaitSettled(waitCtx, bot.ID, generation)
 	if err != nil {
-		return Bot{}, fmt.Errorf("wait for workspace: %w", err)
+		return Bot{}, false, fmt.Errorf("wait for workspace: %w", err)
 	}
 	if outcome.Observed == WorkspaceObservedFailed {
-		return Bot{}, workspaceOutcomeError(outcome)
+		return Bot{}, false, workspaceOutcomeError(outcome)
 	}
-	return s.Get(waitCtx, bot.ID)
+	got, err := s.Get(waitCtx, bot.ID)
+	return got, false, err
 }
 
 // workspaceOutcomeError turns a failed observation into the stable errors the
@@ -391,23 +402,6 @@ func normalizeCreateRequestID(raw string) (string, error) {
 		}
 	}
 	return id, nil
-}
-
-// FindByCreateRequest returns the bot a previous Create with the same
-// idempotency key produced for this owner, if any.
-func (s *Service) FindByCreateRequest(ctx context.Context, ownerUserID, requestID string) (Bot, bool, error) {
-	if s.queries == nil {
-		return Bot{}, false, errors.New("bot queries not configured")
-	}
-	ownerUUID, err := db.ParseUUID(strings.TrimSpace(ownerUserID))
-	if err != nil {
-		return Bot{}, false, err
-	}
-	id, err := normalizeCreateRequestID(requestID)
-	if err != nil || id == "" {
-		return Bot{}, false, err
-	}
-	return s.findByCreateRequest(ctx, ownerUUID, id)
 }
 
 func (s *Service) findByCreateRequest(ctx context.Context, ownerUUID pgtype.UUID, requestID string) (Bot, bool, error) {

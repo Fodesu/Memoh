@@ -129,6 +129,33 @@ func TestCreateBotStreamReplaysBotForIdempotencyKey(t *testing.T) {
 	}
 }
 
+// Losing the race against an identical request is a replay too: the JSON path
+// answers 200 with the winner's Bot, not 201.
+func TestCreateBotAnswersRaceLoserWithReplayStatus(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	db := &createBotStreamDB{ownerID: ownerID, botID: botID, raceOnInsert: true}
+	handler := &UsersHandler{
+		service:        newTestCreateBotAccountService(ownerID),
+		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(db))),
+		workspaceSetup: &createBotStreamWorkspace{},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"display_name": "Stream Bot"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Idempotency-Key", "retry-1")
+	rec := httptest.NewRecorder()
+	if err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID)); err != nil {
+		t.Fatalf("CreateBot() error = %v", err)
+	}
+	if rec.Code != http.StatusOK || db.inserts != 1 || db.lookups != 2 {
+		t.Fatalf("status = %d inserts = %d lookups = %d, want 200 after the lookup miss, one failed insert and the re-lookup; body=%s", rec.Code, db.inserts, db.lookups, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), botID) {
+		t.Fatalf("body = %s, want the winner's bot", rec.Body.String())
+	}
+}
+
 // The JSON path answers a replay with 200 and the existing Bot.
 func TestCreateBotReplaysBotForIdempotencyKeyJSON(t *testing.T) {
 	ownerID := "00000000-0000-0000-0000-000000000101"
@@ -604,7 +631,12 @@ type createBotStreamDB struct {
 	// requestIDKnown makes the idempotency lookup return the bot, as if an
 	// earlier request with the same key had created it.
 	requestIDKnown bool
-	inserts        int
+	// raceOnInsert makes the insert fail on the idempotency index as if an
+	// identical request had won the race after this one's lookup missed; the
+	// lookup then finds the bot.
+	raceOnInsert bool
+	lookups      int
+	inserts      int
 }
 
 func (d *createBotStreamDB) Exec(_ context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
@@ -623,12 +655,18 @@ func (d *createBotStreamDB) QueryRow(_ context.Context, query string, args ...an
 	case strings.Contains(query, "FROM users") && strings.Contains(query, "id = $1"):
 		return &createBotStreamRow{scanFunc: func(_ ...any) error { return nil }}
 	case strings.Contains(query, "create_request_id = $2"):
-		if d.requestIDKnown {
+		d.lookups++
+		if d.requestIDKnown || (d.raceOnInsert && d.inserts > 0) {
 			return d.botRow(bots.BotStatusCreating)
 		}
 		return &createBotStreamRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
 	case strings.Contains(query, "INSERT INTO bots"):
 		d.inserts++
+		if d.raceOnInsert {
+			return &createBotStreamRow{scanFunc: func(_ ...any) error {
+				return &pgconn.PgError{Code: "23505", ConstraintName: "idx_bots_create_request"}
+			}}
+		}
 		if len(args) > 6 {
 			if payload, ok := args[6].([]byte); ok {
 				d.metadata = append([]byte(nil), payload...)
