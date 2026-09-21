@@ -2205,6 +2205,7 @@
         "botCreated": "Botレコードが作成されました",
         "pulling": "ベースイメージのプル",
         "creating": "Workspace を作成中",
+        "retrying": "前回の試行が失敗したため自動で再試行しています（{attempt} 回目）",
         "restoring": "Memoryとデータの復元",
         "ready": "Botの準備ができました",
         "applyingSettings": "ModelとMemory設定の適用",

@@ -9,6 +9,7 @@ export type BotCreateTerminalLineKind =
   | 'bot-created'
   | 'pulling'
   | 'creating'
+  | 'retrying'
   | 'restoring'
   | 'ready'
   | 'applying-settings'
@@ -22,6 +23,8 @@ export type BotCreateTerminalLine = {
   image?: string
   percent?: number
   message?: string
+  // retrying: how many fast attempts the reconciler has consumed so far.
+  attempt?: number
 }
 
 type NewBotCreateTerminalLine = Omit<BotCreateTerminalLine, 'id'>

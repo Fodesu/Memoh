@@ -478,6 +478,28 @@ describe('useBotCreateProgressStore', () => {
     expect(store.status).toBe('ready')
   })
 
+  it('shows the pending workspace retry as waiting instead of failing', async () => {
+    vi.useFakeTimers()
+    getBot
+      .mockResolvedValueOnce({ data: { id: 'bot-1', status: 'creating' } })
+      .mockResolvedValue({ data: { id: 'bot-1', name: 'cat', status: 'ready' } })
+    getBotChecks.mockResolvedValue({ data: { items: [
+      { type: 'container.init', status: 'unknown', detail: 'pull image: connection refused', metadata: { retry_pending: true, attempts: 2 } },
+    ] } })
+    const store = useBotCreateProgressStore()
+    const restoring = store.restore({ botId: 'bot-1', botName: 'cat', displayName: 'Cat', setupError: null })
+    await vi.advanceTimersByTimeAsync(0)
+    // The first creating observation reads the checks and surfaces the retry.
+    expect(getBotChecks).toHaveBeenCalledTimes(1)
+    expect(store.status).toBe('creating')
+    expect(store.canRetry).toBe(false)
+    expect(store.lines.at(-1)).toMatchObject({ kind: 'retrying', status: 'running', attempt: 2 })
+    await vi.advanceTimersByTimeAsync(BOT_STATUS_POLL_INTERVAL_MS)
+    await restoring
+    expect(store.status).toBe('ready')
+    expect(store.lines.map(l => l.kind)).toEqual(['bot-created', 'creating', 'retrying', 'ready'])
+  })
+
   it('shows the failed workspace with its check detail after a refresh', async () => {
     getBot.mockResolvedValue({ data: { id: 'bot-1', name: 'cat', display_name: 'Cat', status: 'failed' } })
     getBotChecks.mockResolvedValue({ data: { items: [

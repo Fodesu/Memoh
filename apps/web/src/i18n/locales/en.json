@@ -2207,6 +2207,7 @@
         "botCreated": "Bot record created",
         "pulling": "Pulling base image",
         "creating": "Creating workspace",
+        "retrying": "Last attempt failed, retrying automatically (attempt {attempt})",
         "restoring": "Restoring memory & data",
         "ready": "Bot is ready",
         "applyingSettings": "Applying model & memory settings",

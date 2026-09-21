@@ -57,6 +57,46 @@ func TestStreamWorkspaceProvisioningStopsWhenClientDisconnects(t *testing.T) {
 	}
 }
 
+// A retryable failure the reconciler is about to retry is not terminal: the
+// relay must not turn its subscriber-side error event into an SSE error. Only
+// the awaited (Final) observation decides the outcome.
+func TestStreamWorkspaceProvisioningIgnoresNonTerminalErrorEvents(t *testing.T) {
+	events := make(chan botworkspace.ProgressEvent, 4)
+	events <- botworkspace.ProgressEvent{Type: "pulling", Image: "debian:bookworm-slim"}
+	events <- botworkspace.ProgressEvent{Type: botworkspace.EventError, Phase: botworkspace.PhaseImagePrepare, Message: "pull image: connection refused"}
+	events <- botworkspace.ProgressEvent{Type: "pulling", Image: "debian:bookworm-slim"}
+
+	await := func(context.Context) (botworkspace.Workspace, error) {
+		return botworkspace.Workspace{Desired: botworkspace.DesiredPresent, Observed: botworkspace.ObservedRunning, EverReady: true}, nil
+	}
+
+	var sent []string
+	errorSent := false
+	outcome := streamWorkspaceProvisioning(
+		context.Background(),
+		func(payload any) bool {
+			if ev, ok := payload.(createContainerPullingEvent); ok {
+				sent = append(sent, ev.Type)
+			}
+			return true
+		},
+		events,
+		await,
+		"req-1",
+		func(string, string, string) { errorSent = true },
+	)
+
+	if outcome.Failed || outcome.Disconnected || outcome.ErrorSent {
+		t.Fatalf("outcome = %+v, want success", outcome)
+	}
+	if errorSent {
+		t.Fatal("a retryable failure inside the budget must not be relayed as an error event")
+	}
+	if len(sent) != 2 {
+		t.Fatalf("relayed progress events = %v, want the two pulling events", sent)
+	}
+}
+
 // restoreWorkspaceManager fakes the preserved-data archive: it exists until
 // RestorePreservedData consumes it.
 type restoreWorkspaceManager struct {

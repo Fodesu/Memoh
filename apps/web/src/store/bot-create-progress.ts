@@ -80,6 +80,8 @@ const NOTHING_APPLIED: BotCreateStartResult = { settingsApplied: false, agentApp
 // keep watching.
 export const BOT_STATUS_POLL_INTERVAL_MS = 2000
 export const BOT_STATUS_POLL_BUDGET_MS = 15 * 60 * 1000
+// Re-read the Bot's checks for a pending retry once per this many status polls.
+export const RETRY_CHECK_EVERY_POLLS = 5
 
 const WORKSPACE_FAILURE_FALLBACK = { i18n_key: 'bots.create.failedSubtitle' }
 const WORKSPACE_STILL_PROVISIONING = { i18n_key: 'bots.create.stillProvisioning' }
@@ -145,13 +147,30 @@ function toMessage(error: unknown): string {
 
 // Polls the Bot until the server has settled its workspace one way or the
 // other. Returns the last observation even when the budget runs out while the
-// Bot is still creating; the caller decides what that means.
-async function awaitBotSettled(botId: string): Promise<BotsBot> {
+// Bot is still creating; the caller decides what that means. `onCreating` is
+// invoked on every observation that is still creating.
+async function awaitBotSettled(botId: string, onCreating?: () => Promise<void>): Promise<BotsBot> {
   const deadline = Date.now() + BOT_STATUS_POLL_BUDGET_MS
   for (;;) {
     const { data } = await getBotsById({ path: { id: botId }, throwOnError: true })
     if (data.status !== BOT_STATUS_CREATING || Date.now() >= deadline) return data
+    await onCreating?.()
     await sleep(BOT_STATUS_POLL_INTERVAL_MS)
+  }
+}
+
+// While a Bot is creating, the reconciler may be between two attempts after a
+// transient failure. The init check carries that as `retry_pending` metadata;
+// read it so the terminal can show "retrying" instead of a silent wait.
+async function pendingWorkspaceRetry(botId: string): Promise<{ attempt: number } | null> {
+  try {
+    const { data } = await getBotsByIdChecks({ path: { id: botId }, throwOnError: true })
+    const metadata = data.items?.find(check => check.type === CONTAINER_INIT_CHECK)?.metadata as Record<string, unknown> | undefined
+    if (metadata?.retry_pending !== true) return null
+    const attempts = metadata.attempts
+    return { attempt: typeof attempts === 'number' ? attempts : 0 }
+  } catch {
+    return null
   }
 }
 
@@ -379,8 +398,18 @@ export const useBotCreateProgressStore = defineStore('bot-create-progress', () =
       lines.value = pushBotCreateTerminalLine(lines.value, { kind: 'creating', status: 'running' })
     }
     progress.value = { phase: 'creating' }
+    // Only re-read the checks every few polls; the retry cadence is 10s+.
+    let polls = 0
+    const noteRetry = async () => {
+      if (polls++ % RETRY_CHECK_EVERY_POLLS !== 0) return
+      const retry = await pendingWorkspaceRetry(botId)
+      if (!retry) return
+      const last = lines.value.at(-1)
+      if (last?.kind === 'retrying' && last.attempt === retry.attempt) return
+      lines.value = pushBotCreateTerminalLine(lines.value, { kind: 'retrying', status: 'running', attempt: retry.attempt })
+    }
     try {
-      const current = await awaitBotSettled(botId)
+      const current = await awaitBotSettled(botId, noteRetry)
       bot.value = { ...bot.value, ...current }
       if (!display.value?.display_name && current.display_name) {
         display.value = { display_name: current.display_name, avatar_url: current.avatar_url }

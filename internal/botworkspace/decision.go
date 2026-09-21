@@ -87,7 +87,12 @@ func NextBackoff(now time.Time, attempts int32, base, capDuration time.Duration)
 // DeriveBotStatus maps the workspace state onto bots.status. ok is false when
 // the bot's status must not be touched (the workspace is absent on purpose or
 // the bot is being deleted; those transitions belong to the bot lifecycle).
-func DeriveBotStatus(w Workspace) (string, bool) {
+//
+// A failure that is still inside the fast retry budget (RetryPending with
+// maxAttempts) keeps the bot at creating: the reconciler is about to try
+// again on its own, and most such failures recover. Only a spent budget or a
+// non-retryable failure becomes failed.
+func DeriveBotStatus(w Workspace, maxAttempts int32) (string, bool) {
 	if w.Desired == DesiredAbsent {
 		return "", false
 	}
@@ -97,6 +102,9 @@ func DeriveBotStatus(w Workspace) (string, bool) {
 	case ObservedFailed:
 		if w.EverReady {
 			return BotStatusReady, true
+		}
+		if w.RetryPending(maxAttempts) {
+			return BotStatusCreating, true
 		}
 		return BotStatusFailed, true
 	default:

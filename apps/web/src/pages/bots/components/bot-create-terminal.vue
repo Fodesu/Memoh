@@ -16,6 +16,7 @@ const lineLabelKey: Partial<Record<BotCreateTerminalLineKind, string>> = {
   'bot-created': 'bots.create.line.botCreated',
   pulling: 'bots.create.line.pulling',
   creating: 'bots.create.line.creating',
+  retrying: 'bots.create.line.retrying',
   restoring: 'bots.create.line.restoring',
   ready: 'bots.create.line.ready',
   'applying-settings': 'bots.create.line.applyingSettings',
@@ -26,7 +27,7 @@ function labelFor(line: BotCreateTerminalLine): string {
   if (line.kind === 'error') return line.message ?? t('bots.create.failedTitle')
   const key = lineLabelKey[line.kind]
   if (!key) return ''
-  return t(key, { name: line.message ?? '' })
+  return t(key, { name: line.message ?? '', attempt: line.attempt ?? 0 })
 }
 
 const scroller = ref<HTMLElement | null>(null)

@@ -907,7 +907,8 @@ func (s *Service) buildRuntimeChecks(ctx context.Context, row sqlc.Bot, includeD
 			Summary:  "Initialization is in progress.",
 			Detail:   "Bot resources are still being provisioned.",
 		}
-		if status == BotStatusFailed {
+		switch status {
+		case BotStatusFailed:
 			initCheck.Status = BotCheckStatusError
 			initCheck.Summary = "Workspace initialization failed."
 			initCheck.Detail = "Bot resources failed to provision. Retry the workspace or delete the bot."
@@ -916,6 +917,27 @@ func (s *Service) buildRuntimeChecks(ctx context.Context, row sqlc.Bot, includeD
 				initCheck.Metadata = map[string]any{
 					"setup_error_phase": outcome.LastErrorPhase,
 				}
+			}
+		case BotStatusCreating:
+			// A failed attempt inside the fast retry budget keeps the bot
+			// creating; surface the retry so clients can show it as waiting
+			// rather than as a failure. The check status stays unknown on
+			// purpose: nothing has failed for good yet.
+			if outcome, ok := s.workspaceOutcome(ctx, row.ID.String()); ok && outcome.RetryPending {
+				initCheck.Summary = "Workspace initialization is being retried."
+				initCheck.Detail = "The last attempt failed; the next one is scheduled."
+				if detail := strings.TrimSpace(outcome.LastError); detail != "" {
+					initCheck.Detail = detail
+				}
+				metadata := map[string]any{
+					"retry_pending":     true,
+					"attempts":          outcome.Attempts,
+					"setup_error_phase": outcome.LastErrorPhase,
+				}
+				if !outcome.NextAttemptAt.IsZero() {
+					metadata["next_attempt_at"] = outcome.NextAttemptAt.UTC().Format(time.RFC3339)
+				}
+				initCheck.Metadata = metadata
 			}
 		}
 		checks = append(checks, initCheck)

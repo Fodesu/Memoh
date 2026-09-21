@@ -107,6 +107,13 @@ type WorkspaceOutcome struct {
 	LastError      string
 	LastErrorPhase string
 	EverReady      bool
+	// Attempts is the fast retry budget consumed so far; NextAttemptAt is when
+	// the reconciler will try again. RetryPending is true while a failed
+	// observation is still inside that budget, i.e. the failure is transient
+	// from the user's point of view and the bot stays creating.
+	Attempts      int32
+	NextAttemptAt time.Time
+	RetryPending  bool
 }
 
 // Workspace observation values the bots service branches on.

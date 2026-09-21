@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -252,6 +253,84 @@ func TestListChecksReportsSetupFailureAsSingleIssue(t *testing.T) {
 	state, issueCount := summarizeChecks(checks)
 	if state != BotCheckStateIssue || issueCount != 1 {
 		t.Fatalf("summary = (%q, %d), want (%q, 1); checks=%#v", state, issueCount, BotCheckStateIssue, checks)
+	}
+}
+
+func makeGetBotRowWithStatus(botID, ownerUserID pgtype.UUID, status string) *fakeRow {
+	base := makeGetBotRowWithMetadata(botID, ownerUserID, []byte(`{}`))
+	return &fakeRow{scanFunc: func(dest ...any) error {
+		if err := base.scanFunc(dest...); err != nil {
+			return err
+		}
+		*dest[7].(*string) = status
+		return nil
+	}}
+}
+
+func newCreatingBotChecksService(t *testing.T, botUUID, ownerUUID pgtype.UUID, outcome WorkspaceOutcome) *Service {
+	t.Helper()
+	db := &fakeDBTX{
+		queryRowFunc: func(_ context.Context, query string, _ ...any) pgx.Row {
+			switch {
+			case strings.Contains(query, "SELECT id, owner_user_id") && strings.Contains(query, "FROM bots"):
+				return makeGetBotRowWithStatus(botUUID, ownerUUID, BotStatusCreating)
+			default:
+				t.Fatalf("unexpected query: %s", query)
+				return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
+	svc.SetWorkspaceIntents(&fakeWorkspaceIntents{outcome: outcome})
+	return svc
+}
+
+// A failed attempt inside the reconciler's fast retry budget is not a failure
+// yet: the bot stays creating and the init check reports the retry instead of
+// an error, with enough metadata for a client to show it as waiting.
+func TestListChecksReportsPendingRetryAsWaitingNotError(t *testing.T) {
+	botUUID := mustParseUUID("00000000-0000-0000-0000-000000000002")
+	ownerUUID := mustParseUUID("00000000-0000-0000-0000-000000000001")
+	next := time.Date(2026, 9, 21, 8, 0, 30, 0, time.UTC)
+	svc := newCreatingBotChecksService(t, botUUID, ownerUUID, WorkspaceOutcome{
+		Desired: "present", Observed: WorkspaceObservedFailed,
+		LastError: "pull image: dial tcp: connection refused", LastErrorPhase: "image_prepare",
+		Attempts: 2, NextAttemptAt: next, RetryPending: true,
+	})
+
+	checks, err := svc.ListChecks(context.Background(), botUUID.String())
+	if err != nil {
+		t.Fatalf("ListChecks() error = %v", err)
+	}
+	initCheck := findBotCheck(t, checks, BotCheckTypeContainerInit)
+	if initCheck.Status != BotCheckStatusUnknown {
+		t.Fatalf("container.init status = %q, want unknown while retrying", initCheck.Status)
+	}
+	if initCheck.Detail != "pull image: dial tcp: connection refused" {
+		t.Fatalf("container.init detail = %q, want the last error", initCheck.Detail)
+	}
+	if initCheck.Metadata["retry_pending"] != true || initCheck.Metadata["attempts"] != int32(2) ||
+		initCheck.Metadata["next_attempt_at"] != "2026-09-21T08:00:30Z" || initCheck.Metadata["setup_error_phase"] != "image_prepare" {
+		t.Fatalf("container.init metadata = %#v", initCheck.Metadata)
+	}
+	if state, issues := summarizeChecks(checks); state == BotCheckStateIssue || issues != 0 {
+		t.Fatalf("summary = (%q, %d), want no issue while retrying", state, issues)
+	}
+}
+
+// Without a pending retry the creating bot keeps the plain in-progress check.
+func TestListChecksKeepsPlainProgressWhileProvisioning(t *testing.T) {
+	botUUID := mustParseUUID("00000000-0000-0000-0000-000000000002")
+	ownerUUID := mustParseUUID("00000000-0000-0000-0000-000000000001")
+	svc := newCreatingBotChecksService(t, botUUID, ownerUUID, WorkspaceOutcome{Desired: "present", Observed: "provisioning"})
+
+	checks, err := svc.ListChecks(context.Background(), botUUID.String())
+	if err != nil {
+		t.Fatalf("ListChecks() error = %v", err)
+	}
+	initCheck := findBotCheck(t, checks, BotCheckTypeContainerInit)
+	if initCheck.Status != BotCheckStatusUnknown || initCheck.Metadata != nil || initCheck.Summary != "Initialization is in progress." {
+		t.Fatalf("container.init = %#v, want plain in-progress check", initCheck)
 	}
 }
 

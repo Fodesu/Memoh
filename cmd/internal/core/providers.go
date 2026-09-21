@@ -620,7 +620,7 @@ func (a botWorkspaceIntents) RequestAbsent(ctx context.Context, botID string, pr
 
 func (a botWorkspaceIntents) AwaitSettled(ctx context.Context, botID string, generation int64) (bots.WorkspaceOutcome, error) {
 	w, err := a.svc.Await(ctx, botID, generation)
-	return toWorkspaceOutcome(w), err
+	return toWorkspaceOutcome(w, a.svc.MaxAttempts()), err
 }
 
 func (a botWorkspaceIntents) Current(ctx context.Context, botID string) (bots.WorkspaceOutcome, bool, error) {
@@ -631,16 +631,19 @@ func (a botWorkspaceIntents) Current(ctx context.Context, botID string) (bots.Wo
 		}
 		return bots.WorkspaceOutcome{}, false, err
 	}
-	return toWorkspaceOutcome(w), true, nil
+	return toWorkspaceOutcome(w, a.svc.MaxAttempts()), true, nil
 }
 
-func toWorkspaceOutcome(w botworkspace.Workspace) bots.WorkspaceOutcome {
+func toWorkspaceOutcome(w botworkspace.Workspace, maxAttempts int32) bots.WorkspaceOutcome {
 	return bots.WorkspaceOutcome{
 		Desired:        w.Desired,
 		Observed:       w.Observed,
 		LastError:      w.LastError,
 		LastErrorPhase: w.LastErrorPhase,
 		EverReady:      w.EverReady,
+		Attempts:       w.Attempts,
+		NextAttemptAt:  w.NextAttemptAt,
+		RetryPending:   w.RetryPending(maxAttempts),
 	}
 }
 

@@ -64,14 +64,15 @@ func TestDeriveBotStatus(t *testing.T) {
 		{"absent before first success is creating", Workspace{Desired: DesiredPresent, Observed: ObservedAbsent}, BotStatusCreating, true},
 		{"running is ready", Workspace{Desired: DesiredPresent, Observed: ObservedRunning}, BotStatusReady, true},
 		{"stopped is ready", Workspace{Desired: DesiredPresent, Observed: ObservedStopped}, BotStatusReady, true},
-		{"failed before first success is failed", Workspace{Desired: DesiredPresent, Observed: ObservedFailed}, BotStatusFailed, true},
-		{"failed after being ready stays ready", Workspace{Desired: DesiredPresent, Observed: ObservedFailed, EverReady: true}, BotStatusReady, true},
+		{"failed inside the retry budget stays creating", Workspace{Desired: DesiredPresent, Observed: ObservedFailed, Attempts: 1}, BotStatusCreating, true},
+		{"failed with the budget spent is failed", Workspace{Desired: DesiredPresent, Observed: ObservedFailed, Attempts: 3}, BotStatusFailed, true},
+		{"failed after being ready stays ready", Workspace{Desired: DesiredPresent, Observed: ObservedFailed, Attempts: 3, EverReady: true}, BotStatusReady, true},
 		{"vanished after being ready stays ready", Workspace{Desired: DesiredPresent, Observed: ObservedAbsent, EverReady: true}, BotStatusReady, true},
 		{"absent intent leaves bot status alone", Workspace{Desired: DesiredAbsent, Observed: ObservedRemoving}, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := DeriveBotStatus(tc.w)
+			got, ok := DeriveBotStatus(tc.w, 3)
 			if ok != tc.wantOK || got != tc.want {
 				t.Fatalf("DeriveBotStatus() = (%q, %v), want (%q, %v)", got, ok, tc.want, tc.wantOK)
 			}

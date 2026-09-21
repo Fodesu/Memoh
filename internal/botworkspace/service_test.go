@@ -332,8 +332,10 @@ func TestProvisionRetryableFailureBacksOffThenRecovers(t *testing.T) {
 	if !w.NextAttemptAt.Equal(clk.now().Add(30 * time.Second)) {
 		t.Fatalf("backoff = %s, want +30s", w.NextAttemptAt.Sub(clk.now()))
 	}
-	if status.get(bot) != BotStatusFailed {
-		t.Fatalf("bot status = %q, want failed while never ready", status.get(bot))
+	// One retryable failure inside the budget is not a failure to the user:
+	// the bot keeps creating while the reconciler waits for the next attempt.
+	if status.get(bot) != BotStatusCreating {
+		t.Fatalf("bot status = %q, want creating while the retry is pending", status.get(bot))
 	}
 	// Not due yet: nothing claimed.
 	if n, _ := svc.ReconcileOnce(ctx); n != 0 {
@@ -407,7 +409,7 @@ func TestNewIntentResetsRetryBudget(t *testing.T) {
 
 func TestProvisionExhaustsAttempts(t *testing.T) {
 	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseStart, Retryable: true, Err: errors.New("start failed")}}
-	svc, repo, _, clk := newTestService(t, backend)
+	svc, repo, status, clk := newTestService(t, backend)
 	ctx := context.Background()
 	_, _ = svc.EnsurePresent(ctx, bot, "")
 	for i := 0; i < 3; i++ {
@@ -415,10 +417,17 @@ func TestProvisionExhaustsAttempts(t *testing.T) {
 			clk.advance(time.Hour)
 		}
 		_, _ = svc.ReconcileOnce(ctx)
+		if i < 2 && status.get(bot) != BotStatusCreating {
+			t.Fatalf("attempt %d: bot status = %q, want creating while retries remain", i+1, status.get(bot))
+		}
 	}
 	w := repo.get(bot)
 	if w.Attempts != 3 || w.RetryPending(3) {
 		t.Fatalf("after max attempts: %+v", w)
+	}
+	// Only the spent budget makes the failure visible on the bot.
+	if status.get(bot) != BotStatusFailed {
+		t.Fatalf("bot status = %q, want failed once the budget is spent", status.get(bot))
 	}
 	// Fast retries were 30s, 1m; the third failure falls back to the slow cadence.
 	if !w.NextAttemptAt.Equal(clk.now().Add(15 * time.Minute)) {

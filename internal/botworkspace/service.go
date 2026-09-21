@@ -174,6 +174,10 @@ func (s *Service) SetBotStatusWriter(w BotStatusWriter) {
 // Owner is this instance's lease owner id.
 func (s *Service) Owner() string { return s.opts.Owner }
 
+// MaxAttempts is the fast retry budget; callers derive RetryPending/Final
+// against it so their view matches the reconciler's own.
+func (s *Service) MaxAttempts() int32 { return s.opts.MaxAttempts }
+
 // ─── Intent API ──────────────────────────────────────────────────────────────
 
 // EnsurePresent records that the bot should have a running workspace built
@@ -736,7 +740,7 @@ func (s *Service) deriveBotStatus(ctx context.Context, w Workspace) {
 	if writer == nil {
 		return
 	}
-	status, ok := DeriveBotStatus(w)
+	status, ok := DeriveBotStatus(w, s.opts.MaxAttempts)
 	if !ok {
 		return
 	}

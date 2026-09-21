@@ -2207,6 +2207,7 @@
         "botCreated": "已创建 Bot 记录",
         "pulling": "正在拉取基础镜像",
         "creating": "正在创建工作区",
+        "retrying": "上一次尝试失败，正在自动重试（第 {attempt} 次）",
         "restoring": "正在恢复记忆与数据",
         "ready": "Bot 已就绪",
         "applyingSettings": "正在应用模型与记忆设置",
