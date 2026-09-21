@@ -21,8 +21,6 @@ func (m *Manager) RecordPersistedTurn(ctx context.Context, handle RunHandle, tur
 	if turn.TurnID == "" {
 		return errors.New("persisted turn id is required")
 	}
-	turn.RequestMessageID = strings.TrimSpace(turn.RequestMessageID)
-	turn.AssistantMessageID = strings.TrimSpace(turn.AssistantMessageID)
 	_, _, err := m.updateActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
 		run := snapshot.CurrentRunView
 		if !runMatchesHandle(run, handle) || !m.runOwnerMatches(run) || !isActiveRunStatus(run.Status) {

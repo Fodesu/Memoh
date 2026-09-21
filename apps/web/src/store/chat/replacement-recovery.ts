@@ -1,3 +1,6 @@
+import type { RuntimeCurrentRunView } from '@/composables/api/useChat.types'
+import { runHistoryState } from './runtime-projection'
+
 // When a retry or edit fails, the store decides whether history must be
 // reloaded. Two failures need it: the server refused the replacement as stale,
 // or the run streamed output and then failed without writing its round.
@@ -24,8 +27,9 @@ export function isStaleTurnErrorCode(code: string | undefined): boolean {
 export function runLeftNoHistory(feedback: unknown): boolean {
   if (!feedback || typeof feedback !== 'object') return false
   const run = feedback as { run_id?: unknown, status?: unknown, persisted_turn?: unknown }
-  return typeof run.run_id === 'string'
-    && typeof run.status === 'string'
-    && run.status !== 'completed'
-    && !run.persisted_turn
+  if (typeof run.run_id !== 'string' || typeof run.status !== 'string') return false
+  return runHistoryState({
+    status: run.status as RuntimeCurrentRunView['status'],
+    persisted_turn: run.persisted_turn ? { turn_id: '' } : undefined,
+  }) === 'unwritten'
 }

@@ -86,7 +86,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 	// A replacement run's rows are not the session's history until ReplaceTurn
 	// publishes them; replacePersistedTurn records that outcome itself.
 	if req.TurnReplacement == nil {
-		s.notePersistedTurn(ctx, req, req.PersistedUserMessageID, persisted)
+		s.notePersistedTurn(ctx, req, persisted)
 	}
 	if len(persisted) != len(filtered) {
 		if opts.RequireCompletePersist {
@@ -154,13 +154,18 @@ func lastAssistantMessageIndex(messages []ModelMessage) int {
 	return -1
 }
 
-// notePersistedTurn tells the Session Runtime which history turn the run has
-// written so far. Persisted rows do not carry their turn identity (only list
+// notePersistedTurn tells the Session Runtime that the run has written its
+// history turn. Persisted rows do not carry their turn identity (only list
 // queries populate it), so the turn comes from the admission on the request.
 // Requests without a run handle (discuss rounds, legacy stores) have no live
 // view to update and are skipped. A failure here is logged only: history is
 // already durable, and the run's terminal state is decided elsewhere.
-func (s *Service) notePersistedTurn(ctx context.Context, req ChatRequest, requestMessageID string, persisted []messagepkg.Message) {
+//
+// Every path that writes a round for an admitted run must call this; a path
+// that does not makes the client treat the round as unsent. The Session
+// Runtime's persisted-turn auditor (auditUnrecordedPersistedTurn) reports such
+// omissions after the fact.
+func (s *Service) notePersistedTurn(ctx context.Context, req ChatRequest, persisted []messagepkg.Message) {
 	if s == nil || s.recordPersistedTurn == nil || req.RunHandle.FencingToken <= 0 || len(persisted) == 0 {
 		return
 	}
@@ -173,16 +178,7 @@ func (s *Service) notePersistedTurn(ctx context.Context, req ChatRequest, reques
 	if turnID == "" {
 		return
 	}
-	requestMessageID = strings.TrimSpace(requestMessageID)
-	if requestMessageID == "" {
-		requestMessageID = firstUserID(persisted)
-	}
-	s.publishPersistedTurn(ctx, req.RunHandle, sessionruntime.PersistedTurnView{
-		TurnID:             turnID,
-		Position:           req.TurnPosition,
-		RequestMessageID:   requestMessageID,
-		AssistantMessageID: lastPersistedAssistantMessageID(persisted),
-	})
+	s.publishPersistedTurn(ctx, req.RunHandle, sessionruntime.PersistedTurnView{TurnID: turnID})
 }
 
 func (s *Service) publishPersistedTurn(ctx context.Context, handle sessionruntime.RunHandle, turn sessionruntime.PersistedTurnView) {
@@ -196,11 +192,56 @@ func (s *Service) publishPersistedTurn(ctx context.Context, handle sessionruntim
 		s.logger.ErrorContext(ctx, "persisted turn was not recorded on the run",
 			slog.String("run_id", handle.RunID),
 			slog.String("turn_id", turn.TurnID),
-			slog.String("request_message_id", turn.RequestMessageID),
-			slog.String("assistant_message_id", turn.AssistantMessageID),
 			slog.Any("error", err),
 		)
 	}
+}
+
+// historyTurnLookup is the optional message-service capability the auditor
+// needs; test doubles without it are simply not audited.
+type historyTurnLookup interface {
+	GetHistoryTurn(ctx context.Context, sessionID, turnID string) (messagepkg.HistoryTurn, error)
+}
+
+// auditUnrecordedPersistedTurn runs when a run finished in a failure state
+// without a recorded persisted turn. If history nevertheless holds the run's
+// turn, a persistence path skipped notePersistedTurn (or the record was
+// refused after the lease lapsed): the client will have treated a written
+// round as unsent and may resend it. The disagreement is reported at error
+// level with the ids needed to find the duplicate.
+func (s *Service) auditUnrecordedPersistedTurn(ctx context.Context, handle sessionruntime.RunHandle, run sessionruntime.CurrentRunView) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	lookup, ok := s.messageService.(historyTurnLookup)
+	if !ok {
+		return
+	}
+	turnID := strings.TrimSpace(run.TurnID)
+	sessionID := strings.TrimSpace(handle.SessionID)
+	if turnID == "" || sessionID == "" {
+		return
+	}
+	turn, err := lookup.GetHistoryTurn(ctx, sessionID, turnID)
+	if err != nil {
+		if errors.Is(err, messagepkg.ErrHistoryTurnNotFound) {
+			return
+		}
+		s.logger.WarnContext(ctx, "persisted turn audit could not read history",
+			slog.String("run_id", run.RunID),
+			slog.String("turn_id", turnID),
+			slog.Any("error", err),
+		)
+		return
+	}
+	s.logger.ErrorContext(ctx, "run finished without a persisted turn but history holds its turn",
+		slog.String("run_id", run.RunID),
+		slog.String("turn_id", turnID),
+		slog.String("status", run.Status),
+		slog.String("error_code", run.ErrorCode),
+		slog.String("request_message_id", turn.RequestMessageID),
+		slog.String("assistant_message_id", turn.AssistantMessageID),
+	)
 }
 
 func lastPersistedAssistantMessageID(messages []messagepkg.Message) string {

@@ -308,14 +308,13 @@ type CurrentRunView struct {
 	PersistedTurn *PersistedTurnView `json:"persisted_turn,omitempty"`
 }
 
-// PersistedTurnView is the durable identity of a run's history turn as the
-// application persisted it. AssistantMessageID stays empty while only the
-// request message is on record, which lets a client offer edit but not retry.
+// PersistedTurnView names the history turn a run has written. It carries the
+// turn id only: the client needs to know that history holds the turn, and
+// everything else about it comes from history itself. This field is a bridge
+// until turn state lives in one event log shared by history and the live view
+// (docs/design/turn-history-event-log.md); keep it minimal so it can go.
 type PersistedTurnView struct {
-	TurnID             string `json:"turn_id" validate:"required" format:"uuid"`
-	Position           *int64 `json:"position,omitempty"`
-	RequestMessageID   string `json:"request_message_id,omitempty"`
-	AssistantMessageID string `json:"assistant_message_id,omitempty"`
+	TurnID string `json:"turn_id" validate:"required" format:"uuid"`
 }
 
 type SteerTurnView struct {

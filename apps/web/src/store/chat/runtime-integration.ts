@@ -8,7 +8,7 @@ import type { createAssistantStreamRegistry } from './assistant-streams'
 import type { createChatDecisions } from './decisions'
 import type { createChatRealtimeController } from './realtime'
 import type { RuntimeProjectionChange } from './runtime-client'
-import { isRuntimeRunActive } from './runtime-projection'
+import { isRuntimeRunActive, runHistoryState } from './runtime-projection'
 import type { createSessionList } from './session-list'
 import { CommandStreamError, StreamFailureError } from './send'
 import type {
@@ -399,7 +399,7 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
           // that wrote a round failed mid-stream, one that wrote nothing is
           // unsent and the composer takes the draft back.
           const stage: SendMessageStage = currentRun.messages.some(message => message.type !== 'status')
-            || Boolean(currentRun.persisted_turn)
+            || runHistoryState(currentRun) === 'written'
             ? 'stream'
             : 'startup'
           deps.assistantStreams.rejectAssistantStream(

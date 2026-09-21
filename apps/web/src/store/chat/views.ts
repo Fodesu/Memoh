@@ -4,7 +4,7 @@ import {
   locateMessageUI,
 } from '@/composables/api/useChat'
 import type { RuntimeProjectionState } from './runtime-projection'
-import { isRuntimeRunActive } from './runtime-projection'
+import { runHistoryState } from './runtime-projection'
 import { isRuntimeRunStreaming, runOwnsTurn } from './runtime-projection'
 import { createAssistantStreamRegistry } from './assistant-streams'
 import type { createTranscriptController } from './transcript'
@@ -200,13 +200,7 @@ export function createChatViews(deps: ChatViewsDeps) {
     const id = turnId.trim()
     if (!sid || !id) return false
     const run = runtimeProjectionProbe(sid)?.currentRunView
-    return Boolean(
-      run
-      && run.turn_id.trim() === id
-      && !isRuntimeRunActive(run.status)
-      && run.status !== 'completed'
-      && !run.persisted_turn,
-    )
+    return Boolean(run && run.turn_id.trim() === id && runHistoryState(run) === 'unwritten')
   }
 
   function isSessionStreaming(

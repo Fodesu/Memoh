@@ -34,10 +34,6 @@ type agentStepCommitter struct {
 
 	mu                   sync.Mutex
 	turnRequestMessageID string
-	// requestMessageID is the run's own request row, fixed once known. It
-	// stays put while turnRequestMessageID follows steers, so the persisted
-	// turn recorded on the run names the request turn's anchors.
-	requestMessageID     string
 	persisted            []messagepkg.Message
 	memoryPersisted      []messagepkg.Message
 	messages             []ModelMessage
@@ -88,7 +84,6 @@ func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc
 		service: s, req: req, rc: rc, persister: persister, ownerContext: ctx,
 		queueStep:            queueStep,
 		turnRequestMessageID: requestMessageID,
-		requestMessageID:     requestMessageID,
 		nextStep:             req.StepIndexOffset,
 	}
 }
@@ -252,9 +247,6 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	for _, message := range persisted {
 		if strings.EqualFold(strings.TrimSpace(message.Role), "user") && !messagepkg.IsInternalFeedback(message.Metadata) {
 			c.turnRequestMessageID = message.ID
-			if c.requestMessageID == "" {
-				c.requestMessageID = message.ID
-			}
 		}
 	}
 	c.persisted = append(c.persisted, persisted...)
@@ -265,7 +257,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	// published; recording them earlier would hand the client a retry anchor
 	// that history does not yet show.
 	if c.req.TurnReplacement == nil || c.replacementFinalized {
-		c.service.notePersistedTurn(ctx, c.req, c.requestMessageID, c.persisted)
+		c.service.notePersistedTurn(ctx, c.req, c.persisted)
 	}
 	if !interrupted {
 		// Unfinished reasoning/text is history context, not a fact source for

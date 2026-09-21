@@ -55,6 +55,7 @@ type Manager struct {
 	commandHandler         func(context.Context, Command) error
 	decisionStore          DecisionStore
 	terminalObserver       func(context.Context, TerminalRun)
+	persistedTurnAuditor   func(context.Context, RunHandle, CurrentRunView)
 	admissionObserver      func(botID, sessionID string)
 	decisionFinalizer      func(context.Context, RunHandle) error
 	terminalReconciler     func(context.Context) error
@@ -523,6 +524,21 @@ func (m *Manager) SetTerminalObserver(observer func(context.Context, TerminalRun
 	}
 	m.mu.Lock()
 	m.terminalObserver = observer
+	m.mu.Unlock()
+}
+
+// SetPersistedTurnAuditor observes a run that finished in a failure state
+// without a recorded persisted turn. Every persistence path is supposed to
+// call RecordPersistedTurn; one that does not makes the client treat a written
+// round as unsent. The auditor checks history and reports the disagreement so
+// the omission is visible instead of silent. It runs after the terminal state
+// is published and never affects the finish.
+func (m *Manager) SetPersistedTurnAuditor(auditor func(context.Context, RunHandle, CurrentRunView)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.persistedTurnAuditor = auditor
 	m.mu.Unlock()
 }
 
@@ -1591,6 +1607,7 @@ func (m *Manager) resolveTerminalStatus(ctx context.Context, handle RunHandle, s
 
 func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, errorCode, finishMessage string) (bool, error) {
 	admissionTerminal := false
+	var terminalView CurrentRunView
 	_, changed, err := m.releaseActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
 		run := snapshot.CurrentRunView
 		if !isActiveRunStatus(run.Status) {
@@ -1626,6 +1643,7 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 		snapshot.CurrentRunView.OwnerLeaseExpiresAt = nil
 		snapshot.CurrentRunView.ProposedTerminalStatus = ""
 		snapshot.CurrentRunView.FinishProposedAt = nil
+		terminalView = *snapshot.CurrentRunView
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
 		if admissionTerminal {
@@ -1633,7 +1651,25 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 		}
 		return runtimeRunPatch(snapshot, true, true, m.distributed != nil)
 	})
+	if err == nil && changed {
+		m.auditPersistedTurn(ctx, handle, terminalView)
+	}
 	return changed, err
+}
+
+// auditPersistedTurn hands a failed run that recorded no persisted turn to the
+// auditor. Completed runs always wrote their round and are not audited.
+func (m *Manager) auditPersistedTurn(ctx context.Context, handle RunHandle, run CurrentRunView) {
+	if run.PersistedTurn != nil || strings.EqualFold(run.Status, RunStatusCompleted) || isActiveRunStatus(run.Status) {
+		return
+	}
+	m.mu.Lock()
+	auditor := m.persistedTurnAuditor
+	m.mu.Unlock()
+	if auditor == nil {
+		return
+	}
+	go auditor(context.WithoutCancel(ctx), handle, run)
 }
 
 func (m *Manager) retryFinishRun(ctx context.Context, ctrl *runControl, status, errorCode, message string) {

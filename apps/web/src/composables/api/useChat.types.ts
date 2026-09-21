@@ -502,13 +502,11 @@ export interface RuntimeCurrentRunView {
   persisted_turn?: RuntimePersistedTurn
 }
 
+// The turn id is the whole signal: history holds this run's turn. Anything
+// more about the turn is read from history. Transitional, see
+// docs/design/turn-history-event-log.md.
 export interface RuntimePersistedTurn {
   turn_id: string
-  position?: number
-  request_message_id?: string
-  // Empty while only the request message is on record: the turn can be
-  // edited but not retried.
-  assistant_message_id?: string
 }
 
 export interface RuntimeSteerTurnView {

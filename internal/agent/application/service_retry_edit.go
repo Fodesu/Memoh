@@ -358,14 +358,9 @@ func (s *Service) replacePersistedTurn(
 	}
 	s.applyForkAnchorUpdate(context.WithoutCancel(ctx), req.ThreadID, forkAnchorUpdate)
 	s.publishReplacementMessageCreated(req.BotID, persisted)
-	// The replacement is now the session's visible tail; its anchors come from
-	// the database result rather than the pre-replacement rows.
-	position := replaced.Position
+	// The replacement is now the session's visible tail.
 	s.publishPersistedTurn(ctx, req.RunHandle, sessionruntime.PersistedTurnView{
-		TurnID:             firstNonEmpty(strings.TrimSpace(replaced.ID), strings.TrimSpace(req.TurnID)),
-		Position:           &position,
-		RequestMessageID:   firstNonEmpty(strings.TrimSpace(replaced.RequestMessageID), requestMessageID),
-		AssistantMessageID: firstNonEmpty(strings.TrimSpace(replaced.AssistantMessageID), replacementID),
+		TurnID: firstNonEmpty(replaced.ID, req.TurnID),
 	})
 	return nil
 }

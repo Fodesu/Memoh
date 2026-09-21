@@ -9,6 +9,7 @@ import {
   isRuntimeRunActive,
   isRuntimeRunStreaming,
   reduceRuntimeProjection,
+  runHistoryState,
 } from './runtime-projection'
 
 function runView(overrides: Partial<RuntimeCurrentRunView> = {}): RuntimeCurrentRunView {
@@ -559,12 +560,7 @@ describe('persisted turn', () => {
       snapshot(runView({
         status: 'errored',
         error_code: 'agent.response_timeout',
-        persisted_turn: {
-          turn_id: 'turn-1',
-          position: 4,
-          request_message_id: 'user-1',
-          assistant_message_id: 'assistant-1',
-        },
+        persisted_turn: { turn_id: 'turn-1' },
       })),
     )
     expect(state.transcript.unpersisted).toBe(false)
@@ -595,14 +591,25 @@ describe('persisted turn', () => {
       run: {
         run_id: 'run-1',
         updated_at: '2026-07-27T08:00:00.500Z',
-        persisted_turn: { turn_id: 'turn-1', request_message_id: 'user-1', assistant_message_id: 'assistant-1' },
+        persisted_turn: { turn_id: 'turn-1' },
       },
     }))
     state = reduceRuntimeProjection(state, delta(6, {
       run: { run_id: 'run-1', status: 'errored', error_code: 'agent.response_timeout', updated_at: '2026-07-27T08:00:01.000Z' },
     }))
     expect(state.currentRunView?.status).toBe('errored')
-    expect(state.currentRunView?.persisted_turn?.assistant_message_id).toBe('assistant-1')
+    expect(state.currentRunView?.persisted_turn?.turn_id).toBe('turn-1')
     expect(state.transcript.unpersisted).toBe(false)
+  })
+})
+
+describe('runHistoryState', () => {
+  it('is the single predicate behind stage, projection and retry gating', () => {
+    expect(runHistoryState({ status: 'running' })).toBe('active')
+    expect(runHistoryState({ status: 'errored', persisted_turn: { turn_id: 'turn-1' } })).toBe('written')
+    expect(runHistoryState({ status: 'completed' })).toBe('written')
+    expect(runHistoryState({ status: 'errored' })).toBe('unwritten')
+    expect(runHistoryState({ status: 'aborted' })).toBe('unwritten')
+    expect(runHistoryState({ status: 'lost' })).toBe('unwritten')
   })
 })

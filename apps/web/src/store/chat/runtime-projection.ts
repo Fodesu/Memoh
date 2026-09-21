@@ -63,6 +63,23 @@ export function isRuntimeRunActive(status?: string | null): boolean {
   return activeRunStatuses.has(status as RuntimeCurrentRunView['status'])
 }
 
+// Whether history holds the run's turn. 'written' when the server recorded a
+// persisted turn or the run completed (completion implies its round was
+// written, and frames from a server that predates persisted_turn stay
+// appendable); 'unwritten' for a run that failed without writing anything:
+// an unsent send, which the transcript must not gain a turn for and the
+// composer takes the draft back from. Every place that reasons about this
+// goes through here, so the eventual turn log replaces one predicate.
+export type RuntimeHistoryState = 'active' | 'written' | 'unwritten'
+
+export function runHistoryState(
+  run: Pick<RuntimeCurrentRunView, 'status' | 'persisted_turn'>,
+): RuntimeHistoryState {
+  if (isRuntimeRunActive(run.status)) return 'active'
+  if (run.persisted_turn || run.status === 'completed') return 'written'
+  return 'unwritten'
+}
+
 // Configuration saves still own the session execution slot, but are not an
 // assistant response. The server marks them from the first admitting frame.
 export function isRuntimeRunStreaming(run?: RuntimeCurrentRunView | null): boolean {
@@ -304,7 +321,7 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
     steerTurnIds,
     status: run.status,
     operation: run.operation ? { ...run.operation } : null,
-    unpersisted: !active && run.status !== 'completed' && !run.persisted_turn,
+    unpersisted: runHistoryState(run) === 'unwritten',
     turns,
     streaming: isRuntimeRunActive(run.status),
   }

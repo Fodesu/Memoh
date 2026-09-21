@@ -2074,12 +2074,7 @@ describe('chat-list store', () => {
       const turnId = 'turn-run-1'
       h.sendUpdates = [
         runtime.started,
-        runtime.failedPersisted('timed out', 'agent.response_timeout', {
-          turn_id: turnId,
-          position: 1,
-          request_message_id: 'user-1',
-          assistant_message_id: 'assistant-1',
-        }),
+        runtime.failedPersisted('timed out', 'agent.response_timeout', { turn_id: turnId }),
       ]
       const store = useChatStore()
 
