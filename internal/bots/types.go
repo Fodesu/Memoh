@@ -86,6 +86,36 @@ type ListChecksResponse struct {
 	Items []BotCheck `json:"items"`
 }
 
+// SetupIntents reads the bot's post-create setup state (the botsetup
+// reconciler) so runtime checks can report a setup that is still running or
+// has failed. Wired through a setter to avoid an import cycle.
+type SetupIntents interface {
+	Current(ctx context.Context, botID string) (SetupOutcome, bool, error)
+}
+
+// SetupOutcome is the slice of the setup state the bots service reports.
+type SetupOutcome struct {
+	State        string
+	RetryPending bool
+	Steps        []SetupStepOutcome
+}
+
+// SetupStepOutcome is one setup step's status for the bot.setup check.
+type SetupStepOutcome struct {
+	Step      string
+	Status    string
+	LastError string
+}
+
+// Setup states and the check type mirrored from botsetup (not imported).
+const (
+	SetupStateDone      = "done"
+	SetupStateFailed    = "failed"
+	BotCheckTypeSetup   = "bot.setup"
+	SetupStatusFailed   = "failed"
+	SetupStatusRetrying = "retrying"
+)
+
 // WorkspaceIntents records the desired workspace state of a bot; the
 // botworkspace reconciler converges the actual workspace toward it and derives
 // bots.status. The bots service never drives provisioning itself.

@@ -51,12 +51,6 @@ export type AccountsUpdatePasswordRequest = {
 };
 
 export type AccountsUpdateProfileMetadata = {
-    /**
-     * InitialBotID records the Bot the first-run setup flow created for this
-     * user, so the flow can resume on it from any client. Must be a UUID; an
-     * empty string clears the key.
-     */
-    initial_bot_id?: string;
     onboarding_completed?: boolean;
 };
 
@@ -760,25 +754,6 @@ export type BotsBotCheck = {
     type?: string;
 };
 
-export type BotsCreateBotRequest = {
-    acl_preset?: string;
-    avatar_url?: string;
-    display_name?: string;
-    is_active?: boolean;
-    metadata?: {
-        [key: string]: unknown;
-    };
-    name?: string;
-    /**
-     * RequestID is the client's idempotency key for this creation (also
-     * accepted as the Idempotency-Key header). Retrying with the same key
-     * returns the bot the first request created instead of creating another.
-     */
-    request_id?: string;
-    timezone?: string;
-    wait_for_ready?: boolean;
-};
-
 export type BotsCreateUserGrantRequest = {
     permissions?: Array<string>;
     subject_type?: string;
@@ -829,6 +804,33 @@ export type BotsUserGrant = {
     user_display_name?: string;
     user_id?: string;
     user_username?: string;
+};
+
+export type BotsetupAgentSpec = {
+    app_id?: string;
+    authorization_id?: string;
+    dependency_id?: string;
+    revision?: string;
+    runtime?: string;
+};
+
+export type BotsetupSpec = {
+    /**
+     * Agent is the direct Agent (Codex / Claude Code) to create, authorize,
+     * install and enable. Reserved for the agent/claim/install/enable steps;
+     * not executed yet.
+     */
+    agent?: BotsetupAgentSpec;
+    /**
+     * Grants are workspace user access grants to create; ones that already
+     * exist are left alone.
+     */
+    grants?: Array<BotsCreateUserGrantRequest>;
+    /**
+     * Settings is applied through the settings service; only the fields set
+     * in the request are compared and written.
+     */
+    settings?: SettingsUpsertRequest;
 };
 
 export type ChannelAction = {
@@ -1868,6 +1870,30 @@ export type HandlersBatchDeleteRequest = {
     ids?: Array<string>;
 };
 
+export type HandlersBotSetupSpecSummary = {
+    agent?: string;
+    grants?: number;
+    settings?: boolean;
+};
+
+export type HandlersBotSetupStepView = {
+    attempts?: number;
+    last_error?: string;
+    status?: string;
+    step?: string;
+    updated_at?: string;
+};
+
+export type HandlersBotSetupView = {
+    bot_id?: string;
+    desired_generation?: number;
+    observed_generation?: number;
+    retry_pending?: boolean;
+    spec?: HandlersBotSetupSpecSummary;
+    state?: string;
+    steps?: Array<HandlersBotSetupStepView>;
+};
+
 export type HandlersBotUserCandidate = {
     avatar_url?: string;
     display_name?: string;
@@ -2063,6 +2089,25 @@ export type HandlersContextUsage = {
     context_window?: number;
     tool_defs?: Array<HandlersToolDefBucket>;
     used_tokens?: number;
+};
+
+export type HandlersCreateBotPayload = {
+    acl_preset?: string;
+    avatar_url?: string;
+    display_name?: string;
+    is_active?: boolean;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name?: string;
+    /**
+     * Setup is applied by the server after the workspace is running and
+     * reported through GET /bots/{id}/setup; the SSE create stream relays its
+     * steps before `ready`. Omit it to create a bare bot.
+     */
+    setup?: BotsetupSpec;
+    timezone?: string;
+    wait_for_ready?: boolean;
 };
 
 export type HandlersCreateContainerRequest = {
@@ -4618,13 +4663,7 @@ export type PostBotsData = {
     /**
      * Bot payload
      */
-    body: BotsCreateBotRequest;
-    headers?: {
-        /**
-         * Client-generated key for this creation. Repeating a request with the same key returns the Bot it already created (200) instead of creating another; also accepted as body field request_id.
-         */
-        'Idempotency-Key'?: string;
-    };
+    body: HandlersCreateBotPayload;
     path?: never;
     query?: never;
     url: '/bots';
@@ -4652,10 +4691,6 @@ export type PostBotsErrors = {
 export type PostBotsError = PostBotsErrors[keyof PostBotsErrors];
 
 export type PostBotsResponses = {
-    /**
-     * The Bot a previous request with the same Idempotency-Key created
-     */
-    200: BotsBot;
     /**
      * Created
      */
@@ -12388,6 +12423,90 @@ export type PutBotsByBotIdSettingsResponses = {
 };
 
 export type PutBotsByBotIdSettingsResponse = PutBotsByBotIdSettingsResponses[keyof PutBotsByBotIdSettingsResponses];
+
+export type GetBotsByBotIdSetupData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/setup';
+};
+
+export type GetBotsByBotIdSetupErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdSetupError = GetBotsByBotIdSetupErrors[keyof GetBotsByBotIdSetupErrors];
+
+export type GetBotsByBotIdSetupResponses = {
+    /**
+     * OK
+     */
+    200: HandlersBotSetupView;
+};
+
+export type GetBotsByBotIdSetupResponse = GetBotsByBotIdSetupResponses[keyof GetBotsByBotIdSetupResponses];
+
+export type PostBotsByBotIdSetupRetryData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/setup/retry';
+};
+
+export type PostBotsByBotIdSetupRetryErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdSetupRetryError = PostBotsByBotIdSetupRetryErrors[keyof PostBotsByBotIdSetupRetryErrors];
+
+export type PostBotsByBotIdSetupRetryResponses = {
+    /**
+     * OK
+     */
+    200: HandlersBotSetupView;
+};
+
+export type PostBotsByBotIdSetupRetryResponse = PostBotsByBotIdSetupRetryResponses[keyof PostBotsByBotIdSetupRetryResponses];
 
 export type GetBotsByBotIdSkillsCatalogData = {
     body?: never;

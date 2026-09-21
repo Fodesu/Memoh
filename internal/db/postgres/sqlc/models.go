@@ -425,6 +425,34 @@ type BotSessionEvent struct {
 	TeamID                  pgtype.UUID        `json:"team_id"`
 }
 
+type BotSetup struct {
+	BotID              pgtype.UUID        `json:"bot_id"`
+	TeamID             pgtype.UUID        `json:"team_id"`
+	DesiredGeneration  int64              `json:"desired_generation"`
+	Spec               []byte             `json:"spec"`
+	RequestedByUserID  pgtype.UUID        `json:"requested_by_user_id"`
+	State              string             `json:"state"`
+	ObservedGeneration int64              `json:"observed_generation"`
+	Attempts           int32              `json:"attempts"`
+	NextAttemptAt      pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseOwner         string             `json:"lease_owner"`
+	LeaseUntil         pgtype.Timestamptz `json:"lease_until"`
+	Version            int64              `json:"version"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BotSetupStep struct {
+	BotID      pgtype.UUID        `json:"bot_id"`
+	TeamID     pgtype.UUID        `json:"team_id"`
+	Step       string             `json:"step"`
+	Status     string             `json:"status"`
+	Generation int64              `json:"generation"`
+	Attempts   int32              `json:"attempts"`
+	LastError  string             `json:"last_error"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
 type BotStorageBinding struct {
 	ID                pgtype.UUID        `json:"id"`
 	BotID             pgtype.UUID        `json:"bot_id"`

@@ -22,6 +22,7 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/bots"
+	"github.com/felinics/memoh/internal/botsetup"
 	"github.com/felinics/memoh/internal/botworkspace"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/route"
@@ -45,6 +46,23 @@ type createBotStreamBotEvent struct {
 	Bot  bots.Bot `json:"bot"`
 }
 
+// CreateBotPayload is the POST /bots body: the bot row plus an optional
+// server-side setup the bot should end up with once its workspace runs.
+type CreateBotPayload struct {
+	bots.CreateBotRequest
+	// Setup is applied by the server after the workspace is running and
+	// reported through GET /bots/{id}/setup; the SSE create stream relays its
+	// steps before `ready`. Omit it to create a bare bot.
+	Setup *botsetup.Spec `json:"setup,omitempty"`
+}
+
+// botCreateSetup is the slice of the botsetup reconciler the HTTP layer uses.
+type botCreateSetup interface {
+	EnsureSetup(ctx context.Context, botID, requestedBy string, spec botsetup.Spec) (botsetup.Setup, error)
+	Subscribe(botID string) (<-chan botsetup.Event, func())
+	Await(ctx context.Context, botID string, generation int64) (botsetup.Setup, error)
+}
+
 // UsersHandler manages user/account CRUD and bot operations via REST API.
 type UsersHandler struct {
 	service        *accounts.Service
@@ -54,12 +72,19 @@ type UsersHandler struct {
 	channelRuntime channel.Runtime
 	registry       *channel.Registry
 	workspaceSetup botCreateWorkspace
+	botSetup       botCreateSetup
 	// workspaceStatus describes the settled workspace for the "complete"
 	// event; nil falls back to the provisioner's progress event.
 	workspaceStatus workspaceStatus
 	runtimeResets   runtimeResetService
 	credentials     *agentcredential.Service
 	logger          *slog.Logger
+}
+
+// SetBotSetup wires the post-create setup reconciler; without it POST /bots
+// rejects a body that carries `setup`.
+func (h *UsersHandler) SetBotSetup(setup botCreateSetup) {
+	h.botSetup = setup
 }
 
 // NewUsersHandler creates a UsersHandler with channel identity support.
@@ -412,7 +437,7 @@ func (h *UsersHandler) RemoveMember(c echo.Context) error {
 // @Description Create a bot user owned by current user (or admin-specified owner)
 // @Tags bots
 // @Param Idempotency-Key header string false "Client-generated key for this creation. Repeating a request with the same key returns the Bot it already created (200) instead of creating another; also accepted as body field request_id."
-// @Param payload body bots.CreateBotRequest true "Bot payload"
+// @Param payload body CreateBotPayload true "Bot payload"
 // @Success 201 {object} bots.Bot
 // @Success 200 {object} bots.Bot "The Bot a previous request with the same Idempotency-Key created"
 // @Failure 400 {object} ErrorResponse
@@ -425,9 +450,18 @@ func (h *UsersHandler) CreateBot(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	var req bots.CreateBotRequest
-	if err := c.Bind(&req); err != nil {
+	var payload CreateBotPayload
+	if err := c.Bind(&payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	req := payload.CreateBotRequest
+	if payload.Setup != nil {
+		if h.botSetup == nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "bot setup not configured")
+		}
+		if len(payload.Setup.Steps()) == 0 {
+			return echo.NewHTTPError(http.StatusBadRequest, "setup manages no step")
+		}
 	}
 	if key := strings.TrimSpace(c.Request().Header.Get(idempotencyKeyHeader)); key != "" {
 		req.RequestID = key
@@ -463,11 +497,28 @@ func (h *UsersHandler) CreateBot(c echo.Context) error {
 		}
 	}
 	if acceptsEventStream(c) {
-		return h.createBotStream(c, ownerID, ownerFromToken, req)
+		return h.createBotStream(c, ownerID, ownerFromToken, req, payload.Setup)
 	}
 	resp, replayed, err := h.botService.CreateOrReplay(c.Request().Context(), ownerID, req)
 	if err != nil {
 		return createBotHTTPError(err, ownerFromToken)
+	}
+	if payload.Setup != nil {
+		// Recorded on a replay as well: a retry after the setup failed to save
+		// must complete the creation, and re-asserting the same intent is
+		// idempotent (steps already satisfied are skipped by the reconciler).
+		// The bot exists; the setup is an intent the reconciler applies once
+		// the workspace runs, so it is recorded on a context that outlives a
+		// client that hangs up right after the response.
+		intentCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request().Context()), 15*time.Second)
+		_, err := h.botSetup.EnsureSetup(intentCtx, resp.ID, ownerID, *payload.Setup)
+		cancel()
+		if err != nil {
+			// The Bot exists; say so structurally so a client does not create
+			// a second one, and can retry the setup on this Bot instead.
+			h.logger.ErrorContext(c.Request().Context(), "record bot setup intent failed", slog.String("bot_id", resp.ID), slog.Any("error", err))
+			return apperror.Wrap(apperror.CodeBotSetupSaveFailed, err, map[string]string{"bot_id": resp.ID})
+		}
 	}
 	if replayed {
 		// A retry of a request whose response was lost, or the loser of a race
@@ -519,7 +570,7 @@ func createBotHTTPError(err error, ownerFromToken bool) error {
 	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 }
 
-func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFromToken bool, req bots.CreateBotRequest) error {
+func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFromToken bool, req bots.CreateBotRequest, setup *botsetup.Spec) error {
 	flusher, ok := c.Response().Writer.(http.Flusher)
 	if !ok {
 		return echo.NewHTTPError(http.StatusInternalServerError, "streaming not supported")
@@ -539,10 +590,10 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	if replayed {
 		// The Bot already exists (lost response or lost race): re-attach to its
 		// workspace progress instead of recording a second intent on it.
-		return h.replayBotStream(c, bot)
+		return h.replayBotStream(c, ownerID, bot, setup)
 	}
 	image := workspaceImageFromCreateRequest(req)
-	return h.streamBotWorkspaceSetup(c, flusher, bot, func(ctx context.Context) (botworkspace.Workspace, error) {
+	return h.streamBotWorkspaceSetup(c, flusher, ownerID, bot, setup, func(ctx context.Context) (botworkspace.Workspace, error) {
 		return h.workspaceSetup.EnsurePresent(ctx, bot.ID, image)
 	})
 }
@@ -550,7 +601,7 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 // replayBotStream serves an SSE create for a Bot that an earlier request with
 // the same idempotency key already created: no new row, no new intent unless
 // the first request died before recording one.
-func (h *UsersHandler) replayBotStream(c echo.Context, bot bots.Bot) error {
+func (h *UsersHandler) replayBotStream(c echo.Context, ownerID string, bot bots.Bot, setup *botsetup.Spec) error {
 	flusher, ok := c.Response().Writer.(http.Flusher)
 	if !ok {
 		return echo.NewHTTPError(http.StatusInternalServerError, "streaming not supported")
@@ -558,7 +609,7 @@ func (h *UsersHandler) replayBotStream(c echo.Context, bot bots.Bot) error {
 	if h.workspaceSetup == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "workspace lifecycle not configured")
 	}
-	return h.streamBotWorkspaceSetup(c, flusher, bot, func(ctx context.Context) (botworkspace.Workspace, error) {
+	return h.streamBotWorkspaceSetup(c, flusher, ownerID, bot, setup, func(ctx context.Context) (botworkspace.Workspace, error) {
 		w, err := h.workspaceSetup.Get(ctx, bot.ID)
 		if errors.Is(err, botworkspace.ErrNotFound) {
 			return h.workspaceSetup.EnsurePresent(ctx, bot.ID, workspaceImageFromMetadata(bot.Metadata))
@@ -570,7 +621,10 @@ func (h *UsersHandler) replayBotStream(c echo.Context, bot bots.Bot) error {
 // streamBotWorkspaceSetup relays a Bot's workspace provisioning as the create
 // SSE stream: bot_created, progress, complete, ready (or a terminal error).
 // recordIntent yields the intent whose generation the stream awaits.
-func (h *UsersHandler) streamBotWorkspaceSetup(c echo.Context, flusher http.Flusher, bot bots.Bot, recordIntent func(context.Context) (botworkspace.Workspace, error)) error {
+// setup, when given, is applied after the workspace is ready and its steps are
+// relayed before `ready`; a replay re-asserts the same intent, which the
+// reconciler treats as a re-verification.
+func (h *UsersHandler) streamBotWorkspaceSetup(c echo.Context, flusher http.Flusher, ownerID string, bot bots.Bot, setup *botsetup.Spec, recordIntent func(context.Context) (botworkspace.Workspace, error)) error {
 	setSSEHeaders(c)
 	c.Response().WriteHeader(http.StatusOK)
 	writer := c.Response().Writer
@@ -628,6 +682,27 @@ func (h *UsersHandler) streamBotWorkspaceSetup(c echo.Context, flusher http.Flus
 	}
 	if complete, ok := workspaceCompleteEvent(streamCtx, h.logger, h.workspaceStatus, bot.ID, outcome); ok {
 		if !send(complete) {
+			return nil
+		}
+	}
+
+	if setup != nil {
+		// The workspace runs; now apply the setup and relay its steps. The
+		// subscription is in place before the intent is recorded so no step
+		// transition is missed.
+		setupEvents, unsubscribeSetup := h.botSetup.Subscribe(bot.ID)
+		defer unsubscribeSetup()
+		setupCtx, cancelSetup := context.WithTimeout(context.WithoutCancel(c.Request().Context()), 15*time.Second)
+		setupIntent, err := h.botSetup.EnsureSetup(setupCtx, bot.ID, ownerID, *setup)
+		cancelSetup()
+		if err != nil {
+			h.logger.ErrorContext(c.Request().Context(), "record bot setup intent failed", slog.String("bot_id", bot.ID), slog.Any("error", err))
+			sendError("bot_setup_failed", "bots.create.setupFailedSubtitle", "bot setup could not be scheduled")
+			return nil
+		}
+		if !streamBotSetup(streamCtx, send, setupEvents, func(ctx context.Context) (botsetup.Setup, error) {
+			return h.botSetup.Await(ctx, bot.ID, setupIntent.DesiredGeneration)
+		}, sendError) {
 			return nil
 		}
 	}

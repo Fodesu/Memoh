@@ -126,7 +126,8 @@
       "steer_unsupported": "当前运行不支持插入消息，请等它结束后再发送。"
     },
     "bot": {
-      "name_taken": "该名称已被占用。"
+      "name_taken": "该名称已被占用。",
+      "setup_save_failed": "Bot 已创建但设置未保存，请重试以完成创建。"
     },
     "bot_agent": {
       "not_found": "这个 Agent 已不存在。",

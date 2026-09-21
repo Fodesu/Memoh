@@ -28,6 +28,7 @@ type Service struct {
 	queries               dbstore.Queries
 	logger                *slog.Logger
 	workspaceIntents      WorkspaceIntents
+	setupIntents          SetupIntents
 	connectorLifecycle    ConnectorLifecycle
 	checkers              []RuntimeChecker
 	containerReachability func(ctx context.Context, botID string) error
@@ -68,6 +69,12 @@ func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 // botworkspace reconciler) for bot creation and deletion.
 func (s *Service) SetWorkspaceIntents(intents WorkspaceIntents) {
 	s.workspaceIntents = intents
+}
+
+// SetSetupIntents registers the post-create setup reader used by the
+// bot.setup runtime check.
+func (s *Service) SetSetupIntents(intents SetupIntents) {
+	s.setupIntents = intents
 }
 
 // SetConnectorLifecycle registers connector cleanup for bot deletion.
@@ -1118,6 +1125,7 @@ func (s *Service) buildRuntimeChecks(ctx context.Context, row sqlc.Bot, includeD
 		initCheck.Metadata = setupFailure.metadata()
 	}
 	checks = append(checks, initCheck)
+	checks = s.appendSetupCheck(ctx, row.ID.String(), checks)
 
 	containerRow, err := s.queries.GetContainerByBotID(ctx, row.ID)
 	if err != nil {
@@ -1279,6 +1287,47 @@ func summarizeChecks(checks []BotCheck) (string, int32) {
 }
 
 // workspaceOutcome reads the reconciler's current observation for a bot.
+// appendSetupCheck adds a bot.setup check while the post-create setup has not
+// finished: unknown while it is pending, running or being retried, error once
+// a step failed for good. A bot without a recorded setup gets no check.
+func (s *Service) appendSetupCheck(ctx context.Context, botID string, checks []BotCheck) []BotCheck {
+	if s.setupIntents == nil {
+		return checks
+	}
+	outcome, ok, err := s.setupIntents.Current(ctx, botID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "load bot setup failed", slog.String("bot_id", botID), slog.Any("error", err))
+		return checks
+	}
+	if !ok || outcome.State == SetupStateDone {
+		return checks
+	}
+	check := BotCheck{
+		ID:       BotCheckTypeSetup,
+		Type:     BotCheckTypeSetup,
+		TitleKey: "bots.checks.titles.setup",
+		Status:   BotCheckStatusUnknown,
+		Summary:  "Bot setup is in progress.",
+		Detail:   "Settings and access are still being applied.",
+	}
+	steps := make([]map[string]any, 0, len(outcome.Steps))
+	for _, st := range outcome.Steps {
+		steps = append(steps, map[string]any{"step": st.Step, "status": st.Status, "last_error": st.LastError})
+		if (st.Status == SetupStatusFailed || st.Status == SetupStatusRetrying) && st.LastError != "" {
+			check.Detail = st.LastError
+		}
+	}
+	switch {
+	case outcome.State == SetupStateFailed && !outcome.RetryPending:
+		check.Status = BotCheckStatusError
+		check.Summary = "Bot setup failed."
+	case outcome.State == SetupStateFailed:
+		check.Summary = "Bot setup is being retried."
+	}
+	check.Metadata = map[string]any{"state": outcome.State, "retry_pending": outcome.RetryPending, "steps": steps}
+	return append(checks, check)
+}
+
 func (s *Service) workspaceOutcome(ctx context.Context, botID string) (WorkspaceOutcome, bool) {
 	if s.workspaceIntents == nil {
 		return WorkspaceOutcome{}, false

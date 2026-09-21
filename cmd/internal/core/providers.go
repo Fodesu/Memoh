@@ -51,6 +51,7 @@ import (
 	"github.com/felinics/memoh/internal/botagents"
 	"github.com/felinics/memoh/internal/botbackup"
 	"github.com/felinics/memoh/internal/bots"
+	"github.com/felinics/memoh/internal/botsetup"
 	"github.com/felinics/memoh/internal/botworkspace"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/route"
@@ -645,6 +646,44 @@ func toWorkspaceOutcome(w botworkspace.Workspace, maxAttempts int32) bots.Worksp
 		NextAttemptAt:  w.NextAttemptAt,
 		RetryPending:   w.RetryPending(maxAttempts),
 	}
+}
+
+// provideBotSetupService builds the post-create setup reconciler over the
+// settings and bots services, gated on the workspace reconciler's view.
+func provideBotSetupService(log *slog.Logger, queries dbstore.Queries, settingsService *settings.Service, botService *bots.Service, workspaces *botworkspace.Service) *botsetup.Service {
+	return botsetup.New(botsetup.NewRepository(queries), botsetup.Deps{
+		Settings: settingsService, Grants: botService, Workspaces: workspaces,
+	}, log, botsetup.Options{})
+}
+
+// injectBotSetupIntents lets the bots service report setup progress in its
+// runtime checks without importing botsetup.
+func injectBotSetupIntents(botService *bots.Service, setup *botsetup.Service) {
+	botService.SetSetupIntents(botSetupIntents{svc: setup})
+}
+
+type botSetupIntents struct {
+	svc *botsetup.Service
+}
+
+func (a botSetupIntents) Current(ctx context.Context, botID string) (bots.SetupOutcome, bool, error) {
+	st, err := a.svc.Get(ctx, botID)
+	if err != nil {
+		if errors.Is(err, botsetup.ErrNotFound) {
+			return bots.SetupOutcome{}, false, nil
+		}
+		return bots.SetupOutcome{}, false, err
+	}
+	out := bots.SetupOutcome{State: st.State, RetryPending: st.RetryPending(a.svc.MaxAttempts())}
+	for _, step := range st.Steps {
+		out.Steps = append(out.Steps, bots.SetupStepOutcome{Step: step.Step, Status: step.Status, LastError: step.LastError})
+	}
+	return out, true, nil
+}
+
+// startBotSetupReconciler runs the setup reconciler for the Server's lifetime.
+func startBotSetupReconciler(lc fx.Lifecycle, setup *botsetup.Service) {
+	lc.Append(fx.Hook{OnStart: setup.Start, OnStop: setup.Stop})
 }
 
 // startBotWorkspaceReconciler runs the reconciler for the Server's lifetime.

@@ -126,7 +126,8 @@
       "steer_unsupported": "This run cannot accept steer input. Wait for it to finish and send a new message."
     },
     "bot": {
-      "name_taken": "This name is already taken."
+      "name_taken": "This name is already taken.",
+      "setup_save_failed": "Bot created, but its setup was not saved. Retry to finish."
     },
     "bot_agent": {
       "not_found": "This Agent no longer exists.",

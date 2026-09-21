@@ -21,6 +21,7 @@ const (
 	CodeWorkspaceDependencyDefinitionInvalid     Code = "workspace_dependency.definition_invalid"
 	CodeWorkspaceDependencyCatalogUnavailable    Code = "workspace_dependency.catalog_unavailable"
 	CodeBotNameTaken                             Code = "bot.name_taken"
+	CodeBotSetupSaveFailed                       Code = "bot.setup_save_failed"
 	CodeBotAgentNotFound                         Code = "bot_agent.not_found"
 	CodeBotAgentNameTaken                        Code = "bot_agent.name_taken"
 	CodeBotAgentInvalidRuntime                   Code = "bot_agent.invalid_runtime"
@@ -214,6 +215,11 @@ var catalog = map[Code]Definition{
 		HTTPStatus:  http.StatusConflict,
 		Detail:      "This name is already taken.",
 		AllowedArgs: []string{"field"},
+	},
+	CodeBotSetupSaveFailed: {
+		HTTPStatus:  http.StatusInternalServerError,
+		Detail:      "Bot created, but its setup was not saved. Retry to finish.",
+		AllowedArgs: []string{"bot_id"},
 	},
 	CodeBotAgentNotFound: {
 		HTTPStatus: http.StatusNotFound,

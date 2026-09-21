@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -19,6 +20,7 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
+	"github.com/felinics/memoh/internal/botsetup"
 	"github.com/felinics/memoh/internal/botworkspace"
 	ctr "github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/db"
@@ -178,6 +180,199 @@ func TestCreateBotReplaysBotForIdempotencyKeyJSON(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), botID) {
 		t.Fatalf("body = %s, want the existing bot", rec.Body.String())
+	}
+}
+
+// fakeBotSetup records the setup intent and plays back a scripted run:
+// step transitions on Subscribe, the final row on Await.
+type fakeBotSetup struct {
+	mu        sync.Mutex
+	intents   []botsetup.Spec
+	owners    []string
+	steps     []botsetup.Event
+	final     botsetup.Setup
+	subs      map[string][]chan botsetup.Event
+	awaitErr  error
+	ensureErr error
+}
+
+func (f *fakeBotSetup) EnsureSetup(_ context.Context, botID, requestedBy string, spec botsetup.Spec) (botsetup.Setup, error) {
+	f.mu.Lock()
+	f.intents = append(f.intents, spec)
+	f.owners = append(f.owners, requestedBy)
+	subs := f.subs[botID]
+	f.mu.Unlock()
+	if f.ensureErr != nil {
+		return botsetup.Setup{}, f.ensureErr
+	}
+	go func() {
+		for _, ev := range f.steps {
+			for _, ch := range subs {
+				ch <- ev
+			}
+		}
+	}()
+	return botsetup.Setup{BotID: botID, DesiredGeneration: 1}, nil
+}
+
+func (f *fakeBotSetup) Subscribe(botID string) (<-chan botsetup.Event, func()) {
+	ch := make(chan botsetup.Event, 16)
+	f.mu.Lock()
+	if f.subs == nil {
+		f.subs = map[string][]chan botsetup.Event{}
+	}
+	f.subs[botID] = append(f.subs[botID], ch)
+	f.mu.Unlock()
+	return ch, func() {}
+}
+
+func (f *fakeBotSetup) Await(context.Context, string, int64) (botsetup.Setup, error) {
+	// Let the scripted step events land before the outcome.
+	time.Sleep(20 * time.Millisecond)
+	return f.final, f.awaitErr
+}
+
+func newSetupStreamHandler(ownerID, botID string, setup *fakeBotSetup) *UsersHandler {
+	return &UsersHandler{
+		logger:         slog.Default(),
+		service:        newTestCreateBotAccountService(ownerID),
+		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(&createBotStreamDB{ownerID: ownerID, botID: botID}))),
+		workspaceSetup: &createBotStreamWorkspace{},
+		botSetup:       setup,
+	}
+}
+
+// A create that carries `setup` relays the setup steps after the workspace is
+// ready and ends with `ready` only once every step is done.
+func TestCreateBotStreamRelaysSetupStepsBeforeReady(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	setup := &fakeBotSetup{
+		steps: []botsetup.Event{
+			{Type: botsetup.EventStep, Step: "settings", Status: "running"},
+			{Type: botsetup.EventStep, Step: "settings", Status: "done"},
+			{Type: botsetup.EventStep, Step: "grants", Status: "done", Error: "grant user:u3: user not found"},
+			{Type: botsetup.EventReady},
+		},
+		final: botsetup.Setup{State: botsetup.StateDone, ObservedGeneration: 1, DesiredGeneration: 1},
+	}
+	handler := newSetupStreamHandler(ownerID, botID, setup)
+
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{
+		"display_name": "Stream Bot",
+		"setup": {"settings": {"chat_model_id": "m1"}, "grants": [{"subject_type": "everyone", "permissions": ["chat"]}]}
+	}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(echo.HeaderAccept, "text/event-stream")
+	rec := httptest.NewRecorder()
+	if err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID)); err != nil {
+		t.Fatalf("CreateBot() error = %v", err)
+	}
+	events := decodeSSEEvents(t, rec.Body.String())
+	var types []string
+	for _, ev := range events {
+		types = append(types, ev["type"].(string))
+	}
+	joined := strings.Join(types, ",")
+	if !strings.HasPrefix(joined, "bot_created,") || !strings.HasSuffix(joined, ",setup_step,setup_step,setup_step,ready") {
+		t.Fatalf("event types = %v, want bot_created … setup_step×3 ready", types)
+	}
+	if len(setup.intents) != 1 || setup.intents[0].Settings == nil || *setup.intents[0].Settings.ChatModelID != "m1" || len(setup.intents[0].Grants) != 1 || setup.owners[0] != ownerID {
+		t.Fatalf("recorded intents = %#v owners=%v", setup.intents, setup.owners)
+	}
+	// The step's partial-failure note travels with the event.
+	last := events[len(events)-2]
+	if last["step"] != "grants" || last["status"] != "done" || last["error"] != "grant user:u3: user not found" {
+		t.Fatalf("grants event = %#v", last)
+	}
+}
+
+// A setup step that fails for good ends the stream with an error, not ready.
+func TestCreateBotStreamReportsSetupFailure(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	setup := &fakeBotSetup{final: botsetup.Setup{
+		State: botsetup.StateFailed, Attempts: 6, ObservedGeneration: 1, DesiredGeneration: 1,
+		Steps: []botsetup.Step{{Step: "settings", Status: botsetup.StatusFailed, LastError: "model m1 not found"}},
+	}}
+	handler := newSetupStreamHandler(ownerID, botID, setup)
+
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"display_name": "Stream Bot", "setup": {"settings": {"chat_model_id": "m1"}}}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(echo.HeaderAccept, "text/event-stream")
+	rec := httptest.NewRecorder()
+	if err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID)); err != nil {
+		t.Fatalf("CreateBot() error = %v", err)
+	}
+	events := decodeSSEEvents(t, rec.Body.String())
+	last := events[len(events)-1]
+	if last["type"] != "error" || last["code"] != "bot_setup_failed" || !strings.Contains(last["message"].(string), "model m1 not found") {
+		t.Fatalf("last event = %#v, want bot_setup_failed error", last)
+	}
+	for _, ev := range events {
+		if ev["type"] == "ready" {
+			t.Fatalf("ready must not be sent after a failed setup: %#v", events)
+		}
+	}
+}
+
+// A retried JSON create that carries `setup` and replays an existing Bot still
+// records the setup intent, so the retry completes the creation.
+func TestCreateBotReplayWithSetupRecordsIntent(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	setup := &fakeBotSetup{final: botsetup.Setup{State: botsetup.StateDone}}
+	handler := &UsersHandler{
+		logger:         slog.Default(),
+		service:        newTestCreateBotAccountService(ownerID),
+		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(&createBotStreamDB{ownerID: ownerID, botID: botID, requestIDKnown: true}))),
+		workspaceSetup: &createBotStreamWorkspace{},
+		botSetup:       setup,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"display_name": "Stream Bot", "request_id": "retry-1", "setup": {"settings": {"chat_model_id": "m1"}}}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	if err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID)); err != nil {
+		t.Fatalf("CreateBot() error = %v", err)
+	}
+	if rec.Code != http.StatusOK || len(setup.intents) != 1 {
+		t.Fatalf("status = %d intents = %d, want 200 with the setup recorded", rec.Code, len(setup.intents))
+	}
+}
+
+// When the bot row exists but its setup intent cannot be recorded, the error
+// names the bot so the client retries the setup rather than the creation.
+func TestCreateBotReportsSetupSaveFailureWithBotID(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	handler := newSetupStreamHandler(ownerID, botID, &fakeBotSetup{ensureErr: errors.New("setups table unavailable")})
+
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"display_name": "Stream Bot", "setup": {"settings": {"chat_model_id": "m1"}}}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID))
+	if apperror.CodeOf(err) != apperror.CodeBotSetupSaveFailed || apperror.ArgsOf(err)["bot_id"] != botID {
+		t.Fatalf("CreateBot() error = %#v, want %s naming bot %s", err, apperror.CodeBotSetupSaveFailed, botID)
+	}
+}
+
+// Without a setup reconciler a body carrying `setup` is refused up front; a
+// body without it still creates the bot as before.
+func TestCreateBotRejectsSetupWithoutReconciler(t *testing.T) {
+	ownerID := "00000000-0000-0000-0000-000000000101"
+	botID := "00000000-0000-0000-0000-000000000201"
+	handler := &UsersHandler{
+		service:        newTestCreateBotAccountService(ownerID),
+		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(&createBotStreamDB{ownerID: ownerID, botID: botID}))),
+		workspaceSetup: &createBotStreamWorkspace{},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"display_name": "Stream Bot", "setup": {"settings": {"chat_model_id": "m1"}}}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	err := handler.CreateBot(testAuthContext(echo.New(), req, rec, ownerID))
+	var httpErr *echo.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusInternalServerError {
+		t.Fatalf("CreateBot() error = %v, want 500 without a setup reconciler", err)
 	}
 }
 

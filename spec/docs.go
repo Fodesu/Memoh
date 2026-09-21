@@ -425,7 +425,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/bots.CreateBotRequest"
+                            "$ref": "#/definitions/handlers.CreateBotPayload"
                         }
                     }
                 ],
@@ -10204,6 +10204,106 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/setup": {
+            "get": {
+                "description": "Where the server-side post-create setup of a bot stands, step by step",
+                "tags": [
+                    "bots"
+                ],
+                "summary": "Get bot setup progress",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.BotSetupView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/setup/retry": {
+            "post": {
+                "description": "Re-run the setup steps that have not completed; done steps are kept",
+                "tags": [
+                    "bots"
+                ],
+                "summary": "Retry bot setup",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.BotSetupView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/skills/catalog": {
             "get": {
                 "tags": [
@@ -18815,40 +18915,6 @@ const docTemplate = `{
                 }
             }
         },
-        "bots.CreateBotRequest": {
-            "type": "object",
-            "properties": {
-                "acl_preset": {
-                    "type": "string"
-                },
-                "avatar_url": {
-                    "type": "string"
-                },
-                "display_name": {
-                    "type": "string"
-                },
-                "is_active": {
-                    "type": "boolean"
-                },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "name": {
-                    "type": "string"
-                },
-                "request_id": {
-                    "description": "RequestID is the client's idempotency key for this creation (also\naccepted as the Idempotency-Key header). Retrying with the same key\nreturns the bot the first request created instead of creating another.",
-                    "type": "string"
-                },
-                "timezone": {
-                    "type": "string"
-                },
-                "wait_for_ready": {
-                    "type": "boolean"
-                }
-            }
-        },
         "bots.CreateUserGrantRequest": {
             "type": "object",
             "properties": {
@@ -18980,6 +19046,54 @@ const docTemplate = `{
                 },
                 "user_username": {
                     "type": "string"
+                }
+            }
+        },
+        "botsetup.AgentSpec": {
+            "type": "object",
+            "properties": {
+                "app_id": {
+                    "type": "string"
+                },
+                "authorization_id": {
+                    "type": "string"
+                },
+                "dependency_id": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "runtime": {
+                    "type": "string"
+                }
+            }
+        },
+        "botsetup.Spec": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "description": "Agent is the direct Agent (Codex / Claude Code) to create, authorize,\ninstall and enable. Reserved for the agent/claim/install/enable steps;\nnot executed yet.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/botsetup.AgentSpec"
+                        }
+                    ]
+                },
+                "grants": {
+                    "description": "Grants are workspace user access grants to create; ones that already\nexist are left alone.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/bots.CreateUserGrantRequest"
+                    }
+                },
+                "settings": {
+                    "description": "Settings is applied through the settings service; only the fields set\nin the request are compared and written.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/settings.UpsertRequest"
+                        }
+                    ]
                 }
             }
         },
@@ -21788,6 +21902,69 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.BotSetupSpecSummary": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "grants": {
+                    "type": "integer"
+                },
+                "settings": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.BotSetupStepView": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "step": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.BotSetupView": {
+            "type": "object",
+            "properties": {
+                "bot_id": {
+                    "type": "string"
+                },
+                "desired_generation": {
+                    "type": "integer"
+                },
+                "observed_generation": {
+                    "type": "integer"
+                },
+                "retry_pending": {
+                    "type": "boolean"
+                },
+                "spec": {
+                    "$ref": "#/definitions/handlers.BotSetupSpecSummary"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BotSetupStepView"
+                    }
+                }
+            }
+        },
         "handlers.BotUserCandidate": {
             "type": "object",
             "properties": {
@@ -22229,6 +22406,48 @@ const docTemplate = `{
                 },
                 "used_tokens": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.CreateBotPayload": {
+            "type": "object",
+            "properties": {
+                "acl_preset": {
+                    "type": "string"
+                },
+                "avatar_url": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "name": {
+                    "type": "string"
+                },
+                "request_id": {
+                    "description": "RequestID is the client's idempotency key for this creation (also\naccepted as the Idempotency-Key header). Retrying with the same key\nreturns the bot the first request created instead of creating another.",
+                    "type": "string"
+                },
+                "setup": {
+                    "description": "Setup is applied by the server after the workspace is running and\nreported through GET /bots/{id}/setup; the SSE create stream relays its\nsteps before ` + "`" + `ready` + "`" + `. Omit it to create a bare bot.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/botsetup.Spec"
+                        }
+                    ]
+                },
+                "timezone": {
+                    "type": "string"
+                },
+                "wait_for_ready": {
+                    "type": "boolean"
                 }
             }
         },
