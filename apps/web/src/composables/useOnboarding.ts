@@ -5,7 +5,7 @@ import { putUsersMe } from '@memohai/sdk'
 import { toast } from '@felinic/ui'
 import { useUserStore } from '@/store/user'
 import { ONBOARDING_KEYS } from '@/pages/onboarding/constants'
-import { readOnboardingBotResult, resetOnboardingSession } from '@/pages/onboarding/session'
+import { readOnboardingHandoff, resetOnboardingSession } from '@/pages/onboarding/session'
 import { safeLocalGet, safeLocalRemove, safeLocalSet } from '@/utils/safe-storage'
 
 export const LAST_STEP_INDEX = 5
@@ -53,12 +53,12 @@ export function useOnboarding() {
   async function complete(minTransitionMs = 0): Promise<boolean> {
     completing.value = true
     const minWait = new Promise<void>((resolve) => setTimeout(resolve, minTransitionMs))
+    const userStore = useUserStore()
     try {
       await putUsersMe({
         body: { metadata: { onboarding_completed: true } },
         throwOnError: true,
       })
-      const userStore = useUserStore()
       userStore.onboardingCompleted = true
     } catch {
       toast.error(t('onboarding.complete.saveFailed'))
@@ -66,17 +66,19 @@ export function useOnboarding() {
       return false
     }
     await minWait
-    const result = readOnboardingBotResult()
-    const launchAgentId = result?.agent?.agentId ?? ''
+    // The created Bot is the server-side `initial_bot_id`; the session only
+    // carries which Agent runtime to open it with.
+    const botId = userStore.initialBotId
+    const launchAgentId = readOnboardingHandoff()?.agent?.agentId ?? ''
     const forceOnboarding = safeLocalGet(ONBOARDING_KEYS.forceOnboarding)
     safeLocalRemove(ONBOARDING_KEYS.forceOnboarding)
     try {
       // Use the `bot` route directly (not the `/chat/...` redirect, which drops
       // the query) so the chat page can read `?agent=` on landing.
-      const destination = result?.botId
+      const destination = botId
         ? launchAgentId
-          ? { name: 'bot', params: { botName: result.botId }, query: { agent: launchAgentId } }
-          : { name: 'bot', params: { botName: result.botId } }
+          ? { name: 'bot', params: { botName: botId }, query: { agent: launchAgentId } }
+          : { name: 'bot', params: { botName: botId } }
         : '/'
       const navigationFailure = await router.replace(destination)
       if (navigationFailure) throw navigationFailure

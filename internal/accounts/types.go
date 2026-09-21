@@ -58,6 +58,10 @@ type UpdateProfileRequest struct {
 // allowlist.
 type UpdateProfileMetadata struct {
 	OnboardingCompleted *bool `json:"onboarding_completed,omitempty"`
+	// InitialBotID records the Bot the first-run setup flow created for this
+	// user, so the flow can resume on it from any client. Must be a UUID; an
+	// empty string clears the key.
+	InitialBotID *string `json:"initial_bot_id,omitempty"`
 }
 
 // UpdatePasswordRequest is the input for password change.

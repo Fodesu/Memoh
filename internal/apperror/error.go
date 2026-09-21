@@ -73,6 +73,7 @@ const (
 	CodeRegistryAppInstallFailed                 Code = "registry.app_install_failed"
 	CodeProfileRequestInvalid                    Code = "profile.request_invalid"
 	CodeProfileTitleModelInvalid                 Code = "profile.title_model_invalid"
+	CodeProfileInitialBotInvalid                 Code = "profile.initial_bot_invalid"
 	CodeProfileUpdateFailed                      Code = "profile.update_failed"
 	CodeACPRequestInvalid                        Code = "acp.request_invalid"
 	CodeACPAccessForbidden                       Code = "acp.access_forbidden"
@@ -430,6 +431,10 @@ var catalog = map[Code]Definition{
 	CodeProfileTitleModelInvalid: {
 		HTTPStatus: http.StatusBadRequest,
 		Detail:     "The selected title model is unavailable or is not a chat model.",
+	},
+	CodeProfileInitialBotInvalid: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The initial bot id must be a UUID.",
 	},
 	CodeProfileRequestInvalid: {
 		HTTPStatus: http.StatusBadRequest,

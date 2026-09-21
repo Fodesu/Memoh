@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/felinics/memoh/internal/db"
@@ -26,6 +27,7 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInactiveAccount    = errors.New("account is inactive")
 	ErrInvalidTitleModel  = errors.New("invalid title model")
+	ErrInvalidInitialBot  = errors.New("invalid initial bot id")
 )
 
 // NewService creates a new accounts service.
@@ -286,7 +288,10 @@ func (s *Service) UpdateProfile(ctx context.Context, userID string, req UpdatePr
 	if tzName == "" {
 		tzName = "UTC"
 	}
-	metadata := s.mergeMetadata(existing.Metadata, req.Metadata)
+	metadata, err := s.mergeMetadata(ctx, existing.Metadata, req.Metadata)
+	if err != nil {
+		return Account{}, err
+	}
 	titleModelID := strings.TrimSpace(existing.TitleModelID)
 	if req.TitleModelID != nil {
 		titleModelID = strings.TrimSpace(*req.TitleModelID)
@@ -421,12 +426,12 @@ func toAccount(row dbstore.AccountRecord) Account {
 // user's existing metadata, preserving any other existing keys. Only keys
 // enumerated in UpdateProfileMetadata can be written — arbitrary client keys are
 // impossible because incoming is a typed struct, not free-form JSON.
-func (s *Service) mergeMetadata(existing string, incoming *UpdateProfileMetadata) string {
+func (s *Service) mergeMetadata(ctx context.Context, existing string, incoming *UpdateProfileMetadata) (string, error) {
 	if incoming == nil {
 		if existing == "" {
-			return "{}"
+			return "{}", nil
 		}
-		return existing
+		return existing, nil
 	}
 	base := map[string]any{}
 	if existing != "" {
@@ -435,16 +440,30 @@ func (s *Service) mergeMetadata(existing string, incoming *UpdateProfileMetadata
 			// it. Log loudly and heal with a clean object holding only the
 			// allowlisted fields, rather than locking the user out of profile
 			// updates. Safe because nothing but allowlisted keys is written here.
-			s.logger.Error("existing user metadata is not valid JSON; healing with allowlisted fields", slog.Any("error", err))
+			if s.logger != nil {
+				s.logger.ErrorContext(ctx, "existing user metadata is not valid JSON; healing with allowlisted fields", slog.Any("error", err))
+			}
 			base = map[string]any{}
 		}
 	}
 	if incoming.OnboardingCompleted != nil {
 		base["onboarding_completed"] = *incoming.OnboardingCompleted
 	}
+	if incoming.InitialBotID != nil {
+		botID := strings.TrimSpace(*incoming.InitialBotID)
+		if botID == "" {
+			delete(base, "initial_bot_id")
+		} else {
+			parsed, err := uuid.Parse(botID)
+			if err != nil {
+				return "", ErrInvalidInitialBot
+			}
+			base["initial_bot_id"] = parsed.String()
+		}
+	}
 	result, err := json.Marshal(base)
 	if err != nil {
-		return "{}"
+		return "{}", nil
 	}
-	return string(result)
+	return string(result), nil
 }

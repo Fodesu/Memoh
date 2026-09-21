@@ -169,6 +169,9 @@ func (h *UsersHandler) UpdateMe(c echo.Context) error {
 		if errors.Is(err, accounts.ErrInvalidTitleModel) {
 			return apperror.Wrap(apperror.CodeProfileTitleModelInvalid, err, nil)
 		}
+		if errors.Is(err, accounts.ErrInvalidInitialBot) {
+			return apperror.Wrap(apperror.CodeProfileInitialBotInvalid, err, nil)
+		}
 		return apperror.Wrap(apperror.CodeProfileUpdateFailed, err, nil)
 	}
 	return c.JSON(http.StatusOK, resp)

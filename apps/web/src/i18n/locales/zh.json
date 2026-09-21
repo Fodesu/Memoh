@@ -166,6 +166,7 @@
     "queue_item_not_pending": "这条消息已不在待处理队列中。",
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
+      "initial_bot_invalid": "初始 Bot 的 id 必须是 UUID。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
       "update_failed": "个人资料更新失败。"
     },
@@ -2199,6 +2200,7 @@
       "retryWorkspace": "重试工作区",
       "continueLater": "稍后处理",
       "openExisting": "查看已有 Bot",
+      "recordInitialBotFailed": "未能记录已创建的 Bot，请重试。",
       "stillProvisioning": "工作区仍在创建中。可以到 Bot 的工作区页面继续等待，或现在重试。",
       "line": {
         "command": "正在创建 Bot「{name}」",

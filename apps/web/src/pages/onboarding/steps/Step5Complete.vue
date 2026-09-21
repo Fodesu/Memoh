@@ -8,15 +8,15 @@ import StepExitShell from '../components/step-exit-shell.vue'
 import HintBox from '../components/hint-box.vue'
 import { safeSessionRemove, safeSessionSet } from '@/utils/safe-storage'
 import { ONBOARDING_KEYS } from '../constants'
-import { readOnboardingBotResult } from '../session'
+import { readOnboardingHandoff } from '../session'
 
 const { t } = useI18n()
 const { complete, completing } = useOnboarding()
 
 const visible = ref(false)
 const exiting = ref(false)
-const botResult = readOnboardingBotResult()
-const hasConfiguredAI = botResult?.modelConfigured === true || !!botResult?.agent
+const handoff = readOnboardingHandoff()
+const hasConfiguredAI = handoff?.modelConfigured === true || !!handoff?.agent
 
 const cards = [
   { icon: Plug, titleKey: 'onboarding.complete.cards.im.title', descKey: 'onboarding.complete.cards.im.desc' },

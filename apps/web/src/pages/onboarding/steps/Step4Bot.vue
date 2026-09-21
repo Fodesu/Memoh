@@ -37,11 +37,8 @@ import AgentAuthorization from '@/pages/bots/components/agent-authorization.vue'
 import { readAgentAuthorizationDraft } from '@/composables/useAgentAuthorization'
 import { MEMOH_AGENT_VALUE } from '@/pages/bots/components/agent-type'
 import { useStepTransition } from '../useStepTransition'
-import {
-  clearOnboardingBotResult,
-  readOnboardingProviderId,
-  readOnboardingBotResult,
-} from '../session'
+import { useUserStore } from '@/store/user'
+import { clearOnboardingHandoff, readOnboardingProviderId } from '../session'
 import { mergeOnboardingModels } from './provider-setup'
 import StepFrame from '../components/step-frame.vue'
 import StepExitShell from '../components/step-exit-shell.vue'
@@ -54,7 +51,14 @@ const queryCache = useQueryCache()
 const { visible, exiting, leave } = useStepTransition()
 
 const submitting = ref(false)
-onMounted(() => { if (readOnboardingBotResult()) nextStep() })
+// The server remembers the Bot this flow already created; skip straight past
+// the step instead of creating another one. fetchMe() is a no-op once the
+// profile has been loaded this session.
+onMounted(async () => {
+  const userStore = useUserStore()
+  await userStore.fetchMe()
+  if (userStore.initialBotId) nextStep()
+})
 
 const store = useBotCreateProgressStore()
 
@@ -160,7 +164,7 @@ const ctaLabel = computed(() => {
 async function handleSubmit() {
   if (!canSubmit.value || submitting.value) return
 
-  clearOnboardingBotResult()
+  clearOnboardingHandoff()
   submitting.value = true
 
   const selectedModel = models.value.find(model => model.id === form.chat_model_id)

@@ -77,6 +77,12 @@ definitions:
     type: object
   accounts.UpdateProfileMetadata:
     properties:
+      initial_bot_id:
+        description: |-
+          InitialBotID records the Bot the first-run setup flow created for this
+          user, so the flow can resume on it from any client. Must be a UUID; an
+          empty string clears the key.
+        type: string
       onboarding_completed:
         type: boolean
     type: object

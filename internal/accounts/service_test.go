@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -82,6 +83,7 @@ func (s *testAccountStore) UpdateAdmin(_ context.Context, input dbstore.UpdateAc
 func (s *testAccountStore) UpdateProfile(_ context.Context, input dbstore.UpdateAccountProfileInput) (dbstore.AccountRecord, error) {
 	s.profileUpdated = input
 	s.record.TitleModelID = input.TitleModelID
+	s.record.Metadata = input.Metadata
 	return s.record, nil
 }
 
@@ -149,6 +151,73 @@ func TestUpdateProfileValidatesAndPersistsTitleModel(t *testing.T) {
 	}
 	if store.profileUpdated.TitleModelID != modelID || account.TitleModelID != modelID {
 		t.Fatalf("title model was not persisted: input=%q account=%q", store.profileUpdated.TitleModelID, account.TitleModelID)
+	}
+}
+
+func TestUpdateProfileStoresInitialBotIDAlongsideExistingMetadata(t *testing.T) {
+	botID := "22222222-2222-2222-2222-222222222222"
+	store := &testAccountStore{record: dbstore.AccountRecord{
+		ID: "user-1", Username: "alice", Timezone: "UTC",
+		Metadata: `{"onboarding_completed":false,"other":"keep"}`,
+	}}
+	svc := NewService(nil, store)
+
+	account, err := svc.UpdateProfile(context.Background(), "user-1", UpdateProfileRequest{
+		Metadata: &UpdateProfileMetadata{InitialBotID: &botID},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProfile() error = %v", err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal([]byte(store.profileUpdated.Metadata), &stored); err != nil {
+		t.Fatalf("stored metadata is not JSON: %v", err)
+	}
+	if stored["initial_bot_id"] != botID || stored["other"] != "keep" || stored["onboarding_completed"] != false {
+		t.Fatalf("stored metadata = %v", stored)
+	}
+	if account.Metadata["initial_bot_id"] != botID {
+		t.Fatalf("account metadata = %v", account.Metadata)
+	}
+}
+
+func TestUpdateProfileClearsInitialBotIDWithEmptyString(t *testing.T) {
+	empty := ""
+	store := &testAccountStore{record: dbstore.AccountRecord{
+		ID: "user-1", Username: "alice", Timezone: "UTC",
+		Metadata: `{"initial_bot_id":"22222222-2222-2222-2222-222222222222","onboarding_completed":true}`,
+	}}
+	svc := NewService(nil, store)
+
+	if _, err := svc.UpdateProfile(context.Background(), "user-1", UpdateProfileRequest{
+		Metadata: &UpdateProfileMetadata{InitialBotID: &empty},
+	}); err != nil {
+		t.Fatalf("UpdateProfile() error = %v", err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal([]byte(store.profileUpdated.Metadata), &stored); err != nil {
+		t.Fatalf("stored metadata is not JSON: %v", err)
+	}
+	if _, ok := stored["initial_bot_id"]; ok {
+		t.Fatalf("initial_bot_id was not cleared: %v", stored)
+	}
+	if stored["onboarding_completed"] != true {
+		t.Fatalf("other keys were not preserved: %v", stored)
+	}
+}
+
+func TestUpdateProfileRejectsNonUUIDInitialBotID(t *testing.T) {
+	botID := "not-a-uuid"
+	store := &testAccountStore{record: dbstore.AccountRecord{ID: "user-1", Username: "alice", Timezone: "UTC"}}
+	svc := NewService(nil, store)
+
+	_, err := svc.UpdateProfile(context.Background(), "user-1", UpdateProfileRequest{
+		Metadata: &UpdateProfileMetadata{InitialBotID: &botID},
+	})
+	if !errors.Is(err, ErrInvalidInitialBot) {
+		t.Fatalf("UpdateProfile() error = %v, want ErrInvalidInitialBot", err)
+	}
+	if store.profileUpdated.UserID != "" {
+		t.Fatalf("profile was written despite invalid id: %#v", store.profileUpdated)
 	}
 }
 

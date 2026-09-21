@@ -166,6 +166,7 @@
     "queue_item_not_pending": "This message is no longer pending in the queue.",
     "profile": {
       "request_invalid": "The profile update request is invalid.",
+      "initial_bot_invalid": "The initial bot id must be a UUID.",
       "title_model_invalid": "The selected title model is unavailable or is not a chat model.",
       "update_failed": "The profile could not be updated."
     },
@@ -2199,6 +2200,7 @@
       "retryWorkspace": "Retry workspace",
       "continueLater": "Continue later",
       "openExisting": "Open existing bot",
+      "recordInitialBotFailed": "Couldn't record the created bot. Try again.",
       "stillProvisioning": "The workspace is still being set up. Keep waiting on the bot's workspace page, or retry now.",
       "line": {
         "command": "Creating bot \"{name}\"",

@@ -51,6 +51,12 @@ export type AccountsUpdatePasswordRequest = {
 };
 
 export type AccountsUpdateProfileMetadata = {
+    /**
+     * InitialBotID records the Bot the first-run setup flow created for this
+     * user, so the flow can resume on it from any client. Must be a UUID; an
+     * empty string clears the key.
+     */
+    initial_bot_id?: string;
     onboarding_completed?: boolean;
 };
 

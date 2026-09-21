@@ -163,6 +163,7 @@
     "queue_item_not_pending": "このメッセージは待機中のキューにありません。",
     "profile": {
       "request_invalid": "プロフィール更新リクエストが無効です。",
+      "initial_bot_invalid": "初期 Bot の id は UUID である必要があります。",
       "title_model_invalid": "選択したタイトルModelは利用できないか、チャットModelではありません。",
       "update_failed": "プロフィールを更新できませんでした。"
     },
@@ -2197,6 +2198,7 @@
       "retryWorkspace": "Workspace をリトライ",
       "continueLater": "あとで対応",
       "openExisting": "既存の Bot を開く",
+      "recordInitialBotFailed": "作成した Bot を記録できませんでした。もう一度お試しください。",
       "stillProvisioning": "Workspace はまだ準備中です。Bot の Workspace ページで待つか、今すぐリトライしてください。",
       "line": {
         "command": "Bot「{name}」を作成しています",

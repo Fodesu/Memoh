@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   updateMe: vi.fn(),
   toastError: vi.fn(),
-  user: { onboardingCompleted: false },
+  user: { onboardingCompleted: false, initialBotId: '' },
 }))
 
 vi.mock('vue-router', () => ({
@@ -42,9 +42,9 @@ Object.defineProperty(globalThis, 'localStorage', {
 
 import { resetOnboardingState, useOnboarding } from './useOnboarding'
 import {
-  readOnboardingBotResult,
+  readOnboardingHandoff,
   resetOnboardingSession,
-  writeOnboardingBotResult,
+  writeOnboardingHandoff,
 } from '@/pages/onboarding/session'
 import { ONBOARDING_KEYS } from '@/pages/onboarding/constants'
 
@@ -52,6 +52,7 @@ describe('useOnboarding completion', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.user.onboardingCompleted = false
+    mocks.user.initialBotId = 'bot-id'
     mocks.updateMe.mockResolvedValue({})
     mocks.replace.mockResolvedValue(undefined)
     resetOnboardingState()
@@ -60,8 +61,7 @@ describe('useOnboarding completion', () => {
   })
 
   it('restores forced onboarding and keeps the handoff when navigation fails', async () => {
-    writeOnboardingBotResult({
-      botId: 'bot-id',
+    writeOnboardingHandoff({
       modelConfigured: false,
       agent: { agentId: 'codex', botAgentId: 'agent-id' },
     })
@@ -73,7 +73,7 @@ describe('useOnboarding completion', () => {
     })
 
     expect(await useOnboarding().complete()).toBe(false)
-    expect(readOnboardingBotResult()?.botId).toBe('bot-id')
+    expect(readOnboardingHandoff()?.agent?.agentId).toBe('codex')
     expect(localStorage.getItem(ONBOARDING_KEYS.forceOnboarding)).toBe('1')
     expect(mocks.toastError).toHaveBeenCalledWith('onboarding.complete.navigationFailed')
 
@@ -84,16 +84,23 @@ describe('useOnboarding completion', () => {
       params: { botName: 'bot-id' },
       query: { agent: 'codex' },
     })
-    expect(readOnboardingBotResult()).toBeNull()
+    expect(readOnboardingHandoff()).toBeNull()
     expect(localStorage.getItem(ONBOARDING_KEYS.forceOnboarding)).toBeNull()
   })
 
+  it('lands on the home page when the server has no initial Bot for the user', async () => {
+    mocks.user.initialBotId = ''
+
+    expect(await useOnboarding().complete()).toBe(true)
+    expect(mocks.replace).toHaveBeenLastCalledWith('/')
+  })
+
   it('treats a resolved router failure as a failed completion', async () => {
-    writeOnboardingBotResult({ botId: 'bot-id', modelConfigured: true })
+    writeOnboardingHandoff({ modelConfigured: true })
     mocks.replace.mockResolvedValue({ type: 4 })
 
     expect(await useOnboarding().complete()).toBe(false)
-    expect(readOnboardingBotResult()?.botId).toBe('bot-id')
+    expect(readOnboardingHandoff()?.modelConfigured).toBe(true)
     expect(mocks.toastError).toHaveBeenCalledWith('onboarding.complete.navigationFailed')
   })
 })

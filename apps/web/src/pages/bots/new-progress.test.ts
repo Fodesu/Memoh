@@ -72,12 +72,16 @@ const prevStep = vi.fn()
 const getBot = vi.fn()
 const getBotChecks = vi.fn()
 const putSettings = vi.fn()
+const putUsersMe = vi.fn()
+const userStore = { initialBotId: '' }
 vi.mock('@/composables/useOnboarding', () => ({ useOnboarding: () => ({ nextStep, prevStep }) }))
+vi.mock('@/store/user', () => ({ useUserStore: () => userStore }))
 vi.mock('@/store/install-created-agent', () => ({ installCreatedAgent: vi.fn() }))
 vi.mock('@memohai/sdk', () => ({
   getBotsById: (...args: unknown[]) => getBot(...args),
   getBotsByIdChecks: (...args: unknown[]) => getBotChecks(...args),
   putBotsByBotIdSettings: (...args: unknown[]) => putSettings(...args),
+  putUsersMe: (...args: unknown[]) => putUsersMe(...args),
   getAgentAuthorizationsById: vi.fn(),
   getBotsByBotIdAgents: vi.fn(),
   getBotsByBotIdAgentsById: vi.fn(),
@@ -160,6 +164,8 @@ describe('bot create progress route', () => {
     vi.useFakeTimers()
     routerReplace.mockReset()
     nextStep.mockReset()
+    putUsersMe.mockReset()
+    userStore.initialBotId = ''
     prevStep.mockReset()
     sessionStorage.clear()
     // Real vue-router returns a Promise that resolves when navigation commits.
@@ -288,12 +294,38 @@ describe('bot create progress route', () => {
     await nextTick()
     expect(buttonLabels(mounted.root)).toEqual(['bots.create.continueLater', 'bots.create.retryWorkspace'])
 
+    putUsersMe.mockResolvedValueOnce({})
     mounted.root.querySelector('button')!.click()
     await nextTick()
+    await nextTick()
+    // The Bot is recorded server-side; the session only keeps UI hints.
+    expect(putUsersMe).toHaveBeenCalledWith({ body: { metadata: { initial_bot_id: 'bot-1' } }, throwOnError: true })
+    expect(userStore.initialBotId).toBe('bot-1')
     expect(nextStep).toHaveBeenCalledTimes(1)
     expect(routerReplace).not.toHaveBeenCalled()
-    expect(JSON.parse(sessionStorage.getItem('memoh:onboarding:bot-result') ?? 'null')).toMatchObject({ botId: 'bot-1', modelConfigured: false })
+    expect(sessionStorage.getItem('memoh:onboarding:bot-result')).toBeNull()
+    expect(JSON.parse(sessionStorage.getItem('memoh:onboarding:handoff') ?? 'null')).toEqual({ modelConfigured: false })
     expect(mounted.store.status).toBe('idle')
+    mounted.app.unmount(); mounted.root.remove()
+  })
+
+  it('stays on the progress page when the created Bot cannot be recorded for the user', async () => {
+    const mounted = await mountKeptProgress(true)
+    mounted.store.status = 'workspace-error'
+    await nextTick()
+
+    putUsersMe.mockRejectedValueOnce(new Error('offline'))
+    mounted.root.querySelector('button')!.click()
+    await nextTick()
+    await nextTick()
+    expect(nextStep).not.toHaveBeenCalled()
+    expect(mounted.store.status).toBe('workspace-error')
+
+    putUsersMe.mockResolvedValueOnce({})
+    mounted.root.querySelector('button')!.click()
+    await nextTick()
+    await nextTick()
+    expect(nextStep).toHaveBeenCalledTimes(1)
     mounted.app.unmount(); mounted.root.remove()
   })
 

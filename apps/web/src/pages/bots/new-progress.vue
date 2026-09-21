@@ -72,11 +72,13 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQueryCache } from '@pinia/colada'
 import { getBotsQueryKey } from '@memohai/sdk/colada'
+import { putUsersMe } from '@memohai/sdk'
+import { useUserStore } from '@/store/user'
 import { useAvatarInitials } from '@/composables/useAvatarInitials'
 import { useBotCreateProgressStore } from '@/store/bot-create-progress'
 import { readCreatedBotSession, writeCreatedBotSession } from './created-bot-session'
 import { useOnboarding } from '@/composables/useOnboarding'
-import { readOnboardingBotResult, writeOnboardingBotResult } from '@/pages/onboarding/session'
+import { readOnboardingHandoff, writeOnboardingHandoff } from '@/pages/onboarding/session'
 import BotCreateTerminal from './components/bot-create-terminal.vue'
 
 const props = defineProps<{ onboarding?: boolean }>()
@@ -85,19 +87,23 @@ const router = useRouter()
 const { t } = useI18n()
 const queryCache = useQueryCache()
 const store = useBotCreateProgressStore()
+const userStore = useUserStore()
 const { status, lines, display, bot, setupError, errorCode, createdAgent, authorizationId, modelConfigured, canRetry } = storeToRefs(store)
 if (store.status === 'idle') {
   // A refresh lands here with an empty store. The created Bot is persisted from
   // the first `bot_created` event, so resume on it instead of creating again.
   const saved = readCreatedBotSession(props.onboarding)
-  const previous = props.onboarding ? readOnboardingBotResult() : null
+  // Onboarding already handed the Bot off: the server holds its id and the
+  // session holds the UI hints, so re-enter on that Bot instead of creating.
+  const initialBotId = props.onboarding ? userStore.initialBotId : ''
+  const handoff = initialBotId ? readOnboardingHandoff() : null
   if (saved) void store.restore(saved, props.onboarding)
-  else if (previous?.agent && ['codex', 'claude-code'].includes(previous.agent.agentId)) {
-    void store.restore({ botId: previous.botId, botName: '', displayName: '', agentId: previous.agent.botAgentId,
-      runtime: previous.agent.agentId as 'codex' | 'claude-code', authorizationId: previous.agent.authorizationId, setupError: null }, true)
-  } else if (previous) {
-    store.bot = { id: previous.botId }
-    store.modelConfigured = previous.modelConfigured
+  else if (initialBotId && handoff?.agent && ['codex', 'claude-code'].includes(handoff.agent.agentId)) {
+    void store.restore({ botId: initialBotId, botName: '', displayName: '', agentId: handoff.agent.botAgentId,
+      runtime: handoff.agent.agentId as 'codex' | 'claude-code', authorizationId: handoff.agent.authorizationId, setupError: null }, true)
+  } else if (initialBotId) {
+    store.bot = { id: initialBotId }
+    store.modelConfigured = handoff?.modelConfigured ?? false
     store.status = 'ready'
   }
 }
@@ -127,8 +133,18 @@ async function goToBot() {
   clearReadyRedirectTimer()
   navigated = true
   if (props.onboarding && bot.value?.id) {
+    // Record the Bot server-side before moving on so a refresh, another tab or
+    // another device resumes on it rather than creating a second one.
+    try {
+      await putUsersMe({ body: { metadata: { initial_bot_id: bot.value.id } }, throwOnError: true })
+      userStore.initialBotId = bot.value.id
+    } catch {
+      toast.error(t('bots.create.recordInitialBotFailed'))
+      navigated = false
+      return
+    }
     const runtime = createdAgent.value?.runtime
-    writeOnboardingBotResult({ botId: bot.value.id, modelConfigured: modelConfigured.value,
+    writeOnboardingHandoff({ modelConfigured: modelConfigured.value,
       ...((runtime === 'codex' || runtime === 'claude-code') && { agent: {
         agentId: runtime, botAgentId: createdAgent.value?.id ?? '', authorizationId: authorizationId.value,
       } }),

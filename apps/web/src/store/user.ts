@@ -34,6 +34,10 @@ export const useUserStore = defineStore(
 
     const localToken = useLocalStorage('token', '')
     const onboardingCompleted = ref(false)
+    // The Bot the first-run setup created for this user, from server-side user
+    // metadata. Lets the setup flow resume on the same Bot from any tab or
+    // device instead of creating another one.
+    const initialBotId = ref('')
 
     let _meChecked = false
     let _pendingFetch: Promise<boolean> | null = null
@@ -58,6 +62,8 @@ export const useUserStore = defineStore(
           userInfo.avatarUrl = data.avatar_url ?? ''
           userInfo.timezone = data.timezone || 'UTC'
           onboardingCompleted.value = data.metadata?.onboarding_completed === true
+          const initial = data.metadata?.initial_bot_id
+          initialBotId.value = typeof initial === 'string' ? initial : ''
           _meChecked = true
           return true
         } catch (error) {
@@ -119,6 +125,7 @@ export const useUserStore = defineStore(
 
     const resetOnboarding = () => {
       onboardingCompleted.value = false
+      initialBotId.value = ''
       _meChecked = false
       _pendingFetch = null
       safeLocalRemove(ONBOARDING_KEYS.introSeen)
@@ -160,6 +167,7 @@ export const useUserStore = defineStore(
     return {
       userInfo,
       onboardingCompleted,
+      initialBotId,
       fetchMe,
       login,
       patchUserInfo,

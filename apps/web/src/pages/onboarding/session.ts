@@ -7,6 +7,9 @@ const LEGACY_SESSION_KEYS = [
   'memoh:onboarding:acp-selection',
   'memoh:onboarding:created-bot-id',
   'memoh:onboarding:provider-added-count',
+  // Replaced by the server-side `initial_bot_id` user metadata plus the
+  // bot-less handoff below.
+  'memoh:onboarding:bot-result',
 ] as const
 
 export interface OnboardingAgentResult {
@@ -15,38 +18,35 @@ export interface OnboardingAgentResult {
   botAgentId: string
 }
 
-export interface OnboardingBotResult {
-  botId: string
+// OnboardingHandoff carries UI-only hints between the Bot step and the
+// completion step. The created Bot itself is recorded server-side as the
+// user's `initial_bot_id`, so this never holds a Bot id.
+export interface OnboardingHandoff {
   modelConfigured: boolean
   agent?: OnboardingAgentResult
 }
 
 let providerIdMemory: string | undefined
-let botResultMemory: OnboardingBotResult | null | undefined
+let handoffMemory: OnboardingHandoff | null | undefined
 
 function normalizeProviderId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function normalizeBotResult(value: unknown): OnboardingBotResult | null {
+function normalizeHandoff(value: unknown): OnboardingHandoff | null {
   if (!value || typeof value !== 'object') return null
-  const candidate = value as Partial<OnboardingBotResult>
-  const botId = normalizeProviderId(candidate.botId)
-  if (!botId) return null
+  const candidate = value as Partial<OnboardingHandoff>
 
-  const legacy = candidate as Partial<OnboardingBotResult> & { acp?: OnboardingAgentResult }
-  const selectedAgent = candidate.agent ?? legacy.acp
-  const agentId = normalizeAgentID(selectedAgent?.agentId)
-  const botAgentId = normalizeProviderId(selectedAgent?.botAgentId)
+  const agentId = normalizeAgentID(candidate.agent?.agentId)
+  const botAgentId = normalizeProviderId(candidate.agent?.botAgentId)
 
   return {
-    botId,
     modelConfigured: candidate.modelConfigured === true,
     ...(agentId && (botAgentId || agentId === 'codex' || agentId === 'claude-code') && {
       agent: {
         agentId,
         botAgentId,
-        authorizationId: normalizeProviderId(selectedAgent?.authorizationId) || undefined,
+        authorizationId: normalizeProviderId(candidate.agent?.authorizationId) || undefined,
       },
     }),
   }
@@ -66,12 +66,12 @@ export function writeOnboardingProviderId(providerId: string): void {
   }
 }
 
-export function readOnboardingBotResult(): OnboardingBotResult | null {
-  if (botResultMemory !== undefined) return botResultMemory
-  const raw = safeSessionGet(ONBOARDING_KEYS.botResult)
+export function readOnboardingHandoff(): OnboardingHandoff | null {
+  if (handoffMemory !== undefined) return handoffMemory
+  const raw = safeSessionGet(ONBOARDING_KEYS.handoff)
   if (raw) {
     try {
-      return normalizeBotResult(JSON.parse(raw))
+      return normalizeHandoff(JSON.parse(raw))
     } catch {
       return null
     }
@@ -79,28 +79,25 @@ export function readOnboardingBotResult(): OnboardingBotResult | null {
   return null
 }
 
-export function writeOnboardingBotResult(result: OnboardingBotResult): void {
-  botResultMemory = normalizeBotResult(result)
-  if (!botResultMemory) {
-    clearOnboardingBotResult()
+export function writeOnboardingHandoff(handoff: OnboardingHandoff): void {
+  handoffMemory = normalizeHandoff(handoff)
+  if (!handoffMemory) {
+    clearOnboardingHandoff()
     return
   }
-  safeSessionSet(
-    ONBOARDING_KEYS.botResult,
-    JSON.stringify(botResultMemory),
-  )
+  safeSessionSet(ONBOARDING_KEYS.handoff, JSON.stringify(handoffMemory))
 }
 
-export function clearOnboardingBotResult(): void {
-  botResultMemory = null
-  safeSessionRemove(ONBOARDING_KEYS.botResult)
+export function clearOnboardingHandoff(): void {
+  handoffMemory = null
+  safeSessionRemove(ONBOARDING_KEYS.handoff)
 }
 
 export function resetOnboardingSession(): void {
   providerIdMemory = ''
-  botResultMemory = null
+  handoffMemory = null
   safeSessionRemove(ONBOARDING_KEYS.providerId)
-  safeSessionRemove(ONBOARDING_KEYS.botResult)
+  safeSessionRemove(ONBOARDING_KEYS.handoff)
   purgeLegacyOnboardingSession()
 }
 

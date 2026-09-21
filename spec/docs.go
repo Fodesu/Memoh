@@ -17039,6 +17039,10 @@ const docTemplate = `{
         "accounts.UpdateProfileMetadata": {
             "type": "object",
             "properties": {
+                "initial_bot_id": {
+                    "description": "InitialBotID records the Bot the first-run setup flow created for this\nuser, so the flow can resume on it from any client. Must be a UUID; an\nempty string clears the key.",
+                    "type": "string"
+                },
                 "onboarding_completed": {
                     "type": "boolean"
                 }
