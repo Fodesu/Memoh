@@ -164,10 +164,15 @@ func typedArguments(raw json.RawMessage) (json.RawMessage, bool) {
 }
 
 // storedOutput is the output as the row has always held it: text as a
-// string, a document as itself.
+// string, a document as itself, and no output at all as null. The zero
+// ToolOutput maps to null rather than "" so a row read back and written again
+// keeps its bytes.
 func storedOutput(output sdk.ToolOutput) json.RawMessage {
 	if output.IsJSON() {
 		return output.JSON
+	}
+	if output.Text == "" {
+		return json.RawMessage("null")
 	}
 	encoded, _ := json.Marshal(output.Text)
 	return encoded
