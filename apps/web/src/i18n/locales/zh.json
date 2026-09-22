@@ -278,7 +278,7 @@
       "history_inconsistent": "会话记录保存出错，请刷新后重试。",
       "turn_not_latest": "会话已有新内容，请刷新后重试。",
       "turn_incomplete": "这条消息暂时无法重试，请刷新会话。",
-      "reset_unavailable": "当前无法重置会话历史，请联系管理员。",
+      "reset_unavailable": "当前无法重置会话历史，请联系开发者。",
       "reset_conflict": "会话正忙，请稍后再试。"
     },
     "history": {

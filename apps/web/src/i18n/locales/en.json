@@ -278,7 +278,7 @@
       "history_inconsistent": "The conversation could not be saved. Refresh and try again.",
       "turn_not_latest": "The conversation has newer messages. Refresh and try again.",
       "turn_incomplete": "This message cannot be retried right now. Refresh the conversation.",
-      "reset_unavailable": "Conversation history cannot be reset right now. Contact an administrator.",
+      "reset_unavailable": "Conversation history cannot be reset right now. Contact the developers.",
       "reset_conflict": "The conversation is busy. Please try again shortly."
     },
     "history": {

@@ -626,7 +626,7 @@ var catalog = map[Code]Definition{
 	// operator can fix it.
 	CodeSessionResetUnavailable: {
 		HTTPStatus: http.StatusServiceUnavailable,
-		Detail:     "Conversation history cannot be reset right now. Contact an administrator.",
+		Detail:     "Conversation history cannot be reset right now. Contact the developers.",
 	},
 	// Another operation holds or took over the history reset lease.
 	CodeSessionResetConflict: {
