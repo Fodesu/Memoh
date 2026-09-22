@@ -996,7 +996,8 @@ func TestChannelInboundProcessorQueueCommandsUseResolvedSession(t *testing.T) {
 					t.Fatal("steer was not admitted")
 				}
 				input := queueHandler.steerInputs[len(queueHandler.steerInputs)-1]
-				if input.SessionID != "session-1" || input.Text != tc.wantPayload || input.InvocationID == "" {
+				if input.SessionID != "session-1" || input.Text != tc.wantPayload || input.InvocationID == "" ||
+					input.TeamID != cfg.TeamID || input.ChannelIdentityID != "channelIdentity-1" {
 					t.Fatalf("steer input = %#v", input)
 				}
 			} else {
@@ -1004,7 +1005,8 @@ func TestChannelInboundProcessorQueueCommandsUseResolvedSession(t *testing.T) {
 					t.Fatal("follow-up was not admitted")
 				}
 				input := queueHandler.followUpInputs[len(queueHandler.followUpInputs)-1]
-				if input.SessionID != "session-1" || input.Text != tc.wantPayload || input.InvocationID == "" {
+				if input.SessionID != "session-1" || input.Text != tc.wantPayload || input.InvocationID == "" ||
+					input.TeamID != cfg.TeamID || input.ChannelIdentityID != "channelIdentity-1" {
 					t.Fatalf("follow-up input = %#v", input)
 				}
 			}

@@ -39,7 +39,12 @@ const (
 
 // Thread represents a chat thread within a bot.
 type Thread struct {
-	ID              string         `json:"id"`
+	ID string `json:"id"`
+	// TeamID is the team that owns the thread's bot. Server-owned work that
+	// outlives the request (queued follow-ups) records it because admission
+	// requires a team and nothing else can supply one later. It is internal
+	// state, not part of the session API resource.
+	TeamID          string         `json:"-"`
 	BotID           string         `json:"bot_id"`
 	BotAgentID      string         `json:"bot_agent_id,omitempty"`
 	RouteID         string         `json:"route_id,omitempty"`
@@ -1594,6 +1599,7 @@ func toThread(row sqlc.BotSession) Thread {
 	sessionMode := normalizeSessionMode(row.SessionMode, row.Type)
 	return Thread{
 		ID:                       row.ID.String(),
+		TeamID:                   uuidText(row.TeamID),
 		BotID:                    row.BotID.String(),
 		BotAgentID:               row.BotAgentID.String(),
 		RouteID:                  row.RouteID.String(),

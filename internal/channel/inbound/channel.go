@@ -727,7 +727,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return p.handleUserInputResponseCommand(ctx, msg, sender, identity, resolved.RouteID, sessionID, *invocation)
 	}
 	if isQueueCommand && invocation != nil && (isDirectedAtBot(msg) || slashDirected) {
-		return p.handleQueueCommand(ctx, msg, sender, identity, resolved.RouteID, sessionID, sessionType, *invocation)
+		return p.handleQueueCommand(ctx, cfg, msg, sender, identity, resolved.RouteID, sessionID, sessionType, *invocation)
 	}
 	// Skill commands remain control-plane messages even while an ask_user
 	// request is pending; they must not become text-question answers.
@@ -1481,6 +1481,7 @@ func queueCommandIdempotencyKey(channelType channel.ChannelType, routeID, extern
 
 func (p *ChannelInboundProcessor) handleQueueCommand(
 	ctx context.Context,
+	cfg channel.ChannelConfig,
 	msg channel.InboundMessage,
 	sender channel.StreamReplySender,
 	identity InboundIdentity,
@@ -1505,10 +1506,13 @@ func (p *ChannelInboundProcessor) handleQueueCommand(
 	}
 	invocationID := queueCommandIdempotencyKey(msg.Channel, routeID, msg.Message.ID, resource)
 	input := QueueCommandInput{
-		BotID:        strings.TrimSpace(identity.BotID),
-		SessionID:    strings.TrimSpace(sessionID),
-		InvocationID: invocationID,
-		Text:         strings.TrimSpace(invocation.Rest),
+		TeamID:            strings.TrimSpace(cfg.TeamID),
+		BotID:             strings.TrimSpace(identity.BotID),
+		SessionID:         strings.TrimSpace(sessionID),
+		InvocationID:      invocationID,
+		UserID:            strings.TrimSpace(identity.UserID),
+		ChannelIdentityID: strings.TrimSpace(identity.ChannelIdentityID),
+		Text:              strings.TrimSpace(invocation.Rest),
 	}
 	var err error
 	switch resource {

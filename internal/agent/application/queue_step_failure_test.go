@@ -39,7 +39,7 @@ func TestStepCommitSeparatesHistoryFailureFromQueueFailure(t *testing.T) {
 			backend := &failedSteerApplyBackend{MemoryBackend: sessionruntime.NewMemoryBackend()}
 			service, handle := newDeferredSteerTestService(t, backend)
 			ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: handle.BotID, SessionID: handle.SessionID, Token: handle.FencingToken})
-			item, err := service.EnqueueSteer(ctx, handle.BotID, handle.SessionID, "steer-failure", []byte(`{"text":"adjust"}`))
+			item, err := service.EnqueueSteer(ctx, testQueueInput(handle.BotID, handle.SessionID, "steer-failure", "adjust"))
 			if err != nil {
 				t.Fatal(err)
 			}

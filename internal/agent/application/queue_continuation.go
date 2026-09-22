@@ -16,37 +16,58 @@ import (
 	"github.com/felinics/memoh/internal/telemetry"
 )
 
-// followUpPayload is the document stored for one follow-up item. Text is the
-// user-visible input and is always present so queue listings can render the
-// item. Command is present when the follow-up was a complete turn that arrived
-// while the session was busy; it preserves channel routing, attachments, and
-// reply metadata so the continuation answers where the message came from.
-type followUpPayload struct {
+// queuePayload is the document stored for one queue item, steer or
+// follow-up. Text is the user-visible input and is always present so queue
+// listings can render the item without decoding the command. Command is the
+// complete turn the item replays when it is consumed: for a deferred channel
+// message it preserves routing, attachments, and reply metadata; for a text
+// typed into the queue panel it carries the team and sender the ingress
+// authenticated. Items written by earlier releases may lack Command; they are
+// still listable but cannot be started, and the continuation rejects them.
+type queuePayload struct {
 	Text    string                 `json:"text"`
 	Command *turn.StartTurnCommand `json:"command,omitempty"`
 }
 
-func encodeFollowUpCommand(cmd turn.StartTurnCommand) ([]byte, error) {
+func encodeQueueCommand(cmd turn.StartTurnCommand) ([]byte, error) {
 	text := strings.TrimSpace(cmd.UserVisibleText)
 	if text == "" {
 		text = strings.TrimSpace(cmd.Query)
 	}
-	return json.Marshal(followUpPayload{Text: text, Command: &cmd})
+	return json.Marshal(queuePayload{Text: text, Command: &cmd})
 }
 
-func decodeFollowUpPayload(payload []byte) followUpPayload {
-	var body followUpPayload
+func decodeQueuePayload(payload []byte) queuePayload {
+	var body queuePayload
 	if err := json.Unmarshal(payload, &body); err != nil {
-		return followUpPayload{}
+		return queuePayload{}
 	}
 	body.Text = strings.TrimSpace(body.Text)
 	return body
 }
 
+// rewriteQueuePayloadText replaces the user text of a stored item while
+// keeping the command's routing and attachment metadata intact. A payload
+// without a command keeps its text-only shape.
+func rewriteQueuePayloadText(payload []byte, text string) ([]byte, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, sessionruntime.ErrQueueInvalidReference
+	}
+	body := decodeQueuePayload(payload)
+	body.Text = text
+	if body.Command != nil {
+		body.Command.Query = text
+		body.Command.ModelQuery = ""
+		body.Command.UserVisibleText = text
+	}
+	return json.Marshal(body)
+}
+
 // QueuePayloadText renders only user-visible text. Invalid/empty payloads never
 // fall back to the raw envelope, which can contain a deferred command credential.
 func QueuePayloadText(payload []byte) string {
-	body := decodeFollowUpPayload(payload)
+	body := decodeQueuePayload(payload)
 	if text := strings.TrimSpace(body.Text); text != "" {
 		return text
 	}
@@ -69,18 +90,14 @@ func (s *Service) EnqueueDeferredTurn(ctx context.Context, cmd turn.StartTurnCom
 	if s == nil || s.sessionManager == nil {
 		return errors.New("turn: deferred queue is not configured")
 	}
-	if strings.TrimSpace(cmd.BotID) == "" || strings.TrimSpace(cmd.ThreadID) == "" {
-		return errors.New("turn: deferred turn requires bot and thread")
-	}
-	payload, err := encodeFollowUpCommand(cmd)
-	if err != nil {
-		return err
+	if strings.TrimSpace(cmd.TeamID) == "" || strings.TrimSpace(cmd.BotID) == "" || strings.TrimSpace(cmd.ThreadID) == "" {
+		return errors.New("turn: deferred turn requires team, bot, and thread")
 	}
 	invocationID := strings.TrimSpace(cmd.IdempotencyKey)
 	if invocationID == "" {
 		invocationID = uuid.NewString()
 	}
-	_, err = s.EnqueueFollowUp(ctx, cmd.BotID, cmd.ThreadID, "deferred:"+invocationID, payload)
+	_, err := s.enqueueFollowUpCommand(ctx, "deferred:"+invocationID, cmd)
 	return err
 }
 
@@ -187,17 +204,40 @@ func (s *Service) startFollowUp(parent context.Context, terminal sessionruntime.
 	}
 }
 
+// admitFollowUp claims the next follow-up for this terminal boundary and
+// starts it. An item that cannot be replayed is rejected and the next one is
+// tried, so one unreadable item never blocks the rest of the queue. The loop
+// is bounded by the pending count: every iteration either returns or moves
+// one item to a terminal status.
 func (s *Service) admitFollowUp(ctx context.Context, key sessionruntime.Key, terminal sessionruntime.TerminalRun) turn.RunHandle {
-	item, claim, ok, err := s.sessionManager.ClaimNextFollowUp(ctx, key, terminal.RunID)
-	if err != nil || !ok {
-		return nil
+	for {
+		item, claim, ok, err := s.sessionManager.ClaimNextFollowUp(ctx, key, terminal.RunID)
+		if err != nil || !ok {
+			return nil
+		}
+		cmd, err := followUpCommand(item)
+		if err != nil {
+			s.rejectFollowUp(ctx, key, item, claim, err)
+			continue
+		}
+		return s.startFollowUpCommand(ctx, key, item, claim, cmd)
 	}
-	cmd, ok := s.followUpCommand(item)
-	if !ok {
-		_ = s.sessionManager.ReleaseFollowUp(ctx, key, claim)
-		return nil
+}
+
+func (s *Service) rejectFollowUp(ctx context.Context, key sessionruntime.Key, item sessionruntime.FollowUpItem, claim sessionruntime.FollowUpClaimRef, cause error) {
+	if s.logger != nil {
+		s.logger.WarnContext(ctx, "follow-up item cannot be started; rejecting it",
+			slog.String("item_id", string(item.ID)), slog.Any("error", cause))
 	}
+	if err := s.sessionManager.RejectFollowUp(ctx, key, claim, sessionruntime.QueueErrorFollowUpCommandInvalid); err != nil && s.logger != nil {
+		s.logger.WarnContext(ctx, "reject follow-up item failed",
+			slog.String("item_id", string(item.ID)), slog.Any("error", err))
+	}
+}
+
+func (s *Service) startFollowUpCommand(ctx context.Context, key sessionruntime.Key, item sessionruntime.FollowUpItem, claim sessionruntime.FollowUpClaimRef, cmd turn.StartTurnCommand) turn.RunHandle {
 	var handle turn.RunHandle
+	var err error
 	for attempt := 0; ; attempt++ {
 		handle, err = s.StartTurn(ctx, cmd)
 		if !errors.Is(err, turn.ErrSessionBusy) || attempt >= 7 {
@@ -218,51 +258,44 @@ func (s *Service) admitFollowUp(ctx context.Context, key sessionruntime.Key, ter
 	if err := s.sessionManager.ApplyFollowUp(ctx, key, claim); err != nil && s.logger != nil {
 		s.logger.WarnContext(ctx, "apply transient follow-up failed",
 			slog.String("item_id", string(item.ID)),
-			slog.String("trigger_run_id", terminal.RunID),
+			slog.String("trigger_run_id", claim.TriggerRunID),
 			slog.Any("error", err),
 		)
 	}
 	return handle
 }
 
-// followUpCommand rebuilds the StartTurnCommand for one follow-up item. A
-// deferred channel turn carries its full command; a queue-panel follow-up only
-// carries text and starts as an ordinary chat turn on the same session.
-func (s *Service) followUpCommand(item sessionruntime.FollowUpItem) (turn.StartTurnCommand, bool) {
-	body := decodeFollowUpPayload(item.Payload)
-	var cmd turn.StartTurnCommand
-	if body.Command != nil {
-		cmd = *body.Command
-		if strings.TrimSpace(cmd.BotID) != item.BotID || strings.TrimSpace(cmd.ThreadID) != item.SessionID {
-			return turn.StartTurnCommand{}, false
-		}
-	} else {
-		text := strings.TrimSpace(body.Text)
-		if text == "" {
-			return turn.StartTurnCommand{}, false
-		}
-		cmd = turn.StartTurnCommand{
-			Mode:            turn.ModeChat,
-			BotID:           item.BotID,
-			ChatID:          item.BotID,
-			ThreadID:        item.SessionID,
-			Query:           text,
-			UserVisibleText: text,
-		}
+var (
+	errFollowUpPayloadWithoutCommand = errors.New("follow-up payload carries no command")
+	errFollowUpCommandForeignSession = errors.New("follow-up command belongs to another session")
+	errFollowUpCommandWithoutTeam    = errors.New("follow-up command has no team")
+	errFollowUpCommandWithoutInput   = errors.New("follow-up command has no query or attachments")
+)
+
+// followUpCommand restores the StartTurnCommand stored with one follow-up
+// item. The command is the complete admission input the ingress recorded when
+// it accepted the text, so the continuation replays it rather than inferring
+// team or sender from process state. An item missing any of that cannot be
+// started; the error names what is missing so the caller can reject it.
+func followUpCommand(item sessionruntime.FollowUpItem) (turn.StartTurnCommand, error) {
+	body := decodeQueuePayload(item.Payload)
+	if body.Command == nil {
+		return turn.StartTurnCommand{}, errFollowUpPayloadWithoutCommand
+	}
+	cmd := *body.Command
+	if strings.TrimSpace(cmd.BotID) != item.BotID || strings.TrimSpace(cmd.ThreadID) != item.SessionID {
+		return turn.StartTurnCommand{}, errFollowUpCommandForeignSession
+	}
+	if strings.TrimSpace(cmd.TeamID) == "" {
+		return turn.StartTurnCommand{}, errFollowUpCommandWithoutTeam
+	}
+	if strings.TrimSpace(cmd.Query) == "" && len(cmd.Attachments) == 0 {
+		return turn.StartTurnCommand{}, errFollowUpCommandWithoutInput
 	}
 	// A continuation is server-owned: it never re-enters the deferred queue,
 	// and its retry identity is the queue item rather than the original
 	// platform message, whose admission attempt already failed as busy.
 	cmd.NoDefer = true
 	cmd.IdempotencyKey = "follow-up:" + string(item.ID)
-	if strings.TrimSpace(cmd.TeamID) == "" {
-		// A text-only follow-up has no team of its own. The in-process service
-		// serves exactly one team; without it the continuation fails closed, as
-		// every other turn admission does for an empty TeamID.
-		cmd.TeamID = s.allowedTeam
-	}
-	if strings.TrimSpace(cmd.TeamID) == "" {
-		return turn.StartTurnCommand{}, false
-	}
-	return cmd, true
+	return cmd, nil
 }

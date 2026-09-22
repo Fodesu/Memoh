@@ -627,20 +627,36 @@ func sendWSCommandResult(writer *wsWriter, msg wsClientMessage, actionID string,
 
 // Queue commands share REST admission and invocation identity. They never start
 // a parallel chat turn or pass the command selector to the model.
-func (h *LocalChannelHandler) executeWSQueueCommand(ctx context.Context, writer *wsWriter, msg wsClientMessage, botID, actionID, text string) {
+func (h *LocalChannelHandler) executeWSQueueCommand(ctx context.Context, writer *wsWriter, msg wsClientMessage, channelIdentityID, botID, actionID, text string) {
 	var err error
 	switch {
 	case strings.TrimSpace(msg.SessionID) == "" || strings.TrimSpace(text) == "":
 		err = apperror.New(apperror.CodeQueueRequestInvalid, nil)
+	case h.sessionService == nil:
+		err = apperror.New(apperror.CodeQueueAdmissionUnavailable, nil)
 	default:
-		var payload []byte
-		payload, err = marshalQueuePayload(text)
-		if err == nil {
-			if actionID == "steer" {
-				_, err = h.agentService.EnqueueSteer(ctx, botID, msg.SessionID, msg.InvocationID, payload)
-			} else {
-				_, err = h.agentService.EnqueueFollowUp(ctx, botID, msg.SessionID, msg.InvocationID, payload)
-			}
+		// The queued item records the session's team and the acting user,
+		// because the run it eventually starts is admitted long after this
+		// connection's context is gone.
+		var sess sessionpkg.Thread
+		sess, err = h.sessionService.Get(ctx, msg.SessionID)
+		if err != nil || sess.BotID != botID {
+			err = echo.NewHTTPError(http.StatusNotFound, "session not found")
+			break
+		}
+		input := application.QueueInput{
+			TeamID:                  sess.TeamID,
+			BotID:                   botID,
+			SessionID:               msg.SessionID,
+			InvocationID:            msg.InvocationID,
+			UserID:                  channelIdentityID,
+			SourceChannelIdentityID: channelIdentityID,
+			Text:                    text,
+		}
+		if actionID == "steer" {
+			_, err = h.agentService.EnqueueSteer(ctx, input)
+		} else {
+			_, err = h.agentService.EnqueueFollowUp(ctx, input)
 		}
 		err = queueAdmissionError(err)
 	}
@@ -2108,7 +2124,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					}
 				}
 				if actionID == "steer" || actionID == "queue" {
-					h.executeWSQueueCommand(streamBaseCtx, writer, msg, botID, actionID, decision.Invocation.Rest)
+					h.executeWSQueueCommand(streamBaseCtx, writer, msg, channelIdentityID, botID, actionID, decision.Invocation.Rest)
 					continue
 				}
 				skillActivationAllowed := true

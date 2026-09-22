@@ -78,8 +78,7 @@ func TestEnqueueDeferredTurnStartsFollowUpWithOriginalCommand(t *testing.T) {
 			}
 
 			if text == "edited" {
-				// This is the text-only envelope used by HTTP queue editing.
-				if _, err := service.UpdateFollowUp(ctx, key.BotID, key.SessionID, string(queues.FollowUp[0].ID), []byte(`{"text":"edited"}`)); err != nil {
+				if _, err := service.UpdateFollowUp(ctx, key.BotID, key.SessionID, string(queues.FollowUp[0].ID), "edited"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -118,29 +117,133 @@ func TestEnqueueDeferredTurnWithoutActiveRunReportsNoActiveRun(t *testing.T) {
 	}
 }
 
-func TestFollowUpCommandFromTextPayloadStartsOrdinaryChatTurn(t *testing.T) {
-	service := &Service{allowedTeam: "team1"}
-	textItem := sessionruntime.FollowUpItem{
-		ID: "f1", BotID: "bot", SessionID: "session", Payload: []byte(`{"text":"hello"}`),
+// testQueueInput is what an ingress hands the application for one queued text:
+// the team and sender it authenticated, next to the session and the text.
+func testQueueInput(botID, sessionID, invocationID, text string) QueueInput {
+	return QueueInput{
+		TeamID: "team1", BotID: botID, SessionID: sessionID, InvocationID: invocationID,
+		UserID: "user-1", SourceChannelIdentityID: "user-1", Text: text,
 	}
-	cmd, ok := service.followUpCommand(textItem)
-	if !ok {
-		t.Fatal("text payload was not accepted")
+}
+
+// A hosted runtime serves every team from one process and pins none, so the
+// continuation must take the team from the item itself: the ingress recorded
+// it at enqueue time together with the sender.
+func TestQueuedTextFollowUpReplaysRecordedIdentityWithoutServedTeam(t *testing.T) {
+	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
+	service, admitter, backend, key := newFollowUpTestService(t, runner)
+	service.allowedTeam = ""
+	ctx := context.Background()
+	input := testQueueInput(key.BotID, key.SessionID, "invoke-1", "hello")
+	input.TeamID, input.UserID, input.SourceChannelIdentityID = "team-cloud", "user-9", "identity-9"
+	item, err := service.EnqueueFollowUp(ctx, input)
+	if err != nil {
+		t.Fatalf("enqueue follow-up: %v", err)
 	}
-	if cmd.TeamID != "team1" || !cmd.NoDefer || cmd.IdempotencyKey != "follow-up:f1" ||
-		cmd.Mode != turn.ModeChat || cmd.BotID != "bot" || cmd.ChatID != "bot" || cmd.ThreadID != "session" || cmd.Query != "hello" {
-		t.Fatalf("follow-up command = %+v", cmd)
+	if QueuePayloadText(item.Payload) != "hello" {
+		t.Fatalf("queued text = %q", QueuePayloadText(item.Payload))
 	}
-	if _, ok := (&Service{}).followUpCommand(textItem); ok {
-		t.Fatal("text follow-up without a served team must fail closed")
+	markFollowUpTestRunTerminal(t, backend, key)
+	service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
+
+	if runner.gotReq.Query != "hello" || runner.gotReq.UserID != "user-9" || runner.gotReq.SourceChannelIdentityID != "identity-9" ||
+		runner.gotReq.BotID != key.BotID || runner.gotReq.ChatID != key.BotID || runner.gotReq.ThreadID != key.SessionID {
+		t.Fatalf("continuation lost the recorded identity: %+v", runner.gotReq)
 	}
-	if _, ok := service.followUpCommand(sessionruntime.FollowUpItem{ID: "f2", BotID: "bot", SessionID: "session", Payload: []byte(`{"text":"  "}`)}); ok {
-		t.Fatal("empty text payload was accepted")
+	admitter.mu.Lock()
+	inputs := append([]sessionruntime.AdmitInput(nil), admitter.inputs...)
+	admitter.mu.Unlock()
+	if len(inputs) != 1 || inputs[0].InvocationID != "follow-up:"+string(item.ID) {
+		t.Fatalf("continuation admission = %#v", inputs)
 	}
-	// A stored command must belong to the item's session.
-	foreign, _ := encodeFollowUpCommand(turn.StartTurnCommand{BotID: "bot", ThreadID: "other", Query: "x"})
-	if _, ok := service.followUpCommand(sessionruntime.FollowUpItem{ID: "f3", BotID: "bot", SessionID: "session", Payload: foreign}); ok {
-		t.Fatal("command for another session was accepted")
+	queues, err := service.ListSessionQueues(ctx, key.BotID, key.SessionID)
+	if err != nil || len(queues.FollowUp) != 0 {
+		t.Fatalf("follow-up still pending after start: %#v, %v", queues.FollowUp, err)
+	}
+}
+
+func TestQueueInputRequiresRecordedTeam(t *testing.T) {
+	service, _, _, key := newFollowUpTestService(t, &fakeRunner{})
+	input := testQueueInput(key.BotID, key.SessionID, "invoke-1", "hello")
+	input.TeamID = ""
+	if _, err := service.EnqueueFollowUp(context.Background(), input); !errors.Is(err, ErrQueueInputIncomplete) {
+		t.Fatalf("follow-up without team = %v, want %v", err, ErrQueueInputIncomplete)
+	}
+	if _, err := service.EnqueueSteer(context.Background(), input); !errors.Is(err, ErrQueueInputIncomplete) {
+		t.Fatalf("steer without team = %v, want %v", err, ErrQueueInputIncomplete)
+	}
+	input.TeamID, input.Text = "team1", "  "
+	if _, err := service.EnqueueFollowUp(context.Background(), input); !errors.Is(err, sessionruntime.ErrQueueInvalidReference) {
+		t.Fatalf("follow-up without text = %v, want %v", err, sessionruntime.ErrQueueInvalidReference)
+	}
+}
+
+func TestFollowUpCommandReportsWhatAnItemIsMissing(t *testing.T) {
+	item := func(id string, payload []byte) sessionruntime.FollowUpItem {
+		return sessionruntime.FollowUpItem{ID: sessionruntime.FollowUpItemID(id), BotID: "bot", SessionID: "session", Payload: payload}
+	}
+	encode := func(cmd turn.StartTurnCommand) []byte {
+		payload, err := encodeQueueCommand(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	cmd, err := followUpCommand(item("f1", encode(turn.StartTurnCommand{TeamID: "team1", BotID: "bot", ThreadID: "session", Query: "hello"})))
+	if err != nil || !cmd.NoDefer || cmd.IdempotencyKey != "follow-up:f1" || cmd.TeamID != "team1" || cmd.Query != "hello" {
+		t.Fatalf("follow-up command = %+v, %v", cmd, err)
+	}
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		want    error
+	}{
+		{"text-only payload from an earlier release", []byte(`{"text":"hello"}`), errFollowUpPayloadWithoutCommand},
+		{"unparseable payload", []byte(`{"text":`), errFollowUpPayloadWithoutCommand},
+		{"command for another session", encode(turn.StartTurnCommand{TeamID: "team1", BotID: "bot", ThreadID: "other", Query: "x"}), errFollowUpCommandForeignSession},
+		{"command without team", encode(turn.StartTurnCommand{BotID: "bot", ThreadID: "session", Query: "x"}), errFollowUpCommandWithoutTeam},
+		{"command without input", encode(turn.StartTurnCommand{TeamID: "team1", BotID: "bot", ThreadID: "session"}), errFollowUpCommandWithoutInput},
+	} {
+		if _, err := followUpCommand(item("f2", tc.payload)); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}
+
+// An item the continuation cannot replay is rejected at the boundary that
+// claimed it, and the same boundary goes on to the next accepted item. Before
+// this, such an item was released back to accepted and reclaimed at every
+// terminal boundary without ever starting or being reported.
+func TestUnreplayableFollowUpIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
+	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
+	service, admitter, backend, key := newFollowUpTestService(t, runner)
+	ctx := context.Background()
+	legacy, err := service.sessionManager.EnqueueFollowUp(ctx, key, "legacy-item", "legacy-invocation", []byte(`{"text":"from an earlier release"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-2", "runs after it")); err != nil {
+		t.Fatal(err)
+	}
+	markFollowUpTestRunTerminal(t, backend, key)
+	service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
+
+	if runner.gotReq.Query != "runs after it" {
+		t.Fatalf("second item did not start after the first was rejected: %+v", runner.gotReq)
+	}
+	admitter.mu.Lock()
+	started := len(admitter.inputs)
+	admitter.mu.Unlock()
+	if started != 1 {
+		t.Fatalf("admitted %d runs, want 1", started)
+	}
+	queues, err := service.ListSessionQueues(ctx, key.BotID, key.SessionID)
+	if err != nil || len(queues.FollowUp) != 0 {
+		t.Fatalf("pending follow-ups after rejection = %#v, %v", queues.FollowUp, err)
+	}
+	// The rejected item is terminal: a later boundary must not claim it again.
+	if _, _, ok, err := service.sessionManager.ClaimNextFollowUp(ctx, key, "later-run"); err != nil || ok {
+		t.Fatalf("rejected item %s was claimable again: ok=%v err=%v", legacy.ID, ok, err)
 	}
 }
 
@@ -148,7 +251,7 @@ func TestFollowUpStartIsSingleFlightPerSession(t *testing.T) {
 	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
 	service, _, backend, key := newFollowUpTestService(t, runner)
 	ctx := context.Background()
-	if _, err := service.EnqueueFollowUp(ctx, key.BotID, key.SessionID, "invoke-1", []byte(`{"text":"queued"}`)); err != nil {
+	if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-1", "queued")); err != nil {
 		t.Fatal(err)
 	}
 	markFollowUpTestRunTerminal(t, backend, key)
@@ -176,7 +279,7 @@ func TestFollowUpSchedulingRaces(t *testing.T) {
 			service, admitter, backend, key := newFollowUpTestService(t, &fakeRunner{chunks: []string{`{"type":"done"}`}})
 			ctx := context.Background()
 			for _, id := range []string{"first", "second"}[:tc.pending] {
-				if _, err := service.EnqueueFollowUp(ctx, key.BotID, key.SessionID, id, []byte(`{"text":"queued"}`)); err != nil {
+				if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, id, "queued")); err != nil {
 					t.Fatal(err)
 				}
 			}

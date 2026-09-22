@@ -1761,7 +1761,7 @@ func TestWebQueueCommandErrorsUsePublicCatalog(t *testing.T) {
 	} {
 		for _, action := range []string{"steer", "queue"} {
 			event := decodeWSTestEvent(t, func(w *wsWriter) {
-				h.executeWSQueueCommand(context.Background(), w, wsClientMessage{SessionID: tc.session, InvocationID: "invocation"}, "bot", action, tc.text)
+				h.executeWSQueueCommand(context.Background(), w, wsClientMessage{SessionID: tc.session, InvocationID: "invocation"}, "user", "bot", action, tc.text)
 			})
 			public, _ := apperror.PublicFrom(apperror.New(tc.code, nil), "")
 			failure := event["error"].(map[string]any)

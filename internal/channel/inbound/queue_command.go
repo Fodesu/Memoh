@@ -25,12 +25,17 @@ const (
 
 // QueueCommandInput contains only facts derived by the channel boundary. The
 // session is resolved from the current route; callers cannot select a run or
-// supply queue provenance.
+// supply queue provenance. Team and sender identity are recorded with the
+// item because a queued follow-up starts after this request is gone, and the
+// admission that starts it needs the same identity an ordinary turn carries.
 type QueueCommandInput struct {
-	BotID        string `json:"bot_id"`
-	SessionID    string `json:"session_id"`
-	InvocationID string `json:"invocation_id"`
-	Text         string `json:"text"`
+	TeamID            string `json:"team_id"`
+	BotID             string `json:"bot_id"`
+	SessionID         string `json:"session_id"`
+	InvocationID      string `json:"invocation_id"`
+	UserID            string `json:"user_id,omitempty"`
+	ChannelIdentityID string `json:"channel_identity_id,omitempty"`
+	Text              string `json:"text"`
 }
 
 // QueueCommandHandler is the narrow live-queue port used by channel slash

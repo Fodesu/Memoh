@@ -302,6 +302,51 @@ func TestMemoryLiveQueueCapacityBound(t *testing.T) {
 	}
 }
 
+// A rejected follow-up is terminal and frees its trigger run's claim slot, so
+// the boundary that could not start it moves on to the next accepted item
+// instead of leaving the queue stuck behind an item nobody can run.
+func TestMemoryRejectFollowUpFreesTriggerClaimForNextItem(t *testing.T) {
+	b, key, _ := liveQueueFixture(t)
+	ctx := context.Background()
+	broken, err := b.EnqueueFollowUp(ctx, key, "f-broken", "invoke-f-broken", []byte("broken"))
+	require.NoError(t, err)
+	next, err := b.EnqueueFollowUp(ctx, key, "f-next", "invoke-f-next", []byte("next"))
+	require.NoError(t, err)
+
+	claimed, claim, ok, err := b.ClaimNextFollowUp(ctx, key, "run-done")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, broken.ID, claimed.ID)
+
+	require.ErrorIs(t, b.RejectFollowUp(ctx, key, claim, ""), ErrQueueInvalidReference, "an error code is required")
+	require.NoError(t, b.RejectFollowUp(ctx, key, claim, QueueErrorFollowUpCommandInvalid))
+	require.ErrorIs(t, b.RejectFollowUp(ctx, key, claim, QueueErrorFollowUpCommandInvalid), ErrQueueInvalidReference, "a spent claim must not reject twice")
+
+	_, follows, err := b.PendingQueues(ctx, key, 0)
+	require.NoError(t, err)
+	require.Len(t, follows, 1)
+	require.Equal(t, next.ID, follows[0].ID, "only the rejected item leaves the pending list")
+
+	claimed, _, ok, err = b.ClaimNextFollowUp(ctx, key, "run-done")
+	require.NoError(t, err)
+	require.True(t, ok, "the same trigger run claims the next item after a rejection")
+	require.Equal(t, next.ID, claimed.ID)
+
+	b.mu.Lock()
+	state := b.followUpQueues[key.String()]
+	b.mu.Unlock()
+	var rejected *FollowUpItem
+	for i := range state.Items {
+		if state.Items[i].ID == broken.ID {
+			rejected = &state.Items[i]
+		}
+	}
+	require.NotNil(t, rejected)
+	require.Equal(t, QueueRejected, rejected.Status)
+	require.Equal(t, QueueErrorFollowUpCommandInvalid, rejected.ErrorCode)
+	require.Nil(t, rejected.Claim)
+}
+
 func TestMemoryLiveQueueCompactsTerminalItems(t *testing.T) {
 	b, key, _ := liveQueueFixture(t)
 	ctx := context.Background()

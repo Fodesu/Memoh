@@ -250,3 +250,11 @@ func (m *Manager) ReleaseFollowUp(ctx context.Context, key Key, ref FollowUpClai
 	}
 	return queue.ReleaseFollowUp(ctx, key, ref)
 }
+
+func (m *Manager) RejectFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef, errorCode string) error {
+	queue, err := m.liveQueueBackend()
+	if err != nil {
+		return err
+	}
+	return queue.RejectFollowUp(ctx, key, ref, errorCode)
+}
