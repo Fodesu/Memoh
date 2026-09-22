@@ -2493,7 +2493,7 @@ describe('chat-list store', () => {
   // A stale-turn refusal means the client's picture of the tail is out of
   // date; the fix is to reload history, which the store does on its own.
   it('reloads history when a retry is refused as stale', async () => {
-      h.sendUpdates = [runtime.refused('session_runtime.turn_not_latest', 'This message is no longer the latest in the conversation. Reload and try again.')]
+      h.sendUpdates = [runtime.refused('session_runtime.turn_not_latest', 'The conversation has newer messages. Refresh and try again.')]
       api.fetchSessions.mockResolvedValueOnce({
         items: [{ id: 'session-1', bot_id: 'bot-1', title: 'Chat', type: 'chat' }],
         nextCursor: null,

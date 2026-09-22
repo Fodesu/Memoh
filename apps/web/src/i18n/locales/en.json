@@ -275,11 +275,11 @@
     "session_runtime": {
       "session_busy": "This conversation is still working on your previous message. Please try again in a moment.",
       "invocation_conflict": "This message was already sent with different content. Reload the conversation to see what was saved.",
-      "history_inconsistent": "The conversation history could not be reconciled. Refresh and try again.",
-      "turn_not_latest": "This message is no longer the latest in the conversation. Reload and try again.",
-      "turn_incomplete": "This message has no reply on record yet. Reload the conversation, then edit the message instead of retrying it.",
-      "reset_unavailable": "Conversation history cannot be reset on this server. Contact an administrator.",
-      "reset_conflict": "The conversation is busy with another operation. Please try again shortly."
+      "history_inconsistent": "The conversation could not be saved. Refresh and try again.",
+      "turn_not_latest": "The conversation has newer messages. Refresh and try again.",
+      "turn_incomplete": "This message cannot be retried right now. Refresh the conversation.",
+      "reset_unavailable": "Conversation history cannot be reset right now. Contact an administrator.",
+      "reset_conflict": "The conversation is busy. Please try again shortly."
     },
     "history": {
       "delete_failed": "The conversation history could not be deleted. Please try again."
@@ -294,7 +294,7 @@
     "external_runtime": {
       "auth_required": "Codex is not connected yet. Open Agent settings to connect ChatGPT or configure an API key.",
       "unavailable": "The external Agent runtime is unavailable. Check the Agent setup and workspace, then try again.",
-      "session_resume_failed": "The external Agent session could not be resumed. Try again or start a new conversation."
+      "session_resume_failed": "The session could not be resumed. Try again or start a new conversation."
     },
     "app": {
       "not_found": "This App installation was not found.",

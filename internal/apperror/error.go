@@ -506,7 +506,7 @@ var catalog = map[Code]Definition{
 	// the user retries or starts a fresh conversation.
 	CodeExternalRuntimeSessionResumeFailed: {
 		HTTPStatus: http.StatusBadGateway,
-		Detail:     "The external agent session could not be resumed. Try again or start a new conversation.",
+		Detail:     "The session could not be resumed. Try again or start a new conversation.",
 	},
 	CodeACPModelSelectionUnsupported: {
 		HTTPStatus: http.StatusBadRequest,
@@ -608,30 +608,30 @@ var catalog = map[Code]Definition{
 	// state that has merely gone stale is reported by the 409 codes below.
 	CodeSessionHistoryInconsistent: {
 		HTTPStatus: http.StatusInternalServerError,
-		Detail:     "The conversation history could not be reconciled. Refresh and try again.",
+		Detail:     "The conversation could not be saved. Refresh and try again.",
 	},
 	// The client named a turn that is no longer the latest visible turn (or
 	// was never persisted). Reloading the conversation resolves it.
 	CodeSessionTurnNotLatest: {
 		HTTPStatus: http.StatusConflict,
-		Detail:     "This message is no longer the latest in the conversation. Reload and try again.",
+		Detail:     "The conversation has newer messages. Refresh and try again.",
 	},
 	// The latest turn has a request message but no assistant reply on record,
 	// so it can be edited but not retried.
 	CodeSessionTurnIncomplete: {
 		HTTPStatus: http.StatusConflict,
-		Detail:     "This message has no reply on record yet. Reload the conversation, then edit the message instead of retrying it.",
+		Detail:     "This message cannot be retried right now. Refresh the conversation.",
 	},
 	// The server was deployed without the runtime reset coordinator; only an
 	// operator can fix it.
 	CodeSessionResetUnavailable: {
 		HTTPStatus: http.StatusServiceUnavailable,
-		Detail:     "Conversation history cannot be reset on this server. Contact an administrator.",
+		Detail:     "Conversation history cannot be reset right now. Contact an administrator.",
 	},
 	// Another operation holds or took over the history reset lease.
 	CodeSessionResetConflict: {
 		HTTPStatus: http.StatusConflict,
-		Detail:     "The conversation is busy with another operation. Please try again shortly.",
+		Detail:     "The conversation is busy. Please try again shortly.",
 	},
 	CodeHistoryDeleteFailed: {
 		HTTPStatus: http.StatusInternalServerError,

@@ -275,11 +275,11 @@
     "session_runtime": {
       "session_busy": "这个会话还在处理上一条消息，请稍后再试。",
       "invocation_conflict": "这条消息已用不同内容提交过，请刷新会话查看已保存的内容。",
-      "history_inconsistent": "会话历史无法正确合并，请刷新后重试。",
-      "turn_not_latest": "这条消息已不是会话中的最新一条，请刷新后重试。",
-      "turn_incomplete": "这条消息尚未记录回复，请刷新会话后改为编辑该消息，而不是重试。",
-      "reset_unavailable": "当前服务器无法重置会话历史，请联系管理员。",
-      "reset_conflict": "会话正在执行其他操作，请稍后再试。"
+      "history_inconsistent": "会话记录保存出错，请刷新后重试。",
+      "turn_not_latest": "会话已有新内容，请刷新后重试。",
+      "turn_incomplete": "这条消息暂时无法重试，请刷新会话。",
+      "reset_unavailable": "当前无法重置会话历史，请联系管理员。",
+      "reset_conflict": "会话正忙，请稍后再试。"
     },
     "history": {
       "delete_failed": "会话历史删除失败，请重试。"
@@ -294,7 +294,7 @@
     "external_runtime": {
       "auth_required": "Codex 尚未连接账号。请前往 Agent 设置连接 ChatGPT，或配置 API Key。",
       "unavailable": "外部 Agent 运行时暂不可用。请检查 Agent 配置和工作区后重试。",
-      "session_resume_failed": "外部 Agent 会话无法恢复，请重试或新开一个会话。"
+      "session_resume_failed": "会话无法恢复，请重试或新开会话。"
     },
     "app": {
       "not_found": "未找到该应用安装记录。",
