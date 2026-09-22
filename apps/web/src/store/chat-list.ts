@@ -93,7 +93,7 @@ export const useChatStore = defineStore('chat', () => {
     clearHistoryView, prepareForInitialization, markHistoryEmpty,
     refreshCurrentSession, resyncRuntimeTranscript, loadInitialMessages, fetchSessionWindow,
     loadOlderMessages, findMessageIdByExternalId, locateMessageByExternalId,
-    isSessionStreaming, isTurnUnpersisted, streamingSessionId, streamingSessionIds, streaming, isChatViewStreaming,
+    isSessionStreaming, streamingSessionId, streamingSessionIds, streaming, isChatViewStreaming,
     workspaceTargetSelectionFor, setWorkspaceTargetSelection,
     initializeWorkspaceTargetSelection, resetWorkspaceTargetSelection,
     releaseHiddenSessionView, bindChatView, setChatViewVisible, unbindChatView,
@@ -602,7 +602,7 @@ export const useChatStore = defineStore('chat', () => {
     pendingACPRuntimeEnsuring, pendingExternalAgentStateFor,
     pendingExternalAgentMatchesInput,
     sessionId, hasExplicitSessionSelection, currentBotId, bots,
-    activeChatTarget, isSessionStreaming, isTurnUnpersisted,
+    activeChatTarget, isSessionStreaming,
     loadingChats, loadingMessages, loadingOlder, hasMoreOlder,
     // Exposed for tests only — do not branch on this in components. The
     // leading underscore reflects the test-only contract at the call site.

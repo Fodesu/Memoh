@@ -495,18 +495,6 @@ export interface RuntimeCurrentRunView {
   proposed_terminal_status?: RuntimeRunStatus
   finish_proposed_at?: string
   operation?: RuntimeRunOperation
-  // The history turn this run has written, recorded by the server the moment
-  // a round lands. Absent on a settled run means the run wrote nothing: the
-  // send is unsent, so the client restores the draft instead of offering a
-  // retry on a turn history does not have.
-  persisted_turn?: RuntimePersistedTurn
-}
-
-// The turn id is the whole signal: history holds this run's turn. Anything
-// more about the turn is read from history. Transitional until turn state
-// lives in one event log shared by history and the live view.
-export interface RuntimePersistedTurn {
-  turn_id: string
 }
 
 export interface RuntimeSteerTurnView {
@@ -538,7 +526,6 @@ export interface RuntimeCurrentRunPatch {
   error?: string
   updated_at?: string
   owner_lease_expires_at?: string
-  persisted_turn?: RuntimePersistedTurn
 }
 
 export interface RuntimeMessageAppend {

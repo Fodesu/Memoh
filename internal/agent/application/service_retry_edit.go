@@ -341,7 +341,7 @@ func (s *Service) replacePersistedTurn(
 		requestMessageID = firstUserID(persisted)
 	}
 	forkAnchorUpdate := s.prepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID)
-	replaced, err := s.messageService.ReplaceTurn(
+	if _, err := s.messageService.ReplaceTurn(
 		context.WithoutCancel(ctx),
 		req.ThreadID,
 		oldTurnID,
@@ -350,18 +350,13 @@ func (s *Service) replacePersistedTurn(
 		requestMessageID,
 		replacementID,
 		reason,
-	)
-	if err != nil {
+	); err != nil {
 		s.logger.ErrorContext(ctx, "replace history turn failed", slog.String("reason", reason), slog.Any("error", err))
 		s.cleanupReplacementMessages(ctx, persisted)
 		return fmt.Errorf("replace history turn: %w", err)
 	}
 	s.applyForkAnchorUpdate(context.WithoutCancel(ctx), req.ThreadID, forkAnchorUpdate)
 	s.publishReplacementMessageCreated(req.BotID, persisted)
-	// The replacement is now the session's visible tail.
-	s.publishPersistedTurn(ctx, req.RunHandle, sessionruntime.PersistedTurnView{
-		TurnID: firstNonEmpty(replaced.ID, req.TurnID),
-	})
 	return nil
 }
 

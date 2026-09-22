@@ -8,7 +8,7 @@ import type { createAssistantStreamRegistry } from './assistant-streams'
 import type { createChatDecisions } from './decisions'
 import type { createChatRealtimeController } from './realtime'
 import type { RuntimeProjectionChange } from './runtime-client'
-import { isRuntimeRunActive, runHistoryState } from './runtime-projection'
+import { isRuntimeRunActive } from './runtime-projection'
 import type { createSessionList } from './session-list'
 import { CommandStreamError, StreamFailureError } from './send'
 import type {
@@ -394,12 +394,8 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
           aborted.name = 'AbortError'
           deps.assistantStreams.rejectAssistantStream(invocationId, aborted)
         } else {
-          // Every errored run carries an error code, so the code cannot say
-          // whether the send reached history. The persisted turn can: a run
-          // that wrote a round failed mid-stream, one that wrote nothing is
-          // unsent and the composer takes the draft back.
           const stage: SendMessageStage = currentRun.messages.some(message => message.type !== 'status')
-            || runHistoryState(currentRun) === 'written'
+            || Boolean(currentRun.error_code)
             ? 'stream'
             : 'startup'
           deps.assistantStreams.rejectAssistantStream(

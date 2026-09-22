@@ -1396,31 +1396,6 @@ func (s *DBService) GetVisibleTurnByMessage(ctx context.Context, sessionID strin
 	return toHistoryTurn(row), nil
 }
 
-// ErrHistoryTurnNotFound reports that a session holds no turn with the given id.
-var ErrHistoryTurnNotFound = errors.New("history turn not found")
-
-// GetHistoryTurn returns the turn as history holds it, visible or superseded.
-// It backs the persisted-turn audit, which asks whether history has a turn the
-// live run view claims was never written.
-func (s *DBService) GetHistoryTurn(ctx context.Context, sessionID, turnID string) (HistoryTurn, error) {
-	pgSessionID, err := dbpkg.ParseUUID(sessionID)
-	if err != nil {
-		return HistoryTurn{}, fmt.Errorf("invalid session id: %w", err)
-	}
-	pgTurnID, err := dbpkg.ParseUUID(turnID)
-	if err != nil {
-		return HistoryTurn{}, fmt.Errorf("invalid turn id: %w", err)
-	}
-	row, err := s.queries.GetHistoryTurnByID(ctx, sqlc.GetHistoryTurnByIDParams{OldTurnID: pgTurnID, SessionID: pgSessionID})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return HistoryTurn{}, ErrHistoryTurnNotFound
-		}
-		return HistoryTurn{}, err
-	}
-	return toHistoryTurn(row), nil
-}
-
 // ErrNoVisibleTurn reports that a session holds no visible turn at all. It is
 // a sentinel rather than the driver's own no-rows error so callers can map it
 // onto a user-facing code instead of surfacing the driver's wording.

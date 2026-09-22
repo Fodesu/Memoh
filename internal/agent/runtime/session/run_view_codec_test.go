@@ -59,28 +59,3 @@ func TestCurrentRunViewInputCodec(t *testing.T) {
 		})
 	}
 }
-
-func TestCurrentRunViewPersistedTurnRoundTrip(t *testing.T) {
-	run := CurrentRunView{
-		RunID:         "run-1",
-		TurnID:        "turn-1",
-		Status:        RunStatusErrored,
-		PersistedTurn: &PersistedTurnView{TurnID: "turn-1"},
-	}
-	data, err := json.Marshal(run)
-	require.NoError(t, err)
-	require.Contains(t, string(data), `"persisted_turn":{"turn_id":"turn-1"}`)
-
-	stored, err := marshalSnapshot(Snapshot{CurrentRunView: &run})
-	require.NoError(t, err)
-	var snapshot Snapshot
-	require.NoError(t, unmarshalSnapshot(stored, &snapshot))
-	require.Equal(t, &run, snapshot.CurrentRunView)
-
-	var absent CurrentRunView
-	require.NoError(t, json.Unmarshal([]byte(`{"run_id":"run-2","turn_id":"turn-2","status":"errored"}`), &absent))
-	require.Nil(t, absent.PersistedTurn, "a run that wrote nothing carries no persisted turn")
-	data, err = json.Marshal(absent)
-	require.NoError(t, err)
-	require.NotContains(t, string(data), "persisted_turn")
-}

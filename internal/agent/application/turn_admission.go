@@ -56,8 +56,6 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 		_, err := manager.HandleAgentEvent(ctx, handle, event)
 		return err
 	}
-	s.recordPersistedTurn = manager.RecordPersistedTurn
-	manager.SetPersistedTurnAuditor(s.auditUnrecordedPersistedTurn)
 	manager.SetDecisionStore(s)
 	manager.SetLostRunDecisionCanceller(func(ctx context.Context, botID, sessionID, runID string, fencingToken int64, reason string) error {
 		canceller, ok := s.userInput.(interface {

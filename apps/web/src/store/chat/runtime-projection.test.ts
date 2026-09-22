@@ -9,7 +9,6 @@ import {
   isRuntimeRunActive,
   isRuntimeRunStreaming,
   reduceRuntimeProjection,
-  runHistoryState,
 } from './runtime-projection'
 
 function runView(overrides: Partial<RuntimeCurrentRunView> = {}): RuntimeCurrentRunView {
@@ -536,80 +535,4 @@ it('配置切换从 admitting 到完成都不显示生成状态或空助手消�
   }
   expect(isRuntimeRunStreaming(runView())).toBe(true)
   expect(isRuntimeRunActive('running')).toBe(true)
-})
-
-// A run that settled without writing a history turn is an unsent send. The
-// frame still settles what is on screen, but it is flagged so the transcript
-// never introduces turns for it and retry/edit never target it.
-describe('persisted turn', () => {
-  it('flags a settled run that recorded no persisted turn as unpersisted', () => {
-    const state = reduceRuntimeProjection(
-      createEmptyRuntimeProjection('session-1'),
-      snapshot(runView({ status: 'errored', error_code: 'agent.provider_auth_failed', error: 'rejected' })),
-    )
-    expect(state.currentRunView?.persisted_turn).toBeUndefined()
-    expect(state.transcript.unpersisted).toBe(true)
-    expect(state.transcript.streaming).toBe(false)
-    const assistant = state.transcript.turns.find(turn => turn.role === 'assistant')
-    expect(assistant?.role === 'assistant' && assistant.messages.map(message => message.type)).toEqual(['error'])
-  })
-
-  it('does not flag a settled run whose turn reached history', () => {
-    const state = reduceRuntimeProjection(
-      createEmptyRuntimeProjection('session-1'),
-      snapshot(runView({
-        status: 'errored',
-        error_code: 'agent.response_timeout',
-        persisted_turn: { turn_id: 'turn-1' },
-      })),
-    )
-    expect(state.transcript.unpersisted).toBe(false)
-    expect(state.transcript.turns.map(turn => turn.role)).toEqual(['user', 'assistant'])
-  })
-
-  it('never flags a completed run: completion implies its round was written', () => {
-    const state = reduceRuntimeProjection(
-      createEmptyRuntimeProjection('session-1'),
-      snapshot(runView({ status: 'completed', messages: [{ id: 0, type: 'text', content: 'done' }] })),
-    )
-    expect(state.transcript.unpersisted).toBe(false)
-    expect(state.transcript.turns.map(turn => turn.role)).toEqual(['user', 'assistant'])
-  })
-
-  it('never flags an active run, whose turn may still be written', () => {
-    const state = reduceRuntimeProjection(
-      createEmptyRuntimeProjection('session-1'),
-      snapshot(runView({ status: 'running' })),
-    )
-    expect(state.transcript.unpersisted).toBe(false)
-    expect(state.transcript.streaming).toBe(true)
-  })
-
-  it('carries the persisted turn from a run patch into the terminal patch', () => {
-    let state = reduceRuntimeProjection(createEmptyRuntimeProjection('session-1'), snapshot(runView()))
-    state = reduceRuntimeProjection(state, delta(5, {
-      run: {
-        run_id: 'run-1',
-        updated_at: '2026-07-27T08:00:00.500Z',
-        persisted_turn: { turn_id: 'turn-1' },
-      },
-    }))
-    state = reduceRuntimeProjection(state, delta(6, {
-      run: { run_id: 'run-1', status: 'errored', error_code: 'agent.response_timeout', updated_at: '2026-07-27T08:00:01.000Z' },
-    }))
-    expect(state.currentRunView?.status).toBe('errored')
-    expect(state.currentRunView?.persisted_turn?.turn_id).toBe('turn-1')
-    expect(state.transcript.unpersisted).toBe(false)
-  })
-})
-
-describe('runHistoryState', () => {
-  it('is the single predicate behind stage, projection and retry gating', () => {
-    expect(runHistoryState({ status: 'running' })).toBe('active')
-    expect(runHistoryState({ status: 'errored', persisted_turn: { turn_id: 'turn-1' } })).toBe('written')
-    expect(runHistoryState({ status: 'completed' })).toBe('written')
-    expect(runHistoryState({ status: 'errored' })).toBe('unwritten')
-    expect(runHistoryState({ status: 'aborted' })).toBe('unwritten')
-    expect(runHistoryState({ status: 'lost' })).toBe('unwritten')
-  })
 })

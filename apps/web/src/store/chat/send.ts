@@ -23,7 +23,6 @@ import type {
   SendMessageResult,
   SendMessageStage,
 } from './types'
-import { isStaleTurnErrorCode, runLeftNoHistory } from './replacement-recovery'
 
 type Transcript = ReturnType<typeof createTranscriptController>
 
@@ -61,7 +60,6 @@ export class CommandStreamError extends StreamFailureError {
     this.name = 'CommandStreamError'
   }
 }
-
 
 interface TrackStreamInput {
   onModelPreferenceSettled?: () => void
@@ -526,9 +524,6 @@ export function createChatSend(deps: ChatSendDeps) {
       } else {
         deps.finalizeStreamFailure(assistantTurn, botId, targetSessionId, failure)
       }
-      if (isStaleTurnErrorCode(errorCode) || (stage === 'stream' && runLeftNoHistory(failure instanceof StreamFailureError ? failure.feedback : undefined))) {
-        await deps.refreshCurrentSession(botId, targetSessionId)
-      }
       return { ok: false, stage, error: reason, errorCode }
     }
   }
@@ -618,9 +613,6 @@ export function createChatSend(deps: ChatSendDeps) {
         )
       } else {
         deps.finalizeStreamFailure(assistantTurn, botId, targetSessionId, failure)
-      }
-      if (isStaleTurnErrorCode(errorCode) || (stage === 'stream' && runLeftNoHistory(failure instanceof StreamFailureError ? failure.feedback : undefined))) {
-        await deps.refreshCurrentSession(botId, targetSessionId)
       }
       return { ok: false, stage, error: reason, errorCode, restoreInput: text }
     }
