@@ -315,8 +315,8 @@ func TestStartTurnFailsWhenRuntimeEventPublicationFails(t *testing.T) {
 	if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
 		t.Fatalf("publication failure status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
 	}
-	if got := apperror.CodeOf(publicErr); got != apperror.CodeSessionHistoryInconsistent {
-		t.Fatalf("publication failure code = %q, want %q", got, apperror.CodeSessionHistoryInconsistent)
+	if got := apperror.CodeOf(publicErr); got != apperror.CodeSessionPublishFailed {
+		t.Fatalf("publication failure code = %q, want %q", got, apperror.CodeSessionPublishFailed)
 	}
 	if got := apperror.CauseOf(publicErr); !errors.Is(got, publishErr) {
 		t.Fatalf("private publication cause = %v, want %v", got, publishErr)

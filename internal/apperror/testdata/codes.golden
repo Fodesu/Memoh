@@ -105,8 +105,10 @@ runtime_control.thread_unavailable	409
 runtime_control.unsupported	400
 search_provider.type_conflict	409
 session.model_preference_conflict	409
+session_runtime.abort_failed	500
 session_runtime.history_inconsistent	500
 session_runtime.invocation_conflict	409
+session_runtime.publish_failed	503
 session_runtime.reset_conflict	409
 session_runtime.reset_unavailable	503
 session_runtime.session_busy	409

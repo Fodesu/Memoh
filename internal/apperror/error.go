@@ -127,6 +127,8 @@ const (
 	CodeSessionResetUnavailable                  Code = "session_runtime.reset_unavailable"
 	CodeSessionResetConflict                     Code = "session_runtime.reset_conflict"
 	CodeHistoryDeleteFailed                      Code = "history.delete_failed"
+	CodeSessionPublishFailed                     Code = "session_runtime.publish_failed"
+	CodeSessionAbortFailed                       Code = "session_runtime.abort_failed"
 	CodeAgentResponseTimeout                     Code = "agent.response_timeout"
 	CodeAgentResponseInterrupted                 Code = "agent.response_interrupted"
 	CodeAgentProviderOverloaded                  Code = "agent.provider_overloaded"
@@ -636,6 +638,18 @@ var catalog = map[Code]Definition{
 	CodeHistoryDeleteFailed: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "The conversation history could not be deleted. Please try again.",
+	},
+	// The run's live state could not be published to the Session Runtime
+	// (Redis unavailable, or this process lost the run). History is not
+	// involved; the client sees the run stop and can retry shortly.
+	CodeSessionPublishFailed: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Detail:     "The conversation could not be updated. Please try again shortly.",
+	},
+	// The session was deleted but its in-flight run could not be stopped.
+	CodeSessionAbortFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The conversation was deleted, but its running task could not be stopped. Refresh and try again.",
 	},
 	CodeAgentResponseTimeout: {
 		HTTPStatus: http.StatusGatewayTimeout,

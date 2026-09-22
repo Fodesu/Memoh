@@ -252,12 +252,22 @@ func runtimeHistoryError(err error) error {
 	return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
 }
 
+// runtimePublishError names a failure to publish the run's live state to the
+// Session Runtime. History is not involved (Redis down, run ownership lost),
+// so it must not read as a history fault.
+func runtimePublishError(err error) error {
+	if err == nil || apperror.CodeOf(err) != "" {
+		return err
+	}
+	return apperror.Wrap(apperror.CodeSessionPublishFailed, err, nil)
+}
+
 func (s *Service) turnAgentEventPublisher(handle sessionruntime.RunHandle) func(context.Context, native.StreamEvent) error {
 	if s == nil || s.publishTurnEvent == nil {
 		return nil
 	}
 	return func(ctx context.Context, event native.StreamEvent) error {
-		return runtimeHistoryError(s.publishTurnEvent(ctx, handle, event))
+		return runtimePublishError(s.publishTurnEvent(ctx, handle, event))
 	}
 }
 

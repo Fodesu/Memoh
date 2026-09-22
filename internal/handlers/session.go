@@ -1128,7 +1128,7 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 		// (including anything admitted before the tombstone landed) and wait
 		// for the driver call to actually finish.
 		if err := h.agentRuntimes.AbortSessionRuns(c.Request().Context(), botID, sessionID); err != nil {
-			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+			return apperror.Wrap(apperror.CodeSessionAbortFailed, err, nil)
 		}
 	}
 	if h.projectionCache != nil {

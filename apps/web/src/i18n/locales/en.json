@@ -279,7 +279,9 @@
       "turn_not_latest": "The conversation has newer messages. Refresh and try again.",
       "turn_incomplete": "This message cannot be retried right now. Refresh the conversation.",
       "reset_unavailable": "Conversation history cannot be reset right now. Contact the developers.",
-      "reset_conflict": "The conversation is busy. Please try again shortly."
+      "reset_conflict": "The conversation is busy. Please try again shortly.",
+      "publish_failed": "The conversation could not be updated. Please try again shortly.",
+      "abort_failed": "The conversation was deleted, but its running task could not be stopped. Refresh and try again."
     },
     "history": {
       "delete_failed": "The conversation history could not be deleted. Please try again."
