@@ -6,8 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/workdir"
 )
 
@@ -34,17 +33,17 @@ func NewWorkdirProvider(log *slog.Logger, service WorkdirLister) *WorkdirProvide
 	}
 }
 
-func (p *WorkdirProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *WorkdirProvider) Tools(_ context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.service == nil {
 		return nil, nil
 	}
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolListWorkdirs().String(),
 			Description: "List this bot's workdirs (named working directories): workdir_id, name, target kind (native workspace or remote runtime), and path. Use a workdir_id to bind a scheduled task's sessions to that directory.",
-			Parameters:  emptyObjectSchema(),
-			Execute: func(ctx *sdk.ToolExecContext, _ any) (any, error) {
+			Parameters:  toolexec.SchemaFromValue(emptyObjectSchema()),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
 					return nil, errors.New("bot_id is required")
@@ -63,7 +62,7 @@ func (p *WorkdirProvider) Tools(_ context.Context, session SessionContext) ([]sd
 					})
 				}
 				return map[string]any{"workdirs": items, "count": len(items)}, nil
-			},
+			}),
 		},
 	}, nil
 }

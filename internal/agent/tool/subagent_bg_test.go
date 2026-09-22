@@ -17,6 +17,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
@@ -227,7 +228,9 @@ func (s *fakeAgentMessageService) persistInputs() []messagepkg.PersistInput {
 	return append([]messagepkg.PersistInput(nil), s.inputs...)
 }
 
-func TestPersistSubagentMessagesSkipsMarshalDefectAndKeepsLaterOutput(t *testing.T) {
+// A tool call whose arguments cannot be encoded is typed as invalid argument
+// text, so the message persists with that text instead of being dropped.
+func TestPersistSubagentMessagesKeepsUnencodableInputAsText(t *testing.T) {
 	messages := newFakeAgentMessageService()
 	provider := &SpawnProvider{
 		messageService: messages,
@@ -243,18 +246,21 @@ func TestPersistSubagentMessagesSkipsMarshalDefectAndKeepsLaterOutput(t *testing
 		{
 			Role: sdk.MessageRoleAssistant,
 			Content: []sdk.MessagePart{sdk.ToolCallPart{
-				ToolCallID: "bad-call", ToolName: "bad", Input: func() {},
+				ToolCallID: "bad-call", ToolName: "bad", Input: toolexec.ArgumentsFromValue(func() {}),
 			}},
 		},
 		sdk.AssistantMessage("durable report"),
 	}}
 
 	if err := provider.persistMessages(context.Background(), req, result, false); err != nil {
-		t.Fatalf("persistMessages() error = %v, want malformed message skipped", err)
+		t.Fatalf("persistMessages() error = %v", err)
 	}
 	inputs := messages.persistInputs()
-	if len(inputs) != 1 || inputs[0].Role != string(sdk.MessageRoleAssistant) {
-		t.Fatalf("persisted inputs = %#v, want only the later valid assistant message", inputs)
+	if len(inputs) != 2 || inputs[0].Role != string(sdk.MessageRoleAssistant) || inputs[1].Role != string(sdk.MessageRoleAssistant) {
+		t.Fatalf("persisted inputs = %#v, want both assistant messages", inputs)
+	}
+	if !strings.Contains(string(inputs[0].Content), `"input":"0x`) {
+		t.Fatalf("unencodable input = %s, want the printed value as invalid argument text", inputs[0].Content)
 	}
 }
 
@@ -406,14 +412,15 @@ func executeAgentTool(t *testing.T, p *SpawnProvider, session SessionContext, na
 	}
 	for _, tool := range tools {
 		if tool.Name == name {
-			return tool.Execute(&sdk.ToolExecContext{Context: context.Background()}, args)
+			out, err := tool.Execute(&toolexec.ToolExecContext{Context: context.Background()}, toolexec.ArgumentsFromValue(args))
+			return toolexec.OutputValue(out), err
 		}
 	}
 	t.Fatalf("tool %q not found in %v", name, toolNames(tools))
 	return nil, nil
 }
 
-func toolNames(tools []sdk.Tool) []string {
+func toolNames(tools []toolexec.Tool) []string {
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		names = append(names, tool.Name)
@@ -833,10 +840,10 @@ func TestBusyAgentQueuesAndRunsFIFO(t *testing.T) {
 	}
 	second := asMap(t, mustExecuteAgentTool(t, p, session, "send_message", map[string]any{"id": "worker", "message": "second"}))
 	third := asMap(t, mustExecuteAgentTool(t, p, session, "send_message", map[string]any{"id": "worker", "message": "third"}))
-	if second["status"] != "queued" || second["queue_position"] != 1 {
+	if second["status"] != "queued" || second["queue_position"] != float64(1) {
 		t.Fatalf("expected second queued at position 1, got %v", second)
 	}
-	if third["status"] != "queued" || third["queue_position"] != 2 {
+	if third["status"] != "queued" || third["queue_position"] != float64(2) {
 		t.Fatalf("expected third queued at position 2, got %v", third)
 	}
 
@@ -1075,8 +1082,8 @@ func TestListAgentsScopedByCurrentSession(t *testing.T) {
 	mustExecuteAgentTool(t, p, sessionB, "spawn_agent", map[string]any{"id": "beta", "task": "b"})
 
 	listA := asMap(t, mustExecuteAgentTool(t, p, sessionA, "list_agents", map[string]any{}))
-	agents := listA["agents"].([]map[string]any)
-	if len(agents) != 1 || agents[0]["agent_id"] != "alpha" {
+	agents, _ := listA["agents"].([]any)
+	if len(agents) != 1 || asMap(t, agents[0])["agent_id"] != "alpha" {
 		t.Fatalf("expected only session A agent, got %v", listA)
 	}
 }

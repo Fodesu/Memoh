@@ -11,6 +11,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/background"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/settings"
 	videopkg "github.com/felinics/memoh/internal/video"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -60,7 +61,7 @@ func NewVideoGenProvider(
 	}
 }
 
-func (p *VideoGenProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *VideoGenProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.settings == nil || p.video == nil || p.bgManager == nil {
 		return nil, nil
 	}
@@ -76,11 +77,11 @@ func (p *VideoGenProvider) Tools(ctx context.Context, session SessionContext) ([
 		return nil, nil
 	}
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolGenerateVideo().String(),
 			Description: "Start a background video generation task using the configured video generation model. Returns a task_id immediately; use wait_until(task_id), then get_background_status(task_id) to inspect the result.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"prompt":           map[string]any{"type": "string", "description": "Detailed description of the video to generate"},
@@ -91,10 +92,10 @@ func (p *VideoGenProvider) Tools(ctx context.Context, session SessionContext) ([
 					"generate_audio":   map[string]any{"type": "boolean", "description": "Whether the provider should generate audio when supported"},
 				},
 				"required": []string{"prompt"},
-			},
-			Execute: func(execCtx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execGenerateVideo(execCtx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 	}, nil
 }

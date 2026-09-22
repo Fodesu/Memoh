@@ -8,8 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	audiopkg "github.com/felinics/memoh/internal/audio"
 	"github.com/felinics/memoh/internal/messaging"
 	"github.com/felinics/memoh/internal/settings"
@@ -71,7 +70,7 @@ func (*TTSProvider) Usage(_ context.Context, session SessionContext, available A
 	})
 }
 
-func (p *TTSProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *TTSProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.settings == nil || p.audio == nil || p.sender == nil || p.resolver == nil {
 		return nil, nil
 	}
@@ -88,11 +87,11 @@ func (p *TTSProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.
 	}
 	sess := session
 	description, platformDescription, targetDescription, required := speakToolPromptMetadata(session)
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolSpeak().String(),
 			Description: description,
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"text":     map[string]any{"type": "string", "description": "The text to convert to speech (max 500 characters)"},
@@ -101,10 +100,10 @@ func (p *TTSProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.
 					"reply_to": map[string]any{"type": "string", "description": "Message ID to reply to. The voice message will reference this message on the platform."},
 				},
 				"required": required,
-			},
-			Execute: func(execCtx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execSpeak(execCtx.Context, sess, execCtx.ToolCallID, inputAsMap(input))
-			},
+			}),
 		},
 	}, nil
 }

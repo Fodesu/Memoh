@@ -9,9 +9,8 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	"github.com/felinics/memoh/internal/agent/background"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 const (
@@ -59,41 +58,41 @@ func (*BackgroundProvider) Usage(_ context.Context, _ SessionContext, available 
 	return usageSection("Background Tasks", parts)
 }
 
-func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.bgManager == nil {
 		return nil, nil
 	}
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolListBackground().String(),
 			Description: "List background tasks for the current session.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execListBackground(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolWait().String(),
 			Description: "Wait for a fixed duration in seconds. Use wait_until when you have a background task_id.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"duration": map[string]any{"type": "number", "description": "Seconds to wait. Must be > 0 and at most 300.", "minimum": 0, "maximum": 300},
 				},
 				"required": []string{"duration"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
-				return p.execWait(ctx.Context, sess, inputAsMap(input), ctx.SendProgress)
-			},
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+				return p.execWait(ctx.Context, sess, inputAsMap(input), toolexec.AdaptLegacyProgress(ctx.SendProgress))
+			}),
 		},
 		{
 			Name:        ToolWaitUntil().String(),
 			Description: "Observe a background task for a bounded time. Returns with a reason: completed/failed/killed, unknown (execution connection lost; refresh dependency state before retrying), stalled (interactive prompt), idle (still running but output quiet for idle_timeout), or timeout — always with the latest output_tail. For servers/watchers that never exit (dev server, watch mode), reason 'idle' plus a ready message in output_tail (e.g. a local URL) means the service is up; do not keep waiting for completion.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id":      map[string]any{"type": "string", "description": "Background task ID"},
@@ -101,38 +100,38 @@ func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([
 					"idle_timeout": map[string]any{"type": "number", "description": "Seconds of output silence after which a running command returns with reason 'idle'. Default 20, max 300. Only applies to exec tasks.", "minimum": 1, "maximum": 300},
 				},
 				"required": []string{"task_id"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
-				return p.execWaitUntil(ctx.Context, sess, inputAsMap(input), ctx.SendProgress)
-			},
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+				return p.execWaitUntil(ctx.Context, sess, inputAsMap(input), toolexec.AdaptLegacyProgress(ctx.SendProgress))
+			}),
 		},
 		{
 			Name:        ToolGetBackgroundStatus().String(),
 			Description: "Get the status and details of a background task. For completed agent/spawn tasks, read the result field.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "Background task ID"},
 				},
 				"required": []string{"task_id"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execGetBackgroundStatus(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolKillBackground().String(),
 			Description: "Kill a running or queued background task.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "Background task ID"},
 				},
 				"required": []string{"task_id"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execKillBackground(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 	}, nil
 }

@@ -9,10 +9,9 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 )
-
-var errCapabilitiesChanged = errors.New("agent capabilities changed after committed step")
 
 // maxCapabilityRefreshes bounds how often one turn may re-assemble its tools:
 // a tool that reports a change on every call must not keep the loop alive.
@@ -27,15 +26,15 @@ const maxCapabilityRefreshes = 32
 func (a *Agent) wrapExecutableTools(
 	hookCtx context.Context,
 	cfg RunConfig,
-	sdkTools []sdk.Tool,
+	sdkTools []toolexec.Tool,
 	meta *toolExecutionMetadataRegistry,
 	guard *ToolLoopGuard,
 	abortCallIDs *toolAbortRegistry,
-) (exec, approval []sdk.Tool) {
+) (exec, approval []toolexec.Tool) {
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools = meta.wrapToolUIOutput(sdkTools)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
-	approval = append([]sdk.Tool(nil), sdkTools...)
+	approval = append([]toolexec.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(hookCtx, cfg, sdkTools)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	if guard != nil {
@@ -49,9 +48,9 @@ func (a *Agent) wrapExecutableTools(
 // handler over the new approval set, and the system prompt carrying the new
 // tool usage.
 type refreshedTools struct {
-	exec    []sdk.Tool
+	exec    []toolexec.Tool
 	defs    []sdk.ToolDefinition
-	approve func(context.Context, sdk.ToolCall) (sdk.ToolApprovalResult, error)
+	approve func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error)
 	system  string
 }
 
@@ -99,11 +98,11 @@ func (a *Agent) refreshCapabilities(
 	// The definitions carry the same prompt-cache marking the dispatch put on
 	// the original set, so the refreshed request stays cacheable.
 	_, _, planTools, _, _ := models.ApplyPromptCacheWithPlan(cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, exec)
-	var executable []sdk.Tool
+	var executable []toolexec.Tool
 	if len(planTools) > 0 && cfg.SupportsToolCall {
 		executable = planTools
 	}
-	toolDefs, err := sdk.ToolDefinitionsFromTools(executable)
+	toolDefs, err := toolexec.ToolDefinitionsFromTools(executable)
 	if err != nil {
 		return refreshedTools{}, err
 	}

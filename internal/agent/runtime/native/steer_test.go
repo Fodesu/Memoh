@@ -16,6 +16,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestStreamSteerInterruptsOnlyInvocation(t *testing.T) {
@@ -217,7 +218,7 @@ func TestSteerPreservesToolsAndEarlierInput(t *testing.T) {
 				}
 			}
 			return closedAgentTestStream(
-				&sdk.StreamToolCallPart{ToolCallID: fmt.Sprintf("call-%d", call), ToolName: "held_tool", Input: map[string]any{}},
+				&sdk.StreamToolCallPart{ToolCallID: fmt.Sprintf("call-%d", call), ToolName: "held_tool", Input: toolexec.ArgumentsFromValue(map[string]any{})},
 				&sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls},
 			), nil
 		}
@@ -231,9 +232,9 @@ func TestSteerPreservesToolsAndEarlierInput(t *testing.T) {
 		return closedAgentTestStream(&sdk.TextDeltaPart{Text: "done"}, &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}), nil
 	})
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "held_tool", Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(ctx *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
 			if executions.Add(1) > 1 {
 				return "completed second tool result", nil
 			}
@@ -244,7 +245,7 @@ func TestSteerPreservesToolsAndEarlierInput(t *testing.T) {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
-		},
+		}),
 	}}}})
 	events := a.Stream(ctx, RunConfig{
 		Model: &sdk.Model{ID: "mock", Provider: provider}, Messages: []sdk.Message{sdk.UserMessage("original")},
@@ -321,24 +322,24 @@ func TestQueuedSteerIsAppendedAfterEveryOtherPreparedMessage(t *testing.T) {
 	t.Parallel()
 
 	imageBase64 := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n\x00payload"))
-	wrapped, readMedia := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []sdk.Tool{{
+	wrapped, readMedia := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []toolexec.Tool{{
 		Name: agenttools.ReadMediaToolName().String(),
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return agenttools.ReadMediaToolOutput{
 				Public:         agenttools.ReadMediaToolResult{OK: true, Path: "/data/image.png", Mime: "image/png"},
 				ImageBase64:    imageBase64,
 				ImageMediaType: "image/png",
 			}, nil
-		},
+		}),
 	}})
 	if readMedia == nil || len(wrapped) != 1 {
 		t.Fatalf("decorateReadMediaTools did not wrap read tool: state=%v tools=%d", readMedia, len(wrapped))
 	}
-	if _, err := wrapped[0].Execute(&sdk.ToolExecContext{
+	if _, err := wrapped[0].Execute(&toolexec.ToolExecContext{
 		Context:    context.Background(),
 		ToolCallID: "call-1",
 		ToolName:   agenttools.ReadMediaToolName().String(),
-	}, map[string]any{"path": "/data/image.png"}); err != nil {
+	}, toolexec.ArgumentsFromValue(map[string]any{"path": "/data/image.png"})); err != nil {
 		t.Fatalf("wrapped read execute returned error: %v", err)
 	}
 

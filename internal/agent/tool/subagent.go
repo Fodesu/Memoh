@@ -20,6 +20,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -370,7 +371,7 @@ func (*SpawnProvider) Usage(_ context.Context, _ SessionContext, available Avail
 	return usageSection("Subagents", parts)
 }
 
-func (p *SpawnProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *SpawnProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if session.IsSubagent || p.agent == nil {
 		return nil, nil
 	}
@@ -381,11 +382,11 @@ func (p *SpawnProvider) Tools(ctx context.Context, session SessionContext) ([]sd
 			spawnDescription = appendModelCatalogToSpawnDescription(spawnDescription, catalog, session)
 		}
 	}
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolSpawnAgent().String(),
 			Description: spawnDescription,
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
@@ -414,15 +415,15 @@ func (p *SpawnProvider) Tools(ctx context.Context, session SessionContext) ([]sd
 					},
 				},
 				"required": []string{"task"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execSpawnAgent(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolSendMessage().String(),
 			Description: "Send a follow-up message to an existing managed subagent. Messages to a busy agent are queued and run serially.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
@@ -439,29 +440,29 @@ func (p *SpawnProvider) Tools(ctx context.Context, session SessionContext) ([]sd
 					},
 				},
 				"required": []string{"id", "message"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execSendMessage(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolListAgents().String(),
 			Description: "List managed subagents created in the current session only.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execListAgents(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolListModels().String(),
 			Description: "List enabled chat models, including model_id, provider, description, and the current session model marker. Subagents can only use models from the current session's provider.",
-			Parameters:  emptyObjectSchema(),
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			Parameters:  toolexec.SchemaFromValue(emptyObjectSchema()),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execListModels(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 	}, nil
 }

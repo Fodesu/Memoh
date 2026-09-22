@@ -14,6 +14,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestAgentStreamRecordsInjectedMessageMutation(t *testing.T) {
@@ -35,12 +36,12 @@ func TestAgentStreamRecordsInjectedMessageMutation(t *testing.T) {
 		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 	ledger := contextfrag.NewMutationLedger()
 	type recordedInjection struct {
@@ -101,12 +102,12 @@ func TestAgentStreamDroppedInjectedMessageIsNotRecorded(t *testing.T) {
 		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	type recordedInjection struct {
@@ -182,12 +183,12 @@ func TestAgentStreamRetryRevokesInjectedMessageRecord(t *testing.T) {
 		}
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	var selectorCalls atomic.Int32
@@ -256,12 +257,12 @@ func TestAgentStreamFailedPreflightDoesNotRecordInjectedMessage(t *testing.T) {
 		}, nil
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	var recorded []string
@@ -324,12 +325,12 @@ func TestAgentStreamRecordsDuplicateAdmittedInjections(t *testing.T) {
 		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	type recordedInjection struct {
@@ -390,12 +391,12 @@ func TestAgentStreamRecordsLaterInjectionAtOutputBoundary(t *testing.T) {
 		}
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	type recordedInjection struct {
@@ -448,12 +449,12 @@ func TestAgentStreamRecordsOnlyAdmittedDuplicateInjection(t *testing.T) {
 		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	type recordedInjection struct {

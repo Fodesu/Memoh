@@ -9,10 +9,11 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 )
 
-func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool) ([]sdk.Tool, *readMediaDecorationState) {
+func decorateReadMediaTools(model *sdk.Model, tools []toolexec.Tool) ([]toolexec.Tool, *readMediaDecorationState) {
 	if len(tools) == 0 {
 		return tools, nil
 	}
@@ -27,7 +28,7 @@ func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool) ([]sdk.Tool, *re
 }
 
 // readMediaToolPresent reports whether the set carries an executable read tool.
-func readMediaToolPresent(tools []sdk.Tool) bool {
+func readMediaToolPresent(tools []toolexec.Tool) bool {
 	for _, tool := range tools {
 		if tool.Name == agenttools.ReadMediaToolName().String() && tool.Execute != nil {
 			return true
@@ -40,12 +41,12 @@ func readMediaToolPresent(tools []sdk.Tool) bool {
 // which is how a capability refresh keeps the media captured so far while the
 // tool set is rebuilt. A nil state or a set without the read tool returns the
 // tools unchanged.
-func decorateReadMediaToolsWithState(model *sdk.Model, tools []sdk.Tool, state *readMediaDecorationState) []sdk.Tool {
+func decorateReadMediaToolsWithState(model *sdk.Model, tools []toolexec.Tool, state *readMediaDecorationState) []toolexec.Tool {
 	if len(tools) == 0 || state == nil {
 		return tools
 	}
 	clientType := models.ResolveClientType(model)
-	wrapped := make([]sdk.Tool, 0, len(tools))
+	wrapped := make([]toolexec.Tool, 0, len(tools))
 	found := false
 
 	for _, tool := range tools {
@@ -57,7 +58,7 @@ func decorateReadMediaToolsWithState(model *sdk.Model, tools []sdk.Tool, state *
 		found = true
 		originalExecute := tool.Execute
 		toolCopy := tool
-		toolCopy.Execute = func(ctx *sdk.ToolExecContext, input any) (any, error) {
+		toolCopy.Execute = func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 			output, err := originalExecute(ctx, input)
 			if err != nil {
 				return output, err
@@ -139,18 +140,12 @@ func drainReadMediaMessage(
 	return append(messages, message)
 }
 
-func normalizeReadMediaOutput(output any, clientType string) (any, sdk.MessagePart, bool) {
-	switch value := output.(type) {
-	case agenttools.ReadMediaToolOutput:
-		return value.Public, buildReadMediaPart(clientType, value), true
-	case *agenttools.ReadMediaToolOutput:
-		if value == nil {
-			return nil, nil, false
-		}
-		return value.Public, buildReadMediaPart(clientType, *value), true
-	default:
-		return nil, nil, false
+func normalizeReadMediaOutput(output sdk.ToolOutput, clientType string) (sdk.ToolOutput, sdk.MessagePart, bool) {
+	value, ok := agenttools.DecodeReadMediaToolOutput(output)
+	if !ok {
+		return sdk.ToolOutput{}, nil, false
 	}
+	return toolexec.OutputFromValue(value.Public), buildReadMediaPart(clientType, value), true
 }
 
 // buildReadMediaPart converts a read-media tool output into the message part
@@ -180,7 +175,7 @@ func mediaPartHasContent(part sdk.MessagePart) bool {
 	}
 }
 
-func publicReadMediaToolResult(output any) any {
+func publicReadMediaToolResult(output sdk.ToolOutput) sdk.ToolOutput {
 	publicResult, _, ok := normalizeReadMediaOutput(output, "")
 	if !ok {
 		return output

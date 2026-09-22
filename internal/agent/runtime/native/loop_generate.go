@@ -13,13 +13,14 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/models"
 )
 
 // runGenerate runs the non-streaming agent invocation with a Memoh-owned step
 // loop: every step performs exactly one provider model call and executes its
-// tool batch through sdk.ExecuteTools. A final step whose commit returns
+// tool batch through toolexec.ExecuteTools. A final step whose commit returns
 // NextInputs continues on the next inner-loop iteration of the same engine.
 func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (*GenerateResult, error) {
 	if cfg.ContextLifecycle == nil {
@@ -69,7 +70,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 		cfg.ForkContext = tools.NewMessageSnapshotWithSources(cfg.Messages, cfg.ForkContextSourceMessageIDs)
 	}
 
-	var sdkTools []sdk.Tool
+	var sdkTools []toolexec.Tool
 	cfg.ContextToolDefsResolved = true
 	if cfg.SupportsToolCall {
 		var toolUsage string
@@ -255,7 +256,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 
 		// No tool calls, a non-tool-calls finish, or no executable tool → final step.
 		if result.FinishReason != sdk.FinishReasonToolCalls || len(result.ToolCalls) == 0 || !hasExecutableToolCalls(result.ToolCalls) {
-			stepMsgs := sdk.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, nil, &result.Usage)
+			stepMsgs := toolexec.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, nil, &result.Usage)
 			// The step's model result is the call's result verbatim: this path
 			// executes no tools and defers nothing.
 			sr := step.Record{Result: result, Messages: stepMsgs}
@@ -280,7 +281,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 
 		// Execute the tool batch through the single-batch primitive. Deferral is
 		// a normal outcome; handler failures are errors.
-		outcome, err := sdk.ExecuteTools(genCtx, result.ToolCalls, sdk.ToolExecOptions{
+		outcome, err := toolexec.ExecuteTools(genCtx, result.ToolCalls, toolexec.ToolExecOptions{
 			Tools:   dispatch.execTools,
 			Approve: dispatch.approve,
 		})
@@ -292,11 +293,11 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			// returns, so outcome.Results carries real output. The step persists
 			// those results; the deferred call and everything after it stay as
 			// dangling ToolCallParts until the approval resolves.
-			stepMsgs := sdk.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, outcome.Results, &result.Usage)
+			stepMsgs := toolexec.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, outcome.Results, &result.Usage)
 			sr := step.Record{
 				Result:      result,
 				Deferred:    outcome.Deferred,
-				ToolResults: sdk.ToolCallResults(result.ToolCalls, outcome.Results),
+				ToolResults: toolexec.ToolCallResults(result.ToolCalls, outcome.Results),
 				Messages:    stepMsgs,
 			}
 			if _, err := commitStep(sdkStep, &sr); err != nil {
@@ -310,8 +311,8 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			break
 		}
 
-		stepMsgs := sdk.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, outcome.Results, &result.Usage)
-		sr := step.Record{Result: result, ToolResults: sdk.ToolCallResults(result.ToolCalls, outcome.Results), Messages: stepMsgs}
+		stepMsgs := toolexec.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, outcome.Results, &result.Usage)
+		sr := step.Record{Result: result, ToolResults: toolexec.ToolCallResults(result.ToolCalls, outcome.Results), Messages: stepMsgs}
 		dir, err := commitStep(sdkStep, &sr)
 		if err != nil {
 			return seg, err
@@ -368,10 +369,10 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 // prepare chain, the provider-attempt handoff, and the approval handler.
 type generateDispatch struct {
 	params      sdk.Request
-	execTools   []sdk.Tool
+	execTools   []toolexec.Tool
 	prepareStep func(*sdk.Request) *sdk.Request
 	handoff     *providerAttemptHandoff
-	approve     func(context.Context, sdk.ToolCall) (sdk.ToolApprovalResult, error)
+	approve     func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error)
 	// initialMessageCount is the compiled provider prefix length (including a
 	// promoted system message), the guard for background-summary stripping.
 	initialMessageCount int
@@ -386,7 +387,7 @@ type generateDispatch struct {
 // prepare-step composition, yielding the concrete sdk.Request and the composed
 // step-prepare function. The executable tool set stays local to the loop; the
 // request carries only the provider-bound definitions.
-func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkTools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.Request) *sdk.Request) (generateDispatch, error) {
+func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkTools []toolexec.Tool, approvalTools []toolexec.Tool, prepareStep func(*sdk.Request) *sdk.Request) (generateDispatch, error) {
 	handoff := newProviderAttemptHandoff(cfg)
 	sdkTools = canonicalizeProviderToolSchemas(sdkTools)
 	cfg.ContextMutations.SetModelInfo(modelID(cfg.Model), models.ResolveClientType(cfg.Model))
@@ -425,11 +426,11 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	initialProviderMessageCount := clampStableMessageCount(providerAttemptPrefixCount, len(messages))
 	publishContextCachePlan(cfg, plan)
 
-	var executableTools []sdk.Tool
+	var executableTools []toolexec.Tool
 	if len(planTools) > 0 && cfg.SupportsToolCall {
 		executableTools = planTools
 	}
-	toolDefs, toolDefErr := sdk.ToolDefinitionsFromTools(executableTools)
+	toolDefs, toolDefErr := toolexec.ToolDefinitionsFromTools(executableTools)
 	if toolDefErr != nil {
 		return generateDispatch{}, toolDefErr
 	}

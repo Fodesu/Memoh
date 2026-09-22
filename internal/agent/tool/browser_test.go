@@ -209,7 +209,7 @@ func TestBuildScreenshotResultDropsShareMetadata(t *testing.T) {
 	if _, exists := asMap["shared"]; exists {
 		t.Fatalf("expected shared field to be removed, got %#v", asMap)
 	}
-	content, ok := asMap["content"].([]map[string]any)
+	content, ok := mapSlice(asMap["content"])
 	if !ok || len(content) == 0 {
 		t.Fatalf("expected text content, got %#v", asMap["content"])
 	}

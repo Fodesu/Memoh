@@ -14,8 +14,7 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/attachment"
 	audiopkg "github.com/felinics/memoh/internal/audio"
 	"github.com/felinics/memoh/internal/media"
@@ -54,7 +53,7 @@ func NewTranscriptionProvider(log *slog.Logger, settingsSvc *settings.Service, a
 	}
 }
 
-func (p *TranscriptionProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *TranscriptionProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.settings == nil || p.audio == nil || p.media == nil {
 		return nil, nil
 	}
@@ -67,10 +66,10 @@ func (p *TranscriptionProvider) Tools(ctx context.Context, session SessionContex
 		return nil, nil
 	}
 	sess := session
-	return []sdk.Tool{{
+	return []toolexec.Tool{{
 		Name:        ToolTranscribeAudio().String(),
 		Description: "Transcribe an audio or voice message into text. Use this when the user sent a voice message and you need to understand its contents. Accepts a bot media path such as /data/.memoh/media/... or a direct URL.",
-		Parameters: map[string]any{
+		Parameters: toolexec.SchemaFromValue(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":        map[string]any{"type": "string", "description": "Audio file path from the message context, usually under /data/.memoh/media/..."},
@@ -80,10 +79,10 @@ func (p *TranscriptionProvider) Tools(ctx context.Context, session SessionContex
 				"contentType": map[string]any{"type": "string", "description": "Optional MIME type override"},
 			},
 			"required": []string{},
-		},
-		Execute: func(execCtx *sdk.ToolExecContext, input any) (any, error) {
+		}),
+		Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
 			return p.execTranscribe(execCtx.Context, sess, inputAsMap(input))
-		},
+		}),
 	}}, nil
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 type agentStreamTestProvider func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error)
@@ -23,7 +24,7 @@ type streamEmitterCaptureProvider struct {
 	emitter chan agenttools.StreamEmitter
 }
 
-func (p *streamEmitterCaptureProvider) Tools(_ context.Context, session agenttools.SessionContext) ([]sdk.Tool, error) {
+func (p *streamEmitterCaptureProvider) Tools(_ context.Context, session agenttools.SessionContext) ([]toolexec.Tool, error) {
 	p.emitter <- session.Emitter
 	return nil, nil
 }
@@ -226,7 +227,7 @@ func TestAgentStreamEmitsToolCallInputStartThenStart(t *testing.T) {
 		return closedAgentTestStream(
 			&sdk.StartPart{}, &sdk.StartStepPart{},
 			&sdk.ToolInputStartPart{ID: "call-1", ToolName: "write"},
-			&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "write", Input: map[string]any{"path": "/tmp/long.txt"}},
+			&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "write", Input: toolexec.ArgumentsFromValue(map[string]any{"path": "/tmp/long.txt"})},
 			&sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop},
 			&sdk.FinishPart{FinishReason: sdk.FinishReasonStop},
 		), nil

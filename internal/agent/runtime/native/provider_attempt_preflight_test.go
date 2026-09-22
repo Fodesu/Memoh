@@ -15,6 +15,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -342,18 +343,18 @@ func TestAgentGenerateSnapshotHashesResolvedMapToolSchema(t *testing.T) {
 		},
 	}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "lookup",
-		Parameters: map[string]any{
+		Parameters: toolexec.SchemaFromValue(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string"},
 			},
 			"required": []string{"query"},
-		},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		}),
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return nil, nil
-		},
+		}),
 	}}}})
 
 	_, err := a.Generate(context.Background(), RunConfig{
@@ -377,7 +378,7 @@ func TestAgentGenerateSnapshotHashesResolvedMapToolSchema(t *testing.T) {
 		Properties map[string]any `json:"properties"`
 		Required   []string       `json:"required"`
 	}
-	if err := json.Unmarshal(providerParams.Tools[0].Parameters, &schema); err != nil {
+	if data, err := json.Marshal(providerParams.Tools[0].Parameters); err != nil || json.Unmarshal(data, &schema) != nil {
 		t.Fatalf("provider schema parameters = %s, want a resolved JSON Schema document: %v", providerParams.Tools[0].Parameters, err)
 	}
 	if schema.Type != "object" || len(schema.Properties) != 1 || len(schema.Required) != 1 {
@@ -419,7 +420,7 @@ func TestAgentGenerateHookStaysGovernedAcrossAnthropicProviderSteps(t *testing.T
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-round8",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			}
@@ -433,12 +434,12 @@ func TestAgentGenerateHookStaysGovernedAcrossAnthropicProviderSteps(t *testing.T
 			return cfg, nil
 		},
 	})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return map[string]any{"answer": "ok"}, nil
-		},
+		}),
 	}}}})
 
 	var selectorCalls atomic.Int32

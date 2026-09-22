@@ -10,10 +10,11 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // deferredApprovalBatch drives one model step that emits an unguarded tool call
-// followed by a call the approval handler defers. sdk.ExecuteTools runs the
+// followed by a call the approval handler defers. toolexec.ExecuteTools runs the
 // pending batch before it returns at the deferral index, so the deferred step
 // record must carry the completed result instead of dropping it.
 func deferredApprovalBatch(t *testing.T) (*Agent, *atomicMockProvider, *atomic.Int32, *atomic.Int32) {
@@ -24,8 +25,8 @@ func deferredApprovalBatch(t *testing.T) (*Agent, *atomicMockProvider, *atomic.I
 			return sdk.ModelResult{
 				FinishReason: sdk.FinishReasonToolCalls,
 				ToolCalls: []sdk.ToolCall{
-					{ToolCallID: "call-search", ToolName: "web_search", Input: map[string]any{"q": "one"}},
-					{ToolCallID: "call-exec", ToolName: "exec", Input: map[string]any{"cmd": "ls"}},
+					{ToolCallID: "call-search", ToolName: "web_search", Input: toolexec.ArgumentsFromValue(map[string]any{"q": "one"})},
+					{ToolCallID: "call-exec", ToolName: "exec", Input: toolexec.ArgumentsFromValue(map[string]any{"cmd": "ls"})},
 				},
 			}, nil
 		},
@@ -35,22 +36,22 @@ func deferredApprovalBatch(t *testing.T) (*Agent, *atomicMockProvider, *atomic.I
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
 		staticToolProvider{
-			tools: []sdk.Tool{
+			tools: []toolexec.Tool{
 				{
 					Name:       "web_search",
 					Parameters: &jsonschema.Schema{Type: "object"},
-					Execute: func(*sdk.ToolExecContext, any) (any, error) {
+					Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 						searchRuns.Add(1)
 						return map[string]any{"hits": 3}, nil
-					},
+					}),
 				},
 				{
 					Name:       "exec",
 					Parameters: &jsonschema.Schema{Type: "object"},
-					Execute: func(*sdk.ToolExecContext, any) (any, error) {
+					Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 						execRuns.Add(1)
 						return map[string]any{"stdout": "ok"}, nil
-					},
+					}),
 				},
 			},
 		},
@@ -58,12 +59,12 @@ func deferredApprovalBatch(t *testing.T) (*Agent, *atomicMockProvider, *atomic.I
 	return a, provider, &searchRuns, &execRuns
 }
 
-func deferOnExec(_ context.Context, call sdk.ToolCall) (sdk.ToolApprovalResult, error) {
+func deferOnExec(_ context.Context, call sdk.ToolCall) (toolexec.ToolApprovalResult, error) {
 	if call.ToolName != "exec" {
-		return sdk.ToolApprovalResult{Decision: sdk.ToolApprovalDecisionApproved}, nil
+		return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
 	}
-	return sdk.ToolApprovalResult{
-		Decision:   sdk.ToolApprovalDecisionDeferred,
+	return toolexec.ToolApprovalResult{
+		Decision:   toolexec.ToolApprovalDecisionDeferred,
 		ApprovalID: "approval-1",
 		Metadata:   map[string]any{"tool_call_id": call.ToolCallID},
 	}, nil

@@ -6,8 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/mcp"
 )
 
@@ -31,7 +30,7 @@ func NewFederationProvider(log *slog.Logger, source mcp.ToolSource) *FederationP
 
 func (*FederationProvider) ProviderLabel() string { return "mcp" }
 
-func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if f.source == nil {
 		return nil, nil
 	}
@@ -41,7 +40,7 @@ func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) 
 		f.logger.WarnContext(ctx, "federation list tools failed", slog.Any("error", err))
 		return nil, nil
 	}
-	tools := make([]sdk.Tool, 0, len(descriptors))
+	tools := make([]toolexec.Tool, 0, len(descriptors))
 	for _, desc := range descriptors {
 		name := strings.TrimSpace(desc.Name)
 		if name == "" || IsBuiltInToolName(name) {
@@ -50,18 +49,18 @@ func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) 
 		desc := desc
 		src := f.source
 		sess := mcpSession
-		tools = append(tools, sdk.Tool{
+		tools = append(tools, toolexec.Tool{
 			Name:        desc.Name,
 			Description: desc.Description,
-			Parameters:  desc.InputSchema,
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			Parameters:  toolexec.SchemaFromValue(desc.InputSchema),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				result, err := src.CallTool(ctx.Context, sess, desc.Name, args)
 				if err != nil {
 					return nil, err
 				}
 				return normalizeMCPResult(result), nil
-			},
+			}),
 		})
 	}
 	return tools, nil

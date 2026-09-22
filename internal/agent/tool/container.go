@@ -15,9 +15,8 @@ import (
 	"sync"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	"github.com/felinics/memoh/internal/agent/background"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
 	workspacepkg "github.com/felinics/memoh/internal/workspace"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -169,7 +168,7 @@ func (*ContainerProvider) Usage(_ context.Context, session SessionContext, avail
 	return usageSection("Basic Tools", parts)
 }
 
-func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	workspace := p.resolveToolWorkspace(ctx, session)
 	// Tool descriptions tell the model where relative paths land; with a
 	// workdir bound, that is the working directory.
@@ -185,11 +184,11 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 		readDesc += " Also supports reading image files (PNG, JPEG, GIF, WebP) — binary images are loaded into model context automatically."
 	}
 
-	toolList := []sdk.Tool{
+	toolList := []toolexec.Tool{
 		{
 			Name:        ToolRead().String(),
 			Description: readDesc,
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"target_id":   targetParameter,
@@ -198,15 +197,15 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 					"n_lines":     map[string]any{"type": "integer", "description": "Number of lines to read. Default: read entire file.", "minimum": 1},
 				},
 				"required": []string{"path"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execRead(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolWrite().String(),
 			Description: fmt.Sprintf("Write file content %s. Creates parent directories automatically. Handles files of any size.", workspace.locationDescription),
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"target_id": targetParameter,
@@ -214,15 +213,15 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 					"content":   map[string]any{"type": "string", "description": "File content"},
 				},
 				"required": []string{"path", "content"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execWrite(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolList().String(),
 			Description: fmt.Sprintf("List directory entries %s. Supports pagination. Max %d entries per call. In recursive mode, subdirectories with >%d items are collapsed to a summary.", workspace.locationDescription, listMaxEntries, listCollapseThreshold),
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"target_id": targetParameter,
@@ -232,15 +231,15 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 					"limit":     map[string]any{"type": "integer", "description": fmt.Sprintf("Max entries to return per call. Default: %d. Max: %d.", listMaxEntries, listMaxEntries), "minimum": 1, "maximum": listMaxEntries, "default": listMaxEntries},
 				},
 				"required": []string{"path"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execList(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name:        ToolEdit().String(),
 			Description: fmt.Sprintf("Replace exact text in a file %s.", workspace.locationDescription),
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"target_id": targetParameter,
@@ -249,10 +248,10 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 					"new_text":  map[string]any{"type": "string", "description": "Replacement text"},
 				},
 				"required": []string{"path", "old_text", "new_text"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execEdit(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 		{
 			Name: ToolApplyPatch().String(),
@@ -300,17 +299,17 @@ Delete a file:
 *** Delete File: obsolete.txt
 *** End Patch
 `, workspace.locationDescription),
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"target_id": targetParameter,
 					"patch":     map[string]any{"type": "string", "description": "Patch body using the apply_patch format. Paths are relative to the workspace by default, or absolute paths supported by the workspace backend."},
 				},
 				"required": []string{"patch"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execApplyPatch(ctx.Context, sess, input)
-			},
+			}),
 		},
 		{
 			Name: ToolExec().String(),
@@ -329,7 +328,7 @@ Delete a file:
   - Do not retry failing commands in a delay loop — diagnose the root cause.
   - If waiting for a background task, use wait_until(task_id).
 %s`, workspace.shellDescription, workspace.locationDescription, wd, workspace.platformInstructions, background.MaxExecTimeout, background.DefaultExecTimeout, workspace.delayInstruction),
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"target_id":         targetParameter,
@@ -340,21 +339,21 @@ Delete a file:
 					"run_in_background": map[string]any{"type": "boolean", "description": "If true, run the command in the background. Returns immediately with a task ID. Use wait_until(task_id), then get_background_status(task_id) to inspect result. Use for long-running commands (installs, builds, test suites) and for processes that never exit (dev servers, watch mode). You do not need to use '&' at the end of the command."},
 				},
 				"required": []string{"command"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execExec(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 	}
 	if resolver, ok := p.clients.(workspaceTargetResolver); ok {
-		locationTool := sdk.Tool{
+		locationTool := toolexec.Tool{
 			Name: ToolListExecutionLocations().String(),
 			Description: "List the execution locations configured for this Bot for file operations and command execution, with current availability and status. " +
 				"The default field identifies the current turn's default (the request-selected target when present, otherwise the Bot's Primary). " +
 				"Use the returned target_id with file and command tools when a non-default location is needed. " +
 				"The available field says whether a location can currently be used. This tool does not change the default location or starting folder.",
-			Parameters: emptyObjectSchema(),
-			Execute: func(ctx *sdk.ToolExecContext, _ any) (any, error) {
+			Parameters: toolexec.SchemaFromValue(emptyObjectSchema()),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
 				ctx.Context = workspaceContextForSession(ctx.Context, sess)
 				targets, err := resolver.ListWorkspaceTargets(ctx.Context, sess.BotID)
 				if err != nil {
@@ -368,9 +367,9 @@ Delete a file:
 					locations = append(locations, executionLocationFromTarget(target, sess.WorkspaceTargetID))
 				}
 				return listExecutionLocationsResult{Locations: locations}, nil
-			},
+			}),
 		}
-		toolList = append([]sdk.Tool{locationTool}, toolList...)
+		toolList = append([]toolexec.Tool{locationTool}, toolList...)
 	}
 	return toolList, nil
 }

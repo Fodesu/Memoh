@@ -13,6 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -268,7 +269,7 @@ type RunConfig struct {
 	// boundaries while tools handle waiting and result inspection.
 	BackgroundManager *background.Manager
 
-	ToolApprovalHandler func(ctx context.Context, call sdk.ToolCall) (sdk.ToolApprovalResult, error)
+	ToolApprovalHandler func(ctx context.Context, call sdk.ToolCall) (toolexec.ToolApprovalResult, error)
 }
 
 // GenerateResult holds the result of a non-streaming agent invocation.

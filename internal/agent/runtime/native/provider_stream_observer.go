@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/telemetry"
 )
 
@@ -222,9 +223,9 @@ func providerPartTimingEvent(part sdk.StreamPart) (StreamEvent, bool) {
 		return StreamEvent{Type: EventToolCallInputStart}, true
 	case *sdk.StreamToolCallPart:
 		return StreamEvent{Type: EventToolCallStart}, true
-	case *sdk.ToolProgressPart:
+	case *toolexec.ToolProgressPart:
 		return StreamEvent{Type: EventToolCallProgress}, true
-	case *sdk.ToolApprovalRequestPart:
+	case *toolexec.ToolApprovalRequestPart:
 		return StreamEvent{Type: EventToolApprovalRequest}, true
 	case *sdk.AbortPart:
 		return StreamEvent{Type: EventAgentAbort}, true

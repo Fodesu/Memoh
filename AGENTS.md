@@ -34,7 +34,7 @@ Infrastructure dependencies:
 ### Backend (Go)
 - **Framework**: Echo (HTTP)
 - **Dependency Injection**: Uber FX
-- **AI SDK**: [Twilight AI](https://github.com/felinics/twilight) (Go LLM SDK — OpenAI, Anthropic, Google)
+- **AI SDK**: [Twilight AI](https://github.com/felinics/twilight) (Go LLM SDK — OpenAI, Anthropic, Google). The SDK is a single-call seam (`sdk.Request` in, `sdk.ModelResult` / stream parts out) and stops at the tool definition; Memoh owns the multi-step loop (`internal/agent/runtime/native/loop_*.go`) and tool execution (`internal/agent/toolexec/`)
 - **Database Driver**: pgx/v5 (PostgreSQL)
 - **Code Generation**: sqlc (SQL → Go)
 - **API Docs**: Swagger/OpenAPI (swaggo)
@@ -160,8 +160,9 @@ The `Human QA` section contains only one status checkbox, `- [ ] Human QA passed
 - `internal/agent/application/` owns turn orchestration: message assembly, history, memory, compaction, decisions, persistence, and runtime dispatch.
 - `internal/agent/turn/` is the pure port used by Channel and by the authenticated in-process/gRPC transports. Internal code says Thread; compatibility adapters keep external `session_id` and existing gRPC fields stable.
 - Model/client types are defined in `internal/models/types.go`: `openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, `openai-codex`, `github-copilot`, `edge-speech`. Model types: `chat`, `embedding`, `speech`.
-- Tools are implemented as `ToolProvider` instances in `internal/agent/tool/`, loaded via setter injection to avoid FX dependency cycles.
-- **Tool usage lives with the tool, never in the static prompt.** Per-tool usage goes in `sdk.Tool.Description`; cross-tool workflow guidance goes in an optional `tools.ToolUsage` `Usage()` method that `assembleTools` injects only when that provider registers tools for the session. `internal/agent/runtime/native/prompt_test.go` guards this.
+- Tools are implemented as `ToolProvider` instances in `internal/agent/tool/`, loaded via setter injection to avoid FX dependency cycles. A tool is a `toolexec.Tool`; its `Execute` takes `sdk.ToolArguments` and returns `sdk.ToolOutput`. Handlers still written against the untyped contract (`input any` → `any`) are wrapped with `toolexec.AdaptLegacyExecute` and map-literal schemas with `toolexec.SchemaFromValue`; new tools should implement the typed contract directly (`toolexec.NewTool[T]` infers the schema).
+- `sdk.ProviderMetadata` is `namespace → name → string`. Memoh-owned annotations on tool-call parts (pending approval, user-input request, execution location) live in the `memoh` namespace through `internal/agent/partmeta`; `internal/messageconv` folds them back into the nested objects `bot_history_messages` has always stored, so the row format did not change with the SDK types.
+- **Tool usage lives with the tool, never in the static prompt.** Per-tool usage goes in `toolexec.Tool.Description`; cross-tool workflow guidance goes in an optional `tools.ToolUsage` `Usage()` method that `assembleTools` injects only when that provider registers tools for the session. `internal/agent/runtime/native/prompt_test.go` guards this.
 - Prompt templates are embedded from `internal/agent/runtime/native/prompts/`. Partials are prefixed with `_`; system prompting combines `system_common.md` with mode-specific prompts such as `mode_chat.md` and `mode_discuss.md`.
 - `internal/chat/` owns internal chat state (`thread`, `message`, `timeline`, `view`) and does not orchestrate Agent execution. Inbound adaptation lives in `internal/channel/inbound/`; discuss-mode driving in `internal/channel/discuss/`.
 - Browser Use tools (`browser_action` / `browser_observe` / `browser_remote_session`) drive the headed workspace Chrome over CDP; Computer Use (`computer_observe` / `computer_action`) drives the GUI desktop via AT-SPI + RFB. Screenshots are saved to a workspace path and must be explicitly read. Prefer Browser Use for web pages; Computer Use for native dialogs and non-browser GUI states.

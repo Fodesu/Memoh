@@ -18,6 +18,7 @@ import (
 	openaiimages "github.com/felinics/twilight/provider/openai/images"
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/models"
@@ -80,7 +81,7 @@ func NewImageGenProvider(
 	}
 }
 
-func (p *ImageGenProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *ImageGenProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.settings == nil || p.models == nil || p.queries == nil {
 		return nil, nil
 	}
@@ -102,21 +103,21 @@ func (p *ImageGenProvider) Tools(ctx context.Context, session SessionContext) ([
 		description += " The image is not shown to the user automatically."
 	}
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolGenerateImage().String(),
 			Description: description,
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"prompt": map[string]any{"type": "string", "description": "Detailed description of the image to generate"},
 					"size":   map[string]any{"type": "string", "description": "Optional image size, e.g. 1024x1024, 1792x1024, 1024x1792. Leave empty to use the provider default."},
 				},
 				"required": []string{"prompt"},
-			},
-			Execute: func(execCtx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execGenerateImage(execCtx.Context, sess, execCtx.ToolCallID, inputAsMap(input))
-			},
+			}),
 		},
 	}, nil
 }

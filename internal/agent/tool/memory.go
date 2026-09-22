@@ -8,8 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/mcp"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
@@ -101,7 +100,7 @@ func (*MemoryProvider) Usage(_ context.Context, _ SessionContext, available Avai
 	return usageSection("Long-term memory", parts)
 }
 
-func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	provider := p.resolveProvider(ctx, session.BotID)
 	if provider == nil {
 		return nil, nil
@@ -111,16 +110,16 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]s
 	if err != nil {
 		return nil, nil
 	}
-	var tools []sdk.Tool
+	var tools []toolexec.Tool
 	for _, desc := range descriptors {
 		desc := desc
 		prov := provider
 		sess := mcpSession
-		tools = append(tools, sdk.Tool{
+		tools = append(tools, toolexec.Tool{
 			Name:        desc.Name,
 			Description: desc.Description,
-			Parameters:  desc.InputSchema,
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			Parameters:  toolexec.SchemaFromValue(desc.InputSchema),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				result, err := prov.CallTool(ctx.Context, sess, desc.Name, args)
 				if err != nil {
@@ -131,7 +130,7 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]s
 					output = p.filterSourceRefs(ctx.Context, session, output)
 				}
 				return output, nil
-			},
+			}),
 		})
 	}
 	return append(tools, p.writeTools(session, provider)...), nil
@@ -142,8 +141,8 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]s
 // holds the session identity and the hook gate; a write issued from inside the
 // memory adapter can reach neither. Both the native loop and the external
 // runtimes reach these through this provider, so one definition covers both.
-func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider.Provider) []sdk.Tool {
-	return []sdk.Tool{
+func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider.Provider) []toolexec.Tool {
+	return []toolexec.Tool{
 		{
 			Name: ToolCreateMemory().String(),
 			Description: "Save one durable fact to long-term memory, so a later conversation can " +
@@ -151,7 +150,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				"person. Search memory first: when the fact is already stored, update that entry " +
 				"instead of adding a second one. Skip transient task state, secrets, and anything " +
 				"the user asked you not to keep.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"memory": map[string]any{
@@ -173,8 +172,8 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 					},
 				},
 				"required": []string{"memory"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				memory, err := memoryWriteBody(args)
 				if err != nil {
@@ -201,7 +200,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolCreateMemory().String(), memory, stringField(out, "id"))
 				return out, nil
-			},
+			}),
 		},
 		{
 			Name: ToolUpdateMemory().String(),
@@ -209,7 +208,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				"searching memory. Use this whenever a remembered fact changed or turned out to " +
 				"be wrong — saving a corrected copy instead leaves the stale one in play, and " +
 				"both come back on the next recall.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
@@ -222,8 +221,8 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 					},
 				},
 				"required": []string{"id", "memory"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				memoryID := strings.TrimSpace(mcp.StringArg(args, "id"))
 				if memoryID == "" {
@@ -247,13 +246,13 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolUpdateMemory().String(), memory, memoryID)
 				return map[string]any{"id": firstNonEmpty(strings.TrimSpace(item.ID), memoryID), "memory": memory}, nil
-			},
+			}),
 		},
 		{
 			Name: ToolDeleteMemory().String(),
 			Description: "Delete a memory by id when the fact no longer holds and no replacement " +
 				"belongs in its place. Prefer updating over deleting when the fact merely changed.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
@@ -262,8 +261,8 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 					},
 				},
 				"required": []string{"id"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				memoryID := strings.TrimSpace(mcp.StringArg(inputAsMap(input), "id"))
 				if memoryID == "" {
 					return nil, errors.New("id is required")
@@ -277,7 +276,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolDeleteMemory().String(), "", memoryID)
 				return map[string]any{"id": memoryID, "deleted": true}, nil
-			},
+			}),
 		},
 	}
 }

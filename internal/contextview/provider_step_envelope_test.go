@@ -11,6 +11,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestProviderStepReselectionRescuesEnvelopeS3HugeResult(t *testing.T) {
@@ -33,7 +34,7 @@ func TestProviderStepReselectionRescuesEnvelopeS3HugeResult(t *testing.T) {
 	system := strings.Repeat("s", 10_000)
 	tools := []sdk.ToolDefinition{{
 		Name: "exec", Description: "Execute a bounded command.",
-		Parameters: json.RawMessage(`{"properties":{"command":{"type":"string"}},"type":"object"}`),
+		Parameters: toolexec.SchemaFromValue(json.RawMessage(`{"properties":{"command":{"type":"string"}},"type":"object"}`)),
 	}}
 	if candidateTokens := contextfrag.ProviderEnvelopeTokens(system, messages, tools); candidateTokens <= inputAllowance {
 		t.Fatalf("literal S3 candidate = %d tokens, want over allowance %d", candidateTokens, inputAllowance)
@@ -81,7 +82,7 @@ func TestProviderStepReselectionTightensEnvelopeS3HugeResultWhenDroppable(t *tes
 	system := strings.Repeat("s", 10_000)
 	tools := []sdk.ToolDefinition{{
 		Name: "exec", Description: "Execute a bounded command.",
-		Parameters: json.RawMessage(`{"properties":{"command":{"type":"string"}},"type":"object"}`),
+		Parameters: toolexec.SchemaFromValue(json.RawMessage(`{"properties":{"command":{"type":"string"}},"type":"object"}`)),
 	}}
 	if candidateTokens := contextfrag.ProviderEnvelopeTokens(system, messages, tools); candidateTokens <= inputAllowance {
 		t.Fatalf("literal S3 candidate = %d tokens, want over allowance %d", candidateTokens, inputAllowance)

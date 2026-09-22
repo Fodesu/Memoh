@@ -12,6 +12,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/workspace"
 )
@@ -67,12 +68,12 @@ func TestToolApprovalHandlerLimitsForcedApprovalRejectionReason(t *testing.T) {
 	result, err := handler(native.ContextWithHookForcedApproval(context.Background(), large), sdk.ToolCall{
 		ToolCallID: "call-1",
 		ToolName:   "write",
-		Input:      map[string]any{},
+		Input:      toolexec.ArgumentsFromValue(map[string]any{}),
 	})
 	if err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
-	if result.Decision != sdk.ToolApprovalDecisionRejected {
+	if result.Decision != toolexec.ToolApprovalDecisionRejected {
 		t.Fatalf("decision = %q, want rejected", result.Decision)
 	}
 	if len(result.Reason) >= len(large) {
@@ -98,12 +99,12 @@ func TestToolApprovalPolicyDenyWinsOverHookForcedApproval(t *testing.T) {
 	result, err := handler(native.ContextWithHookForcedApproval(context.Background(), "hook asks for review"), sdk.ToolCall{
 		ToolCallID: "call-1",
 		ToolName:   "read",
-		Input:      map[string]any{"path": "/data/file.txt"},
+		Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/file.txt"}),
 	})
 	if err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
-	if result.Decision != sdk.ToolApprovalDecisionRejected || result.Reason != toolapproval.PolicyDeniedReason {
+	if result.Decision != toolexec.ToolApprovalDecisionRejected || result.Reason != toolapproval.PolicyDeniedReason {
 		t.Fatalf("result = %+v, want policy rejection", result)
 	}
 }
@@ -138,16 +139,16 @@ func TestToolApprovalHandlerOnlyRecoversMissingWorkspaceTarget(t *testing.T) {
 			result, err := handler(context.Background(), sdk.ToolCall{
 				ToolCallID: "call-1",
 				ToolName:   "exec",
-				Input: map[string]any{
+				Input: toolexec.ArgumentsFromValue(map[string]any{
 					"command":   "node --version",
 					"target_id": "server_workspace",
-				},
+				}),
 			})
 			if tt.wantApproved {
 				if err != nil {
 					t.Fatalf("handler returned error: %v", err)
 				}
-				if result.Decision != sdk.ToolApprovalDecisionApproved {
+				if result.Decision != toolexec.ToolApprovalDecisionApproved {
 					t.Fatalf("decision = %q, want approved", result.Decision)
 				}
 				return

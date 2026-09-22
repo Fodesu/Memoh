@@ -13,6 +13,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/felinics/memoh/internal/agent/runtime/native"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -36,7 +37,7 @@ func TestProviderStepReselectionKeepsPhotoInFrozenPrefixWithinEnvelope(t *testin
 		toolResultMessage("call-weather", "lookup", "sunny, 25C"),
 	)
 	system := strings.Repeat("s", 8_000)
-	tools := []sdk.ToolDefinition{{Name: "lookup", Description: "Look something up.", Parameters: json.RawMessage(`{"type":"object"}`)}}
+	tools := []sdk.ToolDefinition{{Name: "lookup", Description: "Look something up.", Parameters: toolexec.SchemaFromValue(json.RawMessage(`{"type":"object"}`))}}
 
 	plan, err := ComputeContextBudgetPlan(128_000, models.DefaultOutputReserveTokens, 0, 0)
 	if err != nil {
@@ -69,9 +70,9 @@ func TestProviderStepReselectionKeepsPhotoInFrozenPrefixWithinEnvelope(t *testin
 	}
 }
 
-type envelopeProbeToolProvider struct{ tools []sdk.Tool }
+type envelopeProbeToolProvider struct{ tools []toolexec.Tool }
 
-func (p envelopeProbeToolProvider) Tools(context.Context, agenttools.SessionContext) ([]sdk.Tool, error) {
+func (p envelopeProbeToolProvider) Tools(context.Context, agenttools.SessionContext) ([]toolexec.Tool, error) {
 	return p.tools, nil
 }
 
@@ -116,18 +117,18 @@ func TestAgentToolLoopSurvivesPhotoInFrozenPrefix(t *testing.T) {
 			provider := &envelopeProbeProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 				if call == 1 {
 					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{
-						ToolCallID: "call-weather", ToolName: "lookup", Input: map[string]any{"q": "weather"},
+						ToolCallID: "call-weather", ToolName: "lookup", Input: toolexec.ArgumentsFromValue(map[string]any{"q": "weather"}),
 					}}}, nil
 				}
 				return sdk.ModelResult{Text: "sunny", FinishReason: sdk.FinishReasonStop}, nil
 			}}
 			agent := agentpkg.New(agentpkg.Deps{ContextViewApplier: ProviderRunConfigApplier(nil)})
-			agent.SetToolProviders([]agenttools.ToolProvider{envelopeProbeToolProvider{tools: []sdk.Tool{{
+			agent.SetToolProviders([]agenttools.ToolProvider{envelopeProbeToolProvider{tools: []toolexec.Tool{{
 				Name:       "lookup",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"weather": "sunny"}, nil
-				},
+				}),
 			}}}})
 			currentIndex := 0
 			ledger := contextfrag.NewMutationLedger()

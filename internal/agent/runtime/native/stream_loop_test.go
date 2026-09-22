@@ -14,6 +14,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestAgentGenerateRejectsNonPrefixPreservingStepSelectionWithoutMutationRecord(t *testing.T) {
@@ -29,7 +30,7 @@ func TestAgentGenerateRejectsNonPrefixPreservingStepSelectionWithoutMutationReco
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-guard",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			}
@@ -40,12 +41,12 @@ func TestAgentGenerateRejectsNonPrefixPreservingStepSelectionWithoutMutationReco
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"answer": "ok"}, nil
-			},
+			}),
 		}}},
 	})
 
@@ -91,7 +92,7 @@ func TestAgentStreamStopsOnToolLoopAbort(t *testing.T) {
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-stream",
 					ToolName:   "loop_tool",
-					Input:      map[string]any{"query": "same"},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"query": "same"}),
 				}},
 			}, nil
 		},
@@ -100,12 +101,12 @@ func TestAgentStreamStopsOnToolLoopAbort(t *testing.T) {
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
 		staticToolProvider{
-			tools: []sdk.Tool{{
+			tools: []toolexec.Tool{{
 				Name:       "loop_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"ok": true}, nil
-				},
+				}),
 			}},
 		},
 	})

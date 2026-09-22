@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -76,15 +76,15 @@ func (*HistoryProvider) Usage(_ context.Context, _ SessionContext, available Ava
 	return usageSection("Sessions & History", parts)
 }
 
-func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]sdk.Tool, error) {
-	var tools []sdk.Tool
+func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]toolexec.Tool, error) {
+	var tools []toolexec.Tool
 
 	if p.sessions != nil {
 		s := sess
-		tools = append(tools, sdk.Tool{
+		tools = append(tools, toolexec.Tool{
 			Name:        ToolListSessions().String(),
 			Description: "List chat sessions accessible from the current user or channel route, with their bound contact/route information.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"type": map[string]any{
@@ -102,19 +102,19 @@ func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]sdk.T
 					},
 				},
 				"required": []string{},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execListSessions(ctx.Context, s, inputAsMap(input))
-			},
+			}),
 		})
 	}
 
 	if p.messages != nil {
 		s := sess
-		tools = append(tools, sdk.Tool{
+		tools = append(tools, toolexec.Tool{
 			Name:        ToolGetMessages().String(),
 			Description: "Get recent messages from a chat session, or resolve one exact message ID. Defaults to the current session. Results are returned oldest-first.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_id": map[string]any{
@@ -135,19 +135,19 @@ func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]sdk.T
 					},
 				},
 				"required": []string{},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execGetMessages(ctx.Context, s, inputAsMap(input))
-			},
+			}),
 		})
 	}
 
 	if p.queries != nil {
 		s := sess
-		tools = append(tools, sdk.Tool{
+		tools = append(tools, toolexec.Tool{
 			Name:        ToolSearchMessages().String(),
 			Description: "Search message history across sessions accessible from the current user or channel route. Supports filtering by time range, keyword, session, contact, and role. All parameters are optional. If start_time is not provided, only the last 7 days are searched.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"start_time": map[string]any{
@@ -181,10 +181,10 @@ func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]sdk.T
 					},
 				},
 				"required": []string{},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execSearchMessages(ctx.Context, s, inputAsMap(input))
-			},
+			}),
 		})
 	}
 

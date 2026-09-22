@@ -11,6 +11,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // usageTestProvider is a ToolProvider that also implements tools.ToolUsage. It
@@ -25,7 +26,7 @@ type usageTestProvider struct {
 	sessionSeen   *tools.SessionContext
 }
 
-func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContext) ([]sdk.Tool, error) {
+func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContext) ([]toolexec.Tool, error) {
 	if p.sessionSeen != nil {
 		*p.sessionSeen = session
 	}
@@ -36,7 +37,7 @@ func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContex
 	if name == "" {
 		name = "fake_tool"
 	}
-	return []sdk.Tool{{Name: name, Description: "fake"}}, nil
+	return []toolexec.Tool{{Name: name, Description: "fake"}}, nil
 }
 
 func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, available tools.AvailableTools) string {
@@ -52,16 +53,16 @@ func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, ava
 // plainTestProvider returns a tool but does NOT implement tools.ToolUsage.
 type plainTestProvider struct{}
 
-func (plainTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{{Name: tools.ToolRead().String(), Description: "plain"}}, nil
+func (plainTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]toolexec.Tool, error) {
+	return []toolexec.Tool{{Name: tools.ToolRead().String(), Description: "plain"}}, nil
 }
 
 type labeledTestProvider struct{ label string }
 
 func (p labeledTestProvider) ProviderLabel() string { return p.label }
 
-func (labeledTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{{Name: "remote_tool", Description: "remote"}}, nil
+func (labeledTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]toolexec.Tool, error) {
+	return []toolexec.Tool{{Name: "remote_tool", Description: "remote"}}, nil
 }
 
 func newTestAgent(providers ...tools.ToolProvider) *Agent {

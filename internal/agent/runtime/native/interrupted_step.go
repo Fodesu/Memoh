@@ -6,6 +6,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/step"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // interruptedStepCapture retains only the current model call's text and
@@ -14,7 +15,7 @@ import (
 // finish event was still buffered for this consumer.
 type interruptedStepCapture struct {
 	text                 strings.Builder
-	textProviderMetadata map[string]any
+	textProviderMetadata sdk.ProviderMetadata
 	reasoningBlocks      reasoningBlockCapture
 	toolActivity         bool
 	finished             bool
@@ -63,7 +64,7 @@ func (c *reasoningBlockCapture) observe(
 	id, text string,
 	format sdk.ReasoningFormat,
 	model string,
-	meta map[string]any,
+	meta sdk.ProviderMetadata,
 ) {
 	idx := c.at(id)
 	c.parts[idx].Text += text
@@ -73,15 +74,7 @@ func (c *reasoningBlockCapture) observe(
 	if model != "" {
 		c.parts[idx].Model = model
 	}
-	if len(meta) == 0 {
-		return
-	}
-	if c.parts[idx].ProviderMetadata == nil {
-		c.parts[idx].ProviderMetadata = make(map[string]any, len(meta))
-	}
-	for key, value := range meta {
-		c.parts[idx].ProviderMetadata[key] = value
-	}
+	c.parts[idx].ProviderMetadata = c.parts[idx].ProviderMetadata.Merge(meta)
 }
 
 func (c *reasoningBlockCapture) messageParts() []sdk.MessagePart {
@@ -164,8 +157,8 @@ func (c *interruptedStepCapture) observe(part sdk.StreamPart) {
 	case *sdk.ReasoningEndPart:
 		c.reasoningBlocks.observe(p.ID, "", p.Format, p.Model, p.ProviderMetadata)
 	case *sdk.ToolInputStartPart, *sdk.ToolInputDeltaPart, *sdk.ToolInputEndPart,
-		*sdk.StreamToolCallPart, *sdk.StreamToolResultPart, *sdk.StreamToolErrorPart,
-		*sdk.ToolOutputDeniedPart, *sdk.ToolApprovalRequestPart, *sdk.ToolProgressPart:
+		*sdk.StreamToolCallPart, *toolexec.StreamToolResultPart, *toolexec.StreamToolErrorPart,
+		*toolexec.ToolOutputDeniedPart, *toolexec.ToolApprovalRequestPart, *toolexec.ToolProgressPart:
 		c.toolActivity = true
 	case *sdk.FinishStepPart:
 		c.finished = true

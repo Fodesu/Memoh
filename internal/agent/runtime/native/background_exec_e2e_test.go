@@ -2,7 +2,6 @@ package native
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
@@ -186,11 +186,11 @@ func TestE2E_ExplicitBackgroundExec(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "exec",
-						Input: map[string]any{
+						Input: toolexec.ArgumentsFromValue(map[string]any{
 							"command":           "npm install",
 							"run_in_background": true,
 							"description":       "Install dependencies",
-						},
+						}),
 					}},
 				}, nil
 			case 2:
@@ -203,9 +203,9 @@ func TestE2E_ExplicitBackgroundExec(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-2",
 						ToolName:   "exec",
-						Input: map[string]any{
+						Input: toolexec.ArgumentsFromValue(map[string]any{
 							"command": "echo hello",
-						},
+						}),
 					}},
 				}, nil
 			case 3:
@@ -294,11 +294,11 @@ func TestE2E_ForegroundTimeoutFlip(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "exec",
-						Input: map[string]any{
+						Input: toolexec.ArgumentsFromValue(map[string]any{
 							"command":     "slow-build",
 							"timeout":     1, // 1 second — will flip
 							"description": "Run slow build",
-						},
+						}),
 					}},
 				}, nil
 			case 2:
@@ -394,9 +394,9 @@ func TestE2E_SleepRejection(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "exec",
-						Input: map[string]any{
+						Input: toolexec.ArgumentsFromValue(map[string]any{
 							"command": "sleep 10",
-						},
+						}),
 					}},
 				}, nil
 			case 2:
@@ -469,11 +469,11 @@ func TestE2E_RunningTasksSummaryInjected(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "exec",
-						Input: map[string]any{
+						Input: toolexec.ArgumentsFromValue(map[string]any{
 							"command":           "long-task",
 							"run_in_background": true,
 							"description":       "Long running task",
-						},
+						}),
 					}},
 				}, nil
 			case 2:
@@ -483,9 +483,9 @@ func TestE2E_RunningTasksSummaryInjected(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-2",
 						ToolName:   "exec",
-						Input: map[string]any{
+						Input: toolexec.ArgumentsFromValue(map[string]any{
 							"command": "echo check",
-						},
+						}),
 					}},
 				}, nil
 			case 3:
@@ -550,9 +550,7 @@ func extractToolResult(t *testing.T, params sdk.Request, toolCallID string) map[
 			if !ok || tr.ToolCallID != toolCallID {
 				continue
 			}
-			raw, _ := json.Marshal(tr.Result)
-			var m map[string]any
-			_ = json.Unmarshal(raw, &m)
+			m, _ := toolexec.OutputValue(tr.Result).(map[string]any)
 			return m
 		}
 	}
@@ -570,9 +568,7 @@ func extractToolResultWithError(params sdk.Request, toolCallID string) (map[stri
 			if !ok || tr.ToolCallID != toolCallID {
 				continue
 			}
-			raw, _ := json.Marshal(tr.Result)
-			var m map[string]any
-			_ = json.Unmarshal(raw, &m)
+			m, _ := toolexec.OutputValue(tr.Result).(map[string]any)
 			return m, tr.IsError
 		}
 	}

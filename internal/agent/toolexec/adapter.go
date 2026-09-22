@@ -1,0 +1,199 @@
+package toolexec
+
+import (
+	"encoding/json"
+	"fmt"
+	"reflect"
+
+	sdk "github.com/felinics/twilight/sdk"
+	"github.com/google/jsonschema-go/jsonschema"
+)
+
+// LegacyExecuteFunc is the handler contract Memoh's tools were written against
+// before the SDK typed its tool boundary: the decoded arguments as a plain JSON
+// value (an object decodes to map[string]any) and an output the provider
+// serialized on the way to the model. AdaptLegacyExecute runs such a handler
+// on the typed contract; new tools should implement ToolExecuteFunc directly.
+type LegacyExecuteFunc func(ctx *ToolExecContext, input any) (any, error)
+
+// AdaptLegacyExecute bridges a LegacyExecuteFunc onto ToolExecuteFunc. The
+// arguments are decoded exactly as the untyped SDK decoded them, and the
+// output is typed the way the untyped SDK's providers serialized it: a string
+// is text, anything else is its JSON encoding.
+func AdaptLegacyExecute(execute LegacyExecuteFunc) ToolExecuteFunc {
+	if execute == nil {
+		return nil
+	}
+	return func(ctx *ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+		output, err := execute(ctx, ArgumentsValue(input))
+		if err != nil {
+			return sdk.ToolOutput{}, err
+		}
+		return EncodeOutput(output)
+	}
+}
+
+// AdaptLegacyProgress bridges a progress sink written for the untyped contract
+// onto the typed one; a nil sink stays nil so tools can keep testing for it.
+func AdaptLegacyProgress(send func(content sdk.ToolOutput)) func(content any) {
+	if send == nil {
+		return nil
+	}
+	return func(content any) {
+		send(OutputFromValue(content))
+	}
+}
+
+// ArgumentsValue is the arguments as a plain JSON value: an object decodes to
+// map[string]any, the zero value is the empty object, and invalid arguments
+// are their text verbatim (a tool never sees them through ExecuteTools, which
+// answers the model first; a direct caller may).
+func ArgumentsValue(args sdk.ToolArguments) any {
+	if !args.Valid() {
+		return args.Text
+	}
+	if args.JSON == nil {
+		return map[string]any{}
+	}
+	var value any
+	if err := json.Unmarshal(args.JSON, &value); err != nil {
+		return string(args.JSON)
+	}
+	return value
+}
+
+// ArgumentsFromValue types a plain JSON value as tool arguments. Text is
+// classified the way a provider classifies the model's argument text; any
+// other value is encoded.
+func ArgumentsFromValue(value any) sdk.ToolArguments {
+	switch v := value.(type) {
+	case nil:
+		return sdk.ToolArguments{}
+	case sdk.ToolArguments:
+		return v
+	case string:
+		return sdk.ParseToolArguments(v)
+	case json.RawMessage:
+		return sdk.ParseToolArguments(string(v))
+	case []byte:
+		return sdk.ParseToolArguments(string(v))
+	}
+	args, err := sdk.ToolArgumentsJSON(value)
+	if err != nil {
+		return sdk.ToolArguments{Text: fmt.Sprint(value)}
+	}
+	return args
+}
+
+// OutputValue is the output as a plain JSON value: a JSON document decodes,
+// text stays a string.
+func OutputValue(output sdk.ToolOutput) any {
+	if !output.IsJSON() {
+		return output.Text
+	}
+	var value any
+	if err := json.Unmarshal(output.JSON, &value); err != nil {
+		return string(output.JSON)
+	}
+	return value
+}
+
+// EncodeOutput types a plain value as a tool output: a string is text, a
+// byte slice is its text, an encoded document is kept, anything else is
+// encoded. The error is the encoding failure of a value that cannot be JSON.
+func EncodeOutput(value any) (sdk.ToolOutput, error) {
+	switch v := value.(type) {
+	case nil:
+		return sdk.ToolOutput{}, nil
+	case sdk.ToolOutput:
+		return v, nil
+	case string:
+		return sdk.TextOutput(v), nil
+	case []byte:
+		return sdk.TextOutput(string(v)), nil
+	case json.RawMessage:
+		return sdk.RawJSONOutput(v), nil
+	}
+	return sdk.JSONOutput(value)
+}
+
+// SchemaFromValue resolves a tool's parameter schema from the shapes Memoh
+// builds it in: an already resolved schema, a JSON object (map or raw
+// document), or a struct type whose schema is inferred. A value that resolves
+// to nothing yields the empty object schema so the definition is never sent
+// without parameters.
+func SchemaFromValue(value any) *jsonschema.Schema {
+	if schema, ok := schemaFromValue(value); ok && schema != nil {
+		return schema
+	}
+	return &jsonschema.Schema{Type: "object"}
+}
+
+func schemaFromValue(value any) (*jsonschema.Schema, bool) {
+	switch v := value.(type) {
+	case nil:
+		return nil, false
+	case *jsonschema.Schema:
+		return v, true
+	case jsonschema.Schema:
+		return &v, true
+	case map[string]any:
+		return schemaFromJSON(v)
+	case json.RawMessage:
+		return schemaFromJSON(v)
+	case []byte:
+		return schemaFromJSON(json.RawMessage(v))
+	}
+	typ := reflect.TypeOf(value)
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return nil, false
+	}
+	schema, err := jsonschema.ForType(typ, nil)
+	if err != nil {
+		return nil, false
+	}
+	return schema, true
+}
+
+func schemaFromJSON(value any) (*jsonschema.Schema, bool) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return nil, false
+	}
+	return &schema, true
+}
+
+// OutputFromValue is EncodeOutput for a value that is already JSON-shaped
+// (decoded from a row, an event or a decision record): a value that still
+// cannot be encoded becomes its printed form as text rather than an error.
+func OutputFromValue(value any) sdk.ToolOutput {
+	output, err := EncodeOutput(value)
+	if err != nil {
+		return sdk.TextOutput(fmt.Sprint(value))
+	}
+	return output
+}
+
+// SchemaValue is a parameter schema as the JSON object it encodes to, the
+// shape Memoh's MCP gateway and its tests inspect; nil is the empty object.
+func SchemaValue(schema *jsonschema.Schema) map[string]any {
+	if schema == nil {
+		return map[string]any{}
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return map[string]any{}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil || out == nil {
+		return map[string]any{}
+	}
+	return out
+}

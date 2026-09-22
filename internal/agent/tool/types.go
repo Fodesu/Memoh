@@ -15,6 +15,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/tool/internal/toolset"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // SkillDetail holds the description and content of a loadable skill.
@@ -228,10 +229,10 @@ func providerNeutralMessages(messages []sdk.Message) []sdk.Message {
 					clean.Content = append(clean.Content, sdk.FilePart{Data: value.Data, MediaType: value.MediaType, Filename: value.Filename})
 				}
 			case sdk.ToolCallPart:
-				clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: value.Input})
+				clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: toolexec.ArgumentsFromValue(value.Input)})
 			case *sdk.ToolCallPart:
 				if value != nil {
-					clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: value.Input})
+					clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: toolexec.ArgumentsFromValue(value.Input)})
 				}
 			case sdk.ToolResultPart:
 				clean.Content = append(clean.Content, value)
@@ -416,13 +417,13 @@ type ProviderLabeler interface {
 // Tools() is called per-request; implementations may return different
 // tool sets based on session context (e.g. subagent restrictions, bot settings).
 type ToolProvider interface {
-	Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error)
+	Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error)
 }
 
 // AvailableTools is the set of tool names registered for the current session.
 type AvailableTools = toolset.Available
 
-func NewAvailableTools(tools []sdk.Tool) AvailableTools {
+func NewAvailableTools(tools []toolexec.Tool) AvailableTools {
 	names := make([]ToolName, 0, len(tools))
 	for _, tool := range tools {
 		name := strings.TrimSpace(tool.Name)

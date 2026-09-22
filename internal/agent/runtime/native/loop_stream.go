@@ -16,13 +16,14 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/hooks"
 )
 
 // runStream runs the streaming agent invocation with a Memoh-owned step loop:
 // every step performs exactly one Provider.DoStream call, consumes its part
-// stream into events, and executes its tool batch through sdk.ExecuteTools. A
+// stream into events, and executes its tool batch through toolexec.ExecuteTools. A
 // final step whose commit returns NextInputs continues on the next inner-loop
 // iteration of the same engine.
 func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
@@ -85,7 +86,7 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 		cfg.ForkContext = tools.NewMessageSnapshotWithSources(cfg.Messages, cfg.ForkContextSourceMessageIDs)
 	}
 
-	var sdkTools []sdk.Tool
+	var sdkTools []toolexec.Tool
 	cfg.ContextToolDefsResolved = true
 	if cfg.SupportsToolCall {
 		var toolUsage string
@@ -124,7 +125,7 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 			Type:       EventToolCallMetadata,
 			ToolName:   call.ToolName,
 			ToolCallID: call.ToolCallID,
-			Input:      call.Input,
+			Input:      toolexec.ArgumentsValue(call.Input),
 			Metadata:   metadata,
 		})
 	})
@@ -233,7 +234,9 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 			}
 		})
 	}
-	go eng.run()
+	// The engine runs on the segment context it was built with; the steer
+	// checkpoint derives its origin-marked context from that field by design.
+	go eng.run() //nolint:contextcheck
 
 	engineClosed := false
 	for !aborted && !engineClosed {
@@ -401,7 +404,7 @@ func drainEventsUntilClosed(events <-chan StreamEvent, grace time.Duration) bool
 }
 
 // streamEngine owns one segment's step loop: per-step provider dispatch, part
-// consumption, tool batches through sdk.ExecuteTools, the commit barrier, and
+// consumption, tool batches through toolexec.ExecuteTools, the commit barrier, and
 // the inline mid-stream retry. It runs on its own goroutine, publishes
 // StreamEvents to events, and closes that channel on exit; every other field
 // under "published state" is safe to read only after the close is observed.
@@ -418,8 +421,8 @@ type streamEngine struct {
 	events    chan StreamEvent
 
 	dispatch      generateDispatch
-	sdkTools      []sdk.Tool
-	approvalTools []sdk.Tool
+	sdkTools      []toolexec.Tool
+	approvalTools []toolexec.Tool
 	prepareStep   func(*sdk.Request) *sdk.Request
 
 	toolExecutionMetadata  *toolExecutionMetadataRegistry
@@ -439,14 +442,14 @@ type streamEngine struct {
 	steer    *modelSteerGate
 	modelCtx context.Context
 
-	// mu serializes the tool-part bridge: sdk.ExecuteTools may invoke OnPart
+	// mu serializes the tool-part bridge: toolexec.ExecuteTools may invoke OnPart
 	// from parallel tool goroutines.
 	mu sync.Mutex
 
 	// published state, read by the segment owner after events closes.
 	steps           []step.Record
 	outMessages     []sdk.Message
-	deferred        *sdk.ToolApprovalResult
+	deferred        *toolexec.ToolApprovalResult
 	interruptedStep interruptedStepCapture
 	nextDurableStep int
 	aborted         bool
@@ -743,7 +746,7 @@ func (e *streamEngine) consumeStep(
 ) (retryMsg string, retryable bool, done bool) {
 	var (
 		stepText            string
-		stepTextMeta        map[string]any
+		stepTextMeta        sdk.ProviderMetadata
 		stepReasoning       reasoningBlockCapture
 		stepToolCalls       []sdk.ToolCall
 		stepErrored         bool
@@ -866,7 +869,7 @@ partLoop:
 			stepToolCalls = append(stepToolCalls, sdk.ToolCall{
 				ToolCallID:       p.ToolCallID,
 				ToolName:         p.ToolName,
-				Input:            p.Input,
+				Input:            toolexec.ArgumentsFromValue(p.Input),
 				ProviderMetadata: p.ProviderMetadata,
 			})
 			if e.textLoopProbeBuffer != nil {
@@ -876,14 +879,14 @@ partLoop:
 				Type:       EventToolCallStart,
 				ToolName:   p.ToolName,
 				ToolCallID: p.ToolCallID,
-				Input:      p.Input,
+				Input:      toolexec.ArgumentsValue(p.Input),
 			}) {
 				e.aborted = true
 			}
 
-		case *sdk.ToolProgressPart, *sdk.ToolApprovalRequestPart,
-			*sdk.StreamToolResultPart, *sdk.StreamToolErrorPart,
-			*sdk.ToolOutputDeniedPart:
+		case *toolexec.ToolProgressPart, *toolexec.ToolApprovalRequestPart,
+			*toolexec.StreamToolResultPart, *toolexec.StreamToolErrorPart,
+			*toolexec.ToolOutputDeniedPart:
 			e.mu.Lock()
 			e.forwardToolPart(part)
 			e.mu.Unlock()
@@ -969,7 +972,6 @@ partLoop:
 	// finish-step detection, interruption and the live events all run on these
 	// same accumulators.
 	stepResult := func() sdk.ModelResult {
-		response := stepResponse
 		return sdk.ModelResult{
 			Text:            stepText,
 			Reasoning:       stepReasoning.text(),
@@ -978,13 +980,13 @@ partLoop:
 			RawFinishReason: stepRawFinishReason,
 			Usage:           stepUsage,
 			ToolCalls:       stepToolCalls,
-			Response:        &response,
+			Response:        stepResponse,
 		}
 	}
 
 	// No tool calls, a non-tool-calls finish, or no executable tool → final step.
 	if stepFinishReason != sdk.FinishReasonToolCalls || len(stepToolCalls) == 0 || !hasExecutableToolCall(e.dispatch.execTools, stepToolCalls) {
-		stepMsgs := sdk.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, nil, &stepUsage)
+		stepMsgs := toolexec.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, nil, &stepUsage)
 		sr := step.Record{Result: stepResult(), Messages: stepMsgs}
 		dir, err := e.commitStep(attemptStep, &sr)
 		if err != nil {
@@ -1008,7 +1010,7 @@ partLoop:
 	// Execute the tool batch through the single-batch primitive; its OnPart
 	// callback bridges approval, progress, result, and error parts onto the
 	// event channel exactly where the SDK loop used to forward them.
-	outcome, err := sdk.ExecuteTools(e.streamCtx, stepToolCalls, sdk.ToolExecOptions{
+	outcome, err := toolexec.ExecuteTools(e.streamCtx, stepToolCalls, toolexec.ToolExecOptions{
 		Tools:   e.dispatch.execTools,
 		Approve: e.dispatch.approve,
 		OnPart:  e.bridgeToolPart,
@@ -1022,11 +1024,11 @@ partLoop:
 		// returns, so outcome.Results carries real output. The step persists
 		// those results; the deferred call and everything after it stay as
 		// dangling ToolCallParts until the approval resolves.
-		stepMsgs := sdk.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, outcome.Results, &stepUsage)
+		stepMsgs := toolexec.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, outcome.Results, &stepUsage)
 		sr := step.Record{
 			Result:      stepResult(),
 			Deferred:    outcome.Deferred,
-			ToolResults: sdk.ToolCallResults(stepToolCalls, outcome.Results),
+			ToolResults: toolexec.ToolCallResults(stepToolCalls, outcome.Results),
 			Messages:    stepMsgs,
 		}
 		if _, err := e.commitStep(attemptStep, &sr); err != nil {
@@ -1041,8 +1043,8 @@ partLoop:
 		return "", false, true
 	}
 
-	stepMsgs := sdk.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, outcome.Results, &stepUsage)
-	sr := step.Record{Result: stepResult(), ToolResults: sdk.ToolCallResults(stepToolCalls, outcome.Results), Messages: stepMsgs}
+	stepMsgs := toolexec.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, outcome.Results, &stepUsage)
+	sr := step.Record{Result: stepResult(), ToolResults: toolexec.ToolCallResults(stepToolCalls, outcome.Results), Messages: stepMsgs}
 	dir, err := e.commitStep(attemptStep, &sr)
 	if err != nil {
 		msg, retriable := e.streamFailure(err)
@@ -1173,7 +1175,7 @@ func (e *streamEngine) afterStep(attemptStep int, sr *step.Record) {
 	e.agent.runAfterModelCallHook(e.streamCtx, e.cfg, sr, attemptStep)
 }
 
-// bridgeToolPart is the sdk.ExecuteTools OnPart callback. Parallel tool
+// bridgeToolPart is the toolexec.ExecuteTools OnPart callback. Parallel tool
 // executions may invoke it concurrently, so it serializes on e.mu before
 // touching the interrupted-step capture or the event channel.
 func (e *streamEngine) bridgeToolPart(part sdk.StreamPart) {
@@ -1188,18 +1190,18 @@ func (e *streamEngine) bridgeToolPart(part sdk.StreamPart) {
 // matching the legacy consumer switch.
 func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 	switch p := part.(type) {
-	case *sdk.ToolProgressPart:
+	case *toolexec.ToolProgressPart:
 		if !e.emit(StreamEvent{
 			Type:       EventToolCallProgress,
 			ToolName:   p.ToolName,
 			ToolCallID: p.ToolCallID,
 			Metadata:   e.toolExecutionMetadata.metadata(p.ToolCallID),
-			Progress:   p.Content,
+			Progress:   toolexec.OutputValue(p.Content),
 		}) {
 			e.aborted = true
 		}
 
-	case *sdk.ToolApprovalRequestPart:
+	case *toolexec.ToolApprovalRequestPart:
 		eventType := EventToolApprovalRequest
 		var userInputID string
 		var approvalID string
@@ -1217,22 +1219,22 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 			UserInputID: userInputID,
 			ShortID:     approvalShortID(p.Metadata),
 			Status:      "pending",
-			Input:       p.Input,
+			Input:       toolexec.ArgumentsValue(p.Input),
 			Metadata:    p.Metadata,
 		}) {
 			e.aborted = true
 		}
 
-	case *sdk.StreamToolResultPart:
+	case *toolexec.StreamToolResultPart:
 		shouldAbort := e.toolLoopAbortCallIDs.Take(p.ToolCallID)
 		e.stepNumber++
 		if !e.emit(StreamEvent{
 			Type:       EventToolCallEnd,
 			ToolName:   p.ToolName,
 			ToolCallID: p.ToolCallID,
-			Input:      p.Input,
+			Input:      toolexec.ArgumentsValue(p.Input),
 			Metadata:   e.toolExecutionMetadata.metadata(p.ToolCallID),
-			Result:     p.Output,
+			Result:     toolexec.OutputValue(p.Output),
 		}) || !e.emit(StreamEvent{
 			Type:           EventProgress,
 			StepNumber:     e.stepNumber,
@@ -1247,7 +1249,7 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 			e.aborted = true
 		}
 
-	case *sdk.StreamToolErrorPart:
+	case *toolexec.StreamToolErrorPart:
 		// Take before errors.Is so registry IDs from the loop guard are always cleared.
 		tookLoopAbort := e.toolLoopAbortCallIDs.Take(p.ToolCallID)
 		shouldAbort := errors.Is(p.Error, ErrToolLoopDetected) || tookLoopAbort
@@ -1270,7 +1272,7 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 
 // hasExecutableToolCall reports whether any call in the batch resolves to a
 // tool with an execute handler, mirroring the SDK loop's final-step check.
-func hasExecutableToolCall(execTools []sdk.Tool, calls []sdk.ToolCall) bool {
+func hasExecutableToolCall(execTools []toolexec.Tool, calls []sdk.ToolCall) bool {
 	for _, call := range calls {
 		for i := range execTools {
 			if execTools[i].Name == call.ToolName && execTools[i].Execute != nil {

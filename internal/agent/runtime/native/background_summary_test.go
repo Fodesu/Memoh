@@ -13,6 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
@@ -110,7 +111,7 @@ func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: fmt.Sprintf("call-%d", call),
 						ToolName:   "lookup",
-						Input:      map[string]any{"step": call},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"step": call}),
 					}},
 				}, nil
 			}
@@ -120,12 +121,12 @@ func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"ok": true}, nil
-			},
+			}),
 		}}},
 	})
 

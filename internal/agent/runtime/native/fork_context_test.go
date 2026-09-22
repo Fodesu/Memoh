@@ -10,6 +10,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 type forkSnapshotToolProvider struct {
@@ -17,11 +18,11 @@ type forkSnapshotToolProvider struct {
 	snapshots [][]sdk.Message
 }
 
-func (p *forkSnapshotToolProvider) Tools(_ context.Context, session agenttools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{{
+func (p *forkSnapshotToolProvider) Tools(_ context.Context, session agenttools.SessionContext) ([]toolexec.Tool, error) {
+	return []toolexec.Tool{{
 		Name:       "capture_fork_context",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			messages, err := session.ForkContext.Messages()
 			if err != nil {
 				return nil, err
@@ -30,7 +31,7 @@ func (p *forkSnapshotToolProvider) Tools(_ context.Context, session agenttools.S
 			p.snapshots = append(p.snapshots, messages)
 			p.mu.Unlock()
 			return map[string]any{"captured": len(messages)}, nil
-		},
+		}),
 	}}, nil
 }
 
@@ -43,7 +44,7 @@ func TestForkContextTracksMessagesBeforeEachToolCallingStep(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: fmt.Sprintf("capture-call-%d", call),
 						ToolName:   "capture_fork_context",
-						Input:      map[string]any{},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{}),
 					}},
 				}, nil
 			}

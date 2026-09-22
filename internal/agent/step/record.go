@@ -13,7 +13,11 @@
 // for the per-step events the agent core will project.
 package step
 
-import sdk "github.com/felinics/twilight/sdk"
+import (
+	sdk "github.com/felinics/twilight/sdk"
+
+	"github.com/felinics/memoh/internal/agent/toolexec"
+)
 
 // Record is the runtime's record of a single model step.
 type Record struct {
@@ -21,17 +25,17 @@ type Record struct {
 	// provider seam.
 	Result sdk.ModelResult
 	// ToolResults holds the results the loop executed for this step's
-	// ToolCalls, joined to the originating calls by sdk.ToolCallResults, so
+	// ToolCalls, joined to the originating calls by toolexec.ToolCallResults, so
 	// each entry carries the call's Input beside the loop's Output. The SDK
 	// cannot fill this in: it never runs tools. The result parts themselves
 	// (with IsError and cache control) stay in Messages, which is this step's
 	// lossless record.
-	ToolResults []sdk.ToolResult
+	ToolResults []toolexec.ToolResult
 	// Messages holds the messages this step produced (assistant + tool),
 	// excluding any prior context from earlier steps.
 	Messages []sdk.Message
 	// Deferred is set when the step paused for tool approval instead of
 	// completing; the tool calls stay unexecuted and the step carries no tool
 	// messages.
-	Deferred *sdk.ToolApprovalResult
+	Deferred *toolexec.ToolApprovalResult
 }

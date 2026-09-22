@@ -12,6 +12,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // streamScript builds a DoStream implementation that plays back one scripted
@@ -63,7 +64,7 @@ func scriptToolCall(callID, toolName string) func(chan<- sdk.StreamPart) {
 	return func(ch chan<- sdk.StreamPart) {
 		ch <- &sdk.StartPart{}
 		ch <- &sdk.StartStepPart{}
-		ch <- &sdk.StreamToolCallPart{ToolCallID: callID, ToolName: toolName, Input: map[string]any{"q": "fold"}}
+		ch <- &sdk.StreamToolCallPart{ToolCallID: callID, ToolName: toolName, Input: toolexec.ArgumentsFromValue(map[string]any{"q": "fold"})}
 		ch <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls}
 		ch <- &sdk.FinishPart{FinishReason: sdk.FinishReasonToolCalls}
 	}
@@ -94,7 +95,7 @@ func countToolResultText(messages []sdk.Message, text string) int {
 			if !ok {
 				continue
 			}
-			if value, ok := result.Result.(string); ok && strings.Contains(value, text) {
+			if value, ok := toolexec.OutputValue(result.Result).(string); ok && strings.Contains(value, text) {
 				count++
 			}
 		}
@@ -275,7 +276,7 @@ func TestAgentStreamMidStreamRetryChainRecovers(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "chain-call-1",
 						ToolName:   "lookup",
-						Input:      map[string]any{"query": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"query": "one"}),
 					}},
 				}, nil
 			case 2, 3:

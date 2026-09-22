@@ -14,6 +14,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestAgentStreamRecordsLaterDuplicateInjectionRetainedByReselection(t *testing.T) {
@@ -47,12 +48,12 @@ func TestAgentStreamRecordsLaterDuplicateInjectionRetainedByReselection(t *testi
 		}
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	type recordedInjection struct {
@@ -140,12 +141,12 @@ func TestAgentStreamProviderStartFailureDoesNotPersistInjectedMessage(t *testing
 		}
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	var recorded []string
@@ -206,12 +207,12 @@ func TestAgentStreamRetryPreflightFailureDoesNotPersistUncommittedInjection(t *t
 		}
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	var selectorCalls int
@@ -281,12 +282,12 @@ func TestAgentStreamInterruptedInjectedMessageIsDurableExactlyOnce(t *testing.T)
 		}
 	}}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return map[string]any{"ok": true}, nil
-		},
+		}),
 	}}}})
 
 	var interrupted *step.Record

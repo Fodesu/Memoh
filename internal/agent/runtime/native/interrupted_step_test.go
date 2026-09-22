@@ -10,17 +10,18 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // agentStepBoundaryToolProvider exposes one trivially executable tool so the SDK
 // advances past step 0 and runs PrepareStep for the next step.
 type agentStepBoundaryToolProvider struct{}
 
-func (*agentStepBoundaryToolProvider) Tools(context.Context, agenttools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{{
+func (*agentStepBoundaryToolProvider) Tools(context.Context, agenttools.SessionContext) ([]toolexec.Tool, error) {
+	return []toolexec.Tool{{
 		Name:        "probe",
 		Description: "probe",
-		Execute:     func(*sdk.ToolExecContext, any) (any, error) { return "ok", nil },
+		Execute:     toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) { return "ok", nil }),
 	}}, nil
 }
 
@@ -47,7 +48,7 @@ func TestAgentStreamCheckpointWaitsForStepGoroutineToExit(t *testing.T) {
 			return closedAgentTestStream(
 				&sdk.StartStepPart{},
 				&sdk.TextDeltaPart{ID: "text", Text: "working"},
-				&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "probe", Input: map[string]any{}},
+				&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "probe", Input: toolexec.ArgumentsFromValue(map[string]any{})},
 				&sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls},
 			), nil
 		}

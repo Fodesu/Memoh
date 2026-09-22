@@ -12,6 +12,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -108,7 +109,7 @@ func (p *recordingPromptCacheProvider) DoGenerate(_ context.Context, params sdk.
 			ToolCalls: []sdk.ToolCall{{
 				ToolCallID: "call-1",
 				ToolName:   "noop",
-				Input:      map[string]any{},
+				Input:      toolexec.ArgumentsFromValue(map[string]any{}),
 			}},
 		}, nil
 	}
@@ -167,12 +168,12 @@ func cloneMessagePart(part sdk.MessagePart) sdk.MessagePart {
 			p.CacheControl = &cc
 		}
 		if p.ProviderMetadata != nil {
-			p.ProviderMetadata = cloneMap(p.ProviderMetadata)
+			p.ProviderMetadata = p.ProviderMetadata.Clone()
 		}
 		return p
 	case sdk.ReasoningPart:
 		if p.ProviderMetadata != nil {
-			p.ProviderMetadata = cloneMap(p.ProviderMetadata)
+			p.ProviderMetadata = p.ProviderMetadata.Clone()
 		}
 		return p
 	case sdk.ImagePart:
@@ -190,14 +191,6 @@ func cloneMessagePart(part sdk.MessagePart) sdk.MessagePart {
 	default:
 		return part
 	}
-}
-
-func cloneMap(in map[string]any) map[string]any {
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 func TestAgentGenerateBackgroundPrepareKeepsCachedAnthropicSystemPromoted(t *testing.T) {
@@ -221,11 +214,11 @@ func TestAgentGenerateBackgroundPrepareKeepsCachedAnthropicSystemPromoted(t *tes
 		},
 	}
 
-	testTools := []sdk.Tool{{
+	testTools := []toolexec.Tool{{
 		Name: "noop",
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return "ok", nil
-		},
+		}),
 	}}
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: testTools}})
@@ -287,11 +280,11 @@ func TestAgentGenerateRunningTaskSummaryInjectsUserMessageNotSystem(t *testing.T
 		},
 	}
 
-	testTools := []sdk.Tool{{
+	testTools := []toolexec.Tool{{
 		Name: "noop",
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return "ok", nil
-		},
+		}),
 	}}
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: testTools}})

@@ -3,14 +3,15 @@ package native
 import (
 	"context"
 	"fmt"
-	"github.com/felinics/memoh/internal/agent/step"
 	"strconv"
 	"testing"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 type capabilityRefreshProvider struct {
@@ -18,14 +19,14 @@ type capabilityRefreshProvider struct {
 	used      int
 }
 
-func (p *capabilityRefreshProvider) Tools(_ context.Context, session tools.SessionContext) ([]sdk.Tool, error) {
-	result := []sdk.Tool{{Name: "install_test_capability", Parameters: map[string]any{"type": "object"}, Execute: func(*sdk.ToolExecContext, any) (any, error) {
+func (p *capabilityRefreshProvider) Tools(_ context.Context, session tools.SessionContext) ([]toolexec.Tool, error) {
+	result := []toolexec.Tool{{Name: "install_test_capability", Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 		p.installed = true
 		session.CapabilitiesChanged()
 		return map[string]any{"installed": true}, nil
-	}}}
+	})}}
 	if p.installed {
-		result = append(result, sdk.Tool{Name: "new_capability", Parameters: map[string]any{"type": "object"}, Execute: func(*sdk.ToolExecContext, any) (any, error) { p.used++; return "worked", nil }})
+		result = append(result, toolexec.Tool{Name: "new_capability", Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) { p.used++; return "worked", nil })})
 	}
 	return result, nil
 }
@@ -41,7 +42,7 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 				calls++
 				switch calls {
 				case 1:
-					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "install", ToolName: "install_test_capability", Input: map[string]any{}}}}, nil
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "install", ToolName: "install_test_capability", Input: toolexec.ArgumentsFromValue(map[string]any{})}}}, nil
 				case 2:
 					found := false
 					for _, tool := range params.Tools {
@@ -55,7 +56,7 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 					if _, ok := findToolResult(params.Messages, "install_test_capability"); !ok {
 						t.Error("installation result was not carried forward")
 					}
-					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "use", ToolName: "new_capability", Input: map[string]any{}}}}, nil
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "use", ToolName: "new_capability", Input: toolexec.ArgumentsFromValue(map[string]any{})}}}, nil
 				default:
 					return sdk.ModelResult{FinishReason: sdk.FinishReasonStop, Text: "done"}, nil
 				}
@@ -77,7 +78,7 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 					_ = result
 					parts := []sdk.StreamPart{}
 					for _, call := range result.ToolCalls {
-						parts = append(parts, &sdk.StreamToolCallPart{ToolCallID: call.ToolCallID, ToolName: call.ToolName, Input: call.Input})
+						parts = append(parts, &sdk.StreamToolCallPart{ToolCallID: call.ToolCallID, ToolName: call.ToolName, Input: toolexec.ArgumentsFromValue(call.Input)})
 					}
 					if result.Text != "" {
 						parts = append(parts, &sdk.TextDeltaPart{Text: result.Text})

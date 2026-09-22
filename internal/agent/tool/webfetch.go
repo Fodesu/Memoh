@@ -14,9 +14,9 @@ import (
 	"time"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
-	sdk "github.com/felinics/twilight/sdk"
 	readability "github.com/go-shiori/go-readability"
 
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/fetchproviders"
 	"github.com/felinics/memoh/internal/redact"
@@ -48,13 +48,13 @@ func NewWebFetchProvider(log *slog.Logger, settingsSvc *settings.Service, fetchS
 	}
 }
 
-func (p *WebFetchProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *WebFetchProvider) Tools(_ context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolWebFetch().String(),
 			Description: "Fetch a URL and convert the response to readable content. Supports HTML (converts to Markdown), JSON, XML, and plain text formats.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"url": map[string]any{
@@ -68,10 +68,10 @@ func (p *WebFetchProvider) Tools(_ context.Context, session SessionContext) ([]s
 					},
 				},
 				"required": []string{"url"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execWebFetch(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 	}, nil
 }

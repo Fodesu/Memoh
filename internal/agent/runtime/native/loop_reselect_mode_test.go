@@ -13,6 +13,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestNewAgentDefaultsToActiveLoopReselectMode(t *testing.T) {
@@ -88,7 +89,7 @@ func mockToolLoopProvider(maxToolCall int, idPrefix string) *atomicMockProvider 
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: fmt.Sprintf("%s-%d", idPrefix, call),
 						ToolName:   "lookup",
-						Input:      map[string]any{"step": call},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"step": call}),
 					}},
 				}, nil
 			}
@@ -98,12 +99,12 @@ func mockToolLoopProvider(maxToolCall int, idPrefix string) *atomicMockProvider 
 }
 
 func mockToolLoopTools() []agenttools.ToolProvider {
-	return []agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	return []agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return strings.Repeat("large tool result ", 80), nil
-		},
+		}),
 	}}}}
 }
 

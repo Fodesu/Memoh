@@ -10,11 +10,11 @@ import (
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
-	sdk "github.com/felinics/twilight/sdk"
 
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/event"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/mcp"
 )
 
@@ -94,10 +94,10 @@ func (f *parityApproval) createdInputs() []toolapproval.CreatePendingInput {
 	return append([]toolapproval.CreatePendingInput(nil), f.created...)
 }
 
-type parityToolProvider struct{ tool sdk.Tool }
+type parityToolProvider struct{ tool toolexec.Tool }
 
-func (p parityToolProvider) Tools(context.Context, tools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{p.tool}, nil
+func (p parityToolProvider) Tools(context.Context, tools.SessionContext) ([]toolexec.Tool, error) {
+	return []toolexec.Tool{p.tool}, nil
 }
 
 type parityToolEvents struct {
@@ -154,15 +154,15 @@ func parityNativeSource(approval tools.NativeToolApprovalService, toolEvents too
 	if toolEvents == nil {
 		toolEvents = &parityToolEvents{deliver: true}
 	}
-	return tools.NewNativeToolSource(nil, []tools.ToolProvider{parityToolProvider{tool: sdk.Tool{
+	return tools.NewNativeToolSource(nil, []tools.ToolProvider{parityToolProvider{tool: toolexec.Tool{
 		Name:       toolName,
-		Parameters: map[string]any{"type": "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			if executed != nil {
 				*executed = true
 			}
 			return "done", nil
-		},
+		}),
 	}}}, tools.NativeToolSourceOptions{
 		AllowAll:   true,
 		Approval:   approval,

@@ -68,7 +68,7 @@ func TestHistoryProviderGetMessagesDefaultsToCurrentSession(t *testing.T) {
 	}
 
 	out := got.(map[string]any)
-	messages := out["messages"].([]map[string]any)
+	messages := asMapSlice(t, out["messages"])
 	if len(messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(messages))
 	}
@@ -124,7 +124,7 @@ func TestHistoryProviderGetMessagesBeforeUsesRequestedSession(t *testing.T) {
 	if out["session_id"] != "session-other" {
 		t.Fatalf("session_id = %v, want session-other", out["session_id"])
 	}
-	messages := out["messages"].([]map[string]any)
+	messages := asMapSlice(t, out["messages"])
 	if messages[0]["text"] != "before cursor" {
 		t.Fatalf("message text = %v, want before cursor", messages[0]["text"])
 	}
@@ -146,7 +146,7 @@ func TestHistoryProviderGetMessagesResolvesExactSourceRef(t *testing.T) {
 	if reader.exactSessionID != "session-current" || reader.exactMessageID != "msg-source" {
 		t.Fatalf("exact lookup = (%q, %q)", reader.exactSessionID, reader.exactMessageID)
 	}
-	messages := got.(map[string]any)["messages"].([]map[string]any)
+	messages := asMapSlice(t, got.(map[string]any)["messages"])
 	if len(messages) != 1 || messages[0]["text"] != "supporting detail" {
 		t.Fatalf("exact messages = %v", messages)
 	}
@@ -224,7 +224,7 @@ func TestHistoryProviderListSessionsFiltersOtherUsersAndRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execListSessions() error = %v", err)
 	}
-	items := got.(map[string]any)["sessions"].([]map[string]any)
+	items := asMapSlice(t, got.(map[string]any)["sessions"])
 	if len(items) != 3 {
 		t.Fatalf("visible sessions = %v, want current, same route, and same user", items)
 	}

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
+
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestApplyReasoningToRequestDeepSeekChatCompletionsCompat(t *testing.T) {
@@ -681,9 +683,9 @@ func TestNewSDKChatModelKimiCompatIsExplicitForEveryCompletionsBranch(t *testing
 				ChatCompletionsCompat: ChatCompletionsCompatKimi,
 				APIKey:                "test-key",
 			})
-			tools, err := sdk.ToolDefinitionsFromTools([]sdk.Tool{{
+			tools, err := toolexec.ToolDefinitionsFromTools([]toolexec.Tool{{
 				Name: "attach_file",
-				Parameters: map[string]any{
+				Parameters: toolexec.SchemaFromValue(map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"attachment": map[string]any{
@@ -698,7 +700,7 @@ func TestNewSDKChatModelKimiCompatIsExplicitForEveryCompletionsBranch(t *testing
 							},
 						},
 					},
-				},
+				}),
 			}})
 			if err != nil {
 				t.Fatalf("tool definitions: %v", err)

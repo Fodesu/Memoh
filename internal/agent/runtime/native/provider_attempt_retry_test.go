@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,7 +13,9 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/step"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func round8RetryToolCycles(cycles, resultBytes int) []sdk.Message {
@@ -25,13 +28,13 @@ func round8RetryToolCycles(cycles, resultBytes int) []sdk.Message {
 				Content: []sdk.MessagePart{sdk.ToolCallPart{
 					ToolCallID: callID,
 					ToolName:   "lookup",
-					Input:      map[string]any{"step": i},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"step": i}),
 				}},
 			},
 			sdk.ToolMessage(sdk.ToolResultPart{
 				ToolCallID: callID,
 				ToolName:   "lookup",
-				Result:     strings.Repeat("x", resultBytes),
+				Result:     toolexec.OutputFromValue(strings.Repeat("x", resultBytes)),
 			}),
 		)
 	}
@@ -59,7 +62,7 @@ func pruneRound8RetryOldToolResults(messages []sdk.Message, keepRecent int) ([]s
 		if !ok {
 			continue
 		}
-		result.Result = "[tool result pruned for round8 retry]"
+		result.Result = sdk.TextOutput("[tool result pruned for round8 retry]")
 		out[i] = sdk.ToolMessage(result)
 		pruned++
 	}
@@ -76,7 +79,7 @@ func countRound8PrunedToolResults(messages []sdk.Message) int {
 		if !ok {
 			continue
 		}
-		text, _ := result.Result.(string)
+		text, _ := toolexec.OutputValue(result.Result).(string)
 		if strings.Contains(text, "pruned for round8 retry") {
 			count++
 		}
@@ -276,7 +279,7 @@ func TestAgentStreamRetryPreservesStepDynamicHookContext(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "round8-dynamic-retry-call",
 						ToolName:   "lookup",
-						Input:      map[string]any{"query": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"query": "one"}),
 					}},
 				}, nil
 			case 2:
@@ -324,7 +327,7 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 		Content: []sdk.MessagePart{sdk.ToolCallPart{
 			ToolCallID: "call-1",
 			ToolName:   "lookup",
-			Input:      map[string]any{"id": exactLargeInteger},
+			Input:      toolexec.ArgumentsFromValue(map[string]any{"id": exactLargeInteger}),
 		}},
 	}
 	toolResult := sdk.Message{
@@ -332,7 +335,7 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 		Content: []sdk.MessagePart{sdk.ToolResultPart{
 			ToolCallID: "call-1",
 			ToolName:   "lookup",
-			Result:     map[string]any{"id": exactLargeInteger},
+			Result:     toolexec.OutputFromValue(map[string]any{"id": exactLargeInteger}),
 		}},
 	}
 	state := &providerAttemptState{}
@@ -349,7 +352,7 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 			Content: []sdk.MessagePart{sdk.TextPart{
 				Text:             "task",
 				CacheControl:     cacheControl,
-				ProviderMetadata: map[string]any{"trace": "keep"},
+				ProviderMetadata: partmeta.Fold(map[string]any{"trace": "keep"}),
 			}},
 		},
 		toolCall,
@@ -369,23 +372,27 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 		t.Fatalf("promoted system was not removed: %#v", messages)
 	}
 	taskPart, ok := messages[0].Content[0].(sdk.TextPart)
-	if !ok || taskPart.CacheControl != nil || taskPart.ProviderMetadata["trace"] != "keep" {
+	if !ok || taskPart.CacheControl != nil || partmeta.Unfold(taskPart.ProviderMetadata)["trace"] != "keep" {
 		t.Fatalf("raw task part = %#v, want cache control cleared and provider metadata retained", messages[0].Content)
 	}
 	retryCall, ok := messages[1].Content[0].(sdk.ToolCallPart)
 	if !ok {
 		t.Fatalf("retry tool call = %#v, want sdk.ToolCallPart", messages[1].Content)
 	}
-	callID, ok := retryCall.Input.(map[string]any)["id"].(int64)
-	if !ok || callID != exactLargeInteger {
+	var replayInput struct {
+		ID int64 `json:"id"`
+	}
+	if err := retryCall.Input.Unmarshal(&replayInput); err != nil || replayInput.ID != exactLargeInteger {
 		t.Fatalf("retry tool input id = %#v, want exact int64 %d", retryCall.Input, exactLargeInteger)
 	}
 	retryResult, ok := messages[2].Content[0].(sdk.ToolResultPart)
 	if !ok {
 		t.Fatalf("retry tool result = %#v, want sdk.ToolResultPart", messages[2].Content)
 	}
-	resultID, ok := retryResult.Result.(map[string]any)["id"].(int64)
-	if !ok || resultID != exactLargeInteger {
+	var replayOutput struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(retryResult.Result.JSON, &replayOutput); err != nil || replayOutput.ID != exactLargeInteger {
 		t.Fatalf("retry tool result id = %#v, want exact int64 %d", retryResult.Result, exactLargeInteger)
 	}
 	if textOfMessage(messages[len(messages)-1]) != "partial retry tail" {

@@ -14,23 +14,17 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 )
 
 // responseMetadataValue flattens a ModelResult's optional response metadata for
 // the stream-part fixtures, whose Response field is a value.
-func responseMetadataValue(meta *sdk.ResponseMetadata) sdk.ResponseMetadata {
-	if meta == nil {
-		return sdk.ResponseMetadata{}
-	}
-	return *meta
-}
-
 type staticToolProvider struct {
-	tools []sdk.Tool
+	tools []toolexec.Tool
 }
 
-func (p staticToolProvider) Tools(context.Context, agenttools.SessionContext) ([]sdk.Tool, error) {
+func (p staticToolProvider) Tools(context.Context, agenttools.SessionContext) ([]toolexec.Tool, error) {
 	return p.tools, nil
 }
 
@@ -84,13 +78,13 @@ func (m *atomicMockProvider) DoStream(ctx context.Context, params sdk.Request) (
 			ch <- &sdk.StreamToolCallPart{
 				ToolCallID: tc.ToolCallID,
 				ToolName:   tc.ToolName,
-				Input:      tc.Input,
+				Input:      toolexec.ArgumentsFromValue(tc.Input),
 			}
 		}
 		ch <- &sdk.FinishStepPart{
 			FinishReason: result.FinishReason,
 			Usage:        result.Usage,
-			Response:     responseMetadataValue(result.Response),
+			Response:     result.Response,
 		}
 		ch <- &sdk.FinishPart{
 			FinishReason: result.FinishReason,
@@ -207,7 +201,7 @@ func TestAgentGenerateStopsOnTerminalTextLoopAbort(t *testing.T) {
 				toolCalls = []sdk.ToolCall{{
 					ToolCallID: "call-terminal",
 					ToolName:   "noop_tool",
-					Input:      map[string]any{"step": call},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"step": call}),
 				}}
 			} else {
 				finishReason = sdk.FinishReasonStop
@@ -223,12 +217,12 @@ func TestAgentGenerateStopsOnTerminalTextLoopAbort(t *testing.T) {
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
 		staticToolProvider{
-			tools: []sdk.Tool{{
+			tools: []toolexec.Tool{{
 				Name:       "noop_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"ok": true}, nil
-				},
+				}),
 			}},
 		},
 	})
@@ -262,7 +256,7 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			case 2:
@@ -280,12 +274,12 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
 		staticToolProvider{
-			tools: []sdk.Tool{{
+			tools: []toolexec.Tool{{
 				Name:       "lookup",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"answer": strings.Repeat("tool-result ", 64)}, nil
-				},
+				}),
 			}},
 		},
 	})
@@ -352,7 +346,7 @@ func TestAgentGenerateRecordsMidTaskPruneForProtectedRescue(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			}
@@ -363,12 +357,12 @@ func TestAgentGenerateRecordsMidTaskPruneForProtectedRescue(t *testing.T) {
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
 		staticToolProvider{
-			tools: []sdk.Tool{{
+			tools: []toolexec.Tool{{
 				Name:       "lookup",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 					return map[string]any{"answer": strings.Repeat("tool-result ", 64)}, nil
-				},
+				}),
 			}},
 		},
 	})
@@ -413,7 +407,7 @@ func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-budget",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			}
@@ -423,12 +417,12 @@ func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"answer": "ok"}, nil
-			},
+			}),
 		}}},
 	})
 
@@ -456,12 +450,12 @@ func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 func TestAgentGenerateActivePlanStepBudgetSubtractsFixedEnvelopeOnce(t *testing.T) {
 	t.Parallel()
 
-	lookupTool := sdk.Tool{
+	lookupTool := toolexec.Tool{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return map[string]any{"answer": "ok"}, nil
-		},
+		}),
 	}
 	toolCost := contextfrag.ToolDefAccountingFor("native", lookupTool).TokenEstimate
 	plan := contextfrag.ContextBudgetPlan{
@@ -479,7 +473,7 @@ func TestAgentGenerateActivePlanStepBudgetSubtractsFixedEnvelopeOnce(t *testing.
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-budget-plan",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			}
@@ -491,7 +485,7 @@ func TestAgentGenerateActivePlanStepBudgetSubtractsFixedEnvelopeOnce(t *testing.
 		return cfg, nil
 	}})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{lookupTool}},
+		staticToolProvider{tools: []toolexec.Tool{lookupTool}},
 	})
 
 	var seenBudget int
@@ -543,7 +537,7 @@ func TestAgentGenerateFailsClosedOnProtectedStepOverflow(t *testing.T) {
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-step-overflow",
 					ToolName:   "lookup",
-					Input:      map[string]any{"q": "one"},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 				}},
 			}, nil
 		},
@@ -553,12 +547,12 @@ func TestAgentGenerateFailsClosedOnProtectedStepOverflow(t *testing.T) {
 		return cfg, nil
 	}})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"answer": "ok"}, nil
-			},
+			}),
 		}}},
 	})
 
@@ -606,7 +600,7 @@ func TestAgentStreamFailsClosedOnProtectedStepOverflow(t *testing.T) {
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-stream-step-overflow",
 					ToolName:   "lookup",
-					Input:      map[string]any{"q": "one"},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 				}},
 			}, nil
 		},
@@ -615,12 +609,12 @@ func TestAgentStreamFailsClosedOnProtectedStepOverflow(t *testing.T) {
 		return cfg, nil
 	}})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"answer": "ok"}, nil
-			},
+			}),
 		}}},
 	})
 
@@ -653,7 +647,7 @@ func TestAgentStreamFailsClosedOnProtectedStepOverflow(t *testing.T) {
 
 // TestAgentGenerateStepRecordJoinsToolResultsWithCallInput pins the shape of a
 // committed step's ToolResults: each entry pairs the originating call's Input
-// with the loop's Output, which is what makes the field an sdk.ToolResult
+// with the loop's Output, which is what makes the field an toolexec.ToolResult
 // rather than a bare result part. The lossless parts stay in Messages.
 func TestAgentGenerateStepRecordJoinsToolResultsWithCallInput(t *testing.T) {
 	t.Parallel()
@@ -666,7 +660,7 @@ func TestAgentGenerateStepRecordJoinsToolResultsWithCallInput(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "join-call",
 						ToolName:   "join_tool",
-						Input:      map[string]any{"city": "Kyoto"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"city": "Kyoto"}),
 					}},
 				}, nil
 			}
@@ -674,11 +668,11 @@ func TestAgentGenerateStepRecordJoinsToolResultsWithCallInput(t *testing.T) {
 		},
 	}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "join_tool",
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return "sunny", nil
-		},
+		}),
 	}}}})
 
 	var records []step.Record
@@ -706,10 +700,10 @@ func TestAgentGenerateStepRecordJoinsToolResultsWithCallInput(t *testing.T) {
 	if got := results[0].ToolName; got != "join_tool" {
 		t.Errorf("ToolName = %q, want join_tool", got)
 	}
-	if got, ok := results[0].Input.(map[string]any); !ok || got["city"] != "Kyoto" {
+	if got, ok := toolexec.ArgumentsValue(results[0].Input).(map[string]any); !ok || got["city"] != "Kyoto" {
 		t.Errorf("Input = %#v, want the originating call's input", results[0].Input)
 	}
-	if got := results[0].Output; got != "sunny" {
+	if got := toolexec.OutputValue(results[0].Output); got != "sunny" {
 		t.Errorf("Output = %#v, want sunny", got)
 	}
 }

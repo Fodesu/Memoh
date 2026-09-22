@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // spanAttr reports one attribute of a recorded span.
@@ -42,11 +43,11 @@ func spansNamed(recorder *tracetest.SpanRecorder, name string) []sdktrace.ReadOn
 // execute ends the run instead of starting another round.
 func noopToolAgent() *Agent {
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "noop",
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return "ok", nil
-		},
+		}),
 	}}}})
 	return a
 }
@@ -64,7 +65,7 @@ func TestEveryModelRoundGetsItsOwnSpan(t *testing.T) {
 		if round <= 2 {
 			return closedAgentTestStream(
 				&sdk.StartStepPart{},
-				&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "noop", Input: map[string]any{}},
+				&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "noop", Input: toolexec.ArgumentsFromValue(map[string]any{})},
 				&sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls},
 			), nil
 		}
@@ -119,7 +120,7 @@ func TestModelSpansDoNotAdoptTheToolSpans(t *testing.T) {
 		if round == 1 {
 			return closedAgentTestStream(
 				&sdk.StartStepPart{},
-				&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "noop", Input: map[string]any{}},
+				&sdk.StreamToolCallPart{ToolCallID: "call-1", ToolName: "noop", Input: toolexec.ArgumentsFromValue(map[string]any{})},
 				&sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls},
 			), nil
 		}

@@ -6,8 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	sched "github.com/felinics/memoh/internal/schedule"
 )
 
@@ -81,16 +80,16 @@ func (*ScheduleProvider) Usage(_ context.Context, _ SessionContext, available Av
 	return usageSection("Scheduled tasks", parts)
 }
 
-func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.service == nil {
 		return nil, nil
 	}
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name: ToolListSchedule().String(), Description: "List schedules for current bot",
-			Parameters: emptyObjectSchema(),
-			Execute: func(ctx *sdk.ToolExecContext, _ any) (any, error) {
+			Parameters: toolexec.SchemaFromValue(emptyObjectSchema()),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
 					return nil, errors.New("bot_id is required")
@@ -100,18 +99,18 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]s
 					return nil, err
 				}
 				return map[string]any{"items": items}, nil
-			},
+			}),
 		},
 		{
 			Name: ToolGetSchedule().String(), Description: "Get a schedule by id",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{"type": "string", "description": "Schedule ID"},
 				},
 				"required": []string{"id"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
@@ -129,12 +128,12 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]s
 					return nil, errors.New("bot mismatch")
 				}
 				return item, nil
-			},
+			}),
 		},
 		{
 			Name: ToolCreateSchedule().String(), Description: "Create a new cron-scheduled task. Fill `command` with a natural-language instruction; when the cron `pattern` fires, the task runs and you receive a message containing that `command`. Include explicit platform and target in delivery instructions when results should be sent to a person or channel. Set `max_calls` to null for unlimited runs. " +
 				"By default each fire runs in a fresh session with the bot's default model. Optional execution parameters: `session_id` runs every fire inside that existing session (its runtime and workdir are inherited; only model/effort overrides apply). For fresh sessions, `acp_agent_id` (from list_acp_agents) runs fires through an ACP agent — combine with `acp_model_id`; `model_id` (a model_uuid from list_models) picks a native model instead; `workdir_id` (from list_workdirs) pins the session's working directory. `reasoning_effort` overrides the effort in both modes.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"name": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"},
@@ -149,8 +148,8 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]s
 					"workdir_id":       map[string]any{"type": "string", "description": "Bind fresh sessions to this workdir (id from list_workdirs)."},
 				},
 				"required": []string{"name", "description", "pattern", "command"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
@@ -180,11 +179,11 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]s
 					return nil, err
 				}
 				return item, nil
-			},
+			}),
 		},
 		{
 			Name: ToolUpdateSchedule().String(), Description: "Update an existing schedule. To change execution parameters (session_id / model_id / acp_agent_id / acp_model_id / reasoning_effort / workdir_id), set `update_execution` to true and pass the FULL desired execution state — the whole block is replaced as one unit, and omitted execution fields reset to their defaults.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"},
@@ -201,8 +200,8 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]s
 					"workdir_id":       map[string]any{"type": "string", "description": "Bind fresh sessions to this workdir (id from list_workdirs)."},
 				},
 				"required": []string{"id"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
@@ -255,18 +254,18 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]s
 					return nil, err
 				}
 				return item, nil
-			},
+			}),
 		},
 		{
 			Name: ToolDeleteSchedule().String(), Description: "Delete a schedule by id",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{"type": "string", "description": "Schedule ID"},
 				},
 				"required": []string{"id"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
@@ -287,7 +286,7 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]s
 					return nil, err
 				}
 				return map[string]any{"success": true}, nil
-			},
+			}),
 		},
 	}, nil
 }

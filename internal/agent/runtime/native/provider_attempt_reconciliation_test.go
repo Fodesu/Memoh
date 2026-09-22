@@ -16,6 +16,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestAgentGenerateDroppedReadMediaIsNotRecordedAsProviderInput(t *testing.T) {
@@ -31,7 +32,7 @@ func TestAgentGenerateDroppedReadMediaIsNotRecordedAsProviderInput(t *testing.T)
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-pdf",
 					ToolName:   "read",
-					Input:      map[string]any{"path": "/data/report.pdf"},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/report.pdf"}),
 				}},
 			}, nil
 		}
@@ -111,7 +112,7 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 			ToolCalls: []sdk.ToolCall{{
 				ToolCallID: "call-overflow",
 				ToolName:   "lookup",
-				Input:      map[string]any{"q": "one"},
+				Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 			}},
 		}, nil
 	}}
@@ -124,12 +125,12 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 			return cfg, nil
 		},
 	})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return map[string]any{"answer": "ok"}, nil
-		},
+		}),
 	}}}})
 
 	var selectorCalls atomic.Int32
@@ -184,12 +185,12 @@ func TestAgentGenerateStepHookRemainsTransientAfterAdmissionReconciliation(t *te
 		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	a := New(Deps{BridgeProvider: bridgeProvider, HookService: hookService})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return "ok", nil
-		},
+		}),
 	}}}})
 
 	var committed []step.Record
@@ -233,7 +234,7 @@ func TestAgentStreamRetryRevokesReadMediaAdmission(t *testing.T) {
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-retry-pdf",
 					ToolName:   "read",
-					Input:      map[string]any{"path": "/data/retry.pdf"},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/retry.pdf"}),
 				}},
 			}, nil
 		case 2:
@@ -321,7 +322,7 @@ func TestAgentStreamProviderStartFailureDoesNotPersistReadMedia(t *testing.T) {
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-failed-start-pdf",
 					ToolName:   "read",
-					Input:      map[string]any{"path": "/data/failed-start.pdf"},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/failed-start.pdf"}),
 				}},
 			}, nil
 		case 2:
@@ -391,7 +392,7 @@ func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) 
 				&sdk.StreamToolCallPart{
 					ToolCallID: "call-interrupted-pdf",
 					ToolName:   "read",
-					Input:      map[string]any{"path": "/data/interrupted.pdf"},
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/interrupted.pdf"}),
 				},
 				&sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls},
 				&sdk.FinishPart{FinishReason: sdk.FinishReasonToolCalls},
@@ -488,7 +489,7 @@ func TestAgentGenerateCanceledPreflightKeepsLastDispatchedHashAndFork(t *testing
 			ToolCalls: []sdk.ToolCall{{
 				ToolCallID: "call-cancel",
 				ToolName:   "lookup",
-				Input:      map[string]any{"q": "one"},
+				Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 			}},
 		}, nil
 	}}
@@ -496,12 +497,12 @@ func TestAgentGenerateCanceledPreflightKeepsLastDispatchedHashAndFork(t *testing
 	fork := agenttools.NewMessageSnapshot(nil)
 	attemptState := &providerAttemptState{}
 	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return map[string]any{"answer": "ok"}, nil
-		},
+		}),
 	}}}})
 
 	_, err := a.Generate(ctx, RunConfig{

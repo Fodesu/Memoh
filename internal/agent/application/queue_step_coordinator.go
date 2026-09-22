@@ -37,7 +37,7 @@ type queueStepOutcome struct {
 	persisted            []messagepkg.Message
 	appliedSteerItemID   string
 	claimedSteer         *sessionruntime.SteerItem
-	claimedSteerTurn *messagepkg.TurnSlot
+	claimedSteerTurn     *messagepkg.TurnSlot
 	replacementFinalized bool
 }
 

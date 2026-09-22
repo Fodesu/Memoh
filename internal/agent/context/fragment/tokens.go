@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 
 	sdk "github.com/felinics/twilight/sdk"
+
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // EstimateBytesPerToken is the byte-per-token heuristic shared by every
@@ -147,7 +149,7 @@ func ProviderToolDefTokens(def ToolDefAccounting) int {
 // ToolDefAccountingFor measures one local executable tool as the provider will
 // receive it (name, description, parameter schema). A definition that fails to
 // serialize falls back to its visible prose size.
-func ToolDefAccountingFor(provider string, tool sdk.Tool) ToolDefAccounting {
+func ToolDefAccountingFor(provider string, tool toolexec.Tool) ToolDefAccounting {
 	size := len(tool.Name) + len(tool.Description)
 	if data, err := json.Marshal(tool); err == nil {
 		size = len(data)
@@ -164,7 +166,7 @@ func ToolDefAccountingFor(provider string, tool sdk.Tool) ToolDefAccounting {
 // travels on the wire. It is the ToolDefAccountingFor counterpart for the
 // sdk.Request tools shape.
 func ToolDefinitionAccountingFor(provider string, tool sdk.ToolDefinition) ToolDefAccounting {
-	size := len(tool.Name) + len(tool.Description) + len(tool.Parameters)
+	size := len(tool.Name) + len(tool.Description)
 	if data, err := json.Marshal(tool); err == nil {
 		size = len(data)
 	}

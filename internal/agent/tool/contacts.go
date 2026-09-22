@@ -6,8 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/messaging"
 )
 
@@ -52,16 +51,16 @@ func (*ContactsProvider) Usage(_ context.Context, session SessionContext, availa
 	return usageSection("Contacts & Messaging", parts)
 }
 
-func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.contacts == nil {
 		return nil, nil
 	}
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolGetContacts().String(),
 			Description: "List all known contacts and conversations for the current bot. Returns platform, conversation type, reply target, and metadata for each route.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"platform": map[string]any{
@@ -70,8 +69,8 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]s
 					},
 				},
 				"required": []string{},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
@@ -114,7 +113,7 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]s
 					"count":    len(contacts),
 					"contacts": contacts,
 				}, nil
-			},
+			}),
 		},
 	}, nil
 }

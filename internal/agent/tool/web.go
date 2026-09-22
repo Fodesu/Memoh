@@ -22,8 +22,7 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/redact"
 	"github.com/felinics/memoh/internal/searchproviders"
@@ -47,26 +46,26 @@ func NewWebProvider(log *slog.Logger, settingsSvc *settings.Service, searchSvc *
 	}
 }
 
-func (p *WebProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *WebProvider) Tools(_ context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.settings == nil || p.searchProviders == nil {
 		return nil, nil
 	}
 	sess := session
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolWebSearch().String(),
 			Description: "Search web results via configured search provider.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]any{"type": "string", "description": "Search query"},
 					"count": map[string]any{"type": "integer", "description": "Number of results, default 5"},
 				},
 				"required": []string{"query"},
-			},
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
 				return p.execWebSearch(ctx.Context, sess, inputAsMap(input))
-			},
+			}),
 		},
 	}, nil
 }

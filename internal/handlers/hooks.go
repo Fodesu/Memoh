@@ -12,6 +12,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -215,7 +216,7 @@ func (r hookTestToolRunner) RunHookTool(ctx context.Context, toolName string, in
 	part, err := r.agent.ExecuteTool(ctx, r.cfg, sdk.ToolCall{
 		ToolName:   strings.TrimSpace(toolName),
 		ToolCallID: "hook-test:" + strings.TrimSpace(toolName),
-		Input:      input,
+		Input:      toolexec.ArgumentsFromValue(input),
 	})
 	if err != nil {
 		return nil, err

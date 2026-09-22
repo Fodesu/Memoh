@@ -20,6 +20,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
@@ -146,10 +147,10 @@ func (m *agentReadMediaMockProvider) DoStream(ctx context.Context, params sdk.Re
 			ch <- &sdk.StreamToolCallPart{
 				ToolCallID: tc.ToolCallID,
 				ToolName:   tc.ToolName,
-				Input:      tc.Input,
+				Input:      toolexec.ArgumentsFromValue(tc.Input),
 			}
 		}
-		ch <- &sdk.FinishStepPart{FinishReason: result.FinishReason, Usage: result.Usage, Response: responseMetadataValue(result.Response)}
+		ch <- &sdk.FinishStepPart{FinishReason: result.FinishReason, Usage: result.Usage, Response: result.Response}
 		ch <- &sdk.FinishPart{FinishReason: result.FinishReason, TotalUsage: result.Usage}
 	}()
 	return ch, nil
@@ -194,7 +195,7 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "read",
-						Input:      map[string]any{"path": "/data/images/demo.png"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/images/demo.png"}),
 					}},
 				}, nil
 			}
@@ -335,14 +336,14 @@ func TestAgentExecuteToolReadMediaReturnsPublicResultOnly(t *testing.T) {
 	}, sdk.ToolCall{
 		ToolCallID: "call-1",
 		ToolName:   agenttools.ReadMediaToolName().String(),
-		Input:      map[string]any{"path": "/data/images/demo.png"},
+		Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/images/demo.png"}),
 	})
 	if err != nil {
 		t.Fatalf("ExecuteTool(read) returned error: %v", err)
 	}
-	result, ok := part.Result.(agenttools.ReadMediaToolResult)
-	if !ok {
-		t.Fatalf("ExecuteTool(read) result = %T, want public ReadMediaToolResult", part.Result)
+	var result agenttools.ReadMediaToolResult
+	if !part.Result.IsJSON() || json.Unmarshal(part.Result.JSON, &result) != nil {
+		t.Fatalf("ExecuteTool(read) result = %#v, want public ReadMediaToolResult", part.Result)
 	}
 	if !result.OK || result.Path != "images/demo.png" || result.Mime != "image/png" {
 		t.Fatalf("unexpected public read result: %#v", result)
@@ -358,9 +359,9 @@ func TestDecorateReadMediaToolsConcurrentExecutions(t *testing.T) {
 
 	const calls = 32
 	imageBase64 := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n\x00payload"))
-	wrapped, state := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []sdk.Tool{{
+	wrapped, state := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []toolexec.Tool{{
 		Name: agenttools.ReadMediaToolName().String(),
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 			return agenttools.ReadMediaToolOutput{
 				Public: agenttools.ReadMediaToolResult{
 					OK:   true,
@@ -370,7 +371,7 @@ func TestDecorateReadMediaToolsConcurrentExecutions(t *testing.T) {
 				ImageBase64:    imageBase64,
 				ImageMediaType: "image/png",
 			}, nil
-		},
+		}),
 	}})
 	if state == nil || len(wrapped) != 1 {
 		t.Fatalf("decorateReadMediaTools did not wrap read tool: state=%v tools=%d", state, len(wrapped))
@@ -382,17 +383,18 @@ func TestDecorateReadMediaToolsConcurrentExecutions(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			result, err := wrapped[0].Execute(&sdk.ToolExecContext{
+			result, err := wrapped[0].Execute(&toolexec.ToolExecContext{
 				Context:    context.Background(),
 				ToolCallID: fmt.Sprintf("call-%02d", i),
 				ToolName:   agenttools.ReadMediaToolName().String(),
-			}, map[string]any{"path": "/data/image.png"})
+			}, toolexec.ArgumentsFromValue(map[string]any{"path": "/data/image.png"}))
 			if err != nil {
 				t.Errorf("wrapped read execute returned error: %v", err)
 				return
 			}
-			if _, ok := result.(agenttools.ReadMediaToolResult); !ok {
-				t.Errorf("wrapped read execute result = %T, want public ReadMediaToolResult", result)
+			var public agenttools.ReadMediaToolResult
+			if !result.IsJSON() || json.Unmarshal(result.JSON, &public) != nil {
+				t.Errorf("wrapped read execute result = %#v, want public ReadMediaToolResult", result)
 			}
 		}()
 	}
@@ -422,7 +424,7 @@ func TestAgentGenerateReadMediaInjectsAnthropicSafeImageIntoNextStep(t *testing.
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "read",
-						Input:      map[string]any{"path": "/data/images/demo.png"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/images/demo.png"}),
 					}},
 				}, nil
 			}
@@ -488,7 +490,7 @@ func TestAgentStreamReadMediaPersistsInjectedImageInTerminalMessages(t *testing.
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "read",
-						Input:      map[string]any{"path": "/data/images/demo.png"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/images/demo.png"}),
 					}},
 				}, nil
 			}

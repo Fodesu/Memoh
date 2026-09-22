@@ -39,7 +39,7 @@ func SDKMessagesToModelMessagesWithLogger(log *slog.Logger, msgs []sdk.Message) 
 		}
 		result = append(result, turn.ModelMessage{
 			Role:    string(msg.Role),
-			Content: envelope.Content,
+			Content: storedPartsFromSDK(envelope.Content),
 			Usage:   usage,
 		})
 	}
@@ -60,7 +60,7 @@ func ModelMessageToSDKMessage(mm turn.ModelMessage) sdk.Message {
 		Content json.RawMessage `json:"content"`
 	}{
 		Role:    mm.Role,
-		Content: mm.Content,
+		Content: sdkPartsFromStored(mm.Content),
 	})
 	var msg sdk.Message
 	if err := json.Unmarshal(envelope, &msg); err == nil {

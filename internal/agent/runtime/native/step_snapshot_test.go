@@ -13,6 +13,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -100,7 +101,7 @@ func TestAgentGenerateStepReselectionAppliedPreservesDecoratedPrefix(t *testing.
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			case 2:
@@ -115,12 +116,12 @@ func TestAgentGenerateStepReselectionAppliedPreservesDecoratedPrefix(t *testing.
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"answer": "ok"}, nil
-			},
+			}),
 		}}},
 	})
 
@@ -205,7 +206,7 @@ func TestAgentGenerateStepReselectionRejectedKeepsDecoratedPrefixUnchanged(t *te
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
 						ToolName:   "lookup",
-						Input:      map[string]any{"q": "one"},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
 					}},
 				}, nil
 			case 2:
@@ -220,12 +221,12 @@ func TestAgentGenerateStepReselectionRejectedKeepsDecoratedPrefixUnchanged(t *te
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"answer": "ok"}, nil
-			},
+			}),
 		}}},
 	})
 
@@ -289,7 +290,7 @@ func TestAgentGenerateRecordsOneStepSnapshotPerModelStepWithDistinctHashes(t *te
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: fmt.Sprintf("call-%d", call),
 						ToolName:   "lookup",
-						Input:      map[string]any{"step": call},
+						Input:      toolexec.ArgumentsFromValue(map[string]any{"step": call}),
 					}},
 				}, nil
 			}
@@ -299,12 +300,12 @@ func TestAgentGenerateRecordsOneStepSnapshotPerModelStepWithDistinctHashes(t *te
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		staticToolProvider{tools: []sdk.Tool{{
+		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				return map[string]any{"answer": "ok"}, nil
-			},
+			}),
 		}}},
 	})
 

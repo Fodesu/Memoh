@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"sort"
 
-	sdk "github.com/felinics/twilight/sdk"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 type SkillProvider struct {
@@ -40,7 +40,7 @@ func (*SkillProvider) Usage(_ context.Context, _ SessionContext, available Avail
 	return usageSection("Skills", parts)
 }
 
-func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if p.load != nil {
 		loaded, err := p.load(ctx, session.BotID)
 		if err != nil {
@@ -52,15 +52,15 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]sd
 		return nil, nil
 	}
 	skills := session.Skills
-	return []sdk.Tool{
+	return []toolexec.Tool{
 		{
 			Name:        ToolListSkills().String(),
 			Description: "List the skills available in the current session.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
-			},
-			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
 				names := make([]string, 0, len(skills))
 				for name := range skills {
 					names = append(names, name)
@@ -81,12 +81,12 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]sd
 					"count":   len(items),
 					"skills":  items,
 				}, nil
-			},
+			}),
 		},
 		{
 			Name:        ToolUseSkill().String(),
 			Description: "Activate a skill to get its full instructions. Call this when you think a skill is relevant to the current task.",
-			Parameters: map[string]any{
+			Parameters: toolexec.SchemaFromValue(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"skillName": map[string]any{
@@ -99,8 +99,8 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]sd
 					},
 				},
 				"required": []string{"skillName", "reason"},
-			},
-			Execute: func(_ *sdk.ToolExecContext, input any) (any, error) {
+			}),
+			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, input any) (any, error) {
 				args := inputAsMap(input)
 				skillName := StringArg(args, "skillName")
 				if skillName == "" {
@@ -120,7 +120,7 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]sd
 					"content":     skill.Content,
 					"path":        skill.Path,
 				}, nil
-			},
+			}),
 		},
 	}, nil
 }

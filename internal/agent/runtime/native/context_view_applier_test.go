@@ -13,6 +13,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestGenerateAppliesContextViewBeforeProviderOptions(t *testing.T) {
@@ -80,11 +81,11 @@ func TestGenerateFinalInputHashTracksLastProviderStep(t *testing.T) {
 		cfg.ContextMutations = ledger
 		return cfg, nil
 	}})
-	a.SetToolProviders([]tools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+	a.SetToolProviders([]tools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "hash_tool",
-		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
 			return "ok", nil
-		},
+		}),
 	}}}})
 
 	if _, err := a.Generate(context.Background(), RunConfig{

@@ -18,8 +18,10 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -204,7 +206,7 @@ func (a *Agent) ExecuteToolWithUIMetadata(ctx context.Context, cfg RunConfig, ca
 		if tool.Execute == nil {
 			return sdk.ToolResultPart{}, nil, fmt.Errorf("tool %q has no execute handler", call.ToolName)
 		}
-		execCtx := &sdk.ToolExecContext{
+		execCtx := &toolexec.ToolExecContext{
 			Context:    ctx,
 			ToolCallID: call.ToolCallID,
 			ToolName:   call.ToolName,
@@ -215,7 +217,7 @@ func (a *Agent) ExecuteToolWithUIMetadata(ctx context.Context, cfg RunConfig, ca
 			return sdk.ToolResultPart{
 				ToolCallID: call.ToolCallID,
 				ToolName:   call.ToolName,
-				Result:     limitedErr.Error(),
+				Result:     toolexec.OutputFromValue(limitedErr.Error()),
 				IsError:    true,
 			}, nil, nil
 		}
@@ -551,7 +553,7 @@ func (a *Agent) assembleTools(
 	cfg RunConfig,
 	emitter tools.StreamEmitter,
 	liveStream bool,
-) ([]sdk.Tool, string, []contextfrag.ContextFrag, []contextfrag.ToolDefAccounting, error) {
+) ([]toolexec.Tool, string, []contextfrag.ContextFrag, []contextfrag.ToolDefAccounting, error) {
 	if len(a.toolProviders) == 0 {
 		return nil, "", nil, nil, nil
 	}
@@ -602,7 +604,7 @@ func (a *Agent) assembleTools(
 		ContextToolExchangePolicy: cfg.ContextToolExchangePolicy,
 	}
 
-	var allTools []sdk.Tool
+	var allTools []toolexec.Tool
 	var toolDefs []contextfrag.ToolDefAccounting
 	type usageRegistration struct {
 		provider   tools.ToolUsage
@@ -619,7 +621,7 @@ func (a *Agent) assembleTools(
 		if session.IsSubagent {
 			providerTools = tools.FilterSubagentTools(providerTools)
 		}
-		uniqueTools := make([]sdk.Tool, 0, len(providerTools))
+		uniqueTools := make([]toolexec.Tool, 0, len(providerTools))
 		for _, tool := range providerTools {
 			name := strings.TrimSpace(tool.Name)
 			if name == "" {
@@ -697,7 +699,7 @@ func appendToolUsageToSystem(system, toolUsage string) string {
 	return strings.TrimSpace(system + "\n\n" + toolUsage)
 }
 
-func markApprovalTools(sdkTools []sdk.Tool) []sdk.Tool {
+func markApprovalTools(sdkTools []toolexec.Tool) []toolexec.Tool {
 	for i := range sdkTools {
 		switch sdkTools[i].Name {
 		case tools.ToolRead().String(), tools.ToolList().String(), tools.ToolWrite().String(), tools.ToolEdit().String(), tools.ToolApplyPatch().String(), tools.ToolExec().String():
@@ -728,7 +730,7 @@ func approvalShortID(metadata map[string]any) int {
 	}
 }
 
-func annotateDeferredApproval(messages []sdk.Message, approval sdk.ToolApprovalResult) []sdk.Message {
+func annotateDeferredApproval(messages []sdk.Message, approval toolexec.ToolApprovalResult) []sdk.Message {
 	if approval.ApprovalID == "" {
 		return messages
 	}
@@ -747,24 +749,21 @@ func annotateDeferredApproval(messages []sdk.Message, approval sdk.ToolApprovalR
 			if !ok || strings.TrimSpace(call.ToolCallID) != strings.TrimSpace(toolCallID) {
 				continue
 			}
-			if call.ProviderMetadata == nil {
-				call.ProviderMetadata = map[string]any{}
-			}
 			if isUserInputMetadata(approval.Metadata) {
-				call.ProviderMetadata["user_input"] = map[string]any{
+				call.ProviderMetadata = partmeta.Set(call.ProviderMetadata, partmeta.KeyUserInput, map[string]any{
 					"user_input_id": approval.ApprovalID,
 					"short_id":      approvalShortID(approval.Metadata),
 					"status":        "pending",
 					"ui_payload":    approval.Metadata["ui_payload"],
-				}
+				})
 			} else {
-				call.ProviderMetadata["approval"] = map[string]any{
+				call.ProviderMetadata = partmeta.Set(call.ProviderMetadata, partmeta.KeyApproval, map[string]any{
 					"approval_id": approval.ApprovalID,
 					"short_id":    approvalShortID(approval.Metadata),
 					"status":      "pending",
 					"can_approve": true,
 					"operation":   approval.Metadata["operation"],
-				}
+				})
 			}
 			annotated[msgIdx].Content[partIdx] = call
 			return annotated
@@ -866,32 +865,32 @@ const (
 	stepReselectMinMessages           = 20
 )
 
-func wrapToolsWithLoopGuard(tools []sdk.Tool, guard *ToolLoopGuard, abortCallIDs *toolAbortRegistry) []sdk.Tool {
-	wrapped := make([]sdk.Tool, len(tools))
+func wrapToolsWithLoopGuard(tools []toolexec.Tool, guard *ToolLoopGuard, abortCallIDs *toolAbortRegistry) []toolexec.Tool {
+	wrapped := make([]toolexec.Tool, len(tools))
 	for i, tool := range tools {
 		originalExecute := tool.Execute
 		toolName := tool.Name
 		wrapped[i] = tool
-		wrapped[i].Execute = func(ctx *sdk.ToolExecContext, input any) (any, error) {
-			warn, abort := guard.Guard(toolName, input)
+		wrapped[i].Execute = func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+			warn, abort := guard.Guard(toolName, toolexec.ArgumentsValue(input))
 			if abort {
 				abortCallIDs.Add(ctx.ToolCallID)
-				return map[string]any{
+				return toolexec.OutputFromValue(map[string]any{
 					"isError": true,
 					"content": []map[string]any{{
 						"type": "text",
 						"text": ToolLoopDetectedAbortMessage,
 					}},
-				}, ErrToolLoopDetected
+				}), ErrToolLoopDetected
 			}
 			if warn {
-				return map[string]any{
+				return toolexec.OutputFromValue(map[string]any{
 					ToolLoopWarningKey: true,
 					"content": []map[string]any{{
 						"type": "text",
 						"text": ToolLoopWarningText,
 					}},
-				}, nil
+				}), nil
 			}
 			return originalExecute(ctx, input)
 		}
