@@ -554,18 +554,13 @@ func BoolArg(arguments map[string]any, key string) (bool, bool, error) {
 	return value, true, nil
 }
 
-func inputAsMap(input any) map[string]any {
-	args, ok := input.(map[string]any)
-	if ok {
-		return args
-	}
-	if input == nil {
+// inputAsMap decodes the model's arguments as an object. Invalid arguments
+// never reach a handler through the executor, so the fallback only covers a
+// direct caller; a non-object document yields the empty object.
+func inputAsMap(input sdk.ToolArguments) map[string]any {
+	args := map[string]any{}
+	if err := input.Unmarshal(&args); err != nil || args == nil {
 		return map[string]any{}
-	}
-	raw, _ := json.Marshal(input)
-	_ = json.Unmarshal(raw, &args)
-	if args == nil {
-		args = map[string]any{}
 	}
 	return args
 }

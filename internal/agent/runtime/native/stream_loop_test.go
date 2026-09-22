@@ -44,9 +44,9 @@ func TestAgentGenerateRejectsNonPrefixPreservingStepSelectionWithoutMutationReco
 		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{"answer": "ok"}, nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+			},
 		}}},
 	})
 
@@ -104,9 +104,9 @@ func TestAgentStreamStopsOnToolLoopAbort(t *testing.T) {
 			tools: []toolexec.Tool{{
 				Name:       "loop_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return map[string]any{"ok": true}, nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+				},
 			}},
 		},
 	})

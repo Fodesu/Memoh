@@ -39,9 +39,9 @@ func TestAgentStreamRecordsInjectedMessageMutation(t *testing.T) {
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 	ledger := contextfrag.NewMutationLedger()
 	type recordedInjection struct {
@@ -105,9 +105,9 @@ func TestAgentStreamDroppedInjectedMessageIsNotRecorded(t *testing.T) {
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	type recordedInjection struct {
@@ -186,9 +186,9 @@ func TestAgentStreamRetryRevokesInjectedMessageRecord(t *testing.T) {
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	var selectorCalls atomic.Int32
@@ -260,9 +260,9 @@ func TestAgentStreamFailedPreflightDoesNotRecordInjectedMessage(t *testing.T) {
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	var recorded []string
@@ -328,9 +328,9 @@ func TestAgentStreamRecordsDuplicateAdmittedInjections(t *testing.T) {
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	type recordedInjection struct {
@@ -394,9 +394,9 @@ func TestAgentStreamRecordsLaterInjectionAtOutputBoundary(t *testing.T) {
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	type recordedInjection struct {
@@ -452,9 +452,9 @@ func TestAgentStreamRecordsOnlyAdmittedDuplicateInjection(t *testing.T) {
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	type recordedInjection struct {

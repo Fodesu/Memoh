@@ -51,9 +51,9 @@ func TestAgentStreamRecordsLaterDuplicateInjectionRetainedByReselection(t *testi
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	type recordedInjection struct {
@@ -144,9 +144,9 @@ func TestAgentStreamProviderStartFailureDoesNotPersistInjectedMessage(t *testing
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	var recorded []string
@@ -210,9 +210,9 @@ func TestAgentStreamRetryPreflightFailureDoesNotPersistUncommittedInjection(t *t
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	var selectorCalls int
@@ -285,9 +285,9 @@ func TestAgentStreamInterruptedInjectedMessageIsDurableExactlyOnce(t *testing.T)
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+		},
 	}}}})
 
 	var interrupted *step.Record

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/gorilla/websocket"
 
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -154,9 +155,9 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 				"amount":          map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "default": 500, "description": "Scroll amount in pixels."},
 				"timeout":         map[string]any{"type": "integer", "minimum": 1, "maximum": 45000, "default": 1000, "description": "Timeout in milliseconds for wait or navigation readiness."},
 			}, []string{"action"})),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execBrowserAction(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execBrowserAction(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolBrowserObserve().String(),
@@ -168,9 +169,9 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 				"script":    map[string]any{"type": "string", "description": "JavaScript expression to evaluate. Keep it short and read-only unless the task requires otherwise."},
 				"full_page": map[string]any{"type": "boolean", "default": false, "description": "Capture a full-page screenshot for screenshot."},
 			}, []string{"observe"})),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execBrowserObserve(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execBrowserObserve(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolComputerObserve().String(),
@@ -178,9 +179,9 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 			Parameters: toolexec.SchemaFromValue(browserObjectSchema(map[string]any{
 				"observe": map[string]any{"type": "string", "enum": []string{"snapshot", "screenshot"}, "description": "What to observe from the desktop."},
 			}, []string{"observe"})),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execComputerObserve(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execComputerObserve(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolComputerAction().String(),
@@ -199,9 +200,9 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 				"key":         map[string]any{"type": "string", "description": "Key or key chord, e.g. Enter, Escape, Control+a."},
 				"text":        map[string]any{"type": "string", "description": "Text to type or fill into the target."},
 			}, []string{"action"})),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execComputerAction(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execComputerAction(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolBrowserRemoteSession().String(),
@@ -211,9 +212,9 @@ func (p *BrowserProvider) Tools(ctx context.Context, session SessionContext) ([]
 				"session_id": map[string]any{"type": "string", "description": "Target/session ID returned by create or status."},
 				"url":        map[string]any{"type": "string", "description": "Optional URL to open when creating a target."},
 			}, []string{"action"})),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execRemoteSession(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execRemoteSession(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 	}, nil
 }

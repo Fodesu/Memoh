@@ -19,8 +19,7 @@
 // event stream and decision store consume as JSON values; the SDK's closing of
 // that field to strings happened after the executor left it.
 //
-// adapter.go is Memoh's own: it bridges handlers written against the earlier
-// untyped contract (input any, output any) onto the typed one, and converts
-// between the typed argument/output values and the plain JSON values Memoh's
-// events, decisions and history rows carry.
+// adapter.go is Memoh's own: it converts between the typed argument/output
+// values and the plain JSON values Memoh's events, decisions, history rows and
+// map-based tool helpers carry.
 package toolexec

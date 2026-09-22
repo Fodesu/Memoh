@@ -22,16 +22,16 @@ func (p *forkSnapshotToolProvider) Tools(_ context.Context, session agenttools.S
 	return []toolexec.Tool{{
 		Name:       "capture_fork_context",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 			messages, err := session.ForkContext.Messages()
 			if err != nil {
-				return nil, err
+				return sdk.ToolOutput{}, err
 			}
 			p.mu.Lock()
 			p.snapshots = append(p.snapshots, messages)
 			p.mu.Unlock()
-			return map[string]any{"captured": len(messages)}, nil
-		}),
+			return toolexec.OutputFromValue(map[string]any{"captured": len(messages)}), nil
+		},
 	}}, nil
 }
 

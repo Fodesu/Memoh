@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/workdir"
 )
@@ -43,14 +45,14 @@ func (p *WorkdirProvider) Tools(_ context.Context, session SessionContext) ([]to
 			Name:        ToolListWorkdirs().String(),
 			Description: "List this bot's workdirs (named working directories): workdir_id, name, target kind (native workspace or remote runtime), and path. Use a workdir_id to bind a scheduled task's sessions to that directory.",
 			Parameters:  toolexec.SchemaFromValue(emptyObjectSchema()),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				workdirs, err := p.service.List(ctx.Context, botID, false)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				items := make([]map[string]any, 0, len(workdirs))
 				for _, wd := range workdirs {
@@ -61,8 +63,8 @@ func (p *WorkdirProvider) Tools(_ context.Context, session SessionContext) ([]to
 						"path":        wd.Path,
 					})
 				}
-				return map[string]any{"workdirs": items, "count": len(items)}, nil
-			}),
+				return toolexec.OutputFromValue(map[string]any{"workdirs": items, "count": len(items)}), nil
+			},
 		},
 	}, nil
 }

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/db"
@@ -78,18 +80,18 @@ func (p *ACPAgentsProvider) Tools(_ context.Context, session SessionContext) ([]
 					},
 				},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				agentID := acpprofile.NormalizeAgentID(StringArg(args, "agent_id"))
 				if agentID == "" {
-					return p.listAgents(ctx.Context, botID)
+					return toolexec.OutputPair(p.listAgents(ctx.Context, botID))
 				}
-				return p.describeAgent(ctx.Context, botID, agentID, sess)
-			}),
+				return toolexec.OutputPair(p.describeAgent(ctx.Context, botID, agentID, sess))
+			},
 		},
 	}, nil
 }

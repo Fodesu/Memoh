@@ -129,9 +129,9 @@ func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T)
 			lookupTool := toolexec.Tool{
 				Name:       "lookup",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return strings.Repeat("large-result ", 1_000), nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(strings.Repeat("large-result ", 1_000)), nil
+				},
 			}
 			modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 				if call != 1 {

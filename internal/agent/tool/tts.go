@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	audiopkg "github.com/felinics/memoh/internal/audio"
 	"github.com/felinics/memoh/internal/messaging"
@@ -101,9 +103,9 @@ func (p *TTSProvider) Tools(ctx context.Context, session SessionContext) ([]tool
 				},
 				"required": required,
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execSpeak(execCtx.Context, sess, execCtx.ToolCallID, inputAsMap(input))
-			}),
+			Execute: func(execCtx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execSpeak(execCtx.Context, sess, execCtx.ToolCallID, inputAsMap(input)))
+			},
 		},
 	}, nil
 }

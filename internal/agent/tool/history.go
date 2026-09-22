@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -103,9 +104,9 @@ func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]toole
 				},
 				"required": []string{},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execListSessions(ctx.Context, s, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execListSessions(ctx.Context, s, inputAsMap(input)))
+			},
 		})
 	}
 
@@ -136,9 +137,9 @@ func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]toole
 				},
 				"required": []string{},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execGetMessages(ctx.Context, s, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execGetMessages(ctx.Context, s, inputAsMap(input)))
+			},
 		})
 	}
 
@@ -182,9 +183,9 @@ func (p *HistoryProvider) Tools(_ context.Context, sess SessionContext) ([]toole
 				},
 				"required": []string{},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execSearchMessages(ctx.Context, s, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execSearchMessages(ctx.Context, s, inputAsMap(input)))
+			},
 		})
 	}
 

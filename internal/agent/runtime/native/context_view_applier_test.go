@@ -83,9 +83,9 @@ func TestGenerateFinalInputHashTracksLastProviderStep(t *testing.T) {
 	}})
 	a.SetToolProviders([]tools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "hash_tool",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return "ok", nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue("ok"), nil
+		},
 	}}}})
 
 	if _, err := a.Generate(context.Background(), RunConfig{

@@ -128,9 +128,9 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return map[string]any{"answer": "ok"}, nil
-		}),
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+		},
 	}}}})
 
 	var selectorCalls atomic.Int32
@@ -188,9 +188,9 @@ func TestAgentGenerateStepHookRemainsTransientAfterAdmissionReconciliation(t *te
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return "ok", nil
-		}),
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue("ok"), nil
+		},
 	}}}})
 
 	var committed []step.Record
@@ -500,9 +500,9 @@ func TestAgentGenerateCanceledPreflightKeepsLastDispatchedHashAndFork(t *testing
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return map[string]any{"answer": "ok"}, nil
-		}),
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+		},
 	}}}})
 
 	_, err := a.Generate(ctx, RunConfig{

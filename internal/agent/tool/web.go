@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/redact"
@@ -63,9 +65,9 @@ func (p *WebProvider) Tools(_ context.Context, session SessionContext) ([]toolex
 				},
 				"required": []string{"query"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execWebSearch(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execWebSearch(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 	}, nil
 }

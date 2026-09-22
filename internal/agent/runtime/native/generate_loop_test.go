@@ -220,9 +220,9 @@ func TestAgentGenerateStopsOnTerminalTextLoopAbort(t *testing.T) {
 			tools: []toolexec.Tool{{
 				Name:       "noop_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return map[string]any{"ok": true}, nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+				},
 			}},
 		},
 	})
@@ -277,9 +277,9 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 			tools: []toolexec.Tool{{
 				Name:       "lookup",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return map[string]any{"answer": strings.Repeat("tool-result ", 64)}, nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(map[string]any{"answer": strings.Repeat("tool-result ", 64)}), nil
+				},
 			}},
 		},
 	})
@@ -360,9 +360,9 @@ func TestAgentGenerateRecordsMidTaskPruneForProtectedRescue(t *testing.T) {
 			tools: []toolexec.Tool{{
 				Name:       "lookup",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return map[string]any{"answer": strings.Repeat("tool-result ", 64)}, nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(map[string]any{"answer": strings.Repeat("tool-result ", 64)}), nil
+				},
 			}},
 		},
 	})
@@ -420,9 +420,9 @@ func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{"answer": "ok"}, nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+			},
 		}}},
 	})
 
@@ -453,9 +453,9 @@ func TestAgentGenerateActivePlanStepBudgetSubtractsFixedEnvelopeOnce(t *testing.
 	lookupTool := toolexec.Tool{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return map[string]any{"answer": "ok"}, nil
-		}),
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+		},
 	}
 	toolCost := contextfrag.ToolDefAccountingFor("native", lookupTool).TokenEstimate
 	plan := contextfrag.ContextBudgetPlan{
@@ -550,9 +550,9 @@ func TestAgentGenerateFailsClosedOnProtectedStepOverflow(t *testing.T) {
 		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{"answer": "ok"}, nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+			},
 		}}},
 	})
 
@@ -612,9 +612,9 @@ func TestAgentStreamFailsClosedOnProtectedStepOverflow(t *testing.T) {
 		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{"answer": "ok"}, nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+			},
 		}}},
 	})
 
@@ -670,9 +670,9 @@ func TestAgentGenerateStepRecordJoinsToolResultsWithCallInput(t *testing.T) {
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "join_tool",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return "sunny", nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue("sunny"), nil
+		},
 	}}}})
 
 	var records []step.Record

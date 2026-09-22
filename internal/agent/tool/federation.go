@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/mcp"
 )
@@ -53,14 +55,14 @@ func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) 
 			Name:        desc.Name,
 			Description: desc.Description,
 			Parameters:  toolexec.SchemaFromValue(desc.InputSchema),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				result, err := src.CallTool(ctx.Context, sess, desc.Name, args)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
-				return normalizeMCPResult(result), nil
-			}),
+				return toolexec.OutputFromValue(normalizeMCPResult(result)), nil
+			},
 		})
 	}
 	return tools, nil

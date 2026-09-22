@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/attachment"
 	audiopkg "github.com/felinics/memoh/internal/audio"
@@ -80,9 +82,9 @@ func (p *TranscriptionProvider) Tools(ctx context.Context, session SessionContex
 			},
 			"required": []string{},
 		}),
-		Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
-			return p.execTranscribe(execCtx.Context, sess, inputAsMap(input))
-		}),
+		Execute: func(execCtx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputPair(p.execTranscribe(execCtx.Context, sess, inputAsMap(input)))
+		},
 	}}, nil
 }
 

@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/mcp"
@@ -119,18 +121,18 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]t
 			Name:        desc.Name,
 			Description: desc.Description,
 			Parameters:  toolexec.SchemaFromValue(desc.InputSchema),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				result, err := prov.CallTool(ctx.Context, sess, desc.Name, args)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				output := normalizeToolResult(result)
 				if desc.Name == ToolSearchMemory().String() {
 					output = p.filterSourceRefs(ctx.Context, session, output)
 				}
-				return output, nil
-			}),
+				return toolexec.OutputFromValue(output), nil
+			},
 		})
 	}
 	return append(tools, p.writeTools(session, provider)...), nil
@@ -173,14 +175,14 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				},
 				"required": []string{"memory"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				memory, err := memoryWriteBody(args)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				if err := p.gateMemoryWrite(ctx.Context, session, ToolCreateMemory().String(), memory, ""); err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				resp, err := provider.Add(ctx.Context, memprovider.AddRequest{
 					Message:  memory,
@@ -190,7 +192,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				})
 				if err != nil {
 					p.logger.WarnContext(ctx.Context, "create memory failed", slog.String("bot_id", session.BotID), slog.Any("error", err))
-					return nil, errors.New("saving the memory failed")
+					return sdk.ToolOutput{}, errors.New("saving the memory failed")
 				}
 				out := map[string]any{"memory": memory}
 				if len(resp.Results) > 0 {
@@ -199,8 +201,8 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 					}
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolCreateMemory().String(), memory, stringField(out, "id"))
-				return out, nil
-			}),
+				return toolexec.OutputFromValue(out), nil
+			},
 		},
 		{
 			Name: ToolUpdateMemory().String(),
@@ -222,18 +224,18 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				},
 				"required": []string{"id", "memory"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				memoryID := strings.TrimSpace(mcp.StringArg(args, "id"))
 				if memoryID == "" {
-					return nil, errors.New("id is required")
+					return sdk.ToolOutput{}, errors.New("id is required")
 				}
 				memory, err := memoryWriteBody(args)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				if err := p.gateMemoryWrite(ctx.Context, session, ToolUpdateMemory().String(), memory, memoryID); err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				item, err := provider.Update(ctx.Context, memprovider.UpdateRequest{
 					BotID:    strings.TrimSpace(session.BotID),
@@ -242,11 +244,11 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				})
 				if err != nil {
 					p.logger.WarnContext(ctx.Context, "update memory failed", slog.String("bot_id", session.BotID), slog.String("memory_id", memoryID), slog.Any("error", err))
-					return nil, errors.New("updating the memory failed")
+					return sdk.ToolOutput{}, errors.New("updating the memory failed")
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolUpdateMemory().String(), memory, memoryID)
-				return map[string]any{"id": firstNonEmpty(strings.TrimSpace(item.ID), memoryID), "memory": memory}, nil
-			}),
+				return toolexec.OutputFromValue(map[string]any{"id": firstNonEmpty(strings.TrimSpace(item.ID), memoryID), "memory": memory}), nil
+			},
 		},
 		{
 			Name: ToolDeleteMemory().String(),
@@ -262,21 +264,21 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				},
 				"required": []string{"id"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				memoryID := strings.TrimSpace(mcp.StringArg(inputAsMap(input), "id"))
 				if memoryID == "" {
-					return nil, errors.New("id is required")
+					return sdk.ToolOutput{}, errors.New("id is required")
 				}
 				if err := p.gateMemoryWrite(ctx.Context, session, ToolDeleteMemory().String(), "", memoryID); err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				if _, err := provider.Delete(ctx.Context, strings.TrimSpace(session.BotID), memoryID); err != nil {
 					p.logger.WarnContext(ctx.Context, "delete memory failed", slog.String("bot_id", session.BotID), slog.String("memory_id", memoryID), slog.Any("error", err))
-					return nil, errors.New("deleting the memory failed")
+					return sdk.ToolOutput{}, errors.New("deleting the memory failed")
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolDeleteMemory().String(), "", memoryID)
-				return map[string]any{"id": memoryID, "deleted": true}, nil
-			}),
+				return toolexec.OutputFromValue(map[string]any{"id": memoryID, "deleted": true}), nil
+			},
 		},
 	}
 }

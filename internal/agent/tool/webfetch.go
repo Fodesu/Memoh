@@ -14,6 +14,7 @@ import (
 	"time"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
+	sdk "github.com/felinics/twilight/sdk"
 	readability "github.com/go-shiori/go-readability"
 
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -69,9 +70,9 @@ func (p *WebFetchProvider) Tools(_ context.Context, session SessionContext) ([]t
 				},
 				"required": []string{"url"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execWebFetch(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execWebFetch(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 	}, nil
 }

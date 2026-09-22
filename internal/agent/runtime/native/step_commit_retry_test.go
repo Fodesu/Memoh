@@ -29,10 +29,10 @@ func TestStepCommitFailureMustNotReplayExecutedTool(t *testing.T) {
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "record_effect",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
 			effects.Add(1)
-			return "effect recorded", nil
-		}),
+			return toolexec.OutputFromValue("effect recorded"), nil
+		},
 	}}}})
 	var events []StreamEvent
 	for event := range a.Stream(context.Background(), RunConfig{

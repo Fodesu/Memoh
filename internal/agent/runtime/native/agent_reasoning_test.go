@@ -216,9 +216,9 @@ func TestAgentGenerateBackgroundPrepareKeepsCachedAnthropicSystemPromoted(t *tes
 
 	testTools := []toolexec.Tool{{
 		Name: "noop",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return "ok", nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue("ok"), nil
+		},
 	}}
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: testTools}})
@@ -282,9 +282,9 @@ func TestAgentGenerateRunningTaskSummaryInjectsUserMessageNotSystem(t *testing.T
 
 	testTools := []toolexec.Tool{{
 		Name: "noop",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return "ok", nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue("ok"), nil
+		},
 	}}
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: testTools}})

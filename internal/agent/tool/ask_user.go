@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -102,16 +104,16 @@ func (*AskUserProvider) Tools(_ context.Context, session SessionContext) ([]tool
 			"additionalProperties": false,
 		}),
 		RequireApproval: true,
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, input any) (any, error) {
+		Execute: func(_ *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 			if err := userinput.ValidateAskUserInput(input); err != nil {
-				return map[string]any{
+				return toolexec.OutputFromValue(map[string]any{
 					"status":      "invalid_arguments",
 					"error":       err.Error(),
 					"instruction": "Call " + toolRef(ToolAskUser()) + " again with a valid `questions` array. Every question needs `text` and a `kind` of single_select, multi_select, or text; select kinds need `options` with labels.",
-				}, nil
+				}), nil
 			}
-			return nil, errors.New(ToolAskUser().String() + " must be resolved through user input before execution")
-		}),
+			return sdk.ToolOutput{}, errors.New(ToolAskUser().String() + " must be resolved through user input before execution")
+		},
 	}}, nil
 }
 

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	sched "github.com/felinics/memoh/internal/schedule"
 )
@@ -89,17 +91,17 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 		{
 			Name: ToolListSchedule().String(), Description: "List schedules for current bot",
 			Parameters: toolexec.SchemaFromValue(emptyObjectSchema()),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				items, err := p.service.List(ctx.Context, botID)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
-				return map[string]any{"items": items}, nil
-			}),
+				return toolexec.OutputFromValue(map[string]any{"items": items}), nil
+			},
 		},
 		{
 			Name: ToolGetSchedule().String(), Description: "Get a schedule by id",
@@ -110,25 +112,25 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				},
 				"required": []string{"id"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				id := StringArg(args, "id")
 				if id == "" {
-					return nil, errors.New("id is required")
+					return sdk.ToolOutput{}, errors.New("id is required")
 				}
 				item, err := p.service.Get(ctx.Context, id)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				if item.BotID != botID {
-					return nil, errors.New("bot mismatch")
+					return sdk.ToolOutput{}, errors.New("bot mismatch")
 				}
-				return item, nil
-			}),
+				return toolexec.OutputFromValue(item), nil
+			},
 		},
 		{
 			Name: ToolCreateSchedule().String(), Description: "Create a new cron-scheduled task. Fill `command` with a natural-language instruction; when the cron `pattern` fires, the task runs and you receive a message containing that `command`. Include explicit platform and target in delivery instructions when results should be sent to a person or channel. Set `max_calls` to null for unlimited runs. " +
@@ -149,37 +151,37 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				},
 				"required": []string{"name", "description", "pattern", "command"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				name := StringArg(args, "name")
 				description := StringArg(args, "description")
 				pattern := StringArg(args, "pattern")
 				command := StringArg(args, "command")
 				if name == "" || description == "" || pattern == "" || command == "" {
-					return nil, errors.New("name, description, pattern, command are required")
+					return sdk.ToolOutput{}, errors.New("name, description, pattern, command are required")
 				}
 				req := sched.CreateRequest{Name: name, Description: description, Pattern: pattern, Command: command}
 				req.ExecutionConfig = executionConfigFromArgs(args)
 				maxCalls, err := parseNullableIntArg(args, "max_calls")
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				req.MaxCalls = maxCalls
 				if enabled, ok, err := BoolArg(args, "enabled"); err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				} else if ok {
 					req.Enabled = &enabled
 				}
 				item, err := p.service.Create(ctx.Context, botID, req)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
-				return item, nil
-			}),
+				return toolexec.OutputFromValue(item), nil
+			},
 		},
 		{
 			Name: ToolUpdateSchedule().String(), Description: "Update an existing schedule. To change execution parameters (session_id / model_id / acp_agent_id / acp_model_id / reasoning_effort / workdir_id), set `update_execution` to true and pass the FULL desired execution state — the whole block is replaced as one unit, and omitted execution fields reset to their defaults.",
@@ -201,29 +203,29 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				},
 				"required": []string{"id"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				id := StringArg(args, "id")
 				if id == "" {
-					return nil, errors.New("id is required")
+					return sdk.ToolOutput{}, errors.New("id is required")
 				}
 				// Ownership check before any write: Update itself has no bot
 				// scope, so the read guards it.
 				existing, err := p.service.Get(ctx.Context, id)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				if existing.BotID != botID {
-					return nil, errors.New("bot mismatch")
+					return sdk.ToolOutput{}, errors.New("bot mismatch")
 				}
 				req := sched.UpdateRequest{}
 				maxCalls, err := parseNullableIntArg(args, "max_calls")
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				req.MaxCalls = maxCalls
 				if v := StringArg(args, "name"); v != "" {
@@ -239,22 +241,22 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 					req.Command = &v
 				}
 				if enabled, ok, err := BoolArg(args, "enabled"); err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				} else if ok {
 					req.Enabled = &enabled
 				}
 				if updateExec, ok, err := BoolArg(args, "update_execution"); err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				} else if ok && updateExec {
 					exec := executionConfigFromArgs(args)
 					req.Execution = &exec
 				}
 				item, err := p.service.Update(ctx.Context, id, req)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
-				return item, nil
-			}),
+				return toolexec.OutputFromValue(item), nil
+			},
 		},
 		{
 			Name: ToolDeleteSchedule().String(), Description: "Delete a schedule by id",
@@ -265,28 +267,28 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				},
 				"required": []string{"id"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				id := StringArg(args, "id")
 				if id == "" {
-					return nil, errors.New("id is required")
+					return sdk.ToolOutput{}, errors.New("id is required")
 				}
 				item, err := p.service.Get(ctx.Context, id)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				if item.BotID != botID {
-					return nil, errors.New("bot mismatch")
+					return sdk.ToolOutput{}, errors.New("bot mismatch")
 				}
 				if err := p.service.Delete(ctx.Context, id); err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
-				return map[string]any{"success": true}, nil
-			}),
+				return toolexec.OutputFromValue(map[string]any{"success": true}), nil
+			},
 		},
 	}, nil
 }

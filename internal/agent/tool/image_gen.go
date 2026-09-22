@@ -115,9 +115,9 @@ func (p *ImageGenProvider) Tools(ctx context.Context, session SessionContext) ([
 				},
 				"required": []string{"prompt"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execGenerateImage(execCtx.Context, sess, execCtx.ToolCallID, inputAsMap(input))
-			}),
+			Execute: func(execCtx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execGenerateImage(execCtx.Context, sess, execCtx.ToolCallID, inputAsMap(input)))
+			},
 		},
 	}, nil
 }

@@ -40,18 +40,18 @@ func deferredApprovalBatch(t *testing.T) (*Agent, *atomicMockProvider, *atomic.I
 				{
 					Name:       "web_search",
 					Parameters: &jsonschema.Schema{Type: "object"},
-					Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
+					Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
 						searchRuns.Add(1)
-						return map[string]any{"hits": 3}, nil
-					}),
+						return toolexec.OutputFromValue(map[string]any{"hits": 3}), nil
+					},
 				},
 				{
 					Name:       "exec",
 					Parameters: &jsonschema.Schema{Type: "object"},
-					Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
+					Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
 						execRuns.Add(1)
-						return map[string]any{"stdout": "ok"}, nil
-					}),
+						return toolexec.OutputFromValue(map[string]any{"stdout": "ok"}), nil
+					},
 				},
 			},
 		},

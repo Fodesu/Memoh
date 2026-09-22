@@ -21,7 +21,9 @@ func (*agentStepBoundaryToolProvider) Tools(context.Context, agenttools.SessionC
 	return []toolexec.Tool{{
 		Name:        "probe",
 		Description: "probe",
-		Execute:     toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) { return "ok", nil }),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue("ok"), nil
+		},
 	}}, nil
 }
 

@@ -164,7 +164,7 @@ func TestBackgroundProviderListKillAndWait(t *testing.T) {
 		t.Fatalf("wait_until payload = %v, want killed", waitRes)
 	}
 	progressCount := 0
-	if _, err := p.execWait(context.Background(), session, map[string]any{"duration": 0.001}, func(any) {
+	if _, err := p.execWait(context.Background(), session, map[string]any{"duration": 0.001}, func(sdk.ToolOutput) {
 		progressCount++
 	}); err != nil {
 		t.Fatalf("wait failed: %v", err)

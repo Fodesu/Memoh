@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -24,21 +26,21 @@ func TestNativeToolSourceAllowlistAndCall(t *testing.T) {
 				Name:        ToolRead().String(),
 				Description: "Safe tool",
 				Parameters:  toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-				Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-					args, _ := input.(map[string]any)
-					return map[string]any{
+				Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+					args := inputAsMap(input)
+					return toolexec.OutputFromValue(map[string]any{
 						"tool":  ctx.ToolName,
 						"value": args["value"],
-					}, nil
-				}),
+					}), nil
+				},
 			},
 			{
 				Name:        ToolExec().String(),
 				Description: "Blocked tool",
 				Parameters:  toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return "blocked", nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue("blocked"), nil
+				},
 			},
 		},
 	}
@@ -104,9 +106,9 @@ func TestNativeToolSourceAllowlistIgnoresUnknownNames(t *testing.T) {
 			Name:        "safe_tool",
 			Description: "Safe tool",
 			Parameters:  toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return "ok", nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue("ok"), nil
+			},
 		}},
 	}
 	source := NewNativeToolSource(nil, []ToolProvider{provider}, NativeToolSourceOptions{
@@ -132,9 +134,9 @@ func TestNativeToolSourceDefaultsToDenyAll(t *testing.T) {
 			Name:        "safe_tool",
 			Description: "Safe tool",
 			Parameters:  toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return "ok", nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue("ok"), nil
+			},
 		}},
 	}
 	source := NewNativeToolSource(nil, []ToolProvider{provider}, NativeToolSourceOptions{})
@@ -158,17 +160,17 @@ func TestNativeToolSourceAllowAllOnlyAllowsBuiltIns(t *testing.T) {
 				Name:        "unknown_dynamic_tool",
 				Description: "Unknown dynamic tool",
 				Parameters:  toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return "unknown", nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue("unknown"), nil
+				},
 			},
 			{
 				Name:        ToolRead().String(),
 				Description: "Built-in tool",
 				Parameters:  toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return map[string]any{"ok": true}, nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+				},
 			},
 		},
 	}
@@ -276,9 +278,9 @@ func TestNativeToolSourcePassesContextBudgetToProviders(t *testing.T) {
 		tools: []toolexec.Tool{{
 			Name:       ToolRead().String(),
 			Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return "ok", nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue("ok"), nil
+			},
 		}},
 	}
 	source := NewNativeToolSource(nil, []ToolProvider{provider}, NativeToolSourceOptions{
@@ -307,8 +309,8 @@ func TestNativeToolSourceReadMediaReturnsPublicResultOnly(t *testing.T) {
 		tools: []toolexec.Tool{{
 			Name:       ToolRead().String(),
 			Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return ReadMediaToolOutput{
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(ReadMediaToolOutput{
 					Public: ReadMediaToolResult{
 						OK:   true,
 						Path: "/workspace/image.png",
@@ -317,8 +319,8 @@ func TestNativeToolSourceReadMediaReturnsPublicResultOnly(t *testing.T) {
 					},
 					ImageBase64:    "secret-image-bytes",
 					ImageMediaType: "image/png",
-				}, nil
-			}),
+				}), nil
+			},
 		}},
 	}
 	source := NewNativeToolSource(nil, []ToolProvider{provider}, NativeToolSourceOptions{
@@ -352,12 +354,12 @@ func TestNativeToolSourceStripsUIOnlyMetadata(t *testing.T) {
 		tools: []toolexec.Tool{{
 			Name:       ToolWrite().String(),
 			Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{
 					"ok":                true,
 					UIOutputMetadataKey: map[string]any{"diff": "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"},
-				}, nil
-			}),
+				}), nil
+			},
 		}},
 	}
 	source := NewNativeToolSource(nil, []ToolProvider{provider}, NativeToolSourceOptions{
@@ -391,12 +393,12 @@ func TestNativeToolSourceLimitsToolOutput(t *testing.T) {
 		tools: []toolexec.Tool{{
 			Name:       ToolRead().String(),
 			Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{
 					"content": large,
 					"ok":      true,
-				}, nil
-			}),
+				}), nil
+			},
 		}},
 	}
 	source := NewNativeToolSource(nil, []ToolProvider{provider}, NativeToolSourceOptions{
@@ -422,11 +424,11 @@ func TestNativeToolSourceWaitsForApprovalAndPublishesRequest(t *testing.T) {
 		tools: []toolexec.Tool{{
 			Name:       ToolExec().String(),
 			Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(_ *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				executed = true
-				args, _ := input.(map[string]any)
-				return map[string]any{"command": args["command"]}, nil
-			}),
+				args := inputAsMap(input)
+				return toolexec.OutputFromValue(map[string]any{"command": args["command"]}), nil
+			},
 		}},
 	}
 	approval := &nativeSourceApproval{
@@ -494,10 +496,10 @@ func TestNativeToolSourceRechecksRuntimeGuardAfterApproval(t *testing.T) {
 	executed := false
 	provider := &nativeSourceTestProvider{tools: []toolexec.Tool{{
 		Name: ToolExec().String(), Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 			executed = true
-			return "executed", nil
-		}),
+			return toolexec.OutputFromValue("executed"), nil
+		},
 	}}}
 	approval := &nativeSourceApproval{decision: toolapproval.Request{
 		ID: "approval-guard", Status: toolapproval.StatusApproved,
@@ -527,10 +529,10 @@ func TestNativeToolSourceRejectedApprovalDoesNotExecute(t *testing.T) {
 		tools: []toolexec.Tool{{
 			Name:       ToolWrite().String(),
 			Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 				executed = true
-				return "wrote", nil
-			}),
+				return toolexec.OutputFromValue("wrote"), nil
+			},
 		}},
 	}
 	toolEvents := &nativeSourceToolEvents{delivered: true}
@@ -583,10 +585,10 @@ func TestNativeToolSourceApprovalNotDeliveredRejectsWithoutWaiting(t *testing.T)
 		tools: []toolexec.Tool{{
 			Name:       ToolWrite().String(),
 			Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 				executed = true
-				return "wrote", nil
-			}),
+				return toolexec.OutputFromValue("wrote"), nil
+			},
 		}},
 	}
 	approval := &nativeSourceApproval{
@@ -1111,17 +1113,17 @@ func (*nativeSourceUsageProvider) Tools(context.Context, SessionContext) ([]tool
 			Name:        ToolSpawnAgent().String(),
 			Description: "Create one managed subagent.",
 			Parameters:  toolexec.SchemaFromValue(emptyObjectSchema()),
-			Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-				return map[string]any{"ok": true}, nil
-			}),
+			Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+			},
 		},
 		{
 			Name:        ToolSendMessage().String(),
 			Description: "Send a follow-up message.",
 			Parameters:  toolexec.SchemaFromValue(emptyObjectSchema()),
-			Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-				return map[string]any{"ok": true}, nil
-			}),
+			Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+			},
 		},
 	}, nil
 }

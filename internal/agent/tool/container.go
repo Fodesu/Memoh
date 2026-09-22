@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
@@ -198,9 +200,9 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 				},
 				"required": []string{"path"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execRead(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execRead(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolWrite().String(),
@@ -214,9 +216,9 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 				},
 				"required": []string{"path", "content"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execWrite(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execWrite(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolList().String(),
@@ -232,9 +234,9 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 				},
 				"required": []string{"path"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execList(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execList(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolEdit().String(),
@@ -249,9 +251,9 @@ func (p *ContainerProvider) Tools(ctx context.Context, session SessionContext) (
 				},
 				"required": []string{"path", "old_text", "new_text"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execEdit(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execEdit(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name: ToolApplyPatch().String(),
@@ -307,9 +309,9 @@ Delete a file:
 				},
 				"required": []string{"patch"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execApplyPatch(ctx.Context, sess, input)
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execApplyPatch(ctx.Context, sess, input))
+			},
 		},
 		{
 			Name: ToolExec().String(),
@@ -340,9 +342,9 @@ Delete a file:
 				},
 				"required": []string{"command"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execExec(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execExec(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 	}
 	if resolver, ok := p.clients.(workspaceTargetResolver); ok {
@@ -353,11 +355,11 @@ Delete a file:
 				"Use the returned target_id with file and command tools when a non-default location is needed. " +
 				"The available field says whether a location can currently be used. This tool does not change the default location or starting folder.",
 			Parameters: toolexec.SchemaFromValue(emptyObjectSchema()),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 				ctx.Context = workspaceContextForSession(ctx.Context, sess)
 				targets, err := resolver.ListWorkspaceTargets(ctx.Context, sess.BotID)
 				if err != nil {
-					return nil, fmt.Errorf("list execution locations: %w", err)
+					return sdk.ToolOutput{}, fmt.Errorf("list execution locations: %w", err)
 				}
 				locations := make([]executionLocation, 0, len(targets))
 				for _, target := range targets {
@@ -366,8 +368,8 @@ Delete a file:
 					}
 					locations = append(locations, executionLocationFromTarget(target, sess.WorkspaceTargetID))
 				}
-				return listExecutionLocationsResult{Locations: locations}, nil
-			}),
+				return toolexec.OutputFromValue(listExecutionLocationsResult{Locations: locations}), nil
+			},
 		}
 		toolList = append([]toolexec.Tool{locationTool}, toolList...)
 	}

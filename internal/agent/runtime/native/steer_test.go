@@ -234,18 +234,18 @@ func TestSteerPreservesToolsAndEarlierInput(t *testing.T) {
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "held_tool", Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, _ any) (any, error) {
+		Execute: func(ctx *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 			if executions.Add(1) > 1 {
-				return "completed second tool result", nil
+				return toolexec.OutputFromValue("completed second tool result"), nil
 			}
 			started <- ctx
 			select {
 			case <-release:
-				return "completed tool result", nil
+				return toolexec.OutputFromValue("completed tool result"), nil
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return sdk.ToolOutput{}, ctx.Err()
 			}
-		}),
+		},
 	}}}})
 	events := a.Stream(ctx, RunConfig{
 		Model: &sdk.Model{ID: "mock", Provider: provider}, Messages: []sdk.Message{sdk.UserMessage("original")},
@@ -324,13 +324,13 @@ func TestQueuedSteerIsAppendedAfterEveryOtherPreparedMessage(t *testing.T) {
 	imageBase64 := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n\x00payload"))
 	wrapped, readMedia := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []toolexec.Tool{{
 		Name: agenttools.ReadMediaToolName().String(),
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return agenttools.ReadMediaToolOutput{
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(agenttools.ReadMediaToolOutput{
 				Public:         agenttools.ReadMediaToolResult{OK: true, Path: "/data/image.png", Mime: "image/png"},
 				ImageBase64:    imageBase64,
 				ImageMediaType: "image/png",
-			}, nil
-		}),
+			}), nil
+		},
 	}})
 	if readMedia == nil || len(wrapped) != 1 {
 		t.Fatalf("decorateReadMediaTools did not wrap read tool: state=%v tools=%d", readMedia, len(wrapped))

@@ -361,8 +361,8 @@ func TestDecorateReadMediaToolsConcurrentExecutions(t *testing.T) {
 	imageBase64 := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n\x00payload"))
 	wrapped, state := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []toolexec.Tool{{
 		Name: agenttools.ReadMediaToolName().String(),
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return agenttools.ReadMediaToolOutput{
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(agenttools.ReadMediaToolOutput{
 				Public: agenttools.ReadMediaToolResult{
 					OK:   true,
 					Path: "/data/image.png",
@@ -370,8 +370,8 @@ func TestDecorateReadMediaToolsConcurrentExecutions(t *testing.T) {
 				},
 				ImageBase64:    imageBase64,
 				ImageMediaType: "image/png",
-			}, nil
-		}),
+			}), nil
+		},
 	}})
 	if state == nil || len(wrapped) != 1 {
 		t.Fatalf("decorateReadMediaTools did not wrap read tool: state=%v tools=%d", state, len(wrapped))

@@ -352,9 +352,9 @@ func TestAgentGenerateSnapshotHashesResolvedMapToolSchema(t *testing.T) {
 			},
 			"required": []string{"query"},
 		}),
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return nil, nil
-		}),
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return sdk.ToolOutput{}, nil
+		},
 	}}}})
 
 	_, err := a.Generate(context.Background(), RunConfig{
@@ -437,9 +437,9 @@ func TestAgentGenerateHookStaysGovernedAcrossAnthropicProviderSteps(t *testing.T
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return map[string]any{"answer": "ok"}, nil
-		}),
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{"answer": "ok"}), nil
+		},
 	}}}})
 
 	var selectorCalls atomic.Int32

@@ -126,9 +126,9 @@ func TestAgentToolLoopSurvivesPhotoInFrozenPrefix(t *testing.T) {
 			agent.SetToolProviders([]agenttools.ToolProvider{envelopeProbeToolProvider{tools: []toolexec.Tool{{
 				Name:       "lookup",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return map[string]any{"weather": "sunny"}, nil
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(map[string]any{"weather": "sunny"}), nil
+				},
 			}}}})
 			currentIndex := 0
 			ledger := contextfrag.NewMutationLedger()

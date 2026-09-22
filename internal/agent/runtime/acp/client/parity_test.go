@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -157,12 +158,12 @@ func parityNativeSource(approval tools.NativeToolApprovalService, toolEvents too
 	return tools.NewNativeToolSource(nil, []tools.ToolProvider{parityToolProvider{tool: toolexec.Tool{
 		Name:       toolName,
 		Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}),
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 			if executed != nil {
 				*executed = true
 			}
-			return "done", nil
-		}),
+			return toolexec.OutputFromValue("done"), nil
+		},
 	}}}, tools.NativeToolSourceOptions{
 		AllowAll:   true,
 		Approval:   approval,

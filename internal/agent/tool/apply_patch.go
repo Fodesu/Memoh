@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -158,8 +160,17 @@ type applyPatchVirtualFile struct {
 	contentLoaded bool
 }
 
-func execApplyPatchInput(input any) (string, error) {
-	if text, ok := input.(string); ok {
+// execApplyPatchInput reads the patch from the arguments: a model that sent
+// the patch text in place of a JSON object (invalid arguments, or a JSON
+// string document) is accepted, otherwise the "patch" field of the object.
+func execApplyPatchInput(input sdk.ToolArguments) (string, error) {
+	var text string
+	if !input.Valid() {
+		text = input.Text
+	} else if err := input.Unmarshal(&text); err != nil {
+		text = ""
+	}
+	if text != "" {
 		if strings.TrimSpace(text) == "" {
 			return "", errors.New("patch is required")
 		}
@@ -170,7 +181,7 @@ func execApplyPatchInput(input any) (string, error) {
 	if !ok || raw == nil {
 		return "", errors.New("patch is required")
 	}
-	text, ok := raw.(string)
+	text, ok = raw.(string)
 	if !ok {
 		return "", errors.New("patch must be a string")
 	}
@@ -180,7 +191,7 @@ func execApplyPatchInput(input any) (string, error) {
 	return text, nil
 }
 
-func (p *ContainerProvider) execApplyPatch(ctx context.Context, session SessionContext, input any) (any, error) {
+func (p *ContainerProvider) execApplyPatch(ctx context.Context, session SessionContext, input sdk.ToolArguments) (any, error) {
 	patch, err := execApplyPatchInput(input)
 	if err != nil {
 		return nil, err

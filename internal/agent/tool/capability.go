@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	connectsdk "github.com/felinics/connect-it/sdk/go"
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -125,20 +126,20 @@ func (p *CapabilityProvider) Tools(_ context.Context, session SessionContext) ([
 		if spec.name != ToolMCPManage().String() && (p.opts.Apps == nil || p.opts.Registry == nil || p.opts.Catalog == nil) {
 			continue
 		}
-		tool := toolexec.Tool{Name: ToolMCPManage().String(), Description: spec.description, Parameters: toolexec.SchemaFromValue(spec.schema()), Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) { //nolint:contextcheck // FreezeDependencies returns a child of ctx.Context retained through approval.
+		tool := toolexec.Tool{Name: ToolMCPManage().String(), Description: spec.description, Parameters: toolexec.SchemaFromValue(spec.schema()), Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) { //nolint:contextcheck // FreezeDependencies returns a child of ctx.Context retained through approval.
 			args := inputAsMap(input)
 			result, err := p.execute(ctx, session, spec, args)
 			if spec.name != ToolAppSearch().String() && (StringArg(args, "action") != "list" || args["refresh"] == true) && session.CapabilitiesChanged != nil {
 				session.CapabilitiesChanged()
 			}
 			if err == nil {
-				return result, nil
+				return toolexec.OutputFromValue(result), nil
 			}
 			// Causes remain server-side. Even transport errors can include URLs or
 			// credential-bearing request data, so never echo them into tool history.
 			code := apperror.CodeCapabilityOperationFailed
 			if public, ok := apperror.PublicFrom(err, ""); ok {
-				return map[string]any{"ok": false, "code": public.Code, "detail": public.Detail, "message": public.Detail}, nil
+				return toolexec.OutputFromValue(map[string]any{"ok": false, "code": public.Code, "detail": public.Detail, "message": public.Detail}), nil
 			}
 			switch {
 			case errors.Is(err, apps.ErrInvalidRequest):
@@ -148,8 +149,8 @@ func (p *CapabilityProvider) Tools(_ context.Context, session SessionContext) ([
 			}
 			p.logger.Warn("capability operation failed", slog.String("tool", spec.name), slog.String("action", StringArg(args, "action")))
 			public, _ := apperror.PublicFrom(apperror.New(code, nil), "")
-			return map[string]any{"ok": false, "code": public.Code, "detail": public.Detail, "message": public.Detail}, nil
-		})}
+			return toolexec.OutputFromValue(map[string]any{"ok": false, "code": public.Code, "detail": public.Detail, "message": public.Detail}), nil
+		}}
 		switch spec.name {
 		case "mcp_manage":
 			tool.Name = ToolMCPManage().String()

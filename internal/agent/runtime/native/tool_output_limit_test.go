@@ -65,12 +65,12 @@ func TestAgentGenerateLimitsToolOutputBeforeNextModelCall(t *testing.T) {
 			tools: []toolexec.Tool{{
 				Name:       "big_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return map[string]any{
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(map[string]any{
 						"content": large,
 						"ok":      true,
-					}, nil
-				}),
+					}), nil
+				},
 			}},
 		},
 	})
@@ -99,9 +99,9 @@ func TestAgentExecuteToolLimitsToolError(t *testing.T) {
 			tools: []toolexec.Tool{{
 				Name:       "broken_tool",
 				Parameters: &jsonschema.Schema{Type: "object"},
-				Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-					return nil, errors.New(largeErr)
-				}),
+				Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return sdk.ToolOutput{}, errors.New(largeErr)
+				},
 			}},
 		},
 	})

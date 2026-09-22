@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 )
@@ -71,9 +73,9 @@ func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([
 				"type":       "object",
 				"properties": map[string]any{},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execListBackground(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execListBackground(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolWait().String(),
@@ -85,9 +87,9 @@ func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([
 				},
 				"required": []string{"duration"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execWait(ctx.Context, sess, inputAsMap(input), toolexec.AdaptLegacyProgress(ctx.SendProgress))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execWait(ctx.Context, sess, inputAsMap(input), ctx.SendProgress))
+			},
 		},
 		{
 			Name:        ToolWaitUntil().String(),
@@ -101,9 +103,9 @@ func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([
 				},
 				"required": []string{"task_id"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execWaitUntil(ctx.Context, sess, inputAsMap(input), toolexec.AdaptLegacyProgress(ctx.SendProgress))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execWaitUntil(ctx.Context, sess, inputAsMap(input), ctx.SendProgress))
+			},
 		},
 		{
 			Name:        ToolGetBackgroundStatus().String(),
@@ -115,9 +117,9 @@ func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([
 				},
 				"required": []string{"task_id"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execGetBackgroundStatus(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execGetBackgroundStatus(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 		{
 			Name:        ToolKillBackground().String(),
@@ -129,9 +131,9 @@ func (p *BackgroundProvider) Tools(_ context.Context, session SessionContext) ([
 				},
 				"required": []string{"task_id"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execKillBackground(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execKillBackground(ctx.Context, sess, inputAsMap(input)))
+			},
 		},
 	}, nil
 }
@@ -160,7 +162,7 @@ func (p *BackgroundProvider) execListBackground(_ context.Context, session Sessi
 	return map[string]any{"tasks": entries, "count": len(entries)}, nil
 }
 
-func (*BackgroundProvider) execWait(ctx context.Context, _ SessionContext, args map[string]any, sendProgress func(any)) (any, error) {
+func (*BackgroundProvider) execWait(ctx context.Context, _ SessionContext, args map[string]any, sendProgress func(sdk.ToolOutput)) (any, error) {
 	duration, err := durationArg(args, "duration")
 	if err != nil {
 		return nil, err
@@ -188,7 +190,7 @@ func (*BackgroundProvider) execWait(ctx context.Context, _ SessionContext, args 
 	}
 }
 
-func (p *BackgroundProvider) execWaitUntil(ctx context.Context, session SessionContext, args map[string]any, sendProgress func(any)) (any, error) {
+func (p *BackgroundProvider) execWaitUntil(ctx context.Context, session SessionContext, args map[string]any, sendProgress func(sdk.ToolOutput)) (any, error) {
 	taskID := strings.TrimSpace(StringArg(args, "task_id"))
 	if taskID == "" {
 		return nil, errors.New("task_id is required")
@@ -230,7 +232,7 @@ func (p *BackgroundProvider) execWaitUntil(ctx context.Context, session SessionC
 	return result, nil
 }
 
-func (p *BackgroundProvider) waitForSessionTaskWithProgress(ctx context.Context, botID, sessionID, taskID string, idleThreshold time.Duration, sendProgress func(any)) (background.TaskSnapshot, background.WaitOutcome, error) {
+func (p *BackgroundProvider) waitForSessionTaskWithProgress(ctx context.Context, botID, sessionID, taskID string, idleThreshold time.Duration, sendProgress func(sdk.ToolOutput)) (background.TaskSnapshot, background.WaitOutcome, error) {
 	if sendProgress == nil {
 		return p.bgManager.WaitForSessionTask(ctx, botID, sessionID, taskID, idleThreshold)
 	}
@@ -274,9 +276,9 @@ func (p *BackgroundProvider) waitForSessionTaskWithProgress(ctx context.Context,
 	}
 }
 
-func emitWaitProgress(sendProgress func(any), payload map[string]any) {
+func emitWaitProgress(sendProgress func(sdk.ToolOutput), payload map[string]any) {
 	if sendProgress != nil {
-		sendProgress(payload)
+		sendProgress(toolexec.OutputFromValue(payload))
 	}
 }
 

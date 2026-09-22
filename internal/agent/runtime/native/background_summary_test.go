@@ -124,9 +124,9 @@ func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
 		staticToolProvider{tools: []toolexec.Tool{{
 			Name:       "lookup",
 			Parameters: &jsonschema.Schema{Type: "object"},
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{"ok": true}, nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"ok": true}), nil
+			},
 		}}},
 	})
 

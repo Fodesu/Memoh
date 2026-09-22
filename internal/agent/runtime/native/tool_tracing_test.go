@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -50,9 +51,9 @@ func TestWrapToolTracingRecordsACallWithoutItsArguments(t *testing.T) {
 	recorder := recordToolSpans(t)
 	tools := wrapToolTracing([]toolexec.Tool{{
 		Name: "bash",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return "ok", nil
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue("ok"), nil
+		},
 	}})
 
 	out, err := tools[0].Execute(&toolexec.ToolExecContext{Context: context.Background()},
@@ -80,11 +81,11 @@ func TestWrapToolTracingGivesTheToolItsOwnSpanContext(t *testing.T) {
 	recorder := recordToolSpans(t)
 	tools := wrapToolTracing([]toolexec.Tool{{
 		Name: "browser_action",
-		Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, _ any) (any, error) {
+		Execute: func(execCtx *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 			_, inner := otel.Tracer("test").Start(execCtx.Context, "inner.work")
 			inner.End()
-			return "ok", nil
-		}),
+			return toolexec.OutputFromValue("ok"), nil
+		},
 	}})
 
 	if _, err := tools[0].Execute(&toolexec.ToolExecContext{Context: context.Background()}, toolexec.ArgumentsFromValue(nil)); err != nil {
@@ -103,9 +104,9 @@ func TestWrapToolTracingMarksAFailedCall(t *testing.T) {
 	recorder := recordToolSpans(t)
 	tools := wrapToolTracing([]toolexec.Tool{{
 		Name: "write_file",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return nil, errors.New("disk full")
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return sdk.ToolOutput{}, errors.New("disk full")
+		},
 	}})
 
 	if _, err := tools[0].Execute(&toolexec.ToolExecContext{Context: context.Background()}, toolexec.ArgumentsFromValue(nil)); err == nil {
@@ -119,7 +120,9 @@ func TestWrapToolTracingMarksAFailedCall(t *testing.T) {
 func TestWrapToolTracingLeavesTheCallersSliceAlone(t *testing.T) {
 	// The decorators in this chain copy before they wrap. Mutating the input
 	// would double-wrap whichever caller reuses the assembled slice.
-	original := []toolexec.Tool{{Name: "read_file", Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) { return nil, nil })}}
+	original := []toolexec.Tool{{Name: "read_file", Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+		return sdk.ToolOutput{}, nil
+	}}}
 	wrapped := wrapToolTracing(original)
 	if &original[0] == &wrapped[0] {
 		t.Fatal("wrapToolTracing returned the caller's slice")

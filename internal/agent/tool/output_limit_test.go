@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
@@ -106,9 +108,9 @@ func TestWrapToolOutputLimitsPrunesErrors(t *testing.T) {
 
 	wrapped := WrapToolOutputLimits([]toolexec.Tool{{
 		Name: "broken_tool",
-		Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
-			return nil, errors.New("HEAD\n" + strings.Repeat("error detail ", 300) + "\nTAIL")
-		}),
+		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return sdk.ToolOutput{}, errors.New("HEAD\n" + strings.Repeat("error detail ", 300) + "\nTAIL")
+		},
 	}}, ToolOutputLimit{MaxBytes: 512, MaxLines: 80})
 
 	_, err := wrapped[0].Execute(&toolexec.ToolExecContext{Context: context.Background(), ToolName: "broken_tool"}, toolexec.ArgumentsFromValue(nil))

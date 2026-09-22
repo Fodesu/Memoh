@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sort"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
@@ -60,7 +62,7 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]to
 				"type":       "object",
 				"properties": map[string]any{},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
 				names := make([]string, 0, len(skills))
 				for name := range skills {
 					names = append(names, name)
@@ -76,12 +78,12 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]to
 						"path":        skill.Path,
 					})
 				}
-				return map[string]any{
+				return toolexec.OutputFromValue(map[string]any{
 					"success": true,
 					"count":   len(items),
 					"skills":  items,
-				}, nil
-			}),
+				}), nil
+			},
 		},
 		{
 			Name:        ToolUseSkill().String(),
@@ -100,27 +102,27 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]to
 				},
 				"required": []string{"skillName", "reason"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(_ *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				skillName := StringArg(args, "skillName")
 				if skillName == "" {
-					return nil, errors.New("skillName is required")
+					return sdk.ToolOutput{}, errors.New("skillName is required")
 				}
 				skill, ok := skills[skillName]
 				if !ok {
-					return map[string]any{
+					return toolexec.OutputFromValue(map[string]any{
 						"success": false,
 						"error":   fmt.Sprintf("skill %q not found — check available skills in the system prompt", skillName),
-					}, nil
+					}), nil
 				}
-				return map[string]any{
+				return toolexec.OutputFromValue(map[string]any{
 					"success":     true,
 					"skillName":   skillName,
 					"description": skill.Description,
 					"content":     skill.Content,
 					"path":        skill.Path,
-				}, nil
-			}),
+				}), nil
+			},
 		},
 	}, nil
 }

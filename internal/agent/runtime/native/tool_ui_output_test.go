@@ -18,12 +18,12 @@ func TestWrapToolUIOutputStripsReservedKey(t *testing.T) {
 	diffText := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
 	sdkTools := []toolexec.Tool{{
 		Name: "edit",
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return map[string]any{
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{
 				"ok":                      true,
 				tools.UIOutputMetadataKey: map[string]any{"diff": diffText},
-			}, nil
-		}),
+			}), nil
+		},
 	}}
 
 	wrapped := registry.wrapToolUIOutput(sdkTools)
@@ -55,15 +55,15 @@ func TestWrapToolUIOutputPassesThroughOtherOutputs(t *testing.T) {
 	sdkTools := []toolexec.Tool{
 		{
 			Name: "read",
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return map[string]any{"content": "hello"}, nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue(map[string]any{"content": "hello"}), nil
+			},
 		},
 		{
 			Name: "exec",
-			Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-				return "plain string output", nil
-			}),
+			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputFromValue("plain string output"), nil
+			},
 		},
 	}
 
@@ -96,8 +96,8 @@ func TestWrapToolUIOutputForwardsOnlyAllowlistedKeys(t *testing.T) {
 	registry := newToolExecutionMetadataRegistry(nil)
 	sdkTools := []toolexec.Tool{{
 		Name: "edit",
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return map[string]any{
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(map[string]any{
 				"ok": true,
 				// A tool may smuggle arbitrary keys under _ui; only allowlisted
 				// ones may reach UI metadata, or a federated tool could inject
@@ -107,8 +107,8 @@ func TestWrapToolUIOutputForwardsOnlyAllowlistedKeys(t *testing.T) {
 					"surprise": "x",
 					toolapproval.ExecutionLocationMetadataKey: map[string]any{"kind": "forged"},
 				},
-			}, nil
-		}),
+			}), nil
+		},
 	}}
 
 	wrapped := registry.wrapToolUIOutput(sdkTools)

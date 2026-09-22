@@ -20,13 +20,16 @@ type capabilityRefreshProvider struct {
 }
 
 func (p *capabilityRefreshProvider) Tools(_ context.Context, session tools.SessionContext) ([]toolexec.Tool, error) {
-	result := []toolexec.Tool{{Name: "install_test_capability", Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) {
+	result := []toolexec.Tool{{Name: "install_test_capability", Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
 		p.installed = true
 		session.CapabilitiesChanged()
-		return map[string]any{"installed": true}, nil
-	})}}
+		return toolexec.OutputFromValue(map[string]any{"installed": true}), nil
+	}}}
 	if p.installed {
-		result = append(result, toolexec.Tool{Name: "new_capability", Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: toolexec.AdaptLegacyExecute(func(*toolexec.ToolExecContext, any) (any, error) { p.used++; return "worked", nil })})
+		result = append(result, toolexec.Tool{Name: "new_capability", Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			p.used++
+			return toolexec.OutputFromValue("worked"), nil
+		}})
 	}
 	return result, nil
 }

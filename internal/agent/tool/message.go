@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/messaging"
@@ -90,9 +92,9 @@ func (p *MessageProvider) Tools(_ context.Context, session SessionContext) ([]to
 				},
 				"required": sendRequired,
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execSend(ctx.Context, sess, ctx.ToolCallID, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execSend(ctx.Context, sess, ctx.ToolCallID, inputAsMap(input)))
+			},
 		})
 	}
 	if p.exec.CanReact() {
@@ -112,9 +114,9 @@ func (p *MessageProvider) Tools(_ context.Context, session SessionContext) ([]to
 				},
 				"required": reactRequired,
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execReact(ctx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execReact(ctx.Context, sess, inputAsMap(input)))
+			},
 		})
 	}
 	return tools, nil

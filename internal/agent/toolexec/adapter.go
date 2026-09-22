@@ -9,41 +9,6 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// LegacyExecuteFunc is the handler contract Memoh's tools were written against
-// before the SDK typed its tool boundary: the decoded arguments as a plain JSON
-// value (an object decodes to map[string]any) and an output the provider
-// serialized on the way to the model. AdaptLegacyExecute runs such a handler
-// on the typed contract; new tools should implement ToolExecuteFunc directly.
-type LegacyExecuteFunc func(ctx *ToolExecContext, input any) (any, error)
-
-// AdaptLegacyExecute bridges a LegacyExecuteFunc onto ToolExecuteFunc. The
-// arguments are decoded exactly as the untyped SDK decoded them, and the
-// output is typed the way the untyped SDK's providers serialized it: a string
-// is text, anything else is its JSON encoding.
-func AdaptLegacyExecute(execute LegacyExecuteFunc) ToolExecuteFunc {
-	if execute == nil {
-		return nil
-	}
-	return func(ctx *ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-		output, err := execute(ctx, ArgumentsValue(input))
-		if err != nil {
-			return sdk.ToolOutput{}, err
-		}
-		return EncodeOutput(output)
-	}
-}
-
-// AdaptLegacyProgress bridges a progress sink written for the untyped contract
-// onto the typed one; a nil sink stays nil so tools can keep testing for it.
-func AdaptLegacyProgress(send func(content sdk.ToolOutput)) func(content any) {
-	if send == nil {
-		return nil
-	}
-	return func(content any) {
-		send(OutputFromValue(content))
-	}
-}
-
 // ArgumentsValue is the arguments as a plain JSON value: an object decodes to
 // map[string]any, the zero value is the empty object, and invalid arguments
 // are their text verbatim (a tool never sees them through ExecuteTools, which
@@ -196,4 +161,14 @@ func SchemaValue(schema *jsonschema.Schema) map[string]any {
 		return map[string]any{}
 	}
 	return out
+}
+
+// OutputPair types the two results of a helper that still returns a plain
+// value, so a handler can end with `return toolexec.OutputPair(helper(...))`.
+// A failed call carries no output.
+func OutputPair(value any, err error) (sdk.ToolOutput, error) {
+	if err != nil {
+		return sdk.ToolOutput{}, err
+	}
+	return OutputFromValue(value), nil
 }

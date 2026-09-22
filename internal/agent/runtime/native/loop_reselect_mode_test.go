@@ -102,9 +102,9 @@ func mockToolLoopTools() []agenttools.ToolProvider {
 	return []agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
 		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: toolexec.AdaptLegacyExecute(func(_ *toolexec.ToolExecContext, _ any) (any, error) {
-			return strings.Repeat("large tool result ", 80), nil
-		}),
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(strings.Repeat("large tool result ", 80)), nil
+		},
 	}}}}
 }
 

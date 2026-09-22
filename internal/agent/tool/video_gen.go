@@ -93,9 +93,9 @@ func (p *VideoGenProvider) Tools(ctx context.Context, session SessionContext) ([
 				},
 				"required": []string{"prompt"},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(execCtx *toolexec.ToolExecContext, input any) (any, error) {
-				return p.execGenerateVideo(execCtx.Context, sess, inputAsMap(input))
-			}),
+			Execute: func(execCtx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execGenerateVideo(execCtx.Context, sess, inputAsMap(input)))
+			},
 		},
 	}, nil
 }

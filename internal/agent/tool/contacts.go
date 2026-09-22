@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/messaging"
 )
@@ -70,15 +72,15 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]t
 				},
 				"required": []string{},
 			}),
-			Execute: toolexec.AdaptLegacyExecute(func(ctx *toolexec.ToolExecContext, input any) (any, error) {
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
-					return nil, errors.New("bot_id is required")
+					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
 				routes, err := p.contacts.ListContacts(ctx.Context, botID)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
 				platformFilter := strings.ToLower(strings.TrimSpace(FirstStringArg(args, "platform")))
 				contacts := make([]map[string]any, 0, len(routes))
@@ -107,13 +109,13 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]t
 					}
 					contacts = append(contacts, entry)
 				}
-				return map[string]any{
+				return toolexec.OutputFromValue(map[string]any{
 					"ok":       true,
 					"bot_id":   botID,
 					"count":    len(contacts),
 					"contacts": contacts,
-				}, nil
-			}),
+				}), nil
+			},
 		},
 	}, nil
 }
