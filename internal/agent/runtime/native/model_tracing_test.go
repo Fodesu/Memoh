@@ -59,7 +59,7 @@ func TestEveryModelRoundGetsItsOwnSpan(t *testing.T) {
 	recorder := recordToolSpans(t)
 
 	round := 0
-	provider := agentStreamTestProvider(func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 		round++
 		if round <= 2 {
 			return closedAgentTestStream(
@@ -114,7 +114,7 @@ func TestModelSpansDoNotAdoptTheToolSpans(t *testing.T) {
 	recorder := recordToolSpans(t)
 
 	round := 0
-	provider := agentStreamTestProvider(func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 		round++
 		if round == 1 {
 			return closedAgentTestStream(
@@ -166,7 +166,7 @@ func TestModelSpanReportsTheWaitBeforeTheFirstPart(t *testing.T) {
 	recorder := recordToolSpans(t)
 
 	const wait = 40 * time.Millisecond
-	provider := agentStreamTestProvider(func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 		ch := make(chan sdk.StreamPart)
 		go func() {
 			defer close(ch)
@@ -175,7 +175,7 @@ func TestModelSpanReportsTheWaitBeforeTheFirstPart(t *testing.T) {
 			ch <- &sdk.TextDeltaPart{ID: "text-1", Text: "done"}
 			ch <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}
 		}()
-		return &sdk.StreamResult{Stream: ch}, nil
+		return ch, nil
 	})
 
 	events := New(Deps{}).Stream(context.Background(), RunConfig{
@@ -208,7 +208,7 @@ func TestModelSpanReportsTheWaitBeforeTheFirstPart(t *testing.T) {
 func TestModelSpanEndsWhenTheStreamProducesNothing(t *testing.T) {
 	recorder := recordToolSpans(t)
 
-	provider := agentStreamTestProvider(func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 		return closedAgentTestStream(), nil
 	})
 
@@ -232,7 +232,7 @@ func TestModelSpanRecordsAProviderThatRefusesTheCall(t *testing.T) {
 	recorder := recordToolSpans(t)
 
 	refused := errors.New("provider refused the call")
-	provider := agentStreamTestProvider(func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 		return nil, refused
 	})
 
@@ -297,7 +297,7 @@ func TestModelSpansRecordNothingFromTheConversation(t *testing.T) {
 	recorder := recordToolSpans(t)
 
 	const secret = "synthetic-conversation-secret"
-	provider := agentStreamTestProvider(func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 		return closedAgentTestStream(
 			&sdk.StartStepPart{},
 			&sdk.TextDeltaPart{ID: "text-1", Text: secret},

@@ -14,6 +14,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 )
 
@@ -21,11 +22,11 @@ func TestAgentGenerateDroppedReadMediaIsNotRecordedAsProviderInput(t *testing.T)
 	t.Parallel()
 
 	pdfBytes := []byte("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n%%EOF\n")
-	var providerInputs []sdk.GenerateParams
-	modelProvider := &agentReadMediaMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	var providerInputs []sdk.Request
+	modelProvider := &agentReadMediaMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 		providerInputs = append(providerInputs, cloneGenerateParams(params))
 		if call == 1 {
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				FinishReason: sdk.FinishReasonToolCalls,
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-pdf",
@@ -37,7 +38,7 @@ func TestAgentGenerateDroppedReadMediaIsNotRecordedAsProviderInput(t *testing.T)
 		if messagesHaveFilePart(params.Messages) {
 			t.Fatal("second provider call retained the file selected for eviction")
 		}
-		return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 
 	a := New(Deps{})
@@ -47,7 +48,7 @@ func TestAgentGenerateDroppedReadMediaIsNotRecordedAsProviderInput(t *testing.T)
 		}), nil, "/data"),
 	})
 
-	var committed []sdk.StepResult
+	var committed []step.Record
 	result, err := a.Generate(context.Background(), RunConfig{
 		Model:             &sdk.Model{ID: "mock-model", Provider: modelProvider},
 		Messages:          []sdk.Message{sdk.UserMessage("inspect the document")},
@@ -74,9 +75,9 @@ func TestAgentGenerateDroppedReadMediaIsNotRecordedAsProviderInput(t *testing.T)
 				DropReasons: map[string]int{"native_media": dropped},
 			}
 		},
-		OnStepCommitted: func(_ context.Context, _ int, step *sdk.StepResult) error {
+		OnStepCommitted: func(_ context.Context, _ int, step *step.Record) (StepDirective, error) {
 			committed = append(committed, *step)
-			return nil
+			return StepDirective{}, nil
 		},
 	})
 	if err != nil {
@@ -99,13 +100,13 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 	t.Parallel()
 
 	bridgeProvider, hookService := newBeforeModelCallHook(t, "last-dispatched-hook")
-	var firstProviderInput sdk.GenerateParams
-	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	var firstProviderInput sdk.Request
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 		if call != 1 {
-			return nil, errors.New("provider called after failed step preflight")
+			return sdk.ModelResult{}, errors.New("provider called after failed step preflight")
 		}
 		firstProviderInput = cloneGenerateParams(params)
-		return &sdk.GenerateResult{
+		return sdk.ModelResult{
 			FinishReason: sdk.FinishReasonToolCalls,
 			ToolCalls: []sdk.ToolCall{{
 				ToolCallID: "call-overflow",
@@ -171,16 +172,16 @@ func TestAgentGenerateStepHookRemainsTransientAfterAdmissionReconciliation(t *te
 
 	const marker = "transient-step-hook"
 	bridgeProvider, hookService := newBeforeModelCallHook(t, marker)
-	var providerInputs []sdk.GenerateParams
-	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	var providerInputs []sdk.Request
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 		providerInputs = append(providerInputs, cloneGenerateParams(params))
 		if call == 1 {
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				FinishReason: sdk.FinishReasonToolCalls,
 				ToolCalls:    []sdk.ToolCall{{ToolCallID: "call-hook", ToolName: "lookup"}},
 			}, nil
 		}
-		return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	a := New(Deps{BridgeProvider: bridgeProvider, HookService: hookService})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
@@ -191,16 +192,16 @@ func TestAgentGenerateStepHookRemainsTransientAfterAdmissionReconciliation(t *te
 		},
 	}}}})
 
-	var committed []sdk.StepResult
+	var committed []step.Record
 	_, err := a.Generate(context.Background(), RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
 		Messages:         []sdk.Message{sdk.UserMessage("task")},
 		SupportsToolCall: true,
 		Identity:         SessionContext{BotID: "bot-1"},
 		ContextMutations: contextfrag.NewMutationLedger(),
-		OnStepCommitted: func(_ context.Context, _ int, step *sdk.StepResult) error {
+		OnStepCommitted: func(_ context.Context, _ int, step *step.Record) (StepDirective, error) {
 			committed = append(committed, *step)
-			return nil
+			return StepDirective{}, nil
 		},
 	})
 	if err != nil {
@@ -222,12 +223,12 @@ func TestAgentGenerateStepHookRemainsTransientAfterAdmissionReconciliation(t *te
 
 func TestAgentStreamRetryRevokesReadMediaAdmission(t *testing.T) {
 	pdfBytes := []byte("%PDF-1.4\nretry admission\n%%EOF\n")
-	var providerInputs []sdk.GenerateParams
-	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	var providerInputs []sdk.Request
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 		providerInputs = append(providerInputs, cloneGenerateParams(params))
 		switch call {
 		case 1:
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				FinishReason: sdk.FinishReasonToolCalls,
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-retry-pdf",
@@ -239,12 +240,12 @@ func TestAgentStreamRetryRevokesReadMediaAdmission(t *testing.T) {
 			if !messagesHaveFilePart(params.Messages) {
 				t.Fatal("failed provider attempt did not receive admitted file")
 			}
-			return nil, errors.New("api error 500")
+			return sdk.ModelResult{}, errors.New("api error 500")
 		default:
 			if messagesHaveFilePart(params.Messages) {
 				t.Fatal("retry provider attempt retained file selected for eviction")
 			}
-			return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		}
 	}}
 
@@ -256,7 +257,7 @@ func TestAgentStreamRetryRevokesReadMediaAdmission(t *testing.T) {
 	})
 
 	var selectorCalls atomic.Int32
-	var committed []sdk.StepResult
+	var committed []step.Record
 	var terminal StreamEvent
 	for event := range a.Stream(context.Background(), RunConfig{
 		Model:             &sdk.Model{ID: "mock-model", Provider: modelProvider},
@@ -281,9 +282,9 @@ func TestAgentStreamRetryRevokesReadMediaAdmission(t *testing.T) {
 				DropReasons: map[string]int{"native_media": len(input.Messages) - len(selected)},
 			}
 		},
-		OnStepCommitted: func(_ context.Context, _ int, step *sdk.StepResult) error {
+		OnStepCommitted: func(_ context.Context, _ int, step *step.Record) (StepDirective, error) {
 			committed = append(committed, *step)
-			return nil
+			return StepDirective{}, nil
 		},
 	}) {
 		if event.IsTerminal() {
@@ -312,10 +313,10 @@ func TestAgentStreamProviderStartFailureDoesNotPersistReadMedia(t *testing.T) {
 	t.Parallel()
 
 	pdfBytes := []byte("%PDF-1.4\nfailed provider start\n%%EOF\n")
-	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 		switch call {
 		case 1:
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				FinishReason: sdk.FinishReasonToolCalls,
 				ToolCalls: []sdk.ToolCall{{
 					ToolCallID: "call-failed-start-pdf",
@@ -327,10 +328,10 @@ func TestAgentStreamProviderStartFailureDoesNotPersistReadMedia(t *testing.T) {
 			if !messagesHaveFilePart(params.Messages) {
 				t.Fatal("failed provider start did not receive admitted file")
 			}
-			return nil, errors.New("invalid provider request")
+			return sdk.ModelResult{}, errors.New("invalid provider request")
 		default:
 			t.Fatalf("provider call %d crossed the nonretryable start failure", call)
-			return nil, nil
+			return sdk.ModelResult{}, nil
 		}
 	}}
 
@@ -341,7 +342,7 @@ func TestAgentStreamProviderStartFailureDoesNotPersistReadMedia(t *testing.T) {
 		}), nil, "/data"),
 	})
 
-	var committed []sdk.StepResult
+	var committed []step.Record
 	var terminal StreamEvent
 	for event := range a.Stream(context.Background(), RunConfig{
 		Model:             &sdk.Model{ID: "mock-model", Provider: modelProvider},
@@ -350,9 +351,9 @@ func TestAgentStreamProviderStartFailureDoesNotPersistReadMedia(t *testing.T) {
 		SupportsToolCall:  true,
 		Identity:          SessionContext{BotID: "bot-1"},
 		ContextMutations:  contextfrag.NewMutationLedger(),
-		OnStepCommitted: func(_ context.Context, _ int, step *sdk.StepResult) error {
+		OnStepCommitted: func(_ context.Context, _ int, step *step.Record) (StepDirective, error) {
 			committed = append(committed, *step)
-			return nil
+			return StepDirective{}, nil
 		},
 	}) {
 		if event.IsTerminal() {
@@ -381,7 +382,7 @@ func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) 
 
 	pdfBytes := []byte("%PDF-1.4\ninterrupted admission\n%%EOF\n")
 	var calls atomic.Int32
-	modelProvider := &atomicMockProvider{stream: func(streamCtx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+	modelProvider := &atomicMockProvider{stream: func(streamCtx context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
 		switch calls.Add(1) {
 		case 1:
 			return closedAgentTestStream(
@@ -408,7 +409,7 @@ func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) 
 				<-streamCtx.Done()
 				close(parts)
 			}()
-			return &sdk.StreamResult{Stream: parts}, nil
+			return parts, nil
 		}
 	}}
 
@@ -419,7 +420,7 @@ func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) 
 		}), nil, "/data"),
 	})
 
-	var interrupted *sdk.StepResult
+	var interrupted *step.Record
 	events := a.Stream(ctx, RunConfig{
 		Model:             &sdk.Model{ID: "mock-model", Provider: modelProvider},
 		Messages:          []sdk.Message{sdk.UserMessage("inspect the document")},
@@ -427,7 +428,7 @@ func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) 
 		SupportsToolCall:  true,
 		Identity:          SessionContext{BotID: "bot-1"},
 		ContextMutations:  contextfrag.NewMutationLedger(),
-		OnStepInterrupted: func(_ context.Context, stepIndex int, step *sdk.StepResult) error {
+		OnStepInterrupted: func(_ context.Context, stepIndex int, step *step.Record) error {
 			if stepIndex != 1 {
 				t.Errorf("interrupted step index = %d, want 1", stepIndex)
 			}
@@ -476,13 +477,13 @@ func TestAgentGenerateCanceledPreflightKeepsLastDispatchedHashAndFork(t *testing
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var firstProviderInput sdk.GenerateParams
-	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	var firstProviderInput sdk.Request
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 		if call != 1 {
-			return nil, errors.New("provider called after canceled step preflight")
+			return sdk.ModelResult{}, errors.New("provider called after canceled step preflight")
 		}
 		firstProviderInput = cloneGenerateParams(params)
-		return &sdk.GenerateResult{
+		return sdk.ModelResult{
 			FinishReason: sdk.FinishReasonToolCalls,
 			ToolCalls: []sdk.ToolCall{{
 				ToolCallID: "call-cancel",

@@ -23,18 +23,47 @@ type Client struct{}
 
 func NewClient() *Client
 
+func (c *Client) Generate(ctx context.Context, model *Model, req Request) (ModelResult, error)
+func (c *Client) Stream(ctx context.Context, model *Model, req Request) (ModelStream, error)
+
+func Generate(ctx context.Context, model *Model, req Request) (ModelResult, error)
+func Stream(ctx context.Context, model *Model, req Request) (ModelStream, error)
+
+func (m *Model) Generate(ctx context.Context, req Request) (ModelResult, error)
+func (m *Model) Stream(ctx context.Context, req Request) (ModelStream, error)
+
+func (c *Client) Embed(ctx context.Context, value string, options ...EmbedOption) ([]float64, error)
+func (c *Client) EmbedMany(ctx context.Context, values []string, options ...EmbedOption) (*EmbedResult, error)
+
+func Embed(ctx context.Context, value string, options ...EmbedOption) ([]float64, error)
+func EmbedMany(ctx context.Context, values []string, options ...EmbedOption) (*EmbedResult, error)
+```
+
+`Client.Generate` and `Client.Stream` are the current text-generation entry points:
+one call in, an `sdk.ModelResult` or an `sdk.ModelStream` out. The caller owns the
+multi-step loop, tool execution, approval, and step accumulation.
+
+The `model` argument supplies the provider binding; `req.Model` must be empty or
+match `model.ID`. A nil model is an error. The top-level `Generate` and `Stream`
+delegate to a default client, and `Model.Generate` / `Model.Stream` are the same
+call without the client indirection.
+
+The option-built text-generation helpers are deprecated and kept working:
+
+```go
 func (c *Client) GenerateText(ctx context.Context, options ...GenerateOption) (string, error)
 func (c *Client) GenerateTextResult(ctx context.Context, options ...GenerateOption) (*GenerateResult, error)
 func (c *Client) StreamText(ctx context.Context, options ...GenerateOption) (*StreamResult, error)
-func (c *Client) Embed(ctx context.Context, value string, options ...EmbedOption) ([]float64, error)
-func (c *Client) EmbedMany(ctx context.Context, values []string, options ...EmbedOption) (*EmbedResult, error)
 
 func GenerateText(ctx context.Context, options ...GenerateOption) (string, error)
 func GenerateTextResult(ctx context.Context, options ...GenerateOption) (*GenerateResult, error)
 func StreamText(ctx context.Context, options ...GenerateOption) (*StreamResult, error)
-func Embed(ctx context.Context, value string, options ...EmbedOption) ([]float64, error)
-func EmbedMany(ctx context.Context, values []string, options ...EmbedOption) (*EmbedResult, error)
 ```
+
+Deprecated: these run the SDK's own multi-step tool loop, which duplicates the
+orchestration a runtime that persists every step and steers a run mid-flight has
+to own. `Embed`, `EmbedMany`, and the image, speech, transcribe, and video
+surfaces are not deprecated.
 
 ### Provider Contracts
 
@@ -44,8 +73,8 @@ type Provider interface {
     ListModels(ctx context.Context) ([]Model, error)
     Test(ctx context.Context) *ProviderTestResult
     TestModel(ctx context.Context, modelID string) (*ModelTestResult, error)
-    DoGenerate(ctx context.Context, params GenerateParams) (*GenerateResult, error)
-    DoStream(ctx context.Context, params GenerateParams) (*StreamResult, error)
+    DoGenerate(ctx context.Context, req Request) (ModelResult, error)
+    DoStream(ctx context.Context, req Request) (<-chan StreamPart, error)
 }
 
 type ProviderStatus string
@@ -190,6 +219,62 @@ type ResponseFormat struct {
     JSONSchema any
 }
 
+type ToolChoiceMode string
+
+const (
+    ToolChoiceAuto     ToolChoiceMode = "auto"
+    ToolChoiceNone     ToolChoiceMode = "none"
+    ToolChoiceRequired ToolChoiceMode = "required"
+    ToolChoiceTool     ToolChoiceMode = "tool"
+)
+
+// ToolChoice is the closed form of the request's tool-choice field. Tool names
+// the target tool when Mode is ToolChoiceTool.
+type ToolChoice struct {
+    Mode ToolChoiceMode
+    Tool string
+}
+
+// Request is the provider-facing input of one model call: the closed,
+// provider-neutral shape a runtime builds and the seam accepts.
+type Request struct {
+    Model            string
+    System           string
+    Messages         []Message
+    Tools            []ToolDefinition
+    ToolChoice       ToolChoice
+    ResponseFormat   *ResponseFormat
+    Temperature      *float64
+    TopP             *float64
+    MaxTokens        *int
+    StopSequences    []string
+    FrequencyPenalty *float64
+    PresencePenalty  *float64
+    Seed             *int
+    ReasoningEffort  *string
+    ReasoningSummary *string
+    PromptCacheKey   *string
+    ProviderOptions  map[string]json.RawMessage
+}
+
+// ModelResult is the outcome of one model call. The runtime owns the step
+// record it keeps around it.
+type ModelResult struct {
+    Text                 string
+    Reasoning            string
+    ReasoningParts       []ReasoningPart
+    TextProviderMetadata map[string]any
+    FinishReason         FinishReason
+    RawFinishReason      string
+    Usage                Usage
+    Sources              []Source
+    Files                []GeneratedFile
+    ToolCalls            []ToolCall
+    Response             *ResponseMetadata
+}
+
+// GenerateParams is the option-built request of the deprecated text-generation
+// client layer. Build a Request and call Client.Generate instead.
 type GenerateParams struct {
     Model            *Model
     System           string
@@ -207,6 +292,8 @@ type GenerateParams struct {
     ReasoningEffort  *string
 }
 
+// Deprecated: Client.Generate returns a ModelResult for one call, and a runtime
+// owns the step record it keeps.
 type StepResult struct {
     Text            string
     Reasoning       string
@@ -219,6 +306,8 @@ type StepResult struct {
     Messages        []Message
 }
 
+// Deprecated: Client.Generate returns a ModelResult for one call; a runtime
+// assembles its own step record from that.
 type GenerateResult struct {
     Text            string
     Reasoning       string
@@ -236,6 +325,9 @@ type GenerateResult struct {
 ```
 
 ### Generate Options
+
+Deprecated: every option below configures the SDK's own text-generation loop.
+Build a `Request` and call `Client.Generate` or `Client.Stream` instead.
 
 ```go
 type GenerateOption func(*generateConfig)
@@ -268,6 +360,65 @@ Behavior notes:
 - `WithMaxSteps(N)` enables automatic tool execution for up to `N` LLM calls.
 - `WithMaxSteps(-1)` means unlimited loop until the model stops requesting tools.
 - `WithToolChoice` accepts `"auto"`, `"none"`, or `"required"`.
+
+### Runtime Orchestration Primitives
+
+These are the pieces a runtime uses to build its own multi-step loop around
+`Client.Generate` and `Client.Stream`, in place of the deprecated client loop.
+
+```go
+func ToolDefinitionsFromTools(tools []Tool) ([]ToolDefinition, error)
+
+func BuildStepMessages(text string, textMeta map[string]any, reasoning []ReasoningPart,
+    calls []ToolCall, results []ToolResultPart, usage *Usage) []Message
+
+type ToolExecOptions struct {
+    Tools   []Tool
+    Approve func(context.Context, ToolCall) (ToolApprovalResult, error)
+    OnPart  func(StreamPart)
+}
+
+type ToolExecOutcome struct {
+    Results       []ToolResultPart
+    Deferred      *ToolApprovalResult
+    DeferredIndex int
+}
+
+func ExecuteTools(ctx context.Context, calls []ToolCall, opts ToolExecOptions) (ToolExecOutcome, error)
+
+type ToolApprovalDecision string
+
+const (
+    ToolApprovalDecisionApproved ToolApprovalDecision = "approved"
+    ToolApprovalDecisionRejected ToolApprovalDecision = "rejected"
+    ToolApprovalDecisionDeferred ToolApprovalDecision = "deferred"
+)
+
+type ToolApprovalResult struct {
+    Decision   ToolApprovalDecision
+    ApprovalID string
+    Reason     string
+    Metadata   map[string]any
+}
+```
+
+Behavior notes:
+
+- `ToolDefinitionsFromTools` converts executable `Tool` values into the
+  wire-shaped `ToolDefinition` values a `Request` carries. The request never
+  carries `Execute` handlers.
+- `ExecuteTools` runs one step's batch: approvals resolve sequentially in call
+  order, approved tools then execute in parallel. It returns a non-nil error
+  only for approval-handler failures.
+- A deferred approval is a normal outcome, not an error: `Deferred` is set,
+  `DeferredIndex` is the parked call's index, and `Results` still covers the
+  calls before it, so already-computed results are not lost. `DeferredIndex` is
+  `-1` when `Deferred` is nil.
+- With `Approve` nil, every tool carrying `RequireApproval` is denied with an
+  `IsError` result.
+- `BuildStepMessages` assembles one step's assistant message (reasoning parts
+  first, in provider emission order and never dropped on empty text) plus a
+  tool message when results are present.
 
 ### Tools
 
@@ -505,6 +656,18 @@ type RawPart struct {
     RawValue any
 }
 
+// ModelStream is one streamed model call: the live parts plus the assembled
+// result, available once the parts channel closes.
+type ModelStream struct {
+    Parts  <-chan StreamPart
+    Result func() (*ModelResult, error)
+}
+
+// CollectStream folds a part channel into one result. It is the path for
+// callers that want a whole result from a streaming-only backend.
+func CollectStream(ctx context.Context, parts <-chan StreamPart) (ModelResult, error)
+
+// Deprecated: consume ModelStream instead; the caller assembles the result.
 type StreamResult struct {
     Stream   <-chan StreamPart
     Steps    []StepResult
@@ -613,8 +776,8 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error)
 func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult
 func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTestResult, error)
 func (p *Provider) ChatModel(id string) *sdk.Model
-func (p *Provider) DoGenerate(ctx context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error)
-func (p *Provider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error)
+func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelResult, error)
+func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.StreamPart, error)
 ```
 
 Default option values:
@@ -647,8 +810,8 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error)
 func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult
 func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTestResult, error)
 func (p *Provider) ChatModel(id string) *sdk.Model
-func (p *Provider) DoGenerate(ctx context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error)
-func (p *Provider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error)
+func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelResult, error)
+func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.StreamPart, error)
 ```
 
 Default option values:
@@ -664,8 +827,8 @@ Discovery endpoints:
 
 Responses-specific behavior:
 
-- assistant reasoning maps to `GenerateResult.Reasoning`
-- URL citation annotations map to `GenerateResult.Sources`
+- assistant reasoning maps to `ModelResult.Reasoning`
+- URL citation annotations map to `ModelResult.Sources`
 - function-call outputs map to tool-call and tool-result structures
 
 ## Package `provider/anthropic/messages`
@@ -695,8 +858,8 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error)
 func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult
 func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTestResult, error)
 func (p *Provider) ChatModel(id string) *sdk.Model
-func (p *Provider) DoGenerate(ctx context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error)
-func (p *Provider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error)
+func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelResult, error)
+func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.StreamPart, error)
 ```
 
 Default option values:
@@ -735,8 +898,8 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error)
 func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult
 func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTestResult, error)
 func (p *Provider) ChatModel(id string) *sdk.Model
-func (p *Provider) DoGenerate(ctx context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error)
-func (p *Provider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error)
+func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelResult, error)
+func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.StreamPart, error)
 ```
 
 Default option values:

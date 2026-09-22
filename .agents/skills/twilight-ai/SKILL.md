@@ -11,7 +11,8 @@ Use this skill when the task involves `twilight-ai`, especially:
 
 - implementing or refactoring SDK APIs in `sdk/`
 - adding or updating providers under `provider/`
-- working on `GenerateText`, `GenerateTextResult`, `StreamText`, `Embed`, or `EmbedMany`
+- working on `Client.Generate`, `Client.Stream`, `Request`, `ModelResult`, `Embed`, or `EmbedMany`
+- migrating off `GenerateText`, `GenerateTextResult`, or `StreamText`
 - adding tool-calling, streaming, reasoning, or embedding support
 - writing examples, docs, or usage guidance for this library
 
@@ -19,9 +20,13 @@ Use this skill when the task involves `twilight-ai`, especially:
 
 Twilight AI is a lightweight Go AI SDK with a provider-agnostic core API.
 
-- Text generation: `sdk.GenerateText`, `sdk.GenerateTextResult`, `sdk.StreamText`
+- Text generation: `sdk.Client.Generate` and `sdk.Client.Stream` over an `sdk.Request`,
+  returning an `sdk.ModelResult` or an `sdk.ModelStream`
+- Deprecated: `sdk.GenerateText`, `sdk.GenerateTextResult`, `sdk.StreamText`, which
+  run the SDK's own multi-step tool loop and its option-built request/result types
 - Embeddings: `sdk.Embed`, `sdk.EmbedMany`
-- Tool calling: `sdk.Tool`, `sdk.NewTool[T]`, `WithMaxSteps`, approval flow
+- Tool calling: `sdk.Tool`, `sdk.ToolDefinition`, `sdk.ExecuteTools`, `sdk.BuildStepMessages`
+- Deprecated: the client-side `WithMaxSteps` loop and its approval flow
 - MCP tool integration: `sdk.CreateMCPClient`, `sdk.MCPClient`, `sdk.MCPClientConfig`
 - Streaming: typed `StreamPart` events over Go channels
 - Current providers:
@@ -34,11 +39,17 @@ Twilight AI is a lightweight Go AI SDK with a provider-agnostic core API.
 
 ## Default Mental Model
 
-Prefer the high-level SDK API first, then drop to provider details only when needed.
+Prefer the single-call seam, then drop to provider details only when needed.
 
 - `sdk.Model` binds a chat model to a `sdk.Provider`
 - `sdk.EmbeddingModel` binds an embedding model to an `sdk.EmbeddingProvider`
-- The client orchestrates tool loops, callbacks, approvals, and streaming lifecycle
+- `sdk.Client.Generate` takes an `sdk.Model` and one `sdk.Request` and returns one
+  `sdk.ModelResult`; `sdk.Client.Stream` returns an `sdk.ModelStream` of live
+  `sdk.StreamPart` values. The model carries the provider binding, so
+  `Request.Model` must be empty or match the model's ID
+- A runtime owns the orchestration around those calls: the multi-step loop, tool
+  execution through `sdk.ExecuteTools`, approvals, and its own step record.
+  Deprecated: the client layer that used to own that loop
 - MCP clients can load remote MCP tools and turn them into ordinary `sdk.Tool` values
 - Providers handle backend-specific HTTP, request mapping, response parsing, and SSE translation
 
@@ -46,11 +57,14 @@ Prefer the high-level SDK API first, then drop to provider details only when nee
 
 Choose the narrowest API that matches the task:
 
-- Need only final text: use `sdk.GenerateText`
-- Need usage, finish reason, steps, sources, files, or tool details: use `sdk.GenerateTextResult`
-- Need live output: use `sdk.StreamText`
+- Need one model call and its result: build an `sdk.Request` and use `sdk.Client.Generate`
+- Need live output: use `sdk.Client.Stream` and consume the `sdk.ModelStream` parts
+- Need tool schemas on the wire: `sdk.ToolDefinition` (via `sdk.ToolDefinitionsFromTools`)
+- Need to run the model's tool calls: `sdk.ExecuteTools`
 - Need one vector: use `sdk.Embed`
 - Need multiple vectors or embedding token usage: use `sdk.EmbedMany`
+- Deprecated for text generation: `sdk.GenerateText`, `sdk.GenerateTextResult` and
+  `sdk.StreamText` run the SDK's own multi-step tool loop
 
 If the task introduces examples or docs, prefer simple end-to-end snippets that start with:
 
@@ -77,14 +91,15 @@ If adding or changing a chat provider, preserve the `sdk.Provider` contract:
 - `ListModels(ctx)`
 - `Test(ctx)`
 - `TestModel(ctx, modelID)`
-- `DoGenerate(ctx, params)`
-- `DoStream(ctx, params)`
+- `DoGenerate(ctx, req sdk.Request) (sdk.ModelResult, error)`
+- `DoStream(ctx, req sdk.Request) (<-chan sdk.StreamPart, error)`
 
 Keep provider responsibilities focused:
 
-- translate SDK messages/options into backend request format
-- parse backend responses into `sdk.GenerateResult`
-- map backend streaming events into typed `sdk.StreamPart` values
+- translate an `sdk.Request` into backend request format
+- parse backend responses into `sdk.ModelResult`
+- map backend streaming events into typed `sdk.StreamPart` values, and let the SDK
+  assemble them: a provider emits parts and stops, it never folds its own result
 - report usage, finish reasons, reasoning, tool calls, sources, and files when supported
 
 ### Embedding Providers
@@ -104,9 +119,9 @@ Prefer `sdk.NewTool[T]` for new tool examples and integrations. It gives typed i
 
 Use these defaults unless the task requires something else:
 
-- `WithToolChoice("auto")` for normal use
-- `WithMaxSteps(0)` for inspection-only tool calls
-- `WithMaxSteps(N)` for automatic execution loops
+- `Request.ToolChoice` left zero, or `sdk.ToolChoice{Mode: sdk.ToolChoiceAuto}`, for normal use
+- inspect `ModelResult.ToolCalls` without running anything for inspection-only use
+- `sdk.ExecuteTools` to run one step's tool batch; the runtime owns the loop around it
 - `RequireApproval: true` only for sensitive side effects
 
 When streaming with tools, ensure the implementation can emit:
@@ -142,9 +157,10 @@ Twilight AI streaming is channel-first and type-safe. Prefer type switches over 
 
 Important expectations:
 
-- `StreamText` returns `*sdk.StreamResult`
-- `sr.Stream` must be consumed before relying on `sr.Steps` or `sr.Messages`
-- `Text()` and `ToResult()` are the convenience paths when callers do not want manual event handling
+- `Client.Stream` returns an `sdk.ModelStream`
+- `ModelStream.Parts` must be fully consumed before calling `ModelStream.Result`
+- `sdk.CollectStream` folds a part channel into one `sdk.ModelResult` for backends
+  whose only transport is streaming
 
 ### Messages And Results
 
@@ -208,8 +224,9 @@ Use these terms consistently:
 - Model: provider-bound chat model
 - Embedding model: provider-bound embedding model
 - Tool calling: model requests a tool invocation
-- Multi-step execution: automatic tool loop controlled by `WithMaxSteps`
-- Stream part: a typed event from `StreamText`
+- Multi-step execution: a tool loop the runtime owns, driving one `Client.Generate`
+  or `Client.Stream` call per step
+- Stream part: a typed event from `Client.Stream`
 
 ## Quick Checklist
 
@@ -219,7 +236,7 @@ Before finishing work in this repo, verify:
 - chat and embedding concerns are not mixed accidentally
 - public examples use top-level `sdk` APIs unless lower-level behavior is the point
 - streaming logic uses typed `StreamPart` handling
-- tool-calling changes cover both inspection mode and multi-step mode when relevant
+- tool-calling changes cover both inspection of `ModelResult.ToolCalls` and execution through `sdk.ExecuteTools` when relevant
 - MCP examples show both transport setup and normal `WithTools(...)` usage when relevant
 - provider work includes health checks or model discovery behavior if the backend supports them
 

@@ -175,13 +175,13 @@ func TestE2E_ExplicitBackgroundExec(t *testing.T) {
 
 	// Model calls exec with run_in_background. Completion should not inject
 	// a notification into later model steps.
-	var step2Params sdk.GenerateParams
+	var step2Params sdk.Request
 	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			switch call {
 			case 1:
 				// Model decides to run npm install in background.
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
@@ -198,7 +198,7 @@ func TestE2E_ExplicitBackgroundExec(t *testing.T) {
 				// It should do something else or reply.
 				// Simulate waiting a bit so the background task has time to complete.
 				time.Sleep(300 * time.Millisecond)
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-2",
@@ -211,12 +211,12 @@ func TestE2E_ExplicitBackgroundExec(t *testing.T) {
 			case 3:
 				// Step 3 should not receive a background notification.
 				step2Params = params
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "All done!",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
 			default:
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "unexpected",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
@@ -285,11 +285,11 @@ func TestE2E_ForegroundTimeoutFlip(t *testing.T) {
 
 	var toolResult map[string]any
 	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			switch call {
 			case 1:
 				// Model runs a command with short timeout (will flip).
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
@@ -304,12 +304,12 @@ func TestE2E_ForegroundTimeoutFlip(t *testing.T) {
 			case 2:
 				// Extract the tool result from step 1.
 				toolResult = extractToolResult(t, params, "call-1")
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "Build moved to background.",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
 			default:
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "unexpected",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
@@ -385,11 +385,11 @@ func TestE2E_SleepRejection(t *testing.T) {
 	var sleepToolResult map[string]any
 	var sleepWasError bool
 	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			switch call {
 			case 1:
 				// Model tries to sleep 10.
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
@@ -402,12 +402,12 @@ func TestE2E_SleepRejection(t *testing.T) {
 			case 2:
 				// Check the tool result — should be an error.
 				sleepToolResult, sleepWasError = extractToolResultWithError(params, "call-1")
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "Got it, won't sleep.",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
 			default:
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "unexpected",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
@@ -459,12 +459,12 @@ func TestE2E_RunningTasksSummaryInjected(t *testing.T) {
 
 	bgMgr := background.New(nil)
 
-	var step3Params sdk.GenerateParams
+	var step3Params sdk.Request
 	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			switch call {
 			case 1:
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
@@ -478,7 +478,7 @@ func TestE2E_RunningTasksSummaryInjected(t *testing.T) {
 				}, nil
 			case 2:
 				// Do another tool call so prepareStep fires again.
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-2",
@@ -492,12 +492,12 @@ func TestE2E_RunningTasksSummaryInjected(t *testing.T) {
 				// Capture the params; the running tasks summary should ride a
 				// message, never the system prompt.
 				step3Params = cloneGenerateParams(params)
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "Done checking.",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
 			default:
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "unexpected",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
@@ -539,7 +539,7 @@ func TestE2E_RunningTasksSummaryInjected(t *testing.T) {
 // Helpers for extracting tool results from params
 // ---------------------------------------------------------------------------
 
-func extractToolResult(t *testing.T, params sdk.GenerateParams, toolCallID string) map[string]any {
+func extractToolResult(t *testing.T, params sdk.Request, toolCallID string) map[string]any {
 	t.Helper()
 	for _, msg := range params.Messages {
 		if msg.Role != sdk.MessageRoleTool {
@@ -560,7 +560,7 @@ func extractToolResult(t *testing.T, params sdk.GenerateParams, toolCallID strin
 	return nil
 }
 
-func extractToolResultWithError(params sdk.GenerateParams, toolCallID string) (map[string]any, bool) {
+func extractToolResultWithError(params sdk.Request, toolCallID string) (map[string]any, bool) {
 	for _, msg := range params.Messages {
 		if msg.Role != sdk.MessageRoleTool {
 			continue

@@ -55,8 +55,8 @@ type countingDiscussLifecycleProvider struct {
 
 func (p *countingDiscussLifecycleProvider) DoStream(
 	_ context.Context,
-	params sdk.GenerateParams,
-) (*sdk.StreamResult, error) {
+	params sdk.Request,
+) (<-chan sdk.StreamPart, error) {
 	p.mu.Lock()
 	p.calls++
 	p.params = params

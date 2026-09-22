@@ -398,11 +398,10 @@ func generateChatImage(ctx context.Context, provider sqlc.Provider, apiKey, mode
 		[]sdk.Message{sdk.UserMessage(userMsg)},
 		nil,
 	)
-	result, err := sdk.GenerateTextResult(ctx,
-		sdk.WithModel(sdkModel),
-		sdk.WithSystem(system),
-		sdk.WithMessages(messages),
-	)
+	result, err := sdkModel.Generate(ctx, sdk.Request{
+		System:   system,
+		Messages: messages,
+	})
 	if err != nil {
 		return generatedImage{}, err
 	}

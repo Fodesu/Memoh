@@ -17,10 +17,10 @@ func TestAgentGenerateLimitsToolOutputBeforeNextModelCall(t *testing.T) {
 
 	large := "HEAD\n" + strings.Repeat("0123456789", 200) + "\nTAIL"
 	modelProvider := &atomicMockProvider{
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			switch call {
 			case 1:
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-big",
@@ -47,13 +47,13 @@ func TestAgentGenerateLimitsToolOutputBeforeNextModelCall(t *testing.T) {
 				if !strings.Contains(content, "[memoh pruned]") {
 					t.Fatalf("tool output missing prune marker:\n%s", content)
 				}
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					Text:         "ok",
 					FinishReason: sdk.FinishReasonStop,
 				}, nil
 			default:
 				t.Fatalf("unexpected model call %d", call)
-				return nil, nil
+				return sdk.ModelResult{}, nil
 			}
 		},
 	}

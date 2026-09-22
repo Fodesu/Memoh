@@ -29,7 +29,7 @@ func TestNewAgentDefaultsToActiveLoopReselectMode(t *testing.T) {
 	}
 }
 
-func TestBuildGenerateOptionsOffModeSetsLegacyPruneLoopSelectionMode(t *testing.T) {
+func TestBuildGenerateDispatchOffModeSetsLegacyPruneLoopSelectionMode(t *testing.T) {
 	t.Parallel()
 
 	ledger := contextfrag.NewMutationLedger()
@@ -45,14 +45,16 @@ func TestBuildGenerateOptionsOffModeSetsLegacyPruneLoopSelectionMode(t *testing.
 		},
 	}
 
-	a.buildGenerateOptions(context.Background(), cfg, nil, nil, nil)
+	if _, err := a.buildGenerateDispatch(context.Background(), cfg, nil, nil, nil); err != nil {
+		t.Fatalf("buildGenerateDispatch: %v", err)
+	}
 
 	if got := ledger.LoopSelectionMode(); got != contextfrag.LoopSelectionLegacyPrune {
 		t.Fatalf("loop selection mode = %q, want %q", got, contextfrag.LoopSelectionLegacyPrune)
 	}
 }
 
-func TestBuildGenerateOptionsShadowModeSetsSuffixOnlyShadowLoopSelectionMode(t *testing.T) {
+func TestBuildGenerateDispatchShadowModeSetsSuffixOnlyShadowLoopSelectionMode(t *testing.T) {
 	t.Parallel()
 
 	ledger := contextfrag.NewMutationLedger()
@@ -68,7 +70,9 @@ func TestBuildGenerateOptionsShadowModeSetsSuffixOnlyShadowLoopSelectionMode(t *
 		},
 	}
 
-	a.buildGenerateOptions(context.Background(), cfg, nil, nil, nil)
+	if _, err := a.buildGenerateDispatch(context.Background(), cfg, nil, nil, nil); err != nil {
+		t.Fatalf("buildGenerateDispatch: %v", err)
+	}
 
 	if got := ledger.LoopSelectionMode(); got != contextfrag.LoopSelectionSuffixOnlyShadow {
 		t.Fatalf("loop selection mode = %q, want %q", got, contextfrag.LoopSelectionSuffixOnlyShadow)
@@ -77,9 +81,9 @@ func TestBuildGenerateOptionsShadowModeSetsSuffixOnlyShadowLoopSelectionMode(t *
 
 func mockToolLoopProvider(maxToolCall int, idPrefix string) *atomicMockProvider {
 	return &atomicMockProvider{
-		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 			if call <= maxToolCall {
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: fmt.Sprintf("%s-%d", idPrefix, call),
@@ -88,7 +92,7 @@ func mockToolLoopProvider(maxToolCall int, idPrefix string) *atomicMockProvider 
 					}},
 				}, nil
 			}
-			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+			return sdk.ModelResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
 }
@@ -111,15 +115,15 @@ func mockToolLoopTools() []agenttools.ToolProvider {
 func TestAgentGenerateOffModeNeverInvokesReselectorAndMatchesReselectorNilRun(t *testing.T) {
 	t.Parallel()
 
-	captureParams := func(a *Agent, cfg RunConfig) []sdk.GenerateParams {
-		var params []sdk.GenerateParams
+	captureParams := func(a *Agent, cfg RunConfig) []sdk.Request {
+		var params []sdk.Request
 		provider := cfg.Model.Provider.(*atomicMockProvider)
 		baseHandler := provider.handler
-		provider.handler = func(call int, p sdk.GenerateParams) (*sdk.GenerateResult, error) {
-			params = append(params, sdk.GenerateParams{
+		provider.handler = func(call int, p sdk.Request) (sdk.ModelResult, error) {
+			params = append(params, sdk.Request{
 				System:   p.System,
 				Messages: append([]sdk.Message(nil), p.Messages...),
-				Tools:    append([]sdk.Tool(nil), p.Tools...),
+				Tools:    append([]sdk.ToolDefinition(nil), p.Tools...),
 			})
 			return baseHandler(call, p)
 		}
@@ -180,15 +184,15 @@ func TestAgentGenerateOffModeNeverInvokesReselectorAndMatchesReselectorNilRun(t 
 func TestAgentGenerateShadowModeInvokesReselectorButNeverAppliesSelection(t *testing.T) {
 	t.Parallel()
 
-	captureParams := func(a *Agent, cfg RunConfig) []sdk.GenerateParams {
-		var params []sdk.GenerateParams
+	captureParams := func(a *Agent, cfg RunConfig) []sdk.Request {
+		var params []sdk.Request
 		provider := cfg.Model.Provider.(*atomicMockProvider)
 		baseHandler := provider.handler
-		provider.handler = func(call int, p sdk.GenerateParams) (*sdk.GenerateResult, error) {
-			params = append(params, sdk.GenerateParams{
+		provider.handler = func(call int, p sdk.Request) (sdk.ModelResult, error) {
+			params = append(params, sdk.Request{
 				System:   p.System,
 				Messages: append([]sdk.Message(nil), p.Messages...),
-				Tools:    append([]sdk.Tool(nil), p.Tools...),
+				Tools:    append([]sdk.ToolDefinition(nil), p.Tools...),
 			})
 			return baseHandler(call, p)
 		}

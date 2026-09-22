@@ -65,16 +65,16 @@ func TestGenerateAppliesContextViewBeforeProviderOptions(t *testing.T) {
 func TestGenerateFinalInputHashTracksLastProviderStep(t *testing.T) {
 	t.Parallel()
 	ledger := contextfrag.NewMutationLedger()
-	var lastParams sdk.GenerateParams
-	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	var lastParams sdk.Request
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 		if call == 1 {
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				FinishReason: sdk.FinishReasonToolCalls,
 				ToolCalls:    []sdk.ToolCall{{ToolCallID: "hash-call", ToolName: "hash_tool"}},
 			}, nil
 		}
 		lastParams = params
-		return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		cfg.ContextMutations = ledger
@@ -162,14 +162,14 @@ func (*preflightCountingProvider) TestModel(context.Context, string) (*sdk.Model
 	return &sdk.ModelTestResult{Supported: true}, nil
 }
 
-func (p *preflightCountingProvider) DoGenerate(context.Context, sdk.GenerateParams) (*sdk.GenerateResult, error) {
+func (p *preflightCountingProvider) DoGenerate(context.Context, sdk.Request) (sdk.ModelResult, error) {
 	p.mu.Lock()
 	p.generateCalls++
 	p.mu.Unlock()
-	return &sdk.GenerateResult{Text: "unexpected", FinishReason: sdk.FinishReasonStop}, nil
+	return sdk.ModelResult{Text: "unexpected", FinishReason: sdk.FinishReasonStop}, nil
 }
 
-func (p *preflightCountingProvider) DoStream(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+func (p *preflightCountingProvider) DoStream(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 	p.mu.Lock()
 	p.streamCalls++
 	p.mu.Unlock()

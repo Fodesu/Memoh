@@ -825,7 +825,6 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	go s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
 	cfg := rc.runConfig
-	cfg.StepIndexOffset = req.StepIndexOffset
 	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
 	if stepCommitter != nil {
 		cfg.OnStepCommitted = stepCommitter.commit

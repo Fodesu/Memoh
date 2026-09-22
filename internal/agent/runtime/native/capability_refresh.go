@@ -1,25 +1,129 @@
 package native
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
+
+	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/models"
 )
 
 var errCapabilitiesChanged = errors.New("agent capabilities changed after committed step")
 
-// The SDK snapshots executable tools when an invocation starts. Continue from
-// the committed transcript so discovery, execution and context accounting use
-// the same new tools; a PrepareStep-only schema change would leave old handlers.
-func capabilityContinuation(cfg RunConfig, messages []sdk.Message, steps int) RunConfig {
-	cfg = appendSteerContinuation(cfg, messages, steps)
+// maxCapabilityRefreshes bounds how often one turn may re-assemble its tools:
+// a tool that reports a change on every call must not keep the loop alive.
+const maxCapabilityRefreshes = 32
+
+// wrapExecutableTools builds the execution chain over assembled tools: the
+// UI-only payload stripper innermost (so the payload is recorded whole and
+// never counts against the model's output budget), output limits, the
+// bot-defined hooks, limits again for hook output, and the loop guard. The
+// approval set is the pre-hook view: the approval handler must see the tool
+// the hooks will run, not the hook wrapper.
+func (a *Agent) wrapExecutableTools(
+	hookCtx context.Context,
+	cfg RunConfig,
+	sdkTools []sdk.Tool,
+	meta *toolExecutionMetadataRegistry,
+	guard *ToolLoopGuard,
+	abortCallIDs *toolAbortRegistry,
+) (exec, approval []sdk.Tool) {
+	limit := a.Limits().ToolOutputLimit()
+	sdkTools = meta.wrapToolUIOutput(sdkTools)
+	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
+	approval = append([]sdk.Tool(nil), sdkTools...)
+	sdkTools = a.wrapToolsWithHooks(hookCtx, cfg, sdkTools)
+	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
+	if guard != nil {
+		sdkTools = wrapToolsWithLoopGuard(sdkTools, guard, abortCallIDs)
+	}
+	return sdkTools, approval
+}
+
+// refreshedTools is a re-assembled tool set ready for the loop's next model
+// call: the executable chain, the provider-facing definitions, the approval
+// handler over the new approval set, and the system prompt carrying the new
+// tool usage.
+type refreshedTools struct {
+	exec    []sdk.Tool
+	defs    []sdk.ToolDefinition
+	approve func(context.Context, sdk.ToolCall) (sdk.ToolApprovalResult, error)
+	system  string
+}
+
+// refreshCapabilities re-assembles the tool set after a tool reported that
+// the bot's capabilities changed (an MCP connection or an App was installed).
+// The loop snapshots executable tools when a dispatch is built, so without
+// this the model would learn about a new tool only on the next turn, and a
+// definition-only refresh would leave the old handlers behind.
+//
+// The refresh is in place: the thread, the durable step cursor and the
+// provider-attempt state continue unchanged; only the tools, their usage text
+// in the system prompt, and the definitions on the wire are replaced.
+func (a *Agent) refreshCapabilities(
+	ctx, hookCtx context.Context,
+	cfg *RunConfig,
+	emitter tools.StreamEmitter,
+	liveToolStream bool,
+	readMedia *readMediaDecorationState,
+	meta *toolExecutionMetadataRegistry,
+	guard *ToolLoopGuard,
+	abortCallIDs *toolAbortRegistry,
+) (refreshedTools, error) {
+	if cfg.capabilityRefreshCount >= maxCapabilityRefreshes {
+		return refreshedTools{}, errors.New("too many capability refreshes in one turn")
+	}
 	cfg.capabilityRefreshCount++
+	sdkTools, usage, usageFrags, defs, err := a.assembleTools(ctx, *cfg, emitter, liveToolStream)
+	if err != nil {
+		return refreshedTools{}, fmt.Errorf("assemble tools: %w", err)
+	}
 	if cfg.ContextToolUsage != "" {
 		cfg.System = strings.Replace(cfg.System, cfg.ContextToolUsage, "", 1)
 	}
 	cfg.ContextToolUsage = ""
 	cfg.ContextToolUsageFrags = nil
-	cfg.ContextToolDefs = nil
-	return cfg
+	cfg.ContextToolDefs = defs
+	if usage != "" {
+		cfg.System = appendToolUsageToSystem(cfg.System, usage)
+		cfg.ContextToolUsage = usage
+		cfg.ContextToolUsageFrags = usageFrags
+	}
+	sdkTools = decorateReadMediaToolsWithState(cfg.Model, sdkTools, readMedia)
+	exec, approval := a.wrapExecutableTools(hookCtx, *cfg, sdkTools, meta, guard, abortCallIDs)
+	exec = canonicalizeProviderToolSchemas(exec)
+	// The definitions carry the same prompt-cache marking the dispatch put on
+	// the original set, so the refreshed request stays cacheable.
+	_, _, planTools, _, _ := models.ApplyPromptCacheWithPlan(cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, exec)
+	var executable []sdk.Tool
+	if len(planTools) > 0 && cfg.SupportsToolCall {
+		executable = planTools
+	}
+	toolDefs, err := sdk.ToolDefinitionsFromTools(executable)
+	if err != nil {
+		return refreshedTools{}, err
+	}
+	approve := cfg.ToolApprovalHandler
+	if a != nil && a.hookService != nil {
+		approve = a.wrapApprovalHandlerWithHooks(*cfg, approval, approve)
+	}
+	return refreshedTools{exec: executable, defs: toolDefs, approve: approve, system: cfg.System}, nil
+}
+
+// apply installs a refreshed tool set on the dispatch and the request the
+// loop will send next. The system prompt is replaced only while the dispatch
+// carries it as a request field; a provider that had it promoted into the
+// message prefix keeps the prefix, so the model sees the new tools with the
+// previous usage text until the next turn.
+func (r refreshedTools) apply(dispatch *generateDispatch, params *sdk.Request) {
+	dispatch.execTools = r.exec
+	dispatch.approve = r.approve
+	params.Tools = r.defs
+	if !dispatch.systemPrepended {
+		params.System = r.system
+	}
 }

@@ -36,9 +36,9 @@ func (p *forkSnapshotToolProvider) Tools(_ context.Context, session agenttools.S
 
 func TestForkContextTracksMessagesBeforeEachToolCallingStep(t *testing.T) {
 	modelProvider := &atomicMockProvider{
-		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 			if call <= 2 {
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: fmt.Sprintf("capture-call-%d", call),
@@ -47,7 +47,7 @@ func TestForkContextTracksMessagesBeforeEachToolCallingStep(t *testing.T) {
 					}},
 				}, nil
 			}
-			return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
 	capture := &forkSnapshotToolProvider{}

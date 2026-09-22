@@ -11,6 +11,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
+	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -223,12 +224,12 @@ func applyBeforeModelCallAppendContext(cfg RunConfig, appendContext string) RunC
 	return cfg
 }
 
-func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig, base func(*sdk.GenerateParams) *sdk.GenerateParams) func(*sdk.GenerateParams) *sdk.GenerateParams {
+func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig, base func(*sdk.Request) *sdk.Request) func(*sdk.Request) *sdk.Request {
 	if a == nil || a.hookService == nil {
 		return base
 	}
 	step := 1
-	return func(p *sdk.GenerateParams) *sdk.GenerateParams {
+	return func(p *sdk.Request) *sdk.Request {
 		if base != nil {
 			if override := base(p); override != nil {
 				p = override
@@ -253,7 +254,7 @@ func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig,
 	}
 }
 
-func applyStepHookAppendContext(p *sdk.GenerateParams, ledger *contextfrag.MutationLedger, step int, appendContext string) *sdk.GenerateParams {
+func applyStepHookAppendContext(p *sdk.Request, ledger *contextfrag.MutationLedger, step int, appendContext string) *sdk.Request {
 	if strings.TrimSpace(appendContext) == "" {
 		return p
 	}
@@ -262,21 +263,21 @@ func applyStepHookAppendContext(p *sdk.GenerateParams, ledger *contextfrag.Mutat
 	return p
 }
 
-func (a *Agent) runAfterModelCallHook(ctx context.Context, cfg RunConfig, step *sdk.StepResult, stepIndex int) {
-	if a == nil || a.hookService == nil || step == nil {
+func (a *Agent) runAfterModelCallHook(ctx context.Context, cfg RunConfig, record *step.Record, stepIndex int) {
+	if a == nil || a.hookService == nil || record == nil {
 		return
 	}
 	req := a.baseHookRequest(ctx, cfg, hooks.EventAfterModelCall)
-	payload := modelCallHookPayload(cfg, stepIndex, len(step.Messages))
-	payload["finish_reason"] = string(step.FinishReason)
-	payload["raw_finish_reason"] = step.RawFinishReason
-	payload["input_tokens"] = step.Usage.InputTokens
-	payload["output_tokens"] = step.Usage.OutputTokens
-	payload["total_tokens"] = step.Usage.TotalTokens
-	payload["tool_call_count"] = len(step.ToolCalls)
-	payload["tool_result_count"] = len(step.ToolResults)
-	if step.DeferredToolApproval != nil {
-		payload["deferred_approval_id"] = step.DeferredToolApproval.ApprovalID
+	payload := modelCallHookPayload(cfg, stepIndex, len(record.Messages))
+	payload["finish_reason"] = string(record.Result.FinishReason)
+	payload["raw_finish_reason"] = record.Result.RawFinishReason
+	payload["input_tokens"] = record.Result.Usage.InputTokens
+	payload["output_tokens"] = record.Result.Usage.OutputTokens
+	payload["total_tokens"] = record.Result.Usage.TotalTokens
+	payload["tool_call_count"] = len(record.Result.ToolCalls)
+	payload["tool_result_count"] = len(record.ToolResults)
+	if record.Deferred != nil {
+		payload["deferred_approval_id"] = record.Deferred.ApprovalID
 	}
 	req.Turn = payload
 	if _, err := a.hookService.Run(context.WithoutCancel(ctx), req, nil); err != nil && a.logger != nil {

@@ -30,8 +30,8 @@ func oversizedPrefixRunConfig(provider sdk.Provider, plan *contextfrag.ContextBu
 func TestAgentGenerateChecksInitialEnvelopeWithoutReselector(t *testing.T) {
 	t.Parallel()
 
-	modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
-		return nil, fmt.Errorf("provider must not be called for an oversized prefix (call %d)", call)
+	modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
+		return sdk.ModelResult{}, fmt.Errorf("provider must not be called for an oversized prefix (call %d)", call)
 	}}
 	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		return cfg, nil
@@ -67,8 +67,8 @@ func assertRejectedInitialStep(t *testing.T, ledger *contextfrag.MutationLedger)
 func TestAgentGenerateChecksFullPrefixInitialEnvelopeWithReselector(t *testing.T) {
 	t.Parallel()
 
-	modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
-		return nil, fmt.Errorf("provider must not be called for an oversized prefix (call %d)", call)
+	modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
+		return sdk.ModelResult{}, fmt.Errorf("provider must not be called for an oversized prefix (call %d)", call)
 	}}
 	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		return cfg, nil
@@ -132,11 +132,11 @@ func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T)
 					return strings.Repeat("large-result ", 1_000), nil
 				},
 			}
-			modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 				if call != 1 {
-					return nil, fmt.Errorf("unexpected provider call %d after envelope overflow", call)
+					return sdk.ModelResult{}, fmt.Errorf("unexpected provider call %d after envelope overflow", call)
 				}
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-shadow", ToolName: "lookup", Input: map[string]any{"q": "one"},

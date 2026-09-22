@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"fmt"
+	"github.com/felinics/memoh/internal/agent/step"
 	"strconv"
 	"testing"
 	"time"
@@ -36,11 +37,11 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 			a := New(Deps{})
 			a.SetToolProviders([]tools.ToolProvider{capability})
 			calls := 0
-			next := func(params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			next := func(params sdk.Request) (sdk.ModelResult, error) {
 				calls++
 				switch calls {
 				case 1:
-					return &sdk.GenerateResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "install", ToolName: "install_test_capability", Input: map[string]any{}}}}, nil
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "install", ToolName: "install_test_capability", Input: map[string]any{}}}}, nil
 				case 2:
 					found := false
 					for _, tool := range params.Tools {
@@ -54,25 +55,26 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 					if _, ok := findToolResult(params.Messages, "install_test_capability"); !ok {
 						t.Error("installation result was not carried forward")
 					}
-					return &sdk.GenerateResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "use", ToolName: "new_capability", Input: map[string]any{}}}}, nil
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "use", ToolName: "new_capability", Input: map[string]any{}}}}, nil
 				default:
-					return &sdk.GenerateResult{FinishReason: sdk.FinishReasonStop, Text: "done"}, nil
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonStop, Text: "done"}, nil
 				}
 			}
 			cfg := RunConfig{SupportsToolCall: true, Messages: []sdk.Message{sdk.UserMessage("install and use")}}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var committed []int
-			cfg.OnStepCommitted = func(_ context.Context, index int, _ *sdk.StepResult) error {
+			cfg.OnStepCommitted = func(_ context.Context, index int, _ *step.Record) (StepDirective, error) {
 				committed = append(committed, index)
-				return nil
+				return StepDirective{}, nil
 			}
 			if streaming {
-				cfg.Model = &sdk.Model{ID: "test", Provider: agentStreamTestProvider(func(_ context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+				cfg.Model = &sdk.Model{ID: "test", Provider: agentStreamTestProvider(func(_ context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
 					result, err := next(params)
 					if err != nil {
 						return nil, err
 					}
+					_ = result
 					parts := []sdk.StreamPart{}
 					for _, call := range result.ToolCalls {
 						parts = append(parts, &sdk.StreamToolCallPart{ToolCallID: call.ToolCallID, ToolName: call.ToolName, Input: call.Input})
@@ -89,7 +91,7 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 					}
 				}
 			} else {
-				cfg.Model = &sdk.Model{ID: "test", Provider: &atomicMockProvider{handler: func(_ int, params sdk.GenerateParams) (*sdk.GenerateResult, error) { return next(params) }}}
+				cfg.Model = &sdk.Model{ID: "test", Provider: &atomicMockProvider{handler: func(_ int, params sdk.Request) (sdk.ModelResult, error) { return next(params) }}}
 				if _, err := a.Generate(ctx, cfg); err != nil {
 					t.Fatal(err)
 				}

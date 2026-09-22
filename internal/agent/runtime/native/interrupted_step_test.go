@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 )
 
@@ -41,7 +42,7 @@ func TestAgentStreamCheckpointWaitsForStepGoroutineToExit(t *testing.T) {
 	agent := New(Deps{})
 	agent.SetToolProviders([]agenttools.ToolProvider{&agentStepBoundaryToolProvider{}})
 	var calls atomic.Int32
-	provider := agentStreamTestProvider(func(ctx context.Context, _ sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(ctx context.Context, _ sdk.Request) (<-chan sdk.StreamPart, error) {
 		if calls.Add(1) == 1 {
 			return closedAgentTestStream(
 				&sdk.StartStepPart{},
@@ -52,18 +53,18 @@ func TestAgentStreamCheckpointWaitsForStepGoroutineToExit(t *testing.T) {
 		}
 		ch := make(chan sdk.StreamPart)
 		go func() { <-ctx.Done(); close(ch) }()
-		return &sdk.StreamResult{Stream: ch}, nil
+		return ch, nil
 	})
 
-	interrupted := make(chan *sdk.StepResult, 4)
+	interrupted := make(chan *step.Record, 4)
 	events := agent.Stream(ctx, RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
 		Messages:         []sdk.Message{sdk.UserMessage("hi")},
 		Identity:         SessionContext{BotID: "bot-1"},
 		SupportsToolCall: true,
 		InjectCh:         injectCh,
-		OnStepCommitted:  func(context.Context, int, *sdk.StepResult) error { return nil },
-		OnStepInterrupted: func(_ context.Context, _ int, step *sdk.StepResult) error {
+		OnStepCommitted:  func(context.Context, int, *step.Record) (StepDirective, error) { return StepDirective{}, nil },
+		OnStepInterrupted: func(_ context.Context, _ int, step *step.Record) error {
 			interrupted <- step
 			return nil
 		},
@@ -81,7 +82,7 @@ func TestAgentStreamCheckpointWaitsForStepGoroutineToExit(t *testing.T) {
 
 	select {
 	case step := <-interrupted:
-		t.Fatalf("checkpointed a committed step: text=%q messages=%d", step.Text, len(step.Messages))
+		t.Fatalf("checkpointed a committed step: text=%q messages=%d", step.Result.Text, len(step.Messages))
 	default:
 	}
 }

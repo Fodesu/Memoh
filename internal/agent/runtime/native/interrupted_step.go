@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
+
+	"github.com/felinics/memoh/internal/agent/step"
 )
 
 // interruptedStepCapture retains only the current model call's text and
@@ -173,7 +175,7 @@ func (c *interruptedStepCapture) observe(part sdk.StreamPart) {
 // snapshot returns retained output only at the uncommitted frontier. A finished
 // step is still eligible when its complete commit lost the abort race; a
 // successful complete commit advances nextDurableStep and rejects it here.
-func (c *interruptedStepCapture) snapshot(nextDurableStep int) *sdk.StepResult {
+func (c *interruptedStepCapture) snapshot(nextDurableStep int) *step.Record {
 	text := c.text.String()
 	if c.toolActivity || c.stepIndex != nextDurableStep ||
 		(strings.TrimSpace(text) == "" && c.reasoningBlocks.empty()) {
@@ -188,10 +190,12 @@ func (c *interruptedStepCapture) snapshot(nextDurableStep int) *sdk.StepResult {
 			ProviderMetadata: c.textProviderMetadata,
 		})
 	}
-	return &sdk.StepResult{
-		Text:           text,
-		Reasoning:      c.reasoningBlocks.text(),
-		ReasoningParts: c.reasoningBlocks.parts,
-		Messages:       []sdk.Message{{Role: sdk.MessageRoleAssistant, Content: parts}},
+	return &step.Record{
+		Result: sdk.ModelResult{
+			Text:           text,
+			Reasoning:      c.reasoningBlocks.text(),
+			ReasoningParts: c.reasoningBlocks.parts,
+		},
+		Messages: []sdk.Message{{Role: sdk.MessageRoleAssistant, Content: parts}},
 	}
 }

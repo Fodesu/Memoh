@@ -31,11 +31,11 @@ func (abortAlignmentProvider) TestModel(context.Context, string) (*sdk.ModelTest
 	return &sdk.ModelTestResult{Supported: true, Message: "supported"}, nil
 }
 
-func (abortAlignmentProvider) DoGenerate(context.Context, sdk.GenerateParams) (*sdk.GenerateResult, error) {
-	return &sdk.GenerateResult{FinishReason: sdk.FinishReasonStop}, nil
+func (abortAlignmentProvider) DoGenerate(context.Context, sdk.Request) (sdk.ModelResult, error) {
+	return sdk.ModelResult{FinishReason: sdk.FinishReasonStop}, nil
 }
 
-func (p abortAlignmentProvider) DoStream(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+func (p abortAlignmentProvider) DoStream(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 	parts := make(chan sdk.StreamPart, 7)
 	parts <- &sdk.StartPart{}
 	parts <- &sdk.StartStepPart{}
@@ -46,11 +46,11 @@ func (p abortAlignmentProvider) DoStream(context.Context, sdk.GenerateParams) (*
 		parts <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}
 		parts <- &sdk.FinishPart{FinishReason: sdk.FinishReasonStop}
 		close(parts)
-		return &sdk.StreamResult{Stream: parts}, nil
+		return parts, nil
 	}
 	parts <- &sdk.AbortPart{}
 	close(parts)
-	return &sdk.StreamResult{Stream: parts}, nil
+	return parts, nil
 }
 
 type abortAlignmentFence struct{}

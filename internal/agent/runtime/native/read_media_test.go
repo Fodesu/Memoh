@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -99,7 +100,7 @@ func newAgentReadMediaBridgeProvider(t *testing.T, files map[string][]byte) brid
 type agentReadMediaMockProvider struct {
 	name    string
 	calls   int
-	handler func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error)
+	handler func(call int, params sdk.Request) (sdk.ModelResult, error)
 }
 
 func (m *agentReadMediaMockProvider) Name() string {
@@ -121,12 +122,12 @@ func (*agentReadMediaMockProvider) TestModel(context.Context, string) (*sdk.Mode
 	return &sdk.ModelTestResult{Supported: true, Message: "supported"}, nil
 }
 
-func (m *agentReadMediaMockProvider) DoGenerate(_ context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+func (m *agentReadMediaMockProvider) DoGenerate(_ context.Context, params sdk.Request) (sdk.ModelResult, error) {
 	m.calls++
 	return m.handler(m.calls, params)
 }
 
-func (m *agentReadMediaMockProvider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+func (m *agentReadMediaMockProvider) DoStream(ctx context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
 	result, err := m.DoGenerate(ctx, params)
 	if err != nil {
 		return nil, err
@@ -148,10 +149,10 @@ func (m *agentReadMediaMockProvider) DoStream(ctx context.Context, params sdk.Ge
 				Input:      tc.Input,
 			}
 		}
-		ch <- &sdk.FinishStepPart{FinishReason: result.FinishReason, Usage: result.Usage, Response: result.Response}
+		ch <- &sdk.FinishStepPart{FinishReason: result.FinishReason, Usage: result.Usage, Response: responseMetadataValue(result.Response)}
 		ch <- &sdk.FinishPart{FinishReason: result.FinishReason, TotalUsage: result.Usage}
 	}()
-	return &sdk.StreamResult{Stream: ch}, nil
+	return ch, nil
 }
 
 func assertInjectedReadMediaMessage(t *testing.T, msg sdk.Message, expectedImage, expectedMediaType string) {
@@ -186,9 +187,9 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 	expectedDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
 
 	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			if call == 1 {
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
@@ -248,7 +249,7 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 				t.Fatalf("tool result leaked image bytes: %s", raw)
 			}
 
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				Text:         "done",
 				FinishReason: sdk.FinishReasonStop,
 			}, nil
@@ -266,7 +267,7 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 		agenttools.NewContainerProvider(nil, bp, nil, "/data"),
 	})
 
-	var committed []*sdk.StepResult
+	var committed []*step.Record
 	result, err := a.Generate(context.Background(), RunConfig{
 		Model:              &sdk.Model{ID: "mock-model", Provider: modelProvider},
 		Messages:           []sdk.Message{sdk.UserMessage("look at the image")},
@@ -275,7 +276,7 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 		Identity: SessionContext{
 			BotID: "bot-1",
 		},
-		OnStepCommitted: func(ctx context.Context, index int, step *sdk.StepResult) error {
+		OnStepCommitted: func(ctx context.Context, index int, step *step.Record) (StepDirective, error) {
 			if index == 1 {
 				origins := InternalFeedbackIndexes(ctx)
 				if len(origins) != 1 || origins[0] != 0 {
@@ -283,7 +284,7 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 				}
 			}
 			committed = append(committed, step)
-			return nil
+			return StepDirective{}, nil
 		},
 	})
 	if err != nil {
@@ -397,12 +398,12 @@ func TestDecorateReadMediaToolsConcurrentExecutions(t *testing.T) {
 	}
 	wg.Wait()
 
-	next := state.prepareStep(&sdk.GenerateParams{})
-	if next == nil || len(next.Messages) != 1 {
-		t.Fatalf("prepareStep messages = %#v, want one injected message", next)
+	parts := state.takePendingParts()
+	if got := len(parts); got != calls {
+		t.Fatalf("pending image count = %d, want %d", got, calls)
 	}
-	if got := len(next.Messages[0].Content); got != calls {
-		t.Fatalf("injected image count = %d, want %d", got, calls)
+	if again := state.takePendingParts(); len(again) != 0 {
+		t.Fatalf("second drain returned %d parts, want cleared pending set", len(again))
 	}
 }
 
@@ -414,9 +415,9 @@ func TestAgentGenerateReadMediaInjectsAnthropicSafeImageIntoNextStep(t *testing.
 
 	modelProvider := &agentReadMediaMockProvider{
 		name: "anthropic-messages",
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			if call == 1 {
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
@@ -441,7 +442,7 @@ func TestAgentGenerateReadMediaInjectsAnthropicSafeImageIntoNextStep(t *testing.
 				t.Fatalf("anthropic image payload must not be a data URL: %q", image.Image)
 			}
 
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				Text:         "done",
 				FinishReason: sdk.FinishReasonStop,
 			}, nil
@@ -480,9 +481,9 @@ func TestAgentStreamReadMediaPersistsInjectedImageInTerminalMessages(t *testing.
 	expectedDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
 
 	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 			if call == 1 {
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-1",
@@ -491,7 +492,7 @@ func TestAgentStreamReadMediaPersistsInjectedImageInTerminalMessages(t *testing.
 					}},
 				}, nil
 			}
-			return &sdk.GenerateResult{
+			return sdk.ModelResult{
 				Text:         "done",
 				FinishReason: sdk.FinishReasonStop,
 			}, nil

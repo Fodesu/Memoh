@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/felinics/memoh/internal/agent/step"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -16,7 +17,7 @@ import (
 
 func TestStepCommitFailureMustNotReplayExecutedTool(t *testing.T) {
 	var effects, commits, providerCalls atomic.Int32
-	provider := agentStreamTestProvider(func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 		providerCalls.Add(1)
 		return closedAgentTestStream(
 			&sdk.StartStepPart{},
@@ -39,9 +40,9 @@ func TestStepCommitFailureMustNotReplayExecutedTool(t *testing.T) {
 		SupportsToolCall: true,
 		Identity:         SessionContext{BotID: "qc-bot"},
 		Retry:            RetryConfig{MaxAttempts: 1, FastAttempts: 1},
-		OnStepCommitted: func(context.Context, int, *sdk.StepResult) error {
+		OnStepCommitted: func(context.Context, int, *step.Record) (StepDirective, error) {
 			commits.Add(1)
-			return io.EOF
+			return StepDirective{}, io.EOF
 		},
 	}) {
 		events = append(events, event)

@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,7 +36,7 @@ func TestProviderStepReselectionKeepsPhotoInFrozenPrefixWithinEnvelope(t *testin
 		toolResultMessage("call-weather", "lookup", "sunny, 25C"),
 	)
 	system := strings.Repeat("s", 8_000)
-	tools := []sdk.Tool{{Name: "lookup", Description: "Look something up.", Parameters: map[string]any{"type": "object"}}}
+	tools := []sdk.ToolDefinition{{Name: "lookup", Description: "Look something up.", Parameters: json.RawMessage(`{"type":"object"}`)}}
 
 	plan, err := ComputeContextBudgetPlan(128_000, models.DefaultOutputReserveTokens, 0, 0)
 	if err != nil {
@@ -76,7 +77,7 @@ func (p envelopeProbeToolProvider) Tools(context.Context, agenttools.SessionCont
 
 type envelopeProbeProvider struct {
 	calls   atomic.Int32
-	handler func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error)
+	handler func(call int, params sdk.Request) (sdk.ModelResult, error)
 }
 
 func (*envelopeProbeProvider) Name() string { return "mock" }
@@ -91,11 +92,11 @@ func (*envelopeProbeProvider) TestModel(context.Context, string) (*sdk.ModelTest
 	return &sdk.ModelTestResult{Supported: true}, nil
 }
 
-func (p *envelopeProbeProvider) DoGenerate(_ context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+func (p *envelopeProbeProvider) DoGenerate(_ context.Context, params sdk.Request) (sdk.ModelResult, error) {
 	return p.handler(int(p.calls.Add(1)), params)
 }
 
-func (*envelopeProbeProvider) DoStream(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+func (*envelopeProbeProvider) DoStream(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 	return nil, nil
 }
 
@@ -112,13 +113,13 @@ func TestAgentToolLoopSurvivesPhotoInFrozenPrefix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			provider := &envelopeProbeProvider{handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			provider := &envelopeProbeProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 				if call == 1 {
-					return &sdk.GenerateResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{
 						ToolCallID: "call-weather", ToolName: "lookup", Input: map[string]any{"q": "weather"},
 					}}}, nil
 				}
-				return &sdk.GenerateResult{Text: "sunny", FinishReason: sdk.FinishReasonStop}, nil
+				return sdk.ModelResult{Text: "sunny", FinishReason: sdk.FinishReasonStop}, nil
 			}}
 			agent := agentpkg.New(agentpkg.Deps{ContextViewApplier: ProviderRunConfigApplier(nil)})
 			agent.SetToolProviders([]agenttools.ToolProvider{envelopeProbeToolProvider{tools: []sdk.Tool{{

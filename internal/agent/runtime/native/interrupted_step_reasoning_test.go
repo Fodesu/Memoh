@@ -5,6 +5,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/messageconv"
 )
 
@@ -14,7 +15,7 @@ import (
 // blocks here would leave the checkpoint unreplayable even though the provider
 // side is correct — and nothing would fail to compile.
 
-func reasoningPartsOf(t *testing.T, step *sdk.StepResult) []sdk.ReasoningPart {
+func reasoningPartsOf(t *testing.T, step *step.Record) []sdk.ReasoningPart {
 	t.Helper()
 	if step == nil {
 		t.Fatal("no snapshot produced")
@@ -135,7 +136,7 @@ func TestInterruptedStepKeepsReasoningBlockModel(t *testing.T) {
 	if step == nil {
 		t.Fatal("no snapshot produced")
 	}
-	if got := step.ReasoningParts[0].Model; got != "claude-sonnet-4-20250514" {
+	if got := step.Result.ReasoningParts[0].Model; got != "claude-sonnet-4-20250514" {
 		t.Errorf("ReasoningParts[0].Model: got %q, want response model", got)
 	}
 	parts := reasoningPartsOf(t, step)
@@ -199,8 +200,8 @@ func TestInterruptedStepSnapshotsReasoningWithoutText(t *testing.T) {
 	if step == nil {
 		t.Fatal("reasoning-only interruption produced no snapshot")
 	}
-	if len(step.ReasoningParts) != 1 {
-		t.Fatalf("ReasoningParts: got %d, want 1", len(step.ReasoningParts))
+	if len(step.Result.ReasoningParts) != 1 {
+		t.Fatalf("ReasoningParts: got %d, want 1", len(step.Result.ReasoningParts))
 	}
 }
 
@@ -230,8 +231,8 @@ func TestInterruptedStepFlatReasoningJoinsBlocks(t *testing.T) {
 	if step == nil {
 		t.Fatal("no snapshot produced")
 	}
-	if step.Reasoning != "AAABBB" {
-		t.Errorf("Reasoning: got %q, want %q", step.Reasoning, "AAABBB")
+	if step.Result.Reasoning != "AAABBB" {
+		t.Errorf("Reasoning: got %q, want %q", step.Result.Reasoning, "AAABBB")
 	}
 }
 

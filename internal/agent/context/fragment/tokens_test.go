@@ -285,17 +285,17 @@ func TestProviderEnvelopeTokensSumsSystemMessagesAndTools(t *testing.T) {
 			ToolCallID: "call-1", ToolName: "exec", Result: strings.Repeat("r", 1200),
 		}}},
 	}
-	tools := []sdk.Tool{{
+	tools := []sdk.ToolDefinition{{
 		Name:        "exec",
 		Description: "Execute a bounded command.",
-		Parameters:  map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}},
+		Parameters:  json.RawMessage(`{"properties":{"command":{"type":"string"}},"type":"object"}`),
 	}}
 
 	if got := ProviderEnvelopeTokens(system, messages[:1], nil); got != 125+250 {
 		t.Fatalf("ProviderEnvelopeTokens(system+user) = %d, want 375 (400 and 800 bytes at ceil/4 x 1.25)", got)
 	}
 	want := 375 + ResolveProviderBudgetFragTokens(MessageFrag(MessageFragInput{Message: messages[1]})) +
-		ProviderToolDefTokens(ToolDefAccountingFor("native", tools[0]))
+		ProviderToolDefTokens(ToolDefinitionAccountingFor("native", tools[0]))
 	if got := ProviderEnvelopeTokens(system, messages, tools); got != want {
 		t.Fatalf("ProviderEnvelopeTokens = %d, want %d", got, want)
 	}

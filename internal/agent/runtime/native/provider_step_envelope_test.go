@@ -24,11 +24,11 @@ func TestAgentGenerateActivePreflightBlocksSerializedOverflowFromNoopSelector(t 
 			return strings.Repeat("large-result ", 1_000), nil
 		},
 	}
-	modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
 		if call != 1 {
-			return nil, fmt.Errorf("unexpected provider call %d after serialized overflow", call)
+			return sdk.ModelResult{}, fmt.Errorf("unexpected provider call %d after serialized overflow", call)
 		}
-		return &sdk.GenerateResult{
+		return sdk.ModelResult{
 			FinishReason: sdk.FinishReasonToolCalls,
 			ToolCalls: []sdk.ToolCall{{
 				ToolCallID: "call-envelope", ToolName: "lookup", Input: map[string]any{"q": "one"},

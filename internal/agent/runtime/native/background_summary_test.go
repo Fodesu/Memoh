@@ -92,20 +92,20 @@ func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
 	bgMgr := background.New(nil)
 	taskID, release := spawnBlockedBackgroundTask(t, bgMgr, "bot-1", "sess-1", "Long build task")
 
-	var calls []sdk.GenerateParams
+	var calls []sdk.Request
 	modelProvider := &atomicMockProvider{
-		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			calls = append(calls, cloneGenerateParams(params))
 			if call == 3 {
 				close(release)
 				waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				if _, _, err := bgMgr.WaitForSessionTask(waitCtx, "bot-1", "sess-1", taskID, 0); err != nil {
-					return nil, fmt.Errorf("wait for background task: %w", err)
+					return sdk.ModelResult{}, fmt.Errorf("wait for background task: %w", err)
 				}
 			}
 			if call < 4 {
-				return &sdk.GenerateResult{
+				return sdk.ModelResult{
 					FinishReason: sdk.FinishReasonToolCalls,
 					ToolCalls: []sdk.ToolCall{{
 						ToolCallID: fmt.Sprintf("call-%d", call),
@@ -114,7 +114,7 @@ func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
 					}},
 				}, nil
 			}
-			return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
 
