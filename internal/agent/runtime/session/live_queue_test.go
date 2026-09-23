@@ -142,6 +142,27 @@ func runLiveQueueContract(t *testing.T, first, second LiveQueueBackend, key Key,
 	if _, err := first.EnqueueSteer(ctx, key, "steer-late", "invoke-steer-late", []byte("late")); !errors.Is(err, ErrQueueNoActiveRun) {
 		t.Fatalf("late steer after close = %v, want %v", err, ErrQueueNoActiveRun)
 	}
+
+	// Follow-ups outlive the run. A claimed item that cannot be replayed is
+	// rejected from another instance, and the same trigger run then claims
+	// the item behind it instead of being stuck on the rejected one.
+	broken, err := first.EnqueueFollowUp(ctx, key, "follow-broken", "invoke-follow-broken", []byte("broken"))
+	require.NoError(t, err)
+	behind, err := second.EnqueueFollowUp(ctx, key, "follow-behind", "invoke-follow-behind", []byte("behind"))
+	require.NoError(t, err)
+	claimedBroken, brokenClaim, ok, err := first.ClaimNextFollowUp(ctx, key, "run-after-close")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, broken.ID, claimedBroken.ID)
+	require.NoError(t, second.RejectFollowUp(ctx, key, brokenClaim, QueueErrorFollowUpCommandInvalid))
+	require.ErrorIs(t, first.RejectFollowUp(ctx, key, brokenClaim, QueueErrorFollowUpCommandInvalid), ErrQueueInvalidReference, "a spent claim must not reject twice")
+	claimedBehind, _, ok, err := first.ClaimNextFollowUp(ctx, key, "run-after-close")
+	require.NoError(t, err)
+	require.True(t, ok, "the trigger run moves on after a rejection")
+	require.Equal(t, behind.ID, claimedBehind.ID)
+	_, follows, err = second.PendingQueues(ctx, key, 0)
+	require.NoError(t, err)
+	require.Empty(t, follows, "rejected and claimed items are not pending")
 }
 
 func TestMemoryLiveQueueAcceptedOnlyMutationAndReplay(t *testing.T) {
