@@ -59,7 +59,7 @@ func TestHistoryProviderGetMessagesDefaultsToCurrentSession(t *testing.T) {
 	got, err := provider.execGetMessages(context.Background(), SessionContext{
 		BotID:     "bot-1",
 		SessionID: "session-current",
-	}, map[string]any{"limit": 2})
+	}, getMessagesArgs{Limit: intPtr(2)})
 	if err != nil {
 		t.Fatalf("execGetMessages() error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestHistoryProviderGetMessagesRejectsMissingSessionScope(t *testing.T) {
 
 	reader := &fakeHistoryMessageReader{}
 	provider := NewHistoryProvider(nil, nil, reader, nil)
-	if _, err := provider.execGetMessages(context.Background(), SessionContext{BotID: "bot-1"}, nil); err == nil {
+	if _, err := provider.execGetMessages(context.Background(), SessionContext{BotID: "bot-1"}, getMessagesArgs{}); err == nil {
 		t.Fatal("execGetMessages() error = nil, want missing session scope error")
 	}
 }
@@ -106,10 +106,7 @@ func TestHistoryProviderGetMessagesBeforeUsesRequestedSession(t *testing.T) {
 		BotID:     "bot-1",
 		SessionID: "session-current",
 		UserID:    "user-1",
-	}, map[string]any{
-		"session_id": "session-other",
-		"before":     "2026-06-14T09:00:00Z",
-	})
+	}, getMessagesArgs{SessionID: "session-other", Before: "2026-06-14T09:00:00Z"})
 	if err != nil {
 		t.Fatalf("execGetMessages() error = %v", err)
 	}
@@ -139,7 +136,7 @@ func TestHistoryProviderGetMessagesResolvesExactSourceRef(t *testing.T) {
 	provider := NewHistoryProvider(nil, nil, reader, nil)
 	got, err := provider.execGetMessages(context.Background(), SessionContext{
 		BotID: "bot-1", SessionID: "session-current",
-	}, map[string]any{"session_id": "session-current", "message_id": "msg-source"})
+	}, getMessagesArgs{SessionID: "session-current", MessageID: "msg-source"})
 	if err != nil {
 		t.Fatalf("execGetMessages() error = %v", err)
 	}
@@ -157,7 +154,7 @@ func TestHistoryProviderGetMessagesRejectsExactLookupWithBefore(t *testing.T) {
 	provider := NewHistoryProvider(nil, nil, &fakeHistoryMessageReader{}, nil)
 	_, err := provider.execGetMessages(context.Background(), SessionContext{
 		BotID: "bot-1", SessionID: "session-current",
-	}, map[string]any{"message_id": "msg-source", "before": "2026-06-14T09:00:00Z"})
+	}, getMessagesArgs{MessageID: "msg-source", Before: "2026-06-14T09:00:00Z"})
 	if err == nil {
 		t.Fatal("execGetMessages() error = nil, want ambiguous argument error")
 	}
@@ -177,9 +174,7 @@ func TestHistoryProviderGetMessagesRejectsInaccessibleSessionOnSameBot(t *testin
 	_, err := provider.execGetMessages(context.Background(), SessionContext{
 		BotID:     "bot-1",
 		SessionID: "session-current",
-	}, map[string]any{
-		"session_id": "session-other",
-	})
+	}, getMessagesArgs{SessionID: "session-other"})
 	if err == nil {
 		t.Fatal("execGetMessages() error = nil, want session visibility error")
 	}
@@ -198,7 +193,7 @@ func TestHistoryProviderGetMessagesAllowsSessionOnSameRoute(t *testing.T) {
 
 	if _, err := provider.execGetMessages(context.Background(), SessionContext{
 		BotID: "bot-1", SessionID: "session-current",
-	}, map[string]any{"session_id": "session-previous"}); err != nil {
+	}, getMessagesArgs{SessionID: "session-previous"}); err != nil {
 		t.Fatalf("execGetMessages() error = %v, want same-route session to be visible", err)
 	}
 	if reader.latestSessionID != "session-previous" {
@@ -220,7 +215,7 @@ func TestHistoryProviderListSessionsFiltersOtherUsersAndRoutes(t *testing.T) {
 
 	got, err := provider.execListSessions(context.Background(), SessionContext{
 		BotID: "bot-1", SessionID: "session-current", UserID: "user-1",
-	}, nil)
+	}, listSessionsArgs{})
 	if err != nil {
 		t.Fatalf("execListSessions() error = %v", err)
 	}
@@ -331,3 +326,5 @@ func TestExtractTextContentSummarizesToolResults(t *testing.T) {
 		t.Fatalf("extractTextContent() = %q, want %q", got, want)
 	}
 }
+
+func intPtr(v int) *int { return &v }

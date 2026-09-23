@@ -388,7 +388,7 @@ func TestContainerProviderResolvesOneCanonicalTargetPerInvocation(t *testing.T) 
 		},
 	}}
 	provider := NewContainerProvider(nil, targetProvider, nil, "")
-	resolved, err := provider.resolveToolTarget(context.Background(), SessionContext{BotID: "bot-1", WorkspaceTargetID: "request-default"}, map[string]any{"target_id": "requested-target"})
+	resolved, err := provider.resolveToolTarget(context.Background(), SessionContext{BotID: "bot-1", WorkspaceTargetID: "request-default"}, "requested-target")
 	if err != nil {
 		t.Fatalf("resolveToolTarget() error = %v", err)
 	}
@@ -415,7 +415,7 @@ func TestContainerProviderUsesRequestTargetWhenToolTargetIsOmitted(t *testing.T)
 	resolved, err := provider.resolveToolTarget(context.Background(), SessionContext{
 		BotID:             "bot-1",
 		WorkspaceTargetID: "request-target",
-	}, nil)
+	}, "")
 	if err != nil {
 		t.Fatalf("resolveToolTarget() error = %v", err)
 	}
@@ -446,7 +446,7 @@ func TestContainerProviderHooksUseResolvedRemoteTarget(t *testing.T) {
 	recorder := &recordingWorkspaceHookService{}
 	provider.hookService = recorder
 
-	target, err := provider.resolveToolTarget(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{"target_id": "remote-target"})
+	target, err := provider.resolveToolTarget(context.Background(), SessionContext{BotID: "bot-1"}, "remote-target")
 	if err != nil {
 		t.Fatalf("resolveToolTarget() error = %v", err)
 	}
@@ -481,7 +481,7 @@ func TestContainerProviderExplainsHowToRecoverFromMissingTarget(t *testing.T) {
 
 	targetProvider := &containerTestTargetProvider{resolveErr: workspacepkg.ErrWorkspaceTargetNotFound}
 	provider := NewContainerProvider(nil, targetProvider, nil, "")
-	_, err := provider.resolveToolTarget(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{"target_id": "server_workspace"})
+	_, err := provider.resolveToolTarget(context.Background(), SessionContext{BotID: "bot-1"}, "server_workspace")
 	if err == nil {
 		t.Fatal("resolveToolTarget() returned nil error")
 	}
@@ -500,9 +500,7 @@ func TestContainerReadLargeFileErrorDoesNotReferenceSiblingTools(t *testing.T) {
 
 	client := newLargeReadTestClient(t, 17*1024*1024)
 	provider := NewContainerProvider(nil, containerTestBridgeProvider{client: client}, nil, "")
-	_, err := provider.execRead(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{
-		"path": "/data/large.log",
-	})
+	_, err := provider.execRead(context.Background(), SessionContext{BotID: "bot-1"}, readArgs{Path: "/data/large.log"})
 	if err == nil {
 		t.Fatal("expected large file read to fail")
 	}

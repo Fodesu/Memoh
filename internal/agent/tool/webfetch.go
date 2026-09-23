@@ -55,34 +55,20 @@ func (p *WebFetchProvider) Tools(_ context.Context, session SessionContext) ([]t
 		{
 			Name:        ToolWebFetch().String(),
 			Description: "Fetch a URL and convert the response to readable content. Supports HTML (converts to Markdown), JSON, XML, and plain text formats.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"url": map[string]any{
-						"type":        "string",
-						"description": "The URL to fetch",
-					},
-					"format": map[string]any{
-						"type":        "string",
-						"enum":        []string{"auto", "markdown", "json", "xml", "text"},
-						"description": "Output format (default: auto - detects from content type)",
-					},
-				},
-				"required": []string{"url"},
+			Parameters:  toolexec.SchemaFor[webFetchArgs](toolexec.Enum("format", "auto", "markdown", "json", "xml", "text")),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args webFetchArgs) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execWebFetch(ctx.Context, sess, args))
 			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				return toolexec.OutputPair(p.execWebFetch(ctx.Context, sess, inputAsMap(input)))
-			},
 		},
 	}, nil
 }
 
-func (p *WebFetchProvider) execWebFetch(ctx context.Context, session SessionContext, args map[string]any) (any, error) {
-	rawURL := strings.TrimSpace(StringArg(args, "url"))
+func (p *WebFetchProvider) execWebFetch(ctx context.Context, session SessionContext, args webFetchArgs) (any, error) {
+	rawURL := strings.TrimSpace(args.URL)
 	if rawURL == "" {
 		return nil, errors.New("url is required")
 	}
-	format := strings.TrimSpace(StringArg(args, "format"))
+	format := strings.TrimSpace(args.Format)
 	if format == "" {
 		format = "auto"
 	}
@@ -412,4 +398,9 @@ func fetchProviderDisplayName(provider sqlc.FetchProvider) string {
 	default:
 		return "Native"
 	}
+}
+
+type webFetchArgs struct {
+	Format string `json:"format,omitempty" jsonschema:"Output format (default: auto - detects from content type)"`
+	URL    string `json:"url" jsonschema:"The URL to fetch"`
 }

@@ -152,32 +152,9 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				"person. Search memory first: when the fact is already stored, update that entry " +
 				"instead of adding a second one. Skip transient task state, secrets, and anything " +
 				"the user asked you not to keep.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"memory": map[string]any{
-						"type":        "string",
-						"description": "The fact to remember, as one self-contained statement.",
-					},
-					"layer": map[string]any{
-						"type":        "string",
-						"enum":        memprovider.MemoryLayers(),
-						"description": "What kind of fact this is. Defaults to note.",
-					},
-					"subject": map[string]any{
-						"type":        "string",
-						"description": "Who or what the fact is about, when it is not the user.",
-					},
-					"topic": map[string]any{
-						"type":        "string",
-						"description": "Short topic label used to relate this memory to others.",
-					},
-				},
-				"required": []string{"memory"},
-			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				args := inputAsMap(input)
-				memory, err := memoryWriteBody(args)
+			Parameters: toolexec.SchemaFor[createMemoryArgs](toolexec.EnumStrings("layer", memprovider.MemoryLayers())),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args createMemoryArgs) (sdk.ToolOutput, error) {
+				memory, err := memoryWriteBody(args.Memory)
 				if err != nil {
 					return sdk.ToolOutput{}, err
 				}
@@ -187,7 +164,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				resp, err := provider.Add(ctx.Context, memprovider.AddRequest{
 					Message:  memory,
 					BotID:    strings.TrimSpace(session.BotID),
-					Metadata: p.memoryWriteMetadata(ctx.Context, session, args),
+					Metadata: p.memoryWriteMetadata(ctx.Context, session, args.Layer, args.Subject, args.Topic),
 					Filters:  memprovider.BotScopeFilters(strings.TrimSpace(session.BotID)),
 				})
 				if err != nil {
@@ -202,7 +179,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolCreateMemory().String(), memory, stringField(out, "id"))
 				return toolexec.OutputFromValue(out), nil
-			},
+			}),
 		},
 		{
 			Name: ToolUpdateMemory().String(),
@@ -210,27 +187,13 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				"searching memory. Use this whenever a remembered fact changed or turned out to " +
 				"be wrong — saving a corrected copy instead leaves the stale one in play, and " +
 				"both come back on the next recall.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Id of the memory to replace, as returned by memory search.",
-					},
-					"memory": map[string]any{
-						"type":        "string",
-						"description": "The corrected fact, as one self-contained statement.",
-					},
-				},
-				"required": []string{"id", "memory"},
-			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				args := inputAsMap(input)
-				memoryID := strings.TrimSpace(mcp.StringArg(args, "id"))
+			Parameters: toolexec.SchemaFor[updateMemoryArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args updateMemoryArgs) (sdk.ToolOutput, error) {
+				memoryID := strings.TrimSpace(args.ID)
 				if memoryID == "" {
 					return sdk.ToolOutput{}, errors.New("id is required")
 				}
-				memory, err := memoryWriteBody(args)
+				memory, err := memoryWriteBody(args.Memory)
 				if err != nil {
 					return sdk.ToolOutput{}, err
 				}
@@ -248,24 +211,15 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolUpdateMemory().String(), memory, memoryID)
 				return toolexec.OutputFromValue(map[string]any{"id": firstNonEmpty(strings.TrimSpace(item.ID), memoryID), "memory": memory}), nil
-			},
+			}),
 		},
 		{
 			Name: ToolDeleteMemory().String(),
 			Description: "Delete a memory by id when the fact no longer holds and no replacement " +
 				"belongs in its place. Prefer updating over deleting when the fact merely changed.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Id of the memory to delete, as returned by memory search.",
-					},
-				},
-				"required": []string{"id"},
-			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				memoryID := strings.TrimSpace(mcp.StringArg(inputAsMap(input), "id"))
+			Parameters: toolexec.SchemaFor[deleteMemoryArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args deleteMemoryArgs) (sdk.ToolOutput, error) {
+				memoryID := strings.TrimSpace(args.ID)
 				if memoryID == "" {
 					return sdk.ToolOutput{}, errors.New("id is required")
 				}
@@ -278,13 +232,13 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				}
 				p.afterMemoryWrite(ctx.Context, session, ToolDeleteMemory().String(), "", memoryID)
 				return toolexec.OutputFromValue(map[string]any{"id": memoryID, "deleted": true}), nil
-			},
+			}),
 		},
 	}
 }
 
-func memoryWriteBody(args map[string]any) (string, error) {
-	memory := strings.TrimSpace(mcp.StringArg(args, "memory"))
+func memoryWriteBody(body string) (string, error) {
+	memory := strings.TrimSpace(body)
 	if memory == "" {
 		return "", errors.New("memory is required")
 	}
@@ -297,19 +251,19 @@ func memoryWriteBody(args map[string]any) (string, error) {
 // memoryWriteMetadata keys the write to the same profile formation would have
 // used. resolveActorUserID is what keeps the two paths from splitting one
 // person into two profiles.
-func (p *MemoryProvider) memoryWriteMetadata(ctx context.Context, session SessionContext, args map[string]any) map[string]any {
+func (p *MemoryProvider) memoryWriteMetadata(ctx context.Context, session SessionContext, layer, subject, topic string) map[string]any {
 	channelIdentityID := strings.TrimSpace(session.ChannelIdentityID)
 	metadata := memprovider.BuildProfileMetadata(p.resolveActorUserID(ctx, session), channelIdentityID, "")
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	if layer := memprovider.NormalizeMemoryLayer(mcp.StringArg(args, "layer")); layer != "" {
+	if layer := memprovider.NormalizeMemoryLayer(layer); layer != "" {
 		metadata["layer"] = layer
 	}
-	if subject := strings.TrimSpace(mcp.StringArg(args, "subject")); subject != "" {
+	if subject := strings.TrimSpace(subject); subject != "" {
 		metadata["subject"] = subject
 	}
-	if topic := strings.TrimSpace(mcp.StringArg(args, "topic")); topic != "" {
+	if topic := strings.TrimSpace(topic); topic != "" {
 		metadata["topic"] = topic
 	}
 	return metadata
@@ -546,4 +500,20 @@ func normalizeToolResult(result map[string]any) any {
 		}
 	}
 	return result
+}
+
+type createMemoryArgs struct {
+	Layer   string `json:"layer,omitempty" jsonschema:"What kind of fact this is. Defaults to note."`
+	Memory  string `json:"memory" jsonschema:"The fact to remember, as one self-contained statement."`
+	Subject string `json:"subject,omitempty" jsonschema:"Who or what the fact is about, when it is not the user."`
+	Topic   string `json:"topic,omitempty" jsonschema:"Short topic label used to relate this memory to others."`
+}
+
+type updateMemoryArgs struct {
+	ID     string `json:"id" jsonschema:"Id of the memory to replace, as returned by memory search."`
+	Memory string `json:"memory" jsonschema:"The corrected fact, as one self-contained statement."`
+}
+
+type deleteMemoryArgs struct {
+	ID string `json:"id" jsonschema:"Id of the memory to delete, as returned by memory search."`
 }

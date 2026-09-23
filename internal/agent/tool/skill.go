@@ -58,11 +58,8 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]to
 		{
 			Name:        ToolListSkills().String(),
 			Description: "List the skills available in the current session.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			}),
-			Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			Parameters:  toolexec.SchemaFor[listSkillsArgs](),
+			Execute: toolexec.Typed(func(_ *toolexec.ToolExecContext, _ listSkillsArgs) (sdk.ToolOutput, error) {
 				names := make([]string, 0, len(skills))
 				for name := range skills {
 					names = append(names, name)
@@ -83,28 +80,14 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]to
 					"count":   len(items),
 					"skills":  items,
 				}), nil
-			},
+			}),
 		},
 		{
 			Name:        ToolUseSkill().String(),
 			Description: "Activate a skill to get its full instructions. Call this when you think a skill is relevant to the current task.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"skillName": map[string]any{
-						"type":        "string",
-						"description": "The name of the skill to activate",
-					},
-					"reason": map[string]any{
-						"type":        "string",
-						"description": "Why this skill is relevant to the current task",
-					},
-				},
-				"required": []string{"skillName", "reason"},
-			}),
-			Execute: func(_ *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				args := inputAsMap(input)
-				skillName := StringArg(args, "skillName")
+			Parameters:  toolexec.SchemaFor[useSkillArgs](),
+			Execute: toolexec.Typed(func(_ *toolexec.ToolExecContext, args useSkillArgs) (sdk.ToolOutput, error) {
+				skillName := args.SkillName
 				if skillName == "" {
 					return sdk.ToolOutput{}, errors.New("skillName is required")
 				}
@@ -122,7 +105,14 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]to
 					"content":     skill.Content,
 					"path":        skill.Path,
 				}), nil
-			},
+			}),
 		},
 	}, nil
+}
+
+type listSkillsArgs struct{}
+
+type useSkillArgs struct {
+	Reason    string `json:"reason" jsonschema:"Why this skill is relevant to the current task"`
+	SkillName string `json:"skillName" jsonschema:"The name of the skill to activate"`
 }

@@ -163,7 +163,7 @@ type applyPatchVirtualFile struct {
 // execApplyPatchInput reads the patch from the arguments: a model that sent
 // the patch text in place of a JSON object (invalid arguments, or a JSON
 // string document) is accepted, otherwise the "patch" field of the object.
-func execApplyPatchInput(input sdk.ToolArguments) (string, error) {
+func execApplyPatchInput(input sdk.ToolArguments) (applyPatchArgs, error) {
 	var text string
 	if !input.Valid() {
 		text = input.Text
@@ -172,27 +172,22 @@ func execApplyPatchInput(input sdk.ToolArguments) (string, error) {
 	}
 	if text != "" {
 		if strings.TrimSpace(text) == "" {
-			return "", errors.New("patch is required")
+			return applyPatchArgs{}, errors.New("patch is required")
 		}
-		return text, nil
+		return applyPatchArgs{Patch: text}, nil
 	}
-	args := inputAsMap(input)
-	raw, ok := args["patch"]
-	if !ok || raw == nil {
-		return "", errors.New("patch is required")
+	var args applyPatchArgs
+	if err := input.Unmarshal(&args); err != nil {
+		return applyPatchArgs{}, errors.New("patch must be a string")
 	}
-	text, ok = raw.(string)
-	if !ok {
-		return "", errors.New("patch must be a string")
+	if strings.TrimSpace(args.Patch) == "" {
+		return applyPatchArgs{}, errors.New("patch is required")
 	}
-	if strings.TrimSpace(text) == "" {
-		return "", errors.New("patch is required")
-	}
-	return text, nil
+	return args, nil
 }
 
 func (p *ContainerProvider) execApplyPatch(ctx context.Context, session SessionContext, input sdk.ToolArguments) (any, error) {
-	patch, err := execApplyPatchInput(input)
+	args, err := execApplyPatchInput(input)
 	if err != nil {
 		return nil, err
 	}
@@ -200,12 +195,12 @@ func (p *ContainerProvider) execApplyPatch(ctx context.Context, session SessionC
 	opCtx, opCancel := context.WithTimeout(ctx, containerOpTimeout)
 	defer opCancel()
 
-	target, err := p.resolveToolTarget(opCtx, session, inputAsMap(input))
+	target, err := p.resolveToolTarget(opCtx, session, args.TargetID)
 	if err != nil {
 		return nil, err
 	}
 	client := target.client
-	hunks, err := parseApplyPatch(patch)
+	hunks, err := parseApplyPatch(args.Patch)
 	if err != nil {
 		return nil, err
 	}

@@ -44,8 +44,8 @@ func (p *WorkdirProvider) Tools(_ context.Context, session SessionContext) ([]to
 		{
 			Name:        ToolListWorkdirs().String(),
 			Description: "List this bot's workdirs (named working directories): workdir_id, name, target kind (native workspace or remote runtime), and path. Use a workdir_id to bind a scheduled task's sessions to that directory.",
-			Parameters:  toolexec.SchemaFromValue(emptyObjectSchema()),
-			Execute: func(ctx *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			Parameters:  toolexec.SchemaFor[listWorkdirsArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, _ listWorkdirsArgs) (sdk.ToolOutput, error) {
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
 					return sdk.ToolOutput{}, errors.New("bot_id is required")
@@ -64,7 +64,9 @@ func (p *WorkdirProvider) Tools(_ context.Context, session SessionContext) ([]to
 					})
 				}
 				return toolexec.OutputFromValue(map[string]any{"workdirs": items, "count": len(items)}), nil
-			},
+			}),
 		},
 	}, nil
 }
+
+type listWorkdirsArgs struct{}

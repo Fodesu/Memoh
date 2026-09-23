@@ -492,15 +492,6 @@ func StringArg(arguments map[string]any, key string) string {
 	}
 }
 
-func FirstStringArg(arguments map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value := StringArg(arguments, key); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func IntArg(arguments map[string]any, key string) (int, bool, error) {
 	if arguments == nil {
 		return 0, false, nil
@@ -537,21 +528,6 @@ func IntArg(arguments map[string]any, key string) (int, bool, error) {
 	default:
 		return 0, true, fmt.Errorf("%s must be a number", key)
 	}
-}
-
-func BoolArg(arguments map[string]any, key string) (bool, bool, error) {
-	if arguments == nil {
-		return false, false, nil
-	}
-	raw, ok := arguments[key]
-	if !ok || raw == nil {
-		return false, false, nil
-	}
-	value, ok := raw.(bool)
-	if !ok {
-		return false, true, fmt.Errorf("%s must be a boolean", key)
-	}
-	return value, true, nil
 }
 
 // inputAsMap decodes the model's arguments as an object. Invalid arguments

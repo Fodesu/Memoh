@@ -386,83 +386,34 @@ func (p *SpawnProvider) Tools(ctx context.Context, session SessionContext) ([]to
 		{
 			Name:        ToolSpawnAgent().String(),
 			Description: spawnDescription,
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Optional memorable agent id. If omitted, an id like agent_1 is assigned. Must be lowercase letters, digits, underscore, or hyphen.",
-					},
-					"task": map[string]any{
-						"type":        "string",
-						"description": "Task instruction for the new agent.",
-					},
-					"model_id": map[string]any{
-						"type":        "string",
-						"description": "Optional external model name from the current session's provider. Omit to use the current session model.",
-					},
-					"provider": map[string]any{
-						"type":        "string",
-						"description": "Optional provider name. Must match the current session's provider.",
-					},
-					"fork": map[string]any{
-						"type":        "boolean",
-						"description": "If true, inherit the parent model's current message context while keeping the subagent system prompt and tools.",
-					},
-					"run_in_background": map[string]any{
-						"type":        "boolean",
-						"description": "If true, return immediately with a task_id. Use wait_until(task_id), then get_background_status(task_id) to inspect result.",
-					},
-				},
-				"required": []string{"task"},
+			Parameters:  toolexec.SchemaFor[spawnAgentArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args spawnAgentArgs) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execSpawnAgent(ctx.Context, sess, args))
 			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				return toolexec.OutputPair(p.execSpawnAgent(ctx.Context, sess, inputAsMap(input)))
-			},
 		},
 		{
 			Name:        ToolSendMessage().String(),
 			Description: "Send a follow-up message to an existing managed subagent. Messages to a busy agent are queued and run serially.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Existing agent id returned when the agent was created or listed.",
-					},
-					"message": map[string]any{
-						"type":        "string",
-						"description": "Follow-up instruction for the agent.",
-					},
-					"run_in_background": map[string]any{
-						"type":        "boolean",
-						"description": "If true, return immediately with a task_id. If the agent is busy, the message is queued regardless of this value. Use wait_until(task_id), then get_background_status(task_id) to inspect result.",
-					},
-				},
-				"required": []string{"id", "message"},
+			Parameters:  toolexec.SchemaFor[sendMessageArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args sendMessageArgs) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execSendMessage(ctx.Context, sess, args))
 			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				return toolexec.OutputPair(p.execSendMessage(ctx.Context, sess, inputAsMap(input)))
-			},
 		},
 		{
 			Name:        ToolListAgents().String(),
 			Description: "List managed subagents created in the current session only.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
+			Parameters:  toolexec.SchemaFor[listAgentsArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, _ listAgentsArgs) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execListAgents(ctx.Context, sess))
 			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				return toolexec.OutputPair(p.execListAgents(ctx.Context, sess, inputAsMap(input)))
-			},
 		},
 		{
 			Name:        ToolListModels().String(),
 			Description: "List enabled chat models, including model_id, provider, description, and the current session model marker. Subagents can only use models from the current session's provider.",
-			Parameters:  toolexec.SchemaFromValue(emptyObjectSchema()),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				return toolexec.OutputPair(p.execListModels(ctx.Context, sess, inputAsMap(input)))
-			},
+			Parameters:  toolexec.SchemaFor[listModelsArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, _ listModelsArgs) (sdk.ToolOutput, error) {
+				return toolexec.OutputPair(p.execListModels(ctx.Context, sess))
+			}),
 		},
 	}, nil
 }
@@ -578,15 +529,15 @@ func (c *agentCoordinator) snapshot(botID, parentSessionID, agentID string) agen
 	}
 }
 
-func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionContext, args map[string]any) (any, error) {
+func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionContext, args spawnAgentArgs) (any, error) {
 	if err := validateParentSession(session); err != nil {
 		return nil, err
 	}
-	task := strings.TrimSpace(StringArg(args, "task"))
+	task := strings.TrimSpace(args.Task)
 	if task == "" {
 		return nil, errors.New("task is required")
 	}
-	agentID, err := p.resolveNewAgentID(ctx, session, StringArg(args, "id"))
+	agentID, err := p.resolveNewAgentID(ctx, session, args.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -595,8 +546,8 @@ func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionConte
 	} else if err != nil && !errors.Is(err, errAgentNotFound) {
 		return nil, err
 	}
-	requestedModelID := strings.TrimSpace(StringArg(args, "model_id"))
-	requestedProvider := strings.TrimSpace(StringArg(args, "provider"))
+	requestedModelID := strings.TrimSpace(args.ModelID)
+	requestedProvider := strings.TrimSpace(args.Provider)
 	if requestedModelID == "" && requestedProvider != "" {
 		return nil, errors.New("provider requires model_id")
 	}
@@ -604,7 +555,7 @@ func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionConte
 	if err != nil {
 		return nil, fmt.Errorf("resolve subagent model: %w", err)
 	}
-	forked, _, _ := BoolArg(args, "fork")
+	forked := args.Fork
 	var forkContext []sessionpkg.SubagentForkContextMessage
 	if forked {
 		if session.ForkContext == nil {
@@ -631,19 +582,19 @@ func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionConte
 	if err != nil {
 		return nil, err
 	}
-	runInBackground, _, _ := BoolArg(args, "run_in_background")
+	runInBackground := args.RunInBackground
 	return p.submitAgentTask(ctx, session, rec, config, task, runInBackground)
 }
 
-func (p *SpawnProvider) execSendMessage(ctx context.Context, session SessionContext, args map[string]any) (any, error) {
+func (p *SpawnProvider) execSendMessage(ctx context.Context, session SessionContext, args sendMessageArgs) (any, error) {
 	if err := validateParentSession(session); err != nil {
 		return nil, err
 	}
-	agentID, err := normalizeAgentID(StringArg(args, "id"))
+	agentID, err := normalizeAgentID(args.ID)
 	if err != nil {
 		return nil, err
 	}
-	message := strings.TrimSpace(StringArg(args, "message"))
+	message := strings.TrimSpace(args.Message)
 	if message == "" {
 		return nil, errors.New("message is required")
 	}
@@ -655,11 +606,11 @@ func (p *SpawnProvider) execSendMessage(ctx context.Context, session SessionCont
 	if err != nil {
 		return nil, err
 	}
-	runInBackground, _, _ := BoolArg(args, "run_in_background")
+	runInBackground := args.RunInBackground
 	return p.submitAgentTask(ctx, session, rec, config, message, runInBackground)
 }
 
-func (p *SpawnProvider) execListModels(ctx context.Context, session SessionContext, _ map[string]any) (any, error) {
+func (p *SpawnProvider) execListModels(ctx context.Context, session SessionContext) (any, error) {
 	catalog, err := p.listModelCatalog(ctx, "")
 	if err != nil {
 		return nil, err
@@ -688,7 +639,7 @@ func (p *SpawnProvider) execListModels(ctx context.Context, session SessionConte
 	}, nil
 }
 
-func (p *SpawnProvider) execListAgents(ctx context.Context, session SessionContext, _ map[string]any) (any, error) {
+func (p *SpawnProvider) execListAgents(ctx context.Context, session SessionContext) (any, error) {
 	if err := validateParentSession(session); err != nil {
 		return nil, err
 	}
@@ -1999,3 +1950,22 @@ func (p *SpawnProvider) resolveSubagentReasoning(
 		clientType,
 	), nil
 }
+
+type spawnAgentArgs struct {
+	Fork            bool   `json:"fork,omitempty" jsonschema:"If true, inherit the parent model's current message context while keeping the subagent system prompt and tools."`
+	ID              string `json:"id,omitempty" jsonschema:"Optional memorable agent id. If omitted, an id like agent_1 is assigned. Must be lowercase letters, digits, underscore, or hyphen."`
+	ModelID         string `json:"model_id,omitempty" jsonschema:"Optional external model name from the current session's provider. Omit to use the current session model."`
+	Provider        string `json:"provider,omitempty" jsonschema:"Optional provider name. Must match the current session's provider."`
+	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"If true, return immediately with a task_id. Use wait_until(task_id), then get_background_status(task_id) to inspect result."`
+	Task            string `json:"task" jsonschema:"Task instruction for the new agent."`
+}
+
+type sendMessageArgs struct {
+	ID              string `json:"id" jsonschema:"Existing agent id returned when the agent was created or listed."`
+	Message         string `json:"message" jsonschema:"Follow-up instruction for the agent."`
+	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"If true, return immediately with a task_id. If the agent is busy, the message is queued regardless of this value. Use wait_until(task_id), then get_background_status(task_id) to inspect result."`
+}
+
+type listAgentsArgs struct{}
+
+type listModelsArgs struct{}

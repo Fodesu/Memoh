@@ -105,7 +105,7 @@ func (*AskUserProvider) Tools(_ context.Context, session SessionContext) ([]tool
 		}),
 		RequireApproval: true,
 		Execute: func(_ *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-			if err := userinput.ValidateAskUserInput(input); err != nil {
+			if err := userinput.ValidateAskUserInput(toolexec.ArgumentsValue(input)); err != nil {
 				return toolexec.OutputFromValue(map[string]any{
 					"status":      "invalid_arguments",
 					"error":       err.Error(),

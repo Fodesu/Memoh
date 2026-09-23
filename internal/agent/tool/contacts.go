@@ -62,18 +62,8 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]t
 		{
 			Name:        ToolGetContacts().String(),
 			Description: "List all known contacts and conversations for the current bot. Returns platform, conversation type, reply target, and metadata for each route.",
-			Parameters: toolexec.SchemaFromValue(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"platform": map[string]any{
-						"type":        "string",
-						"description": "Filter by channel platform (e.g. telegram, feishu). Returns all platforms when omitted.",
-					},
-				},
-				"required": []string{},
-			}),
-			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-				args := inputAsMap(input)
+			Parameters:  toolexec.SchemaFor[getContactsArgs](),
+			Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args getContactsArgs) (sdk.ToolOutput, error) {
 				botID := strings.TrimSpace(sess.BotID)
 				if botID == "" {
 					return sdk.ToolOutput{}, errors.New("bot_id is required")
@@ -82,7 +72,7 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]t
 				if err != nil {
 					return sdk.ToolOutput{}, err
 				}
-				platformFilter := strings.ToLower(strings.TrimSpace(FirstStringArg(args, "platform")))
+				platformFilter := strings.ToLower(strings.TrimSpace(args.Platform))
 				contacts := make([]map[string]any, 0, len(routes))
 				for _, r := range routes {
 					if platformFilter != "" && !strings.EqualFold(r.Platform, platformFilter) {
@@ -115,7 +105,11 @@ func (p *ContactsProvider) Tools(_ context.Context, session SessionContext) ([]t
 					"count":    len(contacts),
 					"contacts": contacts,
 				}), nil
-			},
+			}),
 		},
 	}, nil
+}
+
+type getContactsArgs struct {
+	Platform string `json:"platform,omitempty" jsonschema:"Filter by channel platform (e.g. telegram, feishu). Returns all platforms when omitted."`
 }
