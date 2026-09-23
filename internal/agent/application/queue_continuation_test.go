@@ -67,7 +67,7 @@ func TestEnqueueDeferredTurnStartsFollowUpWithOriginalCommand(t *testing.T) {
 			ctx := context.Background()
 			cmd := turn.StartTurnCommand{
 				TeamID: "team1", Mode: turn.ModeChat, BotID: key.BotID, ThreadID: key.SessionID,
-				ChatID: "chat-42", RouteID: "route-7", ReplyTarget: "tg:1",
+				ChatID: "chat-42", RouteID: "route-7", ReplyTarget: "tg:1", UserID: "user-1",
 				Query: "later", UserVisibleText: "later", IdempotencyKey: "msg-1",
 				Attachments: []turn.Attachment{{Type: "image", URL: "https://example.invalid/image.png"}},
 			}
@@ -87,7 +87,7 @@ func TestEnqueueDeferredTurnStartsFollowUpWithOriginalCommand(t *testing.T) {
 			}
 
 			if text == "edited" {
-				if _, err := service.UpdateFollowUp(ctx, key.BotID, key.SessionID, string(queues.FollowUp[0].ID), "edited"); err != nil {
+				if _, err := service.UpdateFollowUp(ctx, key.BotID, key.SessionID, string(queues.FollowUp[0].ID), "user-1", "edited"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -123,6 +123,70 @@ func TestEnqueueDeferredTurnWithoutActiveRunReportsNoActiveRun(t *testing.T) {
 	})
 	if !errors.Is(err, sessionruntime.ErrQueueNoActiveRun) {
 		t.Fatalf("idle session deferred enqueue error = %v, want %v", err, sessionruntime.ErrQueueNoActiveRun)
+	}
+}
+
+// A queued command runs as the sender it recorded, so another user with queue
+// access must not be able to put words in that sender's mouth: the edit is
+// refused and the stored item keeps its original text and sender.
+func TestUpdateFollowUpOnlyBySender(t *testing.T) {
+	service, _, _, key := newFollowUpTestService(t, &fakeRunner{})
+	ctx := context.Background()
+	item, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-1", "original"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, editor := range []string{"user-2", ""} {
+		if _, err := service.UpdateFollowUp(ctx, key.BotID, key.SessionID, string(item.ID), editor, "forged"); !errors.Is(err, ErrQueueItemNotEditable) {
+			t.Fatalf("edit by %q error = %v, want %v", editor, err, ErrQueueItemNotEditable)
+		}
+	}
+	queues, err := service.ListSessionQueues(ctx, key.BotID, key.SessionID)
+	if err != nil || len(queues.FollowUp) != 1 {
+		t.Fatalf("follow-up queue = %#v, %v", queues.FollowUp, err)
+	}
+	cmd, err := followUpCommand(queues.FollowUp[0])
+	if err != nil || cmd.Query != "original" || cmd.UserID != "user-1" {
+		t.Fatalf("refused edit changed the item: %+v, %v", cmd, err)
+	}
+
+	edited, err := service.UpdateFollowUp(ctx, key.BotID, key.SessionID, string(item.ID), "user-1", "revised")
+	if err != nil {
+		t.Fatalf("sender edit: %v", err)
+	}
+	cmd, err = followUpCommand(edited)
+	if err != nil || cmd.Query != "revised" || cmd.UserVisibleText != "revised" || cmd.UserID != "user-1" || cmd.SourceChannelIdentityID != "user-1" {
+		t.Fatalf("sender edit = %+v, %v", cmd, err)
+	}
+}
+
+// Steers and follow-ups share the rewrite. An item without a recorded sender
+// user — a platform sender with no linked account, or a payload from before
+// items carried a command — has nobody who may edit it.
+func TestRewriteQueuePayloadTextRequiresRecordedSender(t *testing.T) {
+	withSender, err := encodeQueueCommand(turn.StartTurnCommand{TeamID: "team1", BotID: "bot", ThreadID: "session", UserID: "user-1", Query: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutSender, err := encodeQueueCommand(turn.StartTurnCommand{TeamID: "team1", BotID: "bot", ThreadID: "session", SourceChannelIdentityID: "ci-1", Query: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		payload []byte
+		editor  string
+		ok      bool
+	}{
+		"sender":            {withSender, "user-1", true},
+		"other user":        {withSender, "user-2", false},
+		"no editor":         {withSender, "", false},
+		"unlinked sender":   {withoutSender, "user-1", false},
+		"text-only payload": {[]byte(`{"text":"hi"}`), "user-1", false},
+	} {
+		_, err := rewriteQueuePayloadText(tc.payload, tc.editor, "new")
+		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrQueueItemNotEditable)) {
+			t.Errorf("%s: error = %v, want ok=%v", name, err, tc.ok)
+		}
 	}
 }
 

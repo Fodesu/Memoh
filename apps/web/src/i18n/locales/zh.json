@@ -165,6 +165,7 @@
     "queue_admission_unavailable": "队列服务暂时不可用，请稍后重试。",
     "queue_item_not_pending": "这条消息已不在待处理队列中。",
     "queue_capacity_exceeded": "该会话队列已满，请取消或等待待处理项完成后再添加。",
+    "queue_item_not_editable": "只有发送者可以编辑这条排队消息。",
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",

@@ -3,13 +3,16 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/felinics/memoh/internal/agent/application"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/apperror"
 )
 
 func TestSessionQueueHandlerRegistersSeparateQueueRoutes(t *testing.T) {
@@ -78,5 +81,13 @@ func TestSessionQueueResponsesDoNotUseMixedQueueKind(t *testing.T) {
 		if _, ok := response["kind"]; ok {
 			t.Fatalf("%s response contains mixed kind discriminator: %s", name, payload)
 		}
+	}
+}
+
+func TestSessionQueueEditBySomeoneElseIsForbidden(t *testing.T) {
+	err := queueMutationError(fmt.Errorf("update: %w", application.ErrQueueItemNotEditable))
+	problem, ok := apperror.ProblemFrom(err, "")
+	if !ok || problem.Status != http.StatusForbidden || problem.Code != string(apperror.CodeQueueItemNotEditable) {
+		t.Fatalf("queueMutationError() = %v, want %d %s", err, http.StatusForbidden, apperror.CodeQueueItemNotEditable)
 	}
 }

@@ -228,6 +228,8 @@ func queueMutationError(err error) error {
 		return apperror.New(apperror.CodeQueueItemNotPending, nil)
 	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
 		return apperror.New(apperror.CodeQueueCapacityExceeded, nil)
+	case errors.Is(err, application.ErrQueueItemNotEditable):
+		return apperror.New(apperror.CodeQueueItemNotEditable, nil)
 	default:
 		return err
 	}
@@ -480,7 +482,7 @@ func (h *SessionQueueHandler) UpdateSteer(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	item, err := h.agentService.UpdateSteer(c.Request().Context(), scope.BotID, scope.SessionID, itemID, req.Text)
+	item, err := h.agentService.UpdateSteer(c.Request().Context(), scope.BotID, scope.SessionID, itemID, scope.IdentityID, req.Text)
 	if err = queueMutationError(err); err != nil {
 		return err
 	}
@@ -538,7 +540,7 @@ func (h *SessionQueueHandler) UpdateFollowUp(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	item, err := h.agentService.UpdateFollowUp(c.Request().Context(), scope.BotID, scope.SessionID, itemID, req.Text)
+	item, err := h.agentService.UpdateFollowUp(c.Request().Context(), scope.BotID, scope.SessionID, itemID, scope.IdentityID, req.Text)
 	if err = queueMutationError(err); err != nil {
 		return err
 	}

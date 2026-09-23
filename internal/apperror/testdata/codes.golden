@@ -86,6 +86,7 @@ queue.steer_unsupported	409
 queue_admission_overloaded	429
 queue_admission_unavailable	503
 queue_capacity_exceeded	409
+queue_item_not_editable	403
 queue_item_not_pending	409
 queue_no_active_run	409
 queue_request_invalid	400

@@ -165,6 +165,7 @@
     "queue_admission_unavailable": "Queue admission is temporarily unavailable. Please retry shortly.",
     "queue_item_not_pending": "This message is no longer pending in the queue.",
     "queue_capacity_exceeded": "This session queue is full. Cancel or wait for pending items before adding more.",
+    "queue_item_not_editable": "Only the sender can edit this queued message.",
     "profile": {
       "request_invalid": "The profile update request is invalid.",
       "title_model_invalid": "The selected title model is unavailable or is not a chat model.",

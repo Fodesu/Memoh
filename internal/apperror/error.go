@@ -140,6 +140,7 @@ const (
 	CodeQueueAdmissionUnavailable                Code = "queue_admission_unavailable"
 	CodeQueueRequestInvalid                      Code = "queue_request_invalid"
 	CodeQueueItemNotPending                      Code = "queue_item_not_pending"
+	CodeQueueItemNotEditable                     Code = "queue_item_not_editable"
 	CodeQueueCapacityExceeded                    Code = "queue_capacity_exceeded"
 	CodeQueueSteerUnsupported                    Code = "queue.steer_unsupported"
 
@@ -698,6 +699,10 @@ var catalog = map[Code]Definition{
 	CodeQueueItemNotPending: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "This queue item is no longer accepted and pending.",
+	},
+	CodeQueueItemNotEditable: {
+		HTTPStatus: http.StatusForbidden,
+		Detail:     "Only the sender can edit this queued message.",
 	},
 	CodeQueueCapacityExceeded: {
 		HTTPStatus: http.StatusConflict,

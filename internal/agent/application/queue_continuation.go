@@ -46,21 +46,31 @@ func decodeQueuePayload(payload []byte) queuePayload {
 	return body
 }
 
+// ErrQueueItemNotEditable reports an edit by anyone other than the sender the
+// item recorded. A queued command runs as that sender, with their attribution,
+// credentials, and memory, so rewriting its text is theirs alone; others with
+// queue access can still cancel or reorder it.
+var ErrQueueItemNotEditable = errors.New("queue: only the sender can edit a queued item")
+
 // rewriteQueuePayloadText replaces the user text of a stored item while
-// keeping the command's routing and attachment metadata intact. A payload
-// without a command keeps its text-only shape.
-func rewriteQueuePayloadText(payload []byte, text string) ([]byte, error) {
+// keeping the command's sender, routing, and attachment metadata intact. Only
+// the recorded sender may edit; an item without a recorded sender user (a
+// platform sender with no linked account, or a payload without a command) is
+// not editable.
+func rewriteQueuePayloadText(payload []byte, editorUserID, text string) ([]byte, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil, sessionruntime.ErrQueueInvalidReference
 	}
 	body := decodeQueuePayload(payload)
-	body.Text = text
-	if body.Command != nil {
-		body.Command.Query = text
-		body.Command.ModelQuery = ""
-		body.Command.UserVisibleText = text
+	editor := strings.TrimSpace(editorUserID)
+	if body.Command == nil || editor == "" || strings.TrimSpace(body.Command.UserID) != editor {
+		return nil, ErrQueueItemNotEditable
 	}
+	body.Text = text
+	body.Command.Query = text
+	body.Command.ModelQuery = ""
+	body.Command.UserVisibleText = text
 	return json.Marshal(body)
 }
 

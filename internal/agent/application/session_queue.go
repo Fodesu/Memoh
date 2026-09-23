@@ -154,10 +154,11 @@ func (s *Service) ReorderFollowUp(ctx context.Context, botID, sessionID string, 
 	return runtime.ReorderFollowUp(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, item, before)
 }
 
-// UpdateSteer replaces the text of an accepted steer. Routing and attachment
+// UpdateSteer replaces the text of an accepted steer on behalf of editorUserID,
+// who must be the sender the item recorded. Sender, routing, and attachment
 // metadata are immutable for a queued command; only the text is rewritten, and
 // the backend rechecks accepted status atomically with the edit.
-func (s *Service) UpdateSteer(ctx context.Context, botID, sessionID, itemID, text string) (sessionruntime.SteerItem, error) {
+func (s *Service) UpdateSteer(ctx context.Context, botID, sessionID, itemID, editorUserID, text string) (sessionruntime.SteerItem, error) {
 	runtime, err := s.liveQueueRuntime()
 	if err != nil {
 		return sessionruntime.SteerItem{}, err
@@ -171,7 +172,7 @@ func (s *Service) UpdateSteer(ctx context.Context, botID, sessionID, itemID, tex
 		if string(item.ID) != itemID {
 			continue
 		}
-		payload, err := rewriteQueuePayloadText(item.Payload, text)
+		payload, err := rewriteQueuePayloadText(item.Payload, editorUserID, text)
 		if err != nil {
 			return sessionruntime.SteerItem{}, err
 		}
@@ -181,7 +182,7 @@ func (s *Service) UpdateSteer(ctx context.Context, botID, sessionID, itemID, tex
 }
 
 // UpdateFollowUp replaces the text of an accepted follow-up. See UpdateSteer.
-func (s *Service) UpdateFollowUp(ctx context.Context, botID, sessionID, itemID, text string) (sessionruntime.FollowUpItem, error) {
+func (s *Service) UpdateFollowUp(ctx context.Context, botID, sessionID, itemID, editorUserID, text string) (sessionruntime.FollowUpItem, error) {
 	runtime, err := s.liveQueueRuntime()
 	if err != nil {
 		return sessionruntime.FollowUpItem{}, err
@@ -195,7 +196,7 @@ func (s *Service) UpdateFollowUp(ctx context.Context, botID, sessionID, itemID, 
 		if string(item.ID) != itemID {
 			continue
 		}
-		payload, err := rewriteQueuePayloadText(item.Payload, text)
+		payload, err := rewriteQueuePayloadText(item.Payload, editorUserID, text)
 		if err != nil {
 			return sessionruntime.FollowUpItem{}, err
 		}

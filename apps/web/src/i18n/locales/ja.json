@@ -162,6 +162,7 @@
     "queue_admission_unavailable": "キューサービスは一時的に利用できません。しばらくしてから再試行してください。",
     "queue_item_not_pending": "このメッセージは待機中のキューにありません。",
     "queue_capacity_exceeded": "このセッションのキューは満杯です。待機中の項目をキャンセルするか完了を待ってから追加してください。",
+    "queue_item_not_editable": "このキュー内のメッセージは送信者のみ編集できます。",
     "profile": {
       "request_invalid": "プロフィール更新リクエストが無効です。",
       "title_model_invalid": "選択したタイトルModelは利用できないか、チャットModelではありません。",
