@@ -31,8 +31,9 @@ const (
 	QueueErrorTargetRunNotActive = "queue_target_run_not_active"
 	// QueueErrorFollowUpCommandInvalid marks a follow-up whose stored payload
 	// cannot be replayed as a turn: it carries no command, names another
-	// session, or lacks the team the admission requires. Such an item is
-	// terminal; retrying it at the next boundary would fail the same way.
+	// session, lacks a team, or names a team this deployment does not serve.
+	// Such an item is terminal; retrying it at the next boundary would fail
+	// the same way.
 	QueueErrorFollowUpCommandInvalid = "queue_follow_up_command_invalid"
 )
 

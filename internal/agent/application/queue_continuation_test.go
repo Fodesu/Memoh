@@ -18,6 +18,15 @@ import (
 func newFollowUpTestService(t *testing.T, runner *fakeRunner) (*Service, *scriptedAdmitter, *sessionruntime.MemoryBackend, sessionruntime.Key) {
 	t.Helper()
 	backend := sessionruntime.NewMemoryBackend()
+	service, admitter, key := newFollowUpTestServiceOn(t, runner, backend, backend)
+	return service, admitter, backend, key
+}
+
+// newFollowUpTestServiceOn seeds the active run on memory and wires the
+// manager over queue, which may wrap memory to inject backend failures.
+func newFollowUpTestServiceOn(t *testing.T, runner *fakeRunner, memory *sessionruntime.MemoryBackend, queue sessionruntime.Backend) (*Service, *scriptedAdmitter, sessionruntime.Key) {
+	t.Helper()
+	backend := memory
 	key := sessionruntime.Key{BotID: "bot", SessionID: "session"}
 	_, _, err := backend.Update(context.Background(), key, func(snapshot sessionruntime.Snapshot, _ bool) (sessionruntime.Snapshot, bool, error) {
 		snapshot.BotID, snapshot.SessionID = key.BotID, key.SessionID
@@ -29,12 +38,12 @@ func newFollowUpTestService(t *testing.T, runner *fakeRunner) (*Service, *script
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := sessionruntime.NewManager(backend, sessionruntime.Options{})
+	manager := sessionruntime.NewManager(queue, sessionruntime.Options{})
 	t.Cleanup(func() { _ = manager.Close() })
 	service, admitter := newAdmittedTurnTestService(runner)
 	service.sessionManager = manager
 	service.allowedTeam = "team1"
-	return service, admitter, backend, key
+	return service, admitter, key
 }
 
 func markFollowUpTestRunTerminal(t *testing.T, backend *sessionruntime.MemoryBackend, key sessionruntime.Key) {
@@ -244,6 +253,86 @@ func TestUnreplayableFollowUpIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
 	// The rejected item is terminal: a later boundary must not claim it again.
 	if _, _, ok, err := service.sessionManager.ClaimNextFollowUp(ctx, key, "later-run"); err != nil || ok {
 		t.Fatalf("rejected item %s was claimable again: ok=%v err=%v", legacy.ID, ok, err)
+	}
+}
+
+// A team this instance does not serve never becomes served between two
+// boundaries, so the item is rejected instead of released for another try.
+func TestFollowUpForUnservedTeamIsRejectedNotRetried(t *testing.T) {
+	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
+	service, admitter, backend, key := newFollowUpTestService(t, runner)
+	ctx := context.Background()
+	foreign := testQueueInput(key.BotID, key.SessionID, "invoke-foreign", "for another team")
+	foreign.TeamID = "team-elsewhere"
+	if _, err := service.EnqueueFollowUp(ctx, foreign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-served", "for this team")); err != nil {
+		t.Fatal(err)
+	}
+	markFollowUpTestRunTerminal(t, backend, key)
+	service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
+	// The unserved item is terminal; the served one behind it waits for the
+	// next boundary, exactly as any second item does after a started first.
+	queues, err := service.ListSessionQueues(ctx, key.BotID, key.SessionID)
+	if err != nil || len(queues.FollowUp) != 1 || QueuePayloadText(queues.FollowUp[0].Payload) != "for this team" {
+		t.Fatalf("pending after unserved rejection = %#v, %v", queues.FollowUp, err)
+	}
+	admitter.mu.Lock()
+	started := len(admitter.inputs)
+	admitter.mu.Unlock()
+	if started != 0 || runner.gotReq.Query != "" {
+		t.Fatalf("unserved item was admitted: inputs=%d req=%+v", started, runner.gotReq)
+	}
+	if _, _, ok, err := service.sessionManager.ClaimNextFollowUp(ctx, key, "original-run"); err != nil || !ok {
+		t.Fatalf("served item should be claimable by the same boundary: ok=%v err=%v", ok, err)
+	}
+}
+
+type failingRejectBackend struct {
+	*sessionruntime.MemoryBackend
+	rejects int
+}
+
+func (b *failingRejectBackend) RejectFollowUp(context.Context, sessionruntime.Key, sessionruntime.FollowUpClaimRef, string) error {
+	b.rejects++
+	return errors.New("injected reject failure")
+}
+
+// When the backend cannot record a rejection the claim stays on the item, and
+// the next ClaimNextFollowUp for the same run would hand it straight back. The
+// starter must stop rather than spin on it.
+func TestFollowUpStarterStopsWhenRejectionCannotBeRecorded(t *testing.T) {
+	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
+	memory := sessionruntime.NewMemoryBackend()
+	backend := &failingRejectBackend{MemoryBackend: memory}
+	service, admitter, key := newFollowUpTestServiceOn(t, runner, memory, backend)
+	ctx := context.Background()
+	if _, err := service.sessionManager.EnqueueFollowUp(ctx, key, "legacy-item", "legacy-invocation", []byte(`{"text":"no command"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-2", "behind it")); err != nil {
+		t.Fatal(err)
+	}
+	markFollowUpTestRunTerminal(t, memory, key)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("starter kept spinning after the rejection failed")
+	}
+	if backend.rejects != 1 {
+		t.Fatalf("reject attempts = %d, want exactly one before giving up", backend.rejects)
+	}
+	admitter.mu.Lock()
+	started := len(admitter.inputs)
+	admitter.mu.Unlock()
+	if started != 0 || runner.gotReq.Query != "" {
+		t.Fatalf("an item was admitted although the boundary could not move on: inputs=%d req=%+v", started, runner.gotReq)
 	}
 }
 

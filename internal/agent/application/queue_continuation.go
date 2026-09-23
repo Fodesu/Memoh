@@ -206,9 +206,10 @@ func (s *Service) startFollowUp(parent context.Context, terminal sessionruntime.
 
 // admitFollowUp claims the next follow-up for this terminal boundary and
 // starts it. An item that cannot be replayed is rejected and the next one is
-// tried, so one unreadable item never blocks the rest of the queue. The loop
-// is bounded by the pending count: every iteration either returns or moves
-// one item to a terminal status.
+// tried, so one unreadable item never blocks the rest of the queue. Every
+// iteration either returns or moves one item to a terminal status; when the
+// rejection itself fails the item stays claimed and the loop must stop, since
+// the same claim would come straight back from the backend.
 func (s *Service) admitFollowUp(ctx context.Context, key sessionruntime.Key, terminal sessionruntime.TerminalRun) turn.RunHandle {
 	for {
 		item, claim, ok, err := s.sessionManager.ClaimNextFollowUp(ctx, key, terminal.RunID)
@@ -217,22 +218,28 @@ func (s *Service) admitFollowUp(ctx context.Context, key sessionruntime.Key, ter
 		}
 		cmd, err := followUpCommand(item)
 		if err != nil {
-			s.rejectFollowUp(ctx, key, item, claim, err)
+			if s.rejectFollowUp(ctx, key, item, claim, err) != nil {
+				return nil
+			}
 			continue
 		}
 		return s.startFollowUpCommand(ctx, key, item, claim, cmd)
 	}
 }
 
-func (s *Service) rejectFollowUp(ctx context.Context, key sessionruntime.Key, item sessionruntime.FollowUpItem, claim sessionruntime.FollowUpClaimRef, cause error) {
+// rejectFollowUp terminalizes an item this deployment can never start and
+// reports whether the queue recorded the rejection.
+func (s *Service) rejectFollowUp(ctx context.Context, key sessionruntime.Key, item sessionruntime.FollowUpItem, claim sessionruntime.FollowUpClaimRef, cause error) error {
 	if s.logger != nil {
 		s.logger.WarnContext(ctx, "follow-up item cannot be started; rejecting it",
 			slog.String("item_id", string(item.ID)), slog.Any("error", cause))
 	}
-	if err := s.sessionManager.RejectFollowUp(ctx, key, claim, sessionruntime.QueueErrorFollowUpCommandInvalid); err != nil && s.logger != nil {
+	err := s.sessionManager.RejectFollowUp(ctx, key, claim, sessionruntime.QueueErrorFollowUpCommandInvalid)
+	if err != nil && s.logger != nil {
 		s.logger.WarnContext(ctx, "reject follow-up item failed",
 			slog.String("item_id", string(item.ID)), slog.Any("error", err))
 	}
+	return err
 }
 
 func (s *Service) startFollowUpCommand(ctx context.Context, key sessionruntime.Key, item sessionruntime.FollowUpItem, claim sessionruntime.FollowUpClaimRef, cmd turn.StartTurnCommand) turn.RunHandle {
@@ -245,6 +252,13 @@ func (s *Service) startFollowUpCommand(ctx context.Context, key sessionruntime.K
 		}
 		// ctx is detached from its parent, so only the backoff bounds the wait.
 		time.Sleep(time.Duration(1<<attempt) * 10 * time.Millisecond)
+	}
+	if errors.Is(err, turn.ErrTeamNotServed) {
+		// The recorded team is not one this instance serves. That does not
+		// change between boundaries, so releasing the item would only retry
+		// it forever; it is terminal like an item without a team.
+		_ = s.rejectFollowUp(ctx, key, item, claim, err)
+		return nil
 	}
 	if err != nil && (!errors.Is(err, turn.ErrDuplicateTurn) || errors.Is(err, sessionruntime.ErrInvocationConflict)) {
 		// The item stays accepted; the next terminal boundary claims it again.
