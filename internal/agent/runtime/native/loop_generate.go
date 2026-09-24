@@ -195,7 +195,11 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 	messages := append([]sdk.Message(nil), params.Messages...)
 
 	var (
-		lastResult  sdk.ModelResult
+		lastResult sdk.ModelResult
+		// finalTexts holds the answer of every final step that a directive or
+		// a refreshed tool set turned into another call, so the result text
+		// reads as the model produced it across the continuation.
+		finalTexts  []string
 		allSteps    []step.Record
 		allMessages []sdk.Message
 	)
@@ -273,6 +277,9 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			// A directive or a refreshed tool set gives the model another
 			// call on the same thread; the step is committed either way.
 			if len(pendingDirectiveInputs) > 0 || pendingRefresh != nil {
+				if text := strings.TrimSpace(result.Text); text != "" {
+					finalTexts = append(finalTexts, text)
+				}
 				messages = append(messages, stepMsgs...)
 				continue
 			}
@@ -355,7 +362,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 	seg.result = &GenerateResult{
 		InternalFeedbackIndexes: feedbackIndexes,
 		Messages:                finalMessages,
-		Text:                    lastResult.Text,
+		Text:                    joinFinalTexts(finalTexts, lastResult.Text),
 		Attachments:             attachments,
 		Reactions:               reactions,
 		Speeches:                speeches,
@@ -552,4 +559,18 @@ func (c *contextStepFailureCapture) err() error {
 	default:
 		return cause
 	}
+}
+
+// joinFinalTexts joins the answers of a continued run the way the segment
+// join did before the loop moved in-process: one per line, blanks dropped.
+func joinFinalTexts(previous []string, last string) string {
+	parts := make([]string, 0, len(previous)+1)
+	parts = append(parts, previous...)
+	if text := strings.TrimSpace(last); text != "" {
+		parts = append(parts, text)
+	}
+	if len(parts) == 0 {
+		return last
+	}
+	return strings.Join(parts, "\n")
 }

@@ -217,6 +217,10 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 		eng.cfg.ContextToolUsageFrags = eng.baseCfg.ContextToolUsageFrags
 		eng.cfg.ContextToolDefs = eng.baseCfg.ContextToolDefs
 		eng.cfg.capabilityRefreshCount = eng.baseCfg.capabilityRefreshCount
+		if err == nil {
+			eng.sdkTools = refreshed.wrapped
+			eng.approvalTools = refreshed.approval
+		}
 		return refreshed, err
 	}
 	// Durable step cursors are absolute: a continuation segment starts counting
@@ -270,7 +274,9 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 		// cooperating promptly. Wait for its exit briefly, then stop waiting so
 		// the caller can fence and finalize the run as aborted.
 		cancel(context.Canceled)
-		engineClosed = drainEventsUntilClosed(eng.events, streamCancelDrainGrace)
+		engineClosed = drainEventsUntilClosed(eng.events, streamCancelDrainGrace, func(evt StreamEvent) bool {
+			return sendEvent(ctx, ch, evt)
+		})
 	}
 	// A closed engine channel is what makes the reads below safe: the engine
 	// goroutine has returned, no further complete step can commit after this
@@ -388,14 +394,22 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 // cancellation, reporting whether the engine exited (closed its channel)
 // within the grace period. The engine observes its own parts before exiting,
 // so unlike the provider-stream drain nothing here needs to be inspected.
-func drainEventsUntilClosed(events <-chan StreamEvent, grace time.Duration) bool {
+// drainEventsUntilClosed reads the engine channel until it closes or grace
+// runs out. Events still queued are handed to forward while the consumer
+// accepts them: a loop-guard abort queues the aborting call's tool_call_end
+// before it cancels, and that event must reach the consumer. Once forward
+// declines (the consumer is gone) the rest is discarded.
+func drainEventsUntilClosed(events <-chan StreamEvent, grace time.Duration, forward func(StreamEvent) bool) bool {
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	for {
 		select {
-		case _, ok := <-events:
+		case evt, ok := <-events:
 			if !ok {
 				return true
+			}
+			if forward != nil && !forward(evt) {
+				forward = nil
 			}
 		case <-timer.C:
 			return false
@@ -660,6 +674,11 @@ func (e *streamEngine) callModel(
 		// stream still leaves a steered attempt: checkpoint it exactly like a
 		// stream that ended before finish-step.
 		return e.checkpointSteeredStep(attemptStep, convo, attemptSteps)
+	case err != nil && e.streamCtx.Err() != nil:
+		// The run was cancelled while the request was in flight; the
+		// provider's report of it is the abort, not a failure to retry.
+		e.aborted = true
+		return "", false, true
 	case err != nil:
 		msg, retriable := e.streamFailure(fmt.Errorf("twilightai: stream step %d: %w", attemptStep, err))
 		return msg, retriable, false
@@ -917,6 +936,11 @@ partLoop:
 				// stepErrored path, but the error stays off the event wire.
 				stepErrored = true
 				continue
+			}
+			if e.streamCtx.Err() != nil {
+				// The provider is reporting the run's own cancellation.
+				e.aborted = true
+				break
 			}
 			failureMsg, retryableFailure = e.streamFailure(p.Error)
 			stepErrored = true

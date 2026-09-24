@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"testing"
@@ -107,5 +108,69 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 				t.Fatalf("step commits=%v", committed)
 			}
 		})
+	}
+}
+
+// A retryable provider failure after a capability refresh must rebuild the
+// dispatch from the refreshed tool set: the retried request still offers the
+// new tool and can execute it.
+func TestCapabilityRefreshSurvivesMidStreamRetry(t *testing.T) {
+	capability := &capabilityRefreshProvider{}
+	a := New(Deps{})
+	a.SetToolProviders([]tools.ToolProvider{capability})
+	calls := 0
+	provider := agentStreamTestProvider(func(_ context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
+		calls++
+		switch calls {
+		case 1:
+			return closedAgentTestStream(
+				&sdk.StreamToolCallPart{ToolCallID: "install", ToolName: "install_test_capability", Input: toolexec.ArgumentsFromValue(map[string]any{})},
+				&sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls},
+			), nil
+		case 2:
+			return nil, errors.New("api error 429: engine overloaded")
+		case 3:
+			found := false
+			for _, tool := range params.Tools {
+				if tool.Name == "new_capability" {
+					found = true
+				}
+			}
+			if !found {
+				t.Error("retried request lost the refreshed tool definitions")
+			}
+			return closedAgentTestStream(
+				&sdk.StreamToolCallPart{ToolCallID: "use", ToolName: "new_capability", Input: toolexec.ArgumentsFromValue(map[string]any{})},
+				&sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls},
+			), nil
+		default:
+			return closedAgentTestStream(&sdk.TextDeltaPart{Text: "done"}, &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}), nil
+		}
+	})
+	cfg := RunConfig{
+		SupportsToolCall: true,
+		Messages:         []sdk.Message{sdk.UserMessage("install, survive a retry, then use")},
+		Model:            &sdk.Model{ID: "test", Provider: provider},
+		Retry:            RetryConfig{MaxAttempts: 3, FastAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond},
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	// The loop publishes the failed attempt's error before it retries, so
+	// only the terminal event decides the outcome.
+	var terminal StreamEventType
+	retried := false
+	for event := range a.Stream(ctx, cfg) {
+		switch event.Type {
+		case EventRetry:
+			retried = true
+		case EventAgentEnd, EventAgentAbort:
+			terminal = event.Type
+		}
+	}
+	if !retried || terminal != EventAgentEnd {
+		t.Fatalf("retried=%v terminal=%q, want a retried run that ends normally", retried, terminal)
+	}
+	if capability.used != 1 || calls != 4 {
+		t.Fatalf("used=%d calls=%d, want the refreshed tool executed once after the retry", capability.used, calls)
 	}
 }

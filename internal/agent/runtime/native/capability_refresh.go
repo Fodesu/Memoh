@@ -52,6 +52,11 @@ type refreshedTools struct {
 	defs    []sdk.ToolDefinition
 	approve func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error)
 	system  string
+	// wrapped and approval are the inputs buildGenerateDispatch takes; the
+	// stream engine keeps them so a mid-stream retry after the refresh
+	// rebuilds its dispatch from the refreshed set, not the segment's first.
+	wrapped  []toolexec.Tool
+	approval []toolexec.Tool
 }
 
 // refreshCapabilities re-assembles the tool set after a tool reported that
@@ -94,6 +99,7 @@ func (a *Agent) refreshCapabilities(
 	}
 	sdkTools = decorateReadMediaToolsWithState(cfg.Model, sdkTools, readMedia)
 	exec, approval := a.wrapExecutableTools(hookCtx, *cfg, sdkTools, meta, guard, abortCallIDs)
+	wrapped := exec
 	exec = canonicalizeProviderToolSchemas(exec)
 	// The definitions carry the same prompt-cache marking the dispatch put on
 	// the original set, so the refreshed request stays cacheable.
@@ -110,7 +116,7 @@ func (a *Agent) refreshCapabilities(
 	if a != nil && a.hookService != nil {
 		approve = a.wrapApprovalHandlerWithHooks(*cfg, approval, approve)
 	}
-	return refreshedTools{exec: executable, defs: toolDefs, approve: approve, system: cfg.System}, nil
+	return refreshedTools{exec: executable, defs: toolDefs, approve: approve, system: cfg.System, wrapped: wrapped, approval: approval}, nil
 }
 
 // apply installs a refreshed tool set on the dispatch and the request the

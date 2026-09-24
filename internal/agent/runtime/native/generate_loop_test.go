@@ -153,8 +153,10 @@ func TestAgentGenerateContinuesAfterFinalSteer(t *testing.T) {
 	if provider.calls.Load() != 2 {
 		t.Fatalf("provider calls = %d, want 2", provider.calls.Load())
 	}
-	if result == nil || result.Text != "adjusted" {
-		t.Fatalf("result text = %#v, want adjusted", result)
+	// The answer before the steer stays in the result, joined the way the
+	// segment continuation joined it before the loop moved in-process.
+	if result == nil || result.Text != "answer\nadjusted" {
+		t.Fatalf("result text = %q, want the pre-steer answer kept", result.Text)
 	}
 }
 
