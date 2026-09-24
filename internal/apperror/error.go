@@ -141,8 +141,14 @@ const (
 	CodeQueueRequestInvalid                      Code = "queue_request_invalid"
 	CodeQueueItemNotPending                      Code = "queue_item_not_pending"
 	CodeQueueItemNotEditable                     Code = "queue_item_not_editable"
-	CodeQueueCapacityExceeded                    Code = "queue_capacity_exceeded"
-	CodeQueueSteerUnsupported                    Code = "queue.steer_unsupported"
+
+	// Runtime notices: degradations an external agent runtime reports into the
+	// conversation (event.RuntimeNotice). Clients localize them from errors.*.
+	CodeRuntimeNativeHistoryLost   Code = "native_history_lost"
+	CodeRuntimeToolsUnavailable    Code = "tools_unavailable"
+	CodeRuntimeElicitationDeclined Code = "elicitation_declined"
+	CodeQueueCapacityExceeded      Code = "queue_capacity_exceeded"
+	CodeQueueSteerUnsupported      Code = "queue.steer_unsupported"
 
 	CodeContextLifecycleRequestInvalid         Code = "context_lifecycle.request_invalid"
 	CodeContextLifecycleAuthenticationRequired Code = "context_lifecycle.authentication_required"
@@ -679,6 +685,18 @@ var catalog = map[Code]Definition{
 	CodeQueueSteerUnsupported: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "This run cannot accept steer input. Wait for it to finish and send a new message.",
+	},
+	CodeRuntimeNativeHistoryLost: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Detail:     "The agent could not restore its previous context and started over. Earlier messages remain as history only. Provide any context needed to continue.",
+	},
+	CodeRuntimeToolsUnavailable: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Detail:     "Memoh tools are unavailable for this conversation. Start a new session to restore them.",
+	},
+	CodeRuntimeElicitationDeclined: {
+		HTTPStatus: http.StatusUnprocessableEntity,
+		Detail:     "A tool requested an interaction that could not be shown. The request was declined.",
 	},
 	CodeQueueNoActiveRun: {
 		HTTPStatus: http.StatusConflict,

@@ -496,7 +496,7 @@ func (d *Driver) ensureThread(ctx context.Context, srv *appServer, cfg Config, i
 	if input.Sink != nil {
 		input.Sink.EmitStreamEvent(event.StreamEvent{
 			Type:  event.RuntimeNotice,
-			Code:  "native_history_lost",
+			Code:  string(apperror.CodeRuntimeNativeHistoryLost),
 			Delta: "Codex could not resume this conversation's session and started a new one. It does not remember the earlier messages shown here.",
 		})
 	}

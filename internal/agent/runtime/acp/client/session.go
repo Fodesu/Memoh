@@ -19,6 +19,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/event"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/mcp"
 	"github.com/felinics/memoh/internal/toolcontext"
 	"github.com/felinics/memoh/internal/version"
@@ -222,7 +223,7 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 			if sink != nil {
 				sink.EmitStreamEvent(event.StreamEvent{
 					Type:  event.RuntimeNotice,
-					Code:  "tools_unavailable",
+					Code:  string(apperror.CodeRuntimeToolsUnavailable),
 					Delta: "Memoh tools are unavailable for this session: tool bridge failed to start",
 				})
 			}
