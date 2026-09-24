@@ -321,7 +321,11 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 	t.Parallel()
 
 	cacheControl := &sdk.CacheControl{Type: "ephemeral"}
-	const exactLargeInteger = int64(9007199254740993)
+	// The SDK keeps tool JSON in RFC 8785 form, so numbers have binary64
+	// semantics and 2^53 is the largest integer that stays exact. The replay
+	// guard below is byte identity with the stored attempt; the decoded value
+	// is checked as well so a lossy re-encoding through float64 would show.
+	const exactLargeInteger = int64(9007199254740992)
 	toolCall := sdk.Message{
 		Role: sdk.MessageRoleAssistant,
 		Content: []sdk.MessagePart{sdk.ToolCallPart{
@@ -379,6 +383,10 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 	if !ok {
 		t.Fatalf("retry tool call = %#v, want sdk.ToolCallPart", messages[1].Content)
 	}
+	storedCall := toolCall.Content[0].(sdk.ToolCallPart)
+	if string(retryCall.Input.JSON) != string(storedCall.Input.JSON) {
+		t.Fatalf("retry tool input = %s, want the stored attempt's bytes %s", retryCall.Input.JSON, storedCall.Input.JSON)
+	}
 	var replayInput struct {
 		ID int64 `json:"id"`
 	}
@@ -388,6 +396,10 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 	retryResult, ok := messages[2].Content[0].(sdk.ToolResultPart)
 	if !ok {
 		t.Fatalf("retry tool result = %#v, want sdk.ToolResultPart", messages[2].Content)
+	}
+	storedResult := toolResult.Content[0].(sdk.ToolResultPart)
+	if string(retryResult.Result.JSON) != string(storedResult.Result.JSON) {
+		t.Fatalf("retry tool result = %s, want the stored attempt's bytes %s", retryResult.Result.JSON, storedResult.Result.JSON)
 	}
 	var replayOutput struct {
 		ID int64 `json:"id"`

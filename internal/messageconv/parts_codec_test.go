@@ -2,6 +2,7 @@ package messageconv
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -14,10 +15,14 @@ import (
 // codec rewrites is covered: arguments object, invalid-argument text, text and
 // document outputs, a null output, provider namespaces and Memoh's own
 // annotations.
-func TestStoredPartsRoundTripKeepsLegacyBytes(t *testing.T) {
+// A legacy row reads back into SDK types and writes back in the stored shape.
+// Its argument and output documents come back in RFC 8785 canonical form
+// (members sorted), so the first round trip may reorder members but never
+// changes a value; a second round trip is byte-stable.
+func TestStoredPartsRoundTripKeepsLegacyShape(t *testing.T) {
 	t.Parallel()
 	for _, content := range []string{
-		`[{"input":{"path":"/tmp/a","n":3},"providerMetadata":{"anthropic":{"signature":"sig-1"},"approval":{"approval_id":"a1","can_approve":true,"operation":{"kind":"exec"},"short_id":3}},"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`,
+		`[{"input":{"path":"/tmp/a","n":3},"providerMetadata":{"anthropic":{"signature":"sig-1"},"approval":{"approval_id":"a1","can_approve":true,"operation":{"kind":"exec"},"short_id":2,"status":"pending"},"execution_location":{"kind":"native","name":"Server Workspace"}},"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`,
 		`[{"input":"not json {","toolCallId":"c2","toolName":"exec","type":"tool-call"}]`,
 		`[{"result":"plain text","toolCallId":"c1","toolName":"exec","type":"tool-result"}]`,
 		`[{"isError":true,"result":{"status":"expired","answers":[{"question_id":"q1"}]},"toolCallId":"c1","toolName":"ask_user","type":"tool-result"}]`,
@@ -25,19 +30,54 @@ func TestStoredPartsRoundTripKeepsLegacyBytes(t *testing.T) {
 		`[{"providerMetadata":{"google":{"thoughtSignature":"SIG"}},"text":"answer","type":"text"}]`,
 		`[{"format":"anthropic","providerMetadata":{"anthropic":{"redactedData":"BLOB"}},"text":"","type":"reasoning"}]`,
 	} {
-		stored := turn.ModelMessage{Role: roleFor(content), Content: json.RawMessage(content)}
-		msg := ModelMessageToSDKMessage(stored)
-		if len(msg.Content) != 1 {
-			t.Fatalf("%s: decoded %d parts", content, len(msg.Content))
+		first := roundTripStored(t, content)
+		if !jsonEqual(t, first, content) {
+			t.Fatalf("round trip changed a value\n got  %s\n want %s", first, content)
 		}
-		back := SDKMessagesToModelMessages([]sdk.Message{msg})
-		if len(back) != 1 {
-			t.Fatalf("%s: encoded %d messages", content, len(back))
+		if second := roundTripStored(t, first); second != first {
+			t.Fatalf("second round trip is not byte-stable\n got  %s\n want %s", second, first)
 		}
-		if got := string(back[0].Content); got != content {
+	}
+}
+
+// A row whose documents are already canonical (members sorted) round-trips
+// byte for byte on the first pass.
+func TestStoredPartsRoundTripKeepsCanonicalBytes(t *testing.T) {
+	t.Parallel()
+	for _, content := range []string{
+		`[{"input":{"n":3,"path":"/tmp/a"},"providerMetadata":{"approval":{"approval_id":"a1","status":"pending"}},"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`,
+		`[{"isError":true,"result":{"answers":[{"question_id":"q1"}],"status":"expired"},"toolCallId":"c1","toolName":"ask_user","type":"tool-result"}]`,
+	} {
+		if got := roundTripStored(t, content); got != content {
 			t.Fatalf("round trip changed the row\n got  %s\n want %s", got, content)
 		}
 	}
+}
+
+func roundTripStored(t *testing.T, content string) string {
+	t.Helper()
+	stored := turn.ModelMessage{Role: roleFor(content), Content: json.RawMessage(content)}
+	msg := ModelMessageToSDKMessage(stored)
+	if len(msg.Content) != 1 {
+		t.Fatalf("%s: decoded %d parts", content, len(msg.Content))
+	}
+	back := SDKMessagesToModelMessages([]sdk.Message{msg})
+	if len(back) != 1 {
+		t.Fatalf("%s: encoded %d messages", content, len(back))
+	}
+	return string(back[0].Content)
+}
+
+func jsonEqual(t *testing.T, a, b string) bool {
+	t.Helper()
+	var va, vb any
+	if err := json.Unmarshal([]byte(a), &va); err != nil {
+		t.Fatalf("unmarshal %s: %v", a, err)
+	}
+	if err := json.Unmarshal([]byte(b), &vb); err != nil {
+		t.Fatalf("unmarshal %s: %v", b, err)
+	}
+	return reflect.DeepEqual(va, vb)
 }
 
 // A provider namespace whose values are not strings is the one legacy shape

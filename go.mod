@@ -19,7 +19,7 @@ require (
 	github.com/felinics/acgo v0.0.0-20260829152557-fc78bf271ef8
 	github.com/felinics/connect-it/sdk/go v0.1.1-0.20260829153217-0dcd18de667d
 	github.com/felinics/dingtalk-stream-sdk-go v0.0.0-20260829152622-ce4b7ea674a5
-	github.com/felinics/twilight v0.6.1-0.20260924090459-ce1730526a2f
+	github.com/felinics/twilight v0.6.1-0.20260924124231-cef8f18c7c76
 	github.com/go-ego/gse v1.0.2
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -68,6 +68,7 @@ require golang.org/x/oauth2 v0.36.0 // indirect
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+	github.com/gowebpki/jcs v1.0.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260128011058-8636f8732409 // indirect

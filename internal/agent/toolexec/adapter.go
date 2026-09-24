@@ -77,12 +77,13 @@ func EncodeOutput(value any) (sdk.ToolOutput, error) {
 	case []byte:
 		return sdk.TextOutput(string(v)), nil
 	case json.RawMessage:
-		// A document that is not JSON would make the tool message itself
-		// unmarshalable and drop it from history; carry it as text instead.
-		if !json.Valid(v) {
+		// Bytes that are not one JSON document would make the tool message
+		// itself unmarshalable and drop it from history; carry them as text.
+		output, err := sdk.RawJSONOutput(v)
+		if err != nil {
 			return sdk.TextOutput(string(v)), nil
 		}
-		return sdk.RawJSONOutput(v), nil
+		return output, nil
 	}
 	return sdk.JSONOutput(value)
 }

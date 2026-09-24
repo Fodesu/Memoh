@@ -16,6 +16,12 @@ import (
 // annotations as nested objects. The two rewrites below keep the stored shape
 // exactly as it was, so existing rows replay and rows written now read back
 // on either side of the change.
+//
+// The SDK keeps the JSON it carries in RFC 8785 canonical form (see
+// sdk.CanonicalJSON). A row read back goes through the SDK constructors, so a
+// legacy row's argument and output documents come back canonical too: the
+// same history gives the same request bytes whether it came from memory or
+// from the database. Rows are JSONB, so their bytes were never the SDK's.
 
 // storedPartsFromSDK rewrites the content array json.Marshal(sdk.Message)
 // produced into the stored shape.
@@ -154,7 +160,12 @@ func typedArguments(raw json.RawMessage) (json.RawMessage, bool) {
 		}
 		args = sdk.ParseToolArguments(text)
 	} else {
-		args = sdk.ToolArguments{JSON: trimmed}
+		// A stored document is canonicalized like a fresh one; a document the
+		// canonical form rejects (a repeated member) is kept as it was.
+		args = sdk.ParseToolArguments(string(trimmed))
+		if !args.Valid() {
+			args = sdk.ToolArguments{JSON: trimmed}
+		}
 	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
@@ -166,7 +177,7 @@ func typedArguments(raw json.RawMessage) (json.RawMessage, bool) {
 // storedOutput is the output as the row has always held it: text as a
 // string, a document as itself, and no output at all as null. The zero
 // ToolOutput maps to null rather than "" so a row read back and written again
-// keeps its bytes.
+// keeps its shape.
 func storedOutput(output sdk.ToolOutput) json.RawMessage {
 	if output.IsJSON() {
 		return output.JSON
@@ -193,7 +204,13 @@ func typedOutput(raw json.RawMessage) (json.RawMessage, bool) {
 		}
 		output = sdk.TextOutput(text)
 	} else {
-		output = sdk.RawJSONOutput(trimmed)
+		canonical, err := sdk.RawJSONOutput(trimmed)
+		if err != nil {
+			// The canonical form rejects it (a repeated member); keep the
+			// document as the row holds it.
+			canonical = sdk.ToolOutput{JSON: trimmed}
+		}
+		output = canonical
 	}
 	encoded, err := json.Marshal(output)
 	if err != nil {

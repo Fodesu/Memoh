@@ -121,10 +121,13 @@ func TestTypedLeavesCustomDecodersAlone(t *testing.T) {
 	}
 	var got args
 	execute := Typed(func(_ *ToolExecContext, a args) (sdk.ToolOutput, error) { got = a; return sdk.ToolOutput{}, nil })
-	if _, err := execute(&ToolExecContext{ToolName: "probe"}, sdk.ParseToolArguments(`{"value": 2.0, "limit": 2.0}`)); err != nil {
+	// The SDK canonicalizes the document first (2.0 would already read 2), so
+	// the custom decoder is probed with a value canonical form keeps and the
+	// integer field with the string form only coercion accepts.
+	if _, err := execute(&ToolExecContext{ToolName: "probe"}, sdk.ParseToolArguments(`{"value": 2.5, "limit": "2"}`)); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if got.Value.raw != "2.0" || got.Limit != 2 {
+	if got.Value.raw != "2.5" || got.Limit != 2 {
 		t.Fatalf("decoded = %+v", got)
 	}
 }
