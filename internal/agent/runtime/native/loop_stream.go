@@ -921,9 +921,6 @@ partLoop:
 			failureMsg, retryableFailure = e.streamFailure(p.Error)
 			stepErrored = true
 
-		case *sdk.AbortPart:
-			e.aborted = true
-
 		case *sdk.FinishPart:
 			// The provider's own finish is swallowed; the step boundary the
 			// consumers see is FinishStepPart.

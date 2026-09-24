@@ -227,8 +227,6 @@ func providerPartTimingEvent(part sdk.StreamPart) (StreamEvent, bool) {
 		return StreamEvent{Type: EventToolCallProgress}, true
 	case *toolexec.ToolApprovalRequestPart:
 		return StreamEvent{Type: EventToolApprovalRequest}, true
-	case *sdk.AbortPart:
-		return StreamEvent{Type: EventAgentAbort}, true
 	default:
 		return StreamEvent{}, false
 	}

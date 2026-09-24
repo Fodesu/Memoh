@@ -112,7 +112,7 @@ func (g *modelSteerGate) observe(part sdk.StreamPart) bool {
 	}
 	switch part.(type) {
 	case *sdk.ToolInputStartPart, *sdk.ToolInputDeltaPart, *sdk.ToolInputEndPart,
-		*sdk.StreamToolCallPart, *sdk.FinishStepPart, *sdk.ErrorPart, *sdk.AbortPart:
+		*sdk.StreamToolCallPart, *sdk.FinishStepPart, *sdk.ErrorPart:
 		g.sampling = false
 	}
 	return true

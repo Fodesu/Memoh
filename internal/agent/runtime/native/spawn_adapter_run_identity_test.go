@@ -175,43 +175,6 @@ func TestSpawnAdapterGenerateWithWatchdogClearsRecoveredStreamError(t *testing.T
 	}
 }
 
-func TestSpawnAdapterGenerateWithWatchdogRejectsProviderAbort(t *testing.T) {
-	provider := &atomicMockProvider{
-		stream: func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
-			return closedAgentTestStream(
-				&sdk.StartPart{},
-				&sdk.StartStepPart{},
-				&sdk.AbortPart{},
-			), nil
-		},
-	}
-	adapter := NewSpawnAdapter(newTestAgent())
-	var observed []StreamEvent
-	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
-		return func(event StreamEvent) SpawnRunObservation {
-			observed = append(observed, event)
-			return SpawnRunObservation{}
-		}
-	})
-	result, err := adapter.GenerateWithWatchdog(
-		context.Background(),
-		tools.SpawnRunConfig{
-			Model:       &sdk.Model{ID: "spawn-abort-model", Provider: provider, Type: sdk.ModelTypeChat},
-			Query:       "abort the task",
-			SessionType: sessionmode.Subagent,
-			Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
-		},
-		func() {},
-	)
-	if err == nil || err.Error() != "agent run aborted" {
-		t.Fatalf("GenerateWithWatchdog error = %v, want generic abort cause", err)
-	}
-	if result == nil || result.ContextLifecycle == nil {
-		t.Fatalf("GenerateWithWatchdog result = %#v, want failure lifecycle snapshot", result)
-	}
-	assertSpawnAbortObservedAsFailure(t, observed)
-}
-
 func TestSpawnAdapterGenerateWithWatchdogRejectsTextLoopAbort(t *testing.T) {
 	repeatedChunk := strings.Repeat("abcd", 64)
 	var observedCancel atomic.Bool

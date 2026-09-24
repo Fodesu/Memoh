@@ -229,8 +229,8 @@ github.com/felinics/connect-it/sdk/go v0.1.1-0.20260829153217-0dcd18de667d h1:4x
 github.com/felinics/connect-it/sdk/go v0.1.1-0.20260829153217-0dcd18de667d/go.mod h1:efQBEl/nBI7s7ptKhxpMIQWXMFwJA/mQlG8Y5Gx7y1k=
 github.com/felinics/dingtalk-stream-sdk-go v0.0.0-20260829152622-ce4b7ea674a5 h1:f70CJWZc4i4csjDQ50PpDVVqyc3wBFgRyGzKc/G101Q=
 github.com/felinics/dingtalk-stream-sdk-go v0.0.0-20260829152622-ce4b7ea674a5/go.mod h1:6lA5cvlc9Grmj5AgIMI0tCKB3o3M49qHzeA3rxmHZ1o=
-github.com/felinics/twilight v0.6.1-0.20260922120054-391b05932d1b h1:I1Fb8Je7VgfsrqY/NLDKcXpZjtJJOln64z5oAqv8Foo=
-github.com/felinics/twilight v0.6.1-0.20260922120054-391b05932d1b/go.mod h1:xW5VaCcw1i6J6aoOvuUg51rSNaBJqd96BfrfrZlVWe4=
+github.com/felinics/twilight v0.6.1-0.20260924090459-ce1730526a2f h1:TH/JcIW6gL4bWjYalq+EK+P5VHfhzuOzlAIYg4ex2hw=
+github.com/felinics/twilight v0.6.1-0.20260924090459-ce1730526a2f/go.mod h1:xW5VaCcw1i6J6aoOvuUg51rSNaBJqd96BfrfrZlVWe4=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/frankban/quicktest v1.14.3/go.mod h1:mgiwOwqx65TmIk1wJ6Q7wvnVMocbUorkibMOrVTHZps=
