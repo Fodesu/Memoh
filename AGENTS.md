@@ -34,7 +34,7 @@ Infrastructure dependencies:
 ### Backend (Go)
 - **Framework**: Echo (HTTP)
 - **Dependency Injection**: Uber FX
-- **AI SDK**: [Twilight AI](https://github.com/felinics/twilight) (Go LLM SDK — OpenAI, Anthropic, Google). The SDK is a single-call seam (`sdk.Request` in, `sdk.ModelResult` / stream parts out) and stops at the tool definition; Memoh owns the multi-step loop (`internal/agent/runtime/native/loop_*.go`) and tool execution (`internal/agent/toolexec/`)
+- **AI SDK**: [Twilight AI](https://github.com/felinics/twilight) (Go LLM SDK — OpenAI, Anthropic, Google)
 - **Database Driver**: pgx/v5 (PostgreSQL)
 - **Code Generation**: sqlc (SQL → Go)
 - **API Docs**: Swagger/OpenAPI (swaggo)
