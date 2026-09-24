@@ -80,6 +80,9 @@ func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc
 		service: s, req: req, rc: rc, persister: persister, ownerContext: ctx,
 		queueStep:            queueStep,
 		turnRequestMessageID: requestMessageID,
+		// A continuation resumes a run whose earlier steps are already
+		// persisted; the loop numbers its commits from the same offset.
+		nextStep: req.StepIndexOffset,
 	}
 }
 

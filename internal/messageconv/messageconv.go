@@ -46,6 +46,31 @@ func SDKMessagesToModelMessagesWithLogger(log *slog.Logger, msgs []sdk.Message) 
 	return result
 }
 
+// SDKMessagesJSONToModelMessages types a serialized []sdk.Message — the
+// Messages payload of step and terminal stream events — as stored-shape model
+// messages. Readers written for the persisted row shape (tool input as the
+// plain object, Memoh annotations as nested objects under providerMetadata)
+// consume the result unchanged.
+func SDKMessagesJSONToModelMessages(raw json.RawMessage) ([]turn.ModelMessage, error) {
+	var envelopes []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Usage   json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &envelopes); err != nil {
+		return nil, err
+	}
+	out := make([]turn.ModelMessage, 0, len(envelopes))
+	for _, envelope := range envelopes {
+		out = append(out, turn.ModelMessage{
+			Role:    envelope.Role,
+			Content: storedPartsFromSDK(envelope.Content),
+			Usage:   envelope.Usage,
+		})
+	}
+	return out, nil
+}
+
 func ModelMessageToSDKMessage(mm turn.ModelMessage) sdk.Message {
 	var s string
 	if err := json.Unmarshal(mm.Content, &s); err == nil {
