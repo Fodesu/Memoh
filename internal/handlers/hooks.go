@@ -221,5 +221,7 @@ func (r hookTestToolRunner) RunHookTool(ctx context.Context, toolName string, in
 	if err != nil {
 		return nil, err
 	}
-	return part.Result, nil
+	// The hook service reads decision/reason/append_* off the tool's own value;
+	// hand it the decoded output, not the SDK's {text|json} envelope.
+	return toolexec.OutputValue(part.Result), nil
 }
