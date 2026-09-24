@@ -51,10 +51,17 @@ func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) 
 		desc := desc
 		src := f.source
 		sess := mcpSession
+		schema, err := toolexec.ResolveSchema(desc.InputSchema)
+		if err != nil {
+			// A tool advertised without its parameters cannot be called
+			// correctly; leave it out of this turn rather than mislead the model.
+			f.logger.Warn("federation tool schema is not usable; tool skipped", slog.String("tool", desc.Name), slog.Any("error", err))
+			continue
+		}
 		tools = append(tools, toolexec.Tool{
 			Name:        desc.Name,
 			Description: desc.Description,
-			Parameters:  toolexec.SchemaFromValue(desc.InputSchema),
+			Parameters:  schema,
 			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				result, err := src.CallTool(ctx.Context, sess, desc.Name, args)

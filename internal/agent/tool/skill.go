@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -87,7 +88,7 @@ func (p *SkillProvider) Tools(ctx context.Context, session SessionContext) ([]to
 			Description: "Activate a skill to get its full instructions. Call this when you think a skill is relevant to the current task.",
 			Parameters:  toolexec.SchemaFor[useSkillArgs](),
 			Execute: toolexec.Typed(func(_ *toolexec.ToolExecContext, args useSkillArgs) (sdk.ToolOutput, error) {
-				skillName := args.SkillName
+				skillName := strings.TrimSpace(args.SkillName)
 				if skillName == "" {
 					return sdk.ToolOutput{}, errors.New("skillName is required")
 				}

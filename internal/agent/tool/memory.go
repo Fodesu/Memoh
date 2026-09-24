@@ -117,10 +117,15 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]t
 		desc := desc
 		prov := provider
 		sess := mcpSession
+		schema, err := toolexec.ResolveSchema(desc.InputSchema)
+		if err != nil {
+			p.logger.Warn("memory tool schema is not usable; tool skipped", slog.String("tool", desc.Name), slog.Any("error", err))
+			continue
+		}
 		tools = append(tools, toolexec.Tool{
 			Name:        desc.Name,
 			Description: desc.Description,
-			Parameters:  toolexec.SchemaFromValue(desc.InputSchema),
+			Parameters:  schema,
 			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				result, err := prov.CallTool(ctx.Context, sess, desc.Name, args)

@@ -77,6 +77,11 @@ func EncodeOutput(value any) (sdk.ToolOutput, error) {
 	case []byte:
 		return sdk.TextOutput(string(v)), nil
 	case json.RawMessage:
+		// A document that is not JSON would make the tool message itself
+		// unmarshalable and drop it from history; carry it as text instead.
+		if !json.Valid(v) {
+			return sdk.TextOutput(string(v)), nil
+		}
 		return sdk.RawJSONOutput(v), nil
 	}
 	return sdk.JSONOutput(value)
@@ -86,22 +91,30 @@ func EncodeOutput(value any) (sdk.ToolOutput, error) {
 // builds it in: an already resolved schema, a JSON object (map or raw
 // document), or a struct type whose schema is inferred. A value that resolves
 // to nothing yields the empty object schema so the definition is never sent
-// without parameters.
+// without parameters. Use it for schemas Memoh writes itself; a schema that
+// arrives as data (an MCP tool, a memory provider descriptor) goes through
+// ResolveSchema so a document that does not parse is not silently replaced.
 func SchemaFromValue(value any) *jsonschema.Schema {
-	if schema, ok := schemaFromValue(value); ok && schema != nil {
+	if schema, err := ResolveSchema(value); err == nil && schema != nil {
 		return schema
 	}
 	return &jsonschema.Schema{Type: "object"}
 }
 
-func schemaFromValue(value any) (*jsonschema.Schema, bool) {
+// ResolveSchema is SchemaFromValue that reports why a value did not resolve.
+// A nil value resolves to the empty object schema; a JSON document that is
+// not a valid schema is the error.
+func ResolveSchema(value any) (*jsonschema.Schema, error) {
 	switch v := value.(type) {
 	case nil:
-		return nil, false
+		return &jsonschema.Schema{Type: "object"}, nil
 	case *jsonschema.Schema:
-		return v, true
+		if v == nil {
+			return &jsonschema.Schema{Type: "object"}, nil
+		}
+		return v, nil
 	case jsonschema.Schema:
-		return &v, true
+		return &v, nil
 	case map[string]any:
 		return schemaFromJSON(v)
 	case json.RawMessage:
@@ -114,25 +127,21 @@ func schemaFromValue(value any) (*jsonschema.Schema, bool) {
 		typ = typ.Elem()
 	}
 	if typ.Kind() != reflect.Struct {
-		return nil, false
+		return nil, fmt.Errorf("toolexec: cannot build a schema from %T", value)
 	}
-	schema, err := jsonschema.ForType(typ, nil)
-	if err != nil {
-		return nil, false
-	}
-	return schema, true
+	return jsonschema.ForType(typ, nil)
 }
 
-func schemaFromJSON(value any) (*jsonschema.Schema, bool) {
+func schemaFromJSON(value any) (*jsonschema.Schema, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("toolexec: encode schema: %w", err)
 	}
 	var schema jsonschema.Schema
 	if err := json.Unmarshal(data, &schema); err != nil {
-		return nil, false
+		return nil, fmt.Errorf("toolexec: schema is not valid JSON Schema: %w", err)
 	}
-	return &schema, true
+	return &schema, nil
 }
 
 // OutputFromValue is EncodeOutput for a value that is already JSON-shaped

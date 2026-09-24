@@ -265,8 +265,8 @@ Delete a file:
 *** End Patch
 `, workspace.locationDescription),
 			Parameters: toolexec.SchemaFor[applyPatchArgs](targetShape),
-			// apply_patch keeps the raw arguments: a model that sends the patch
-			// text in place of the JSON object is still served.
+			// apply_patch keeps the raw arguments: a JSON string document
+			// carrying the patch text is accepted as well as the object.
 			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				return toolexec.OutputPair(p.execApplyPatch(ctx.Context, sess, input))
 			},

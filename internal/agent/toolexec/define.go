@@ -1,9 +1,14 @@
 package toolexec
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"reflect"
+	"strconv"
+	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -47,14 +52,220 @@ func SchemaFor[T any](shape ...func(*jsonschema.Schema)) *jsonschema.Schema {
 // Typed adapts a handler over T to the executor contract: the arguments are
 // decoded into T before the handler runs, and a document that does not decode
 // is reported as the tool's error.
+//
+// Decoding keeps the tolerance the map-based helpers had: a whole-number
+// float for an integer field, a numeric string for a numeric field and a
+// number or boolean for a string field are accepted (coerceArguments). What
+// still does not decode is reported by property name, never by Go type.
 func Typed[T any](execute func(*ToolExecContext, T) (sdk.ToolOutput, error)) ToolExecuteFunc {
 	return func(ctx *ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
+		toolName := "tool"
+		if ctx != nil && ctx.ToolName != "" {
+			toolName = ctx.ToolName
+		}
 		var typed T
-		if err := input.Unmarshal(&typed); err != nil {
-			return sdk.ToolOutput{}, fmt.Errorf("decode %s arguments: %w", ctx.ToolName, err)
+		err := input.Unmarshal(&typed)
+		if err != nil && input.Valid() {
+			if coerced, changed := coerceArguments(input.JSON, reflect.TypeFor[T]()); changed {
+				typed = *new(T)
+				err = json.Unmarshal(coerced, &typed)
+			}
+		}
+		if err != nil {
+			return sdk.ToolOutput{}, describeDecodeError(toolName, err)
 		}
 		return execute(ctx, typed)
 	}
+}
+
+// describeDecodeError turns a decode failure into text the model can act on:
+// the property, what it must be and what arrived.
+func describeDecodeError(toolName string, err error) error {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		field := typeErr.Field
+		if field == "" {
+			field = "arguments"
+		}
+		return fmt.Errorf("invalid arguments for %s: %s must be %s, got %s", toolName, field, kindNoun(typeErr.Type), typeErr.Value)
+	}
+	if errors.Is(err, sdk.ErrInvalidToolArguments) {
+		return fmt.Errorf("invalid arguments for %s: not a JSON object", toolName)
+	}
+	return fmt.Errorf("invalid arguments for %s: %w", toolName, err)
+}
+
+func kindNoun(t reflect.Type) string {
+	if t == nil {
+		return "a valid value"
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Bool:
+		return "a boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "an integer"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.String:
+		return "a string"
+	case reflect.Slice, reflect.Array:
+		return "an array"
+	case reflect.Struct, reflect.Map:
+		return "an object"
+	default:
+		return "a valid value"
+	}
+}
+
+var jsonUnmarshalerType = reflect.TypeFor[json.Unmarshaler]()
+
+// coerceArguments rewrites the scalar values the map-based helpers used to
+// accept so the typed decode accepts them too. It returns the rewritten
+// document and whether anything changed. Fields with their own UnmarshalJSON
+// are left alone; they define their own tolerance.
+func coerceArguments(raw json.RawMessage, typ reflect.Type) (json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil {
+		return raw, false
+	}
+	value, changed := coerceValue(value, typ)
+	if !changed {
+		return raw, false
+	}
+	out, err := json.Marshal(value)
+	if err != nil {
+		return raw, false
+	}
+	return out, true
+}
+
+func coerceValue(value any, typ reflect.Type) (any, bool) {
+	if value == nil || typ == nil {
+		return value, false
+	}
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ != reflect.TypeFor[json.Number]() && reflect.PointerTo(typ).Implements(jsonUnmarshalerType) {
+		return value, false
+	}
+	switch typ.Kind() {
+	case reflect.Struct:
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return value, false
+		}
+		changed := false
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			name := jsonFieldName(field)
+			if name == "" {
+				continue
+			}
+			if v, present := obj[name]; present {
+				if coerced, c := coerceValue(v, field.Type); c {
+					obj[name] = coerced
+					changed = true
+				}
+			}
+		}
+		return obj, changed
+	case reflect.Slice, reflect.Array:
+		items, ok := value.([]any)
+		if !ok {
+			return value, false
+		}
+		changed := false
+		for i := range items {
+			if coerced, c := coerceValue(items[i], typ.Elem()); c {
+				items[i] = coerced
+				changed = true
+			}
+		}
+		return items, changed
+	case reflect.Map:
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return value, false
+		}
+		changed := false
+		for k, v := range obj {
+			if coerced, c := coerceValue(v, typ.Elem()); c {
+				obj[k] = coerced
+				changed = true
+			}
+		}
+		return obj, changed
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return coerceInteger(value)
+	case reflect.Float32, reflect.Float64:
+		if s, ok := value.(string); ok {
+			if _, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+				return json.Number(strings.TrimSpace(s)), true
+			}
+		}
+		return value, false
+	case reflect.String:
+		switch v := value.(type) {
+		case json.Number:
+			return v.String(), true
+		case bool:
+			return strconv.FormatBool(v), true
+		}
+		return value, false
+	case reflect.Bool:
+		if s, ok := value.(string); ok {
+			if b, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
+				return b, true
+			}
+		}
+		return value, false
+	}
+	return value, false
+}
+
+// coerceInteger accepts a whole-number float ("2.0") and a numeric string
+// ("2", " 2.0 ") for an integer field.
+func coerceInteger(value any) (any, bool) {
+	var text string
+	switch v := value.(type) {
+	case json.Number:
+		text = v.String()
+		if _, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return value, false
+		}
+	case string:
+		text = strings.TrimSpace(v)
+	default:
+		return value, false
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) || math.Abs(f) > 1<<53 {
+		return value, false
+	}
+	return json.Number(strconv.FormatInt(int64(f), 10)), true
+}
+
+func jsonFieldName(field reflect.StructField) string {
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return ""
+	}
+	name, _, _ := strings.Cut(tag, ",")
+	if name == "" {
+		name = field.Name
+	}
+	return name
 }
 
 // normalizeSchema removes what jsonschema.For adds beyond the object /

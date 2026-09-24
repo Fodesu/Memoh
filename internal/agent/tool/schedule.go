@@ -137,10 +137,10 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				if botID == "" {
 					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
-				name := args.Name
-				description := args.Description
-				pattern := args.Pattern
-				command := args.Command
+				name := strings.TrimSpace(args.Name)
+				description := strings.TrimSpace(args.Description)
+				pattern := strings.TrimSpace(args.Pattern)
+				command := strings.TrimSpace(args.Command)
 				if name == "" || description == "" || pattern == "" || command == "" {
 					return sdk.ToolOutput{}, errors.New("name, description, pattern, command are required")
 				}
@@ -180,16 +180,16 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				}
 				req := sched.UpdateRequest{}
 				req.MaxCalls = args.MaxCalls.nullableInt()
-				if v := args.Name; v != "" {
+				if v := strings.TrimSpace(args.Name); v != "" {
 					req.Name = &v
 				}
-				if v := args.Description; v != "" {
+				if v := strings.TrimSpace(args.Description); v != "" {
 					req.Description = &v
 				}
-				if v := args.Pattern; v != "" {
+				if v := strings.TrimSpace(args.Pattern); v != "" {
 					req.Pattern = &v
 				}
-				if v := args.Command; v != "" {
+				if v := strings.TrimSpace(args.Command); v != "" {
 					req.Command = &v
 				}
 				if args.Enabled != nil {
@@ -242,12 +242,12 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 // their argument structs spell their own descriptions and hand the values here.
 func scheduleExecutionConfig(sessionID, acpAgentID, modelID, acpModelID, reasoningEffort, workdirID string) sched.ExecutionConfig {
 	exec := sched.ExecutionConfig{
-		TargetSessionID: sessionID,
-		ACPAgentID:      acpAgentID,
-		ModelID:         modelID,
-		ACPModelID:      acpModelID,
-		ReasoningEffort: reasoningEffort,
-		WorkdirID:       workdirID,
+		TargetSessionID: strings.TrimSpace(sessionID),
+		ACPAgentID:      strings.TrimSpace(acpAgentID),
+		ModelID:         strings.TrimSpace(modelID),
+		ACPModelID:      strings.TrimSpace(acpModelID),
+		ReasoningEffort: strings.TrimSpace(reasoningEffort),
+		WorkdirID:       strings.TrimSpace(workdirID),
 	}
 	if exec.TargetSessionID != "" {
 		exec.RunTarget = sched.RunTargetExistingSession

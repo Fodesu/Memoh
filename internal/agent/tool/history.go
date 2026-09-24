@@ -236,7 +236,7 @@ func (p *HistoryProvider) execGetMessages(ctx context.Context, sess SessionConte
 		default:
 			messages = []messagepkg.Message{message}
 		}
-	} else if rawBefore := args.Before; rawBefore != "" {
+	} else if rawBefore := strings.TrimSpace(args.Before); rawBefore != "" {
 		before, err = parseFlexibleTime(rawBefore)
 		if err != nil {
 			return nil, err
@@ -338,10 +338,10 @@ func (p *HistoryProvider) execSearchMessages(ctx context.Context, sess SessionCo
 	if v := args.ContactID; v != "" {
 		params.ContactID = dbpkg.ParseUUIDOrEmpty(v)
 	}
-	if v := args.Role; v != "" {
+	if v := strings.TrimSpace(args.Role); v != "" {
 		params.Role = pgtype.Text{String: v, Valid: true}
 	}
-	if v := args.Keyword; v != "" {
+	if v := strings.TrimSpace(args.Keyword); v != "" {
 		params.Keyword = pgtype.Text{String: v, Valid: true}
 	}
 	if v := args.StartTime; v != "" {
