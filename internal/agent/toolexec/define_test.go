@@ -3,6 +3,8 @@ package toolexec
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -129,5 +131,63 @@ func TestTypedLeavesCustomDecodersAlone(t *testing.T) {
 	}
 	if got.Value.raw != "2.5" || got.Limit != 2 {
 		t.Fatalf("decoded = %+v", got)
+	}
+}
+
+type coercionEdgeArgs struct {
+	coercionEmbedded
+	N     int64   `json:"n"`
+	F     float64 `json:"f,omitempty"`
+	Limit int     `json:"limit,omitempty"`
+}
+
+type coercionEmbedded struct {
+	Count int `json:"count"`
+}
+
+// Integer strings are taken exactly, never through binary64; a float string
+// is accepted only as a JSON number literal; embedded struct fields are
+// coerced against the same object.
+func TestTypedCoercionEdges(t *testing.T) {
+	var got coercionEdgeArgs
+	execute := Typed(func(_ *ToolExecContext, a coercionEdgeArgs) (sdk.ToolOutput, error) {
+		got = a
+		return sdk.ToolOutput{}, nil
+	})
+	if _, err := execute(&ToolExecContext{ToolName: "probe"}, sdk.ParseToolArguments(`{"n":"9007199254740993","f":"1.5","count":"3","limit":"2"}`)); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if got.N != 9007199254740993 || got.F != 1.5 || got.Count != 3 || got.Limit != 2 {
+		t.Fatalf("decoded = %+v", got)
+	}
+	// A float string that is not a JSON number must not abort coercion of
+	// the rest of the document; it is reported on its own property.
+	_, err := execute(&ToolExecContext{ToolName: "probe"}, sdk.ParseToolArguments(`{"n":"5","f":"+1"}`))
+	if err == nil || err.Error() != "invalid arguments for probe: f must be a number, got string" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+type strictDecoder struct{ v int }
+
+func (d *strictDecoder) UnmarshalJSON(data []byte) error {
+	var n int
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("max_calls must be an integer or null: %w", err)
+	}
+	d.v = n
+	return nil
+}
+
+// A custom decoder's own message names the property; it is kept rather than
+// rewritten into a root-level "arguments must be …".
+func TestTypedKeepsCustomDecoderMessage(t *testing.T) {
+	type args struct {
+		MaxCalls strictDecoder `json:"max_calls"`
+	}
+	execute := Typed(func(*ToolExecContext, args) (sdk.ToolOutput, error) { return sdk.ToolOutput{}, nil })
+	_, err := execute(&ToolExecContext{ToolName: "update_schedule"}, sdk.ParseToolArguments(`{"max_calls":"5"}`))
+	if err == nil || !strings.Contains(err.Error(), "max_calls must be an integer or null") || strings.Contains(err.Error(), "arguments must be") {
+		t.Fatalf("error = %v", err)
 	}
 }

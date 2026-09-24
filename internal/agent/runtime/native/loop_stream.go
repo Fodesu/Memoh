@@ -274,9 +274,7 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 		// cooperating promptly. Wait for its exit briefly, then stop waiting so
 		// the caller can fence and finalize the run as aborted.
 		cancel(context.Canceled)
-		engineClosed = drainEventsUntilClosed(eng.events, streamCancelDrainGrace, func(evt StreamEvent) bool {
-			return sendEvent(ctx, ch, evt)
-		})
+		engineClosed = drainEventsUntilClosed(ctx, eng.events, streamCancelDrainGrace, ch)
 	}
 	// A closed engine channel is what makes the reads below safe: the engine
 	// goroutine has returned, no further complete step can commit after this
@@ -395,21 +393,30 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 // within the grace period. The engine observes its own parts before exiting,
 // so unlike the provider-stream drain nothing here needs to be inspected.
 // drainEventsUntilClosed reads the engine channel until it closes or grace
-// runs out. Events still queued are handed to forward while the consumer
+// runs out. Events still queued are forwarded to ch while the consumer
 // accepts them: a loop-guard abort queues the aborting call's tool_call_end
-// before it cancels, and that event must reach the consumer. Once forward
-// declines (the consumer is gone) the rest is discarded.
-func drainEventsUntilClosed(events <-chan StreamEvent, grace time.Duration, forward func(StreamEvent) bool) bool {
+// before it cancels, and that event must reach the consumer. The grace bounds
+// the whole drain, forwarding included; once the consumer's ctx is done the
+// rest is discarded.
+func drainEventsUntilClosed(ctx context.Context, events <-chan StreamEvent, grace time.Duration, ch chan<- StreamEvent) bool {
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
+	forward := ch != nil
 	for {
 		select {
 		case evt, ok := <-events:
 			if !ok {
 				return true
 			}
-			if forward != nil && !forward(evt) {
-				forward = nil
+			if !forward {
+				continue
+			}
+			select {
+			case ch <- evt:
+			case <-ctx.Done():
+				forward = false
+			case <-timer.C:
+				return false
 			}
 		case <-timer.C:
 			return false

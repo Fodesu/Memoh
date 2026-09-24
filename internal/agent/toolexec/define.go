@@ -82,7 +82,11 @@ func Typed[T any](execute func(*ToolExecContext, T) (sdk.ToolOutput, error)) Too
 // the property, what it must be and what arrived.
 func describeDecodeError(toolName string, err error) error {
 	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) {
+	// A type error that names its property, or that is the whole document
+	// (encoding/json returned it unwrapped), reads as "<property> must be …".
+	// One raised inside a custom UnmarshalJSON carries no property and is
+	// wrapped by the decoder's own message, which already names it.
+	if errors.As(err, &typeErr) && (typeErr.Field != "" || errors.Unwrap(err) == nil) {
 		field := typeErr.Field
 		if field == "" {
 			field = "arguments"
@@ -164,6 +168,20 @@ func coerceValue(value any, typ reflect.Type) (any, bool) {
 		changed := false
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)
+			if field.Anonymous && field.Tag.Get("json") == "" {
+				// encoding/json promotes an untagged embedded struct's fields
+				// onto this object; coerce them against the same map.
+				embedded := field.Type
+				for embedded.Kind() == reflect.Pointer {
+					embedded = embedded.Elem()
+				}
+				if embedded.Kind() == reflect.Struct {
+					if _, c := coerceValue(obj, embedded); c {
+						changed = true
+					}
+				}
+				continue
+			}
 			if !field.IsExported() {
 				continue
 			}
@@ -210,8 +228,12 @@ func coerceValue(value any, typ reflect.Type) (any, bool) {
 		return coerceInteger(value)
 	case reflect.Float32, reflect.Float64:
 		if s, ok := value.(string); ok {
-			if _, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
-				return json.Number(strings.TrimSpace(s)), true
+			text := strings.TrimSpace(s)
+			if !jsonNumberText(text) {
+				return value, false
+			}
+			if f, err := strconv.ParseFloat(text, 64); err == nil && !math.IsInf(f, 0) && !math.IsNaN(f) {
+				return json.Number(strconv.FormatFloat(f, 'g', -1, 64)), true
 			}
 		}
 		return value, false
@@ -235,7 +257,9 @@ func coerceValue(value any, typ reflect.Type) (any, bool) {
 }
 
 // coerceInteger accepts a whole-number float ("2.0") and a numeric string
-// ("2", " 2.0 ") for an integer field.
+// ("2", " 2.0 ") for an integer field. An integer literal is taken exactly;
+// only a fractional or exponent form goes through binary64, and then only
+// while it is exact.
 func coerceInteger(value any) (any, bool) {
 	var text string
 	switch v := value.(type) {
@@ -246,6 +270,12 @@ func coerceInteger(value any) (any, bool) {
 		}
 	case string:
 		text = strings.TrimSpace(v)
+		if !jsonNumberText(text) {
+			return value, false
+		}
+		if _, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return json.Number(text), true
+		}
 	default:
 		return value, false
 	}
@@ -254,6 +284,17 @@ func coerceInteger(value any) (any, bool) {
 		return value, false
 	}
 	return json.Number(strconv.FormatInt(int64(f), 10)), true
+}
+
+// jsonNumberText reports whether text is a JSON number literal (optional
+// leading minus, digits, optional fraction and exponent), which is the only
+// string form coercion accepts for a numeric field.
+func jsonNumberText(text string) bool {
+	if text == "" {
+		return false
+	}
+	var n json.Number
+	return json.Unmarshal([]byte(text), &n) == nil
 }
 
 func jsonFieldName(field reflect.StructField) string {
