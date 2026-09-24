@@ -18,9 +18,6 @@ import (
 )
 
 func TestTerminalPingDoesNotWriteStdin(t *testing.T) {
-	restore := setTerminalKeepalive(20*time.Millisecond, time.Second)
-	defer restore()
-
 	dialer := newScriptedDialer(func(stream *scriptedTerminalStream) {
 		stream.enqueue(&pb.TerminalServer{Frame: &pb.TerminalServer_Ready{Ready: &pb.TerminalReady{
 			SessionId: "sess",
@@ -28,7 +25,7 @@ func TestTerminalPingDoesNotWriteStdin(t *testing.T) {
 		}}})
 		<-stream.ctx.Done()
 	})
-	conn := dialTerminal(t, dialer)
+	conn := dialTerminal(t, dialer, 20*time.Millisecond, time.Second)
 	if err := conn.WriteJSON(map[string]any{"type": "open", "cols": 80, "rows": 24}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,24 +173,21 @@ func TestTerminalUnimplementedDoesNotUseExec(t *testing.T) {
 	}
 }
 
-func setTerminalKeepalive(interval, wait time.Duration) func() {
-	prevInterval, prevWait := terminalPingInterval, terminalPongWait
-	terminalPingInterval = interval
-	terminalPongWait = wait
-	return func() {
-		terminalPingInterval = prevInterval
-		terminalPongWait = prevWait
-	}
-}
-
-func dialTerminal(t *testing.T, dialer terminalDialer) *websocket.Conn {
+func dialTerminal(t *testing.T, dialer terminalDialer, keepalive ...time.Duration) *websocket.Conn {
 	t.Helper()
+	pingInterval, pongWait := terminalPingInterval, terminalPongWait
+	if len(keepalive) > 0 {
+		pingInterval = keepalive[0]
+	}
+	if len(keepalive) > 1 {
+		pongWait = keepalive[1]
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := terminalUpgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
-		serveTerminalWebSocket(r.Context(), nil, "bot", conn, dialer, "sleep 30", t.TempDir())
+		serveTerminalWebSocket(r.Context(), nil, "bot", conn, dialer, "sleep 30", t.TempDir(), pingInterval, pongWait)
 	}))
 	t.Cleanup(server.Close)
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")

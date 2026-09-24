@@ -26,11 +26,8 @@ const (
 	terminalCloseTaken       = 4003
 	terminalWorkDir          = "/data"
 	terminalReattachDelay    = 200 * time.Millisecond
-)
-
-var (
-	terminalPingInterval = 30 * time.Second
-	terminalPongWait     = 10 * time.Second
+	terminalPingInterval     = 30 * time.Second
+	terminalPongWait         = 10 * time.Second
 )
 
 type terminalRPC interface {
@@ -72,10 +69,10 @@ type terminalRunResult struct {
 
 func (h *ContainerdHandler) serveTerminalSocket(ctx context.Context, botID string, conn *websocket.Conn, client terminalDialer, shell string) {
 	logger := h.logger
-	serveTerminalWebSocket(ctx, logger, botID, conn, client, shell, terminalWorkDir)
+	serveTerminalWebSocket(ctx, logger, botID, conn, client, shell, terminalWorkDir, terminalPingInterval, terminalPongWait)
 }
 
-func serveTerminalWebSocket(ctx context.Context, logger *slog.Logger, botID string, conn *websocket.Conn, client terminalDialer, shell, workDir string) {
+func serveTerminalWebSocket(ctx context.Context, logger *slog.Logger, botID string, conn *websocket.Conn, client terminalDialer, shell, workDir string, pingInterval, pongWait time.Duration) {
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -85,7 +82,7 @@ func serveTerminalWebSocket(ctx context.Context, logger *slog.Logger, botID stri
 		sock.markPong()
 		return nil
 	})
-	go sock.ping(ctx, cancel)
+	go sock.ping(ctx, cancel, pingInterval, pongWait)
 
 	inbound := make(chan terminalInbound, 32)
 	go readTerminalInbound(ctx, conn, inbound)
@@ -446,8 +443,8 @@ func (s *terminalSocket) markPong() {
 	}
 }
 
-func (s *terminalSocket) ping(ctx context.Context, cancel context.CancelFunc) {
-	ticker := time.NewTicker(terminalPingInterval)
+func (s *terminalSocket) ping(ctx context.Context, cancel context.CancelFunc, interval, pongWait time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -455,13 +452,13 @@ func (s *terminalSocket) ping(ctx context.Context, cancel context.CancelFunc) {
 			return
 		case <-ticker.C:
 			s.writeMu.Lock()
-			err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(terminalPongWait))
+			err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(pongWait))
 			s.writeMu.Unlock()
 			if err != nil {
 				cancel()
 				return
 			}
-			timer := time.NewTimer(terminalPongWait)
+			timer := time.NewTimer(pongWait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
