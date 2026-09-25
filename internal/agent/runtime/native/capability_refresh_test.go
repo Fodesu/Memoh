@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/models"
 )
 
 type capabilityRefreshProvider struct {
@@ -172,5 +174,103 @@ func TestCapabilityRefreshSurvivesMidStreamRetry(t *testing.T) {
 	}
 	if capability.used != 1 || calls != 4 {
 		t.Fatalf("used=%d calls=%d, want the refreshed tool executed once after the retry", capability.used, calls)
+	}
+}
+
+// capabilityUsageProvider is capabilityRefreshProvider plus tool-usage text
+// that changes with the installed set, so a refresh must carry the new text
+// into the request.
+type capabilityUsageProvider struct{ capabilityRefreshProvider }
+
+func (p *capabilityUsageProvider) Usage(context.Context, tools.SessionContext, tools.AvailableTools) string {
+	if p.installed {
+		return "USAGE-AFTER-INSTALL: prefer new_capability"
+	}
+	return "USAGE-BEFORE-INSTALL: install first"
+}
+
+// anthropicNamedProvider makes the prompt-cache plan promote the system prompt
+// into the message prefix, the shape a capability refresh must rewrite.
+type anthropicNamedProvider struct{ *atomicMockProvider }
+
+func (anthropicNamedProvider) Name() string { return string(models.ClientTypeAnthropicMessages) }
+
+// With Anthropic prompt caching the system prompt travels as the first
+// message. A capability refresh must rewrite that message, or the model that
+// is offered the new tool keeps reading the instructions of the old set.
+func TestCapabilityRefreshRewritesPromotedSystemPrompt(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(strconv.FormatBool(streaming), func(t *testing.T) {
+			capability := &capabilityUsageProvider{}
+			a := New(Deps{})
+			a.SetToolProviders([]tools.ToolProvider{capability})
+			var systems []string
+			calls := 0
+			next := func(params sdk.Request) (sdk.ModelResult, error) {
+				calls++
+				if params.System != "" || len(params.Messages) == 0 || params.Messages[0].Role != sdk.MessageRoleSystem {
+					t.Errorf("call %d: system not promoted into the prefix: system=%q first=%#v", calls, params.System, params.Messages[0])
+				}
+				if text, ok := params.Messages[0].Content[0].(sdk.TextPart); ok {
+					systems = append(systems, text.Text)
+					if text.CacheControl == nil {
+						t.Errorf("call %d: promoted system lost its cache control", calls)
+					}
+				}
+				switch calls {
+				case 1:
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "install", ToolName: "install_test_capability", Input: toolexec.ArgumentsFromValue(map[string]any{})}}}, nil
+				default:
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonStop, Text: "done"}, nil
+				}
+			}
+			mock := &atomicMockProvider{handler: func(_ int, params sdk.Request) (sdk.ModelResult, error) { return next(params) }}
+			mock.stream = func(_ context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
+				result, err := next(params)
+				if err != nil {
+					return nil, err
+				}
+				parts := []sdk.StreamPart{}
+				for _, call := range result.ToolCalls {
+					parts = append(parts, &sdk.StreamToolCallPart{ToolCallID: call.ToolCallID, ToolName: call.ToolName, Input: toolexec.ArgumentsFromValue(call.Input)})
+				}
+				if result.Text != "" {
+					parts = append(parts, &sdk.TextDeltaPart{Text: result.Text})
+				}
+				parts = append(parts, &sdk.FinishStepPart{FinishReason: result.FinishReason})
+				return closedAgentTestStream(parts...), nil
+			}
+			cfg := RunConfig{
+				Model:            &sdk.Model{ID: "claude-test", Provider: anthropicNamedProvider{mock}},
+				Messages:         []sdk.Message{sdk.UserMessage("install")},
+				System:           "base system",
+				PromptCacheTTL:   models.PromptCacheTTL5m,
+				SupportsToolCall: true,
+				Identity:         SessionContext{BotID: "bot-1", SessionID: "session-1"},
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if streaming {
+				for event := range a.Stream(ctx, cfg) {
+					if event.Type == EventError {
+						t.Error(event.Error)
+					}
+				}
+			} else if _, err := a.Generate(ctx, cfg); err != nil {
+				t.Fatal(err)
+			}
+			if len(systems) != 2 {
+				t.Fatalf("calls=%d systems=%q, want 2 calls", calls, systems)
+			}
+			if !strings.Contains(systems[0], "USAGE-BEFORE-INSTALL") || strings.Contains(systems[0], "USAGE-AFTER-INSTALL") {
+				t.Fatalf("first request system = %q, want the pre-install usage text", systems[0])
+			}
+			if !strings.Contains(systems[1], "USAGE-AFTER-INSTALL") || strings.Contains(systems[1], "USAGE-BEFORE-INSTALL") {
+				t.Fatalf("request after refresh system = %q, want the refreshed usage text in the promoted prefix", systems[1])
+			}
+			if !strings.HasPrefix(systems[1], "base system") {
+				t.Fatalf("request after refresh lost the base system prompt: %q", systems[1])
+			}
+		})
 	}
 }

@@ -184,6 +184,10 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 
 	var (
 		lastResult sdk.ModelResult
+		// deferred is the decision that parked the last step; the returned
+		// messages carry it on the parked call the same way the stream's
+		// terminal messages do.
+		deferred *toolexec.ToolApprovalResult
 		// finalTexts holds the answer of every final step that a directive or
 		// a refreshed tool set turned into another call, so the result text
 		// reads as the model produced it across the continuation.
@@ -196,7 +200,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 		if pendingRefresh != nil {
 			// Installed before the prepare chain so budgeting and reselection
 			// price the request that is actually sent.
-			pendingRefresh.apply(&dispatch, &params)
+			messages = pendingRefresh.apply(&dispatch, &params, messages)
 			pendingRefresh = nil
 		}
 		if sdkStep > 0 {
@@ -305,6 +309,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			if loopErr := afterStep(sdkStep, &sr); loopErr != nil {
 				return nil, loopErr
 			}
+			deferred = outcome.Deferred
 			break
 		}
 
@@ -348,6 +353,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	finalMessages := allMessages
 	finalMessages, feedbackIndexes := dynamic.mergeReadMedia(allSteps, finalMessages, -1)
 	finalMessages = toolExecutionMetadata.annotate(finalMessages)
+	if deferred != nil {
+		finalMessages = annotateDeferredApproval(finalMessages, *deferred)
+	}
 	usage := aggregateStepUsage(allSteps)
 	return &GenerateResult{
 		InternalFeedbackIndexes: feedbackIndexes,

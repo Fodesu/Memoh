@@ -545,7 +545,7 @@ func (e *streamEngine) run() {
 			// A refreshed tool set is installed before the prepare chain runs,
 			// so envelope budgeting and reselection price the request that is
 			// actually sent.
-			e.pendingRefresh.apply(&e.dispatch, &params)
+			convo = e.pendingRefresh.apply(&e.dispatch, &params, convo)
 			e.pendingRefresh = nil
 		}
 		if attemptStep > 0 {

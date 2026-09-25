@@ -8,6 +8,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -118,7 +119,7 @@ func TestAgentGenerateDeferredStepExecutesNothing(t *testing.T) {
 
 	a, provider, searchRuns, execRuns := deferredApprovalBatch(t)
 	var record *step.Record
-	if _, err := a.Generate(context.Background(), RunConfig{
+	result, err := a.Generate(context.Background(), RunConfig{
 		Model:               &sdk.Model{ID: "mock-model", Provider: provider},
 		Messages:            []sdk.Message{sdk.UserMessage("start")},
 		SupportsToolCall:    true,
@@ -128,10 +129,26 @@ func TestAgentGenerateDeferredStepExecutesNothing(t *testing.T) {
 			record = sr
 			return StepDirective{}, nil
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 	assertDeferredStepExecutesNothing(t, record, searchRuns, execRuns)
+	// The non-streaming result carries the parked decision on the deferred
+	// call, like the stream's terminal messages, so a caller can render the
+	// pending approval without re-reading the persisted step.
+	annotated := false
+	for _, msg := range result.Messages {
+		for _, part := range msg.Content {
+			if call, ok := part.(sdk.ToolCallPart); ok && call.ToolCallID == "call-exec" {
+				approval, ok := partmeta.Object(call.ProviderMetadata, partmeta.KeyApproval)
+				annotated = ok && approval["approval_id"] == "approval-1"
+			}
+		}
+	}
+	if !annotated {
+		t.Fatalf("Generate() messages lack the deferred approval annotation: %#v", result.Messages)
+	}
 }
 
 func TestAgentStreamDeferredStepExecutesNothing(t *testing.T) {

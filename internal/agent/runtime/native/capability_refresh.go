@@ -120,15 +120,42 @@ func (a *Agent) refreshCapabilities(
 }
 
 // apply installs a refreshed tool set on the dispatch and the request the
-// loop will send next. The system prompt is replaced only while the dispatch
-// carries it as a request field; a provider that had it promoted into the
-// message prefix keeps the prefix, so the model sees the new tools with the
-// previous usage text until the next turn.
-func (r refreshedTools) apply(dispatch *generateDispatch, params *sdk.Request) {
+// loop will send next. The system prompt travels either as the request's
+// System field or, when the prompt-cache plan promoted it, as the first
+// message of the prefix; the refreshed usage text replaces it in whichever
+// place it lives, so the model that sees the new tools also sees their
+// instructions. The returned messages are the conversation with the promoted
+// prefix rewritten (unchanged when nothing was promoted).
+func (r refreshedTools) apply(dispatch *generateDispatch, params *sdk.Request, messages []sdk.Message) []sdk.Message {
 	dispatch.execTools = r.exec
 	dispatch.approve = r.approve
 	params.Tools = r.defs
 	if !dispatch.systemPrepended {
 		params.System = r.system
+		return messages
 	}
+	params.Messages = replacePromotedSystem(params.Messages, r.system)
+	return replacePromotedSystem(messages, r.system)
+}
+
+// replacePromotedSystem rewrites the text of the system message the
+// prompt-cache plan placed at the head of the prefix, keeping its cache
+// control. Messages without such a head are returned as they are.
+func replacePromotedSystem(messages []sdk.Message, system string) []sdk.Message {
+	if len(messages) == 0 || messages[0].Role != sdk.MessageRoleSystem || len(messages[0].Content) == 0 {
+		return messages
+	}
+	text, ok := messages[0].Content[0].(sdk.TextPart)
+	if !ok || text.Text == system {
+		return messages
+	}
+	text.Text = system
+	content := append([]sdk.MessagePart(nil), messages[0].Content...)
+	content[0] = text
+	head := messages[0]
+	head.Content = content
+	out := make([]sdk.Message, len(messages))
+	copy(out, messages)
+	out[0] = head
+	return out
 }
