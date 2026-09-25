@@ -22,24 +22,12 @@ import (
 // loop: every step performs exactly one provider model call and executes its
 // tool batch through toolexec.ExecuteTools. A final step whose commit returns
 // NextInputs continues on the next inner-loop iteration of the same engine.
-func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (*GenerateResult, error) {
+//
+//nolint:gocyclo,cyclop,maintidx // the loop inlines the previous SDK loop plus its option assembly; splitting it would scatter the step-order invariants the tests pin.
+func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResult, retErr error) {
 	if cfg.ContextLifecycle == nil {
 		cfg.ContextLifecycle = contextfrag.NewLifecycleHolder()
 	}
-	seg, err := a.runGenerateSegment(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return seg.result, nil
-}
-
-// generateSegment is the outcome of one generate invocation.
-type generateSegment struct {
-	result *GenerateResult
-}
-
-//nolint:gocyclo,cyclop,maintidx // the segment inlines the previous SDK loop plus its option assembly; splitting it would scatter the step-order invariants the tests pin.
-func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg generateSegment, retErr error) {
 	cfg.capabilityChanges = &atomic.Bool{}
 	genCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -79,7 +67,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 		var err error
 		sdkTools, toolUsage, toolUsageFrags, toolDefs, err = a.assembleTools(genCtx, cfg, collectEmitter, false)
 		if err != nil {
-			return seg, fmt.Errorf("assemble tools: %w", err)
+			return nil, fmt.Errorf("assemble tools: %w", err)
 		}
 		cfg.ContextToolDefs = toolDefs
 		if toolUsage != "" {
@@ -95,7 +83,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 	var contextViewErr error
 	cfg, contextViewErr = a.applyContextView(genCtx, cfg)
 	if contextViewErr != nil {
-		return seg, contextViewErr
+		return nil, contextViewErr
 	}
 	cfg = captureProviderAttemptPrefix(cfg)
 	toolExecutionMetadata := newToolExecutionMetadataRegistry(nil)
@@ -120,7 +108,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 	prepareStep := a.wrapPrepareStepWithModelHook(genCtx, cfg, nil)
 	cfg, err := a.applyBeforeModelCallHook(genCtx, cfg, 0)
 	if err != nil {
-		return seg, err
+		return nil, err
 	}
 	// The generate loop surfaces context-preparation failures as returned
 	// errors at the next dispatch boundary; the run context is no longer
@@ -129,16 +117,16 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 	installContextStepFailureHandler(&cfg, failure.capture)
 	dispatch, dispatchErr := a.buildGenerateDispatch(genCtx, cfg, sdkTools, approvalTools, prepareStep)
 	if dispatchErr != nil {
-		return seg, fmt.Errorf("generate: %w", dispatchErr)
+		return nil, fmt.Errorf("generate: %w", dispatchErr)
 	}
 	if stepErr := failure.err(); stepErr != nil {
-		return seg, stepErr
+		return nil, stepErr
 	}
 	if cfg.Model == nil {
-		return seg, fmt.Errorf("generate: %w", errors.New("twilightai: model is required (use WithModel)"))
+		return nil, fmt.Errorf("generate: %w", errors.New("twilightai: model is required (use WithModel)"))
 	}
 	if cfg.Model.Provider == nil {
-		return seg, fmt.Errorf("generate: %w", fmt.Errorf("twilightai: model %q has no provider", cfg.Model.ID))
+		return nil, fmt.Errorf("generate: %w", fmt.Errorf("twilightai: model %q has no provider", cfg.Model.ID))
 	}
 
 	// Read the executable set live: a capability refresh replaces it between
@@ -233,7 +221,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			}
 			messages = params.Messages
 			if stepErr := failure.err(); stepErr != nil {
-				return seg, stepErr
+				return nil, stepErr
 			}
 		}
 
@@ -244,19 +232,19 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 		if ctxErr := genCtx.Err(); ctxErr != nil {
 			dispatch.handoff.reject()
 			if loopErr := detectGenerateLoopAbort(genCtx, ctxErr); loopErr != nil {
-				return seg, loopErr
+				return nil, loopErr
 			}
-			return seg, fmt.Errorf("generate: %w", ctxErr)
+			return nil, fmt.Errorf("generate: %w", ctxErr)
 		}
 		if err := dispatch.handoff.publish(stepParams); err != nil {
-			return seg, fmt.Errorf("generate: %w", err)
+			return nil, fmt.Errorf("generate: %w", err)
 		}
 		result, err := cfg.Model.Generate(genCtx, stepParams)
 		if err != nil {
 			if loopErr := detectGenerateLoopAbort(genCtx, err); loopErr != nil {
-				return seg, loopErr
+				return nil, loopErr
 			}
-			return seg, fmt.Errorf("generate: %w", err)
+			return nil, fmt.Errorf("generate: %w", err)
 		}
 		lastResult = result
 
@@ -268,12 +256,12 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			sr := step.Record{Result: result, Messages: stepMsgs}
 			dir, err := commitStep(sdkStep, &sr)
 			if err != nil {
-				return seg, err
+				return nil, err
 			}
 			allSteps = append(allSteps, sr)
 			allMessages = append(allMessages, stepMsgs...)
 			if loopErr := afterStep(sdkStep, &sr); loopErr != nil {
-				return seg, loopErr
+				return nil, loopErr
 			}
 			pendingDirectiveInputs = collectDirectiveInputs(pendingDirectiveInputs, dir.NextInputs)
 			// A directive or a refreshed tool set gives the model another
@@ -295,7 +283,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			Approve: dispatch.approve,
 		})
 		if err != nil {
-			return seg, fmt.Errorf("generate: %w", err)
+			return nil, fmt.Errorf("generate: %w", err)
 		}
 		if outcome.Deferred != nil {
 			// A deferred batch executes nothing: outcome.Results is empty and every
@@ -310,12 +298,12 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 				Messages:    stepMsgs,
 			}
 			if _, err := commitStep(sdkStep, &sr); err != nil {
-				return seg, err
+				return nil, err
 			}
 			allSteps = append(allSteps, sr)
 			allMessages = append(allMessages, stepMsgs...)
 			if loopErr := afterStep(sdkStep, &sr); loopErr != nil {
-				return seg, loopErr
+				return nil, loopErr
 			}
 			break
 		}
@@ -324,12 +312,12 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 		sr := step.Record{Result: result, ToolResults: toolexec.ToolCallResults(result.ToolCalls, outcome.Results), Messages: stepMsgs}
 		dir, err := commitStep(sdkStep, &sr)
 		if err != nil {
-			return seg, err
+			return nil, err
 		}
 		allSteps = append(allSteps, sr)
 		allMessages = append(allMessages, stepMsgs...)
 		if loopErr := afterStep(sdkStep, &sr); loopErr != nil {
-			return seg, loopErr
+			return nil, loopErr
 		}
 		pendingDirectiveInputs = collectDirectiveInputs(pendingDirectiveInputs, dir.NextInputs)
 		messages = append(messages, stepMsgs...)
@@ -361,7 +349,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 	finalMessages, feedbackIndexes := dynamic.mergeReadMedia(allSteps, finalMessages, -1)
 	finalMessages = toolExecutionMetadata.annotate(finalMessages)
 	usage := aggregateStepUsage(allSteps)
-	seg.result = &GenerateResult{
+	return &GenerateResult{
 		InternalFeedbackIndexes: feedbackIndexes,
 		Messages:                finalMessages,
 		Text:                    joinFinalTexts(finalTexts, lastResult.Text),
@@ -369,8 +357,7 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 		Reactions:               reactions,
 		Speeches:                speeches,
 		Usage:                   &usage,
-	}
-	return seg, nil
+	}, nil
 }
 
 // generateDispatch is the assembled single-call input for the generate loop:

@@ -26,10 +26,6 @@ import (
 // stream into events, and executes its tool batch through toolexec.ExecuteTools. A
 // final step whose commit returns NextInputs continues on the next inner-loop
 // iteration of the same engine.
-func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
-	a.runStreamSegment(ctx, cfg, ch)
-}
-
 // streamEventBuffer is the capacity of the engine→forwarder event channel. It
 // mirrors the part buffer the SDK loop used between its step goroutine and the
 // event consumer: the engine can run a whole step (and its commit barrier)
@@ -37,7 +33,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 const streamEventBuffer = 64
 
 //nolint:gocyclo,cyclop,maintidx // the segment inlines the previous SDK-driven consumer plus its option assembly; splitting it would scatter the event-order invariants the tests pin.
-func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
+func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
 	// Tools report capability changes here; the loop re-assembles its tool
 	// set at the next committed step.
 	cfg.capabilityChanges = &atomic.Bool{}
@@ -940,13 +936,6 @@ partLoop:
 			}) {
 				e.aborted = true
 			}
-
-		case *toolexec.ToolProgressPart, *toolexec.ToolApprovalRequestPart,
-			*toolexec.StreamToolResultPart, *toolexec.StreamToolErrorPart,
-			*toolexec.ToolOutputDeniedPart:
-			e.mu.Lock()
-			e.forwardToolPart(part)
-			e.mu.Unlock()
 
 		case *sdk.StreamFilePart:
 			mediaType := p.File.MediaType

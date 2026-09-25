@@ -144,13 +144,13 @@ func TestMemoryAdapterMCPToolNamesUseConstant(t *testing.T) {
 func TestProtocolNameGuardsRejectRawStrings(t *testing.T) {
 	t.Parallel()
 
-	expr, err := parser.ParseExpr(`toolexec.NewTool[map[string]any]("raw_tool", "desc", fn)`)
+	expr, err := parser.ParseExpr(`toolexec.Define[readArgs]("raw_tool", "desc", fn)`)
 	if err != nil {
-		t.Fatalf("parse toolexec.NewTool raw expression: %v", err)
+		t.Fatalf("parse toolexec.Define raw expression: %v", err)
 	}
 	call := expr.(*ast.CallExpr)
 	if err := checkSDKNewToolNameValue(call, map[string]struct{}{"ToolRead": {}}, nil); err == nil {
-		t.Fatal("toolexec.NewTool with a raw string name must be rejected")
+		t.Fatal("toolexec.Define with a raw string name must be rejected")
 	}
 
 	expr, err = parser.ParseExpr(`toolexec.Define[readArgs]("raw_tool", "desc", fn)`)
@@ -158,20 +158,17 @@ func TestProtocolNameGuardsRejectRawStrings(t *testing.T) {
 		t.Fatalf("parse toolexec.Define raw expression: %v", err)
 	}
 	call = expr.(*ast.CallExpr)
-	if !isSDKNewToolCall(call, map[string]struct{}{"toolexec": {}}) {
-		t.Fatal("toolexec.Define must be scanned like toolexec.NewTool")
-	}
 	if err := checkSDKNewToolNameValue(call, map[string]struct{}{"ToolRead": {}}, nil); err == nil {
 		t.Fatal("toolexec.Define with a raw string name must be rejected")
 	}
 
-	expr, err = parser.ParseExpr(`toolexec.NewTool[map[string]any](ToolRead().String(), "desc", fn)`)
+	expr, err = parser.ParseExpr(`toolexec.Define[readArgs](ToolRead().String(), "desc", fn)`)
 	if err != nil {
-		t.Fatalf("parse toolexec.NewTool central value expression: %v", err)
+		t.Fatalf("parse toolexec.Define central value expression: %v", err)
 	}
 	call = expr.(*ast.CallExpr)
 	if err := checkSDKNewToolNameValue(call, map[string]struct{}{"ToolRead": {}}, nil); err != nil {
-		t.Fatalf("toolexec.NewTool with ToolName.String() should pass: %v", err)
+		t.Fatalf("toolexec.Define with ToolName.String() should pass: %v", err)
 	}
 
 	expr, err = parser.ParseExpr(`[]mcp.ToolDescriptor{{Name: "search_memory"}}`)
@@ -433,7 +430,7 @@ import (
 )
 
 var _ = []twilight.Tool{{Name: "raw_tool"}}
-var _ = twilight.NewTool[map[string]any]("raw_tool", "desc", nil)
+var _ = twilight.Define[readArgs]("raw_tool", "desc", nil)
 var _ = []mcpgw.ToolDescriptor{{Name: "search_memory"}, {Name: memoryadapters.ToolSearchMemory}}
 `)
 	parsed, err := parser.ParseFile(token.NewFileSet(), "alias.go", src, 0)
@@ -479,13 +476,13 @@ var _ = []mcpgw.ToolDescriptor{{Name: "search_memory"}, {Name: memoryadapters.To
 		if call, ok := n.(*ast.CallExpr); ok && isSDKNewToolCall(call, sdkAliases) {
 			sawSDKNewToolAlias = true
 			if err := checkSDKNewToolNameValue(call, map[string]struct{}{"ToolRead": {}}, nil); err == nil {
-				t.Fatal("toolexec.NewTool alias with raw string name must be rejected")
+				t.Fatal("toolexec.Define alias with raw string name must be rejected")
 			}
 		}
 		return true
 	})
 	if !sawSDKToolAlias || !sawSDKNewToolAlias || !sawMCPDescriptorAlias || !sawMemoryAdapterAlias {
-		t.Fatalf("alias guard missed declarations: toolexec.Tool=%v toolexec.NewTool=%v mcp.ToolDescriptor=%v memoryAdapter=%v", sawSDKToolAlias, sawSDKNewToolAlias, sawMCPDescriptorAlias, sawMemoryAdapterAlias)
+		t.Fatalf("alias guard missed declarations: toolexec.Tool=%v toolexec.Define=%v mcp.ToolDescriptor=%v memoryAdapter=%v", sawSDKToolAlias, sawSDKNewToolAlias, sawMCPDescriptorAlias, sawMemoryAdapterAlias)
 	}
 }
 
@@ -1552,7 +1549,7 @@ func isSDKNewToolFun(expr ast.Expr, sdkAliases map[string]struct{}) bool {
 }
 
 func selectorIsSDKNewTool(sel *ast.SelectorExpr, sdkAliases map[string]struct{}) bool {
-	if sel.Sel.Name != "NewTool" && sel.Sel.Name != "Define" {
+	if sel.Sel.Name != "Define" {
 		return false
 	}
 	pkg, ok := sel.X.(*ast.Ident)
@@ -1565,7 +1562,7 @@ func selectorIsSDKNewTool(sel *ast.SelectorExpr, sdkAliases map[string]struct{})
 
 func checkSDKNewToolNameValue(call *ast.CallExpr, toolValues map[string]struct{}, shadowedTools toolShadowSet) error {
 	if len(call.Args) == 0 {
-		return &toolNameError{"toolexec.NewTool missing name argument"}
+		return &toolNameError{"toolexec.Define missing name argument"}
 	}
 	return checkSDKToolNameValue(call.Args[0], toolValues, nil, shadowedTools)
 }

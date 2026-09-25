@@ -28,19 +28,14 @@ type ToolExecOptions struct {
 
 // ToolExecOutcome is the result of ExecuteTools over one batch of tool calls.
 type ToolExecOutcome struct {
-	// Results holds one ToolResultPart per resolved call, in call order.
-	// When Deferred is nil it covers every call; when Deferred is non-nil it
-	// covers exactly the calls before DeferredIndex (including rejected and
-	// not-found IsError results, and the outputs of already-approved tools).
+	// Results holds one ToolResultPart per call, in call order, including
+	// rejected and not-found IsError results. It is nil when Deferred is set.
 	Results []sdk.ToolResultPart
 	// Deferred is non-nil when an approval handler returned
-	// ToolApprovalDecisionDeferred: the batch parked at DeferredIndex and
-	// nothing in it executed, so Results is nil.
-	// Deferral is a normal outcome, not an error.
+	// ToolApprovalDecisionDeferred. The batch parked at that call and nothing
+	// in it executed; the step persists with its calls open and the decision
+	// resumes the run. Deferral is a normal outcome, not an error.
 	Deferred *ToolApprovalResult
-	// DeferredIndex is the index of the deferred call in calls when Deferred
-	// is non-nil, and -1 otherwise.
-	DeferredIndex int
 }
 
 // ExecuteTools resolves approvals for and executes one batch of tool calls.
@@ -145,10 +140,7 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 					})
 				}
 				deferred := approval
-				return ToolExecOutcome{
-					Deferred:      &deferred,
-					DeferredIndex: i,
-				}, nil
+				return ToolExecOutcome{Deferred: &deferred}, nil
 			default:
 				return ToolExecOutcome{}, fmt.Errorf("twilightai: unknown approval decision %q for %q", approval.Decision, tc.ToolName)
 			}
@@ -158,7 +150,7 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 	}
 
 	runPendingTools(ctx, pending, results, opts.OnPart)
-	return ToolExecOutcome{Results: results, DeferredIndex: -1}, nil
+	return ToolExecOutcome{Results: results}, nil
 }
 
 // runPendingTools executes approved tool calls, in parallel when more than one,

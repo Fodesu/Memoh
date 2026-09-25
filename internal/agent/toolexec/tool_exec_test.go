@@ -57,9 +57,6 @@ func TestExecuteTools_DeferralPartialResults(t *testing.T) {
 	if outcome.Deferred == nil || outcome.Deferred.ApprovalID != "approval-2" {
 		t.Fatalf("Deferred: got %#v", outcome.Deferred)
 	}
-	if outcome.DeferredIndex != 1 {
-		t.Fatalf("DeferredIndex: got %d, want 1", outcome.DeferredIndex)
-	}
 	// A deferred batch executes nothing and carries no results: the step is
 	// persisted with its calls open and the whole batch runs when the
 	// decision resumes the run.
@@ -97,8 +94,8 @@ func TestExecuteTools_DeferralExecutesNothing(t *testing.T) {
 	if executedA {
 		t.Fatal("tool-a precedes the deferral point but must not execute while the batch is parked")
 	}
-	if outcome.DeferredIndex != 1 || outcome.Deferred == nil {
-		t.Fatalf("deferral marker: index=%d deferred=%#v", outcome.DeferredIndex, outcome.Deferred)
+	if outcome.Deferred == nil || outcome.Deferred.ApprovalID != "approval-b" {
+		t.Fatalf("deferral marker: %#v", outcome.Deferred)
 	}
 	if len(outcome.Results) != 0 {
 		t.Fatalf("Results: got %#v, want none", outcome.Results)
@@ -117,8 +114,8 @@ func TestExecuteTools_ParallelExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if outcome.Deferred != nil || outcome.DeferredIndex != -1 {
-		t.Fatalf("unexpected deferral: %#v index=%d", outcome.Deferred, outcome.DeferredIndex)
+	if outcome.Deferred != nil {
+		t.Fatalf("unexpected deferral: %#v", outcome.Deferred)
 	}
 	if len(outcome.Results) != 3 {
 		t.Fatalf("Results: got %d entries, want 3", len(outcome.Results))
