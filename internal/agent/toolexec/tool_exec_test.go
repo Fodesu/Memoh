@@ -60,19 +60,21 @@ func TestExecuteTools_DeferralPartialResults(t *testing.T) {
 	if outcome.DeferredIndex != 1 {
 		t.Fatalf("DeferredIndex: got %d, want 1", outcome.DeferredIndex)
 	}
-	if len(outcome.Results) != 1 {
-		t.Fatalf("Results: got %d entries, want 1: %#v", len(outcome.Results), outcome.Results)
-	}
-	r := outcome.Results[0]
-	if r.ToolCallID != "c1" || !r.IsError {
-		t.Fatalf("Results[0]: got %#v, want rejected IsError result for c1", r)
+	// A deferred batch executes nothing and carries no results: the step is
+	// persisted with its calls open and the whole batch runs when the
+	// decision resumes the run.
+	if len(outcome.Results) != 0 {
+		t.Fatalf("Results: got %d entries, want none: %#v", len(outcome.Results), outcome.Results)
 	}
 	if executedA || executedB {
 		t.Fatalf("no tool should execute (rejected + deferred): a=%v b=%v", executedA, executedB)
 	}
 }
 
-func TestExecuteTools_DeferralKeepsApprovedResults(t *testing.T) {
+// A call that needs no approval and precedes the deferred one is not run
+// either: a result computed here would be persisted in a step whose run ends
+// before the model can see what it carried (read_media's image carrier).
+func TestExecuteTools_DeferralExecutesNothing(t *testing.T) {
 	var executedA bool
 	toolA := echoTool("tool-a", &executedA)
 	toolB := echoTool("tool-b", nil)
@@ -92,14 +94,14 @@ func TestExecuteTools_DeferralKeepsApprovedResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if !executedA {
-		t.Fatal("tool-a was approved-free and before the deferral point; it must execute")
+	if executedA {
+		t.Fatal("tool-a precedes the deferral point but must not execute while the batch is parked")
 	}
 	if outcome.DeferredIndex != 1 || outcome.Deferred == nil {
 		t.Fatalf("deferral marker: index=%d deferred=%#v", outcome.DeferredIndex, outcome.Deferred)
 	}
-	if len(outcome.Results) != 1 || outcome.Results[0].Result.Text != "output-tool-a" || outcome.Results[0].IsError {
-		t.Fatalf("Results: got %#v, want tool-a output", outcome.Results)
+	if len(outcome.Results) != 0 {
+		t.Fatalf("Results: got %#v, want none", outcome.Results)
 	}
 }
 
@@ -310,5 +312,45 @@ func TestBuildStepMessages_AssemblesAssistantAndToolMessages(t *testing.T) {
 	}
 	if msgs[1].Role != sdk.MessageRoleTool {
 		t.Fatalf("second message role: %v", msgs[1].Role)
+	}
+}
+
+// An approval handler may pin arguments it resolved (the canonical workspace
+// target). The executor runs the call with those arguments and reports them
+// as the call's input so the persisted step names the same target.
+func TestExecuteTools_ApprovalInputRewritesCall(t *testing.T) {
+	var seen string
+	tool := toolexec.Tool{
+		Name:            "exec",
+		Parameters:      objSchema(),
+		RequireApproval: true,
+		Execute: func(_ *toolexec.ToolExecContext, args sdk.ToolArguments) (sdk.ToolOutput, error) {
+			seen = string(args.Object())
+			return sdk.TextOutput("ok"), nil
+		},
+	}
+	pinned := sdk.ParseToolArguments(`{"cmd":"ls","target_id":"canonical-target"}`)
+	calls := []sdk.ToolCall{
+		{ToolCallID: "c1", ToolName: "exec", Input: sdk.ParseToolArguments(`{"cmd":"ls","target_id":"requested"}`)},
+	}
+	outcome, err := toolexec.ExecuteTools(context.Background(), calls, toolexec.ToolExecOptions{
+		Tools: []toolexec.Tool{tool},
+		Approve: func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error) {
+			return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved, Input: &pinned}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTools: %v", err)
+	}
+	if seen != `{"cmd":"ls","target_id":"canonical-target"}` {
+		t.Fatalf("tool executed with %s, want the approval-pinned arguments", seen)
+	}
+	if len(outcome.Results) != 1 || outcome.Results[0].ToolCallID != "c1" {
+		t.Fatalf("results = %#v, want the single call answered", outcome.Results)
+	}
+	// The step persists the calls slice, so the rewritten arguments must land
+	// on it as well.
+	if got := string(calls[0].Input.Object()); got != `{"cmd":"ls","target_id":"canonical-target"}` {
+		t.Fatalf("persisted call input = %s, want the pinned arguments", got)
 	}
 }

@@ -1213,6 +1213,16 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 		}
 		input.ExecutionLocation = eval.ExecutionLocation
 		locationMetadata := executionLocationResultMetadata(eval.ExecutionLocation)
+		// The policy resolved the workspace target and pinned it on the
+		// argument map it evaluated. The executor takes these arguments for
+		// the call, so the tool runs where the policy looked and the persisted
+		// call names that target (call.Input is a copy the handler cannot
+		// mutate).
+		var approvedInput *sdk.ToolArguments
+		if input.WorkspaceTargeted {
+			rewritten := toolexec.ArgumentsFromValue(input.ToolInput)
+			approvedInput = &rewritten
+		}
 		if eval.Decision == toolapproval.DecisionDeny {
 			return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
 				Decision: toolexec.ToolApprovalDecisionRejected,
@@ -1224,6 +1234,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 			return toolexec.ToolApprovalResult{
 				Decision: toolexec.ToolApprovalDecisionApproved,
 				Metadata: locationMetadata,
+				Input:    approvedInput,
 			}, nil
 		}
 		if !isInteractiveApprovalSession(p.SessionType) {

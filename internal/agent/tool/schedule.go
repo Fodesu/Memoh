@@ -114,7 +114,7 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				if botID == "" {
 					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
-				id := args.ID
+				id := strings.TrimSpace(args.ID)
 				if id == "" {
 					return sdk.ToolOutput{}, errors.New("id is required")
 				}
@@ -165,7 +165,7 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				if botID == "" {
 					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
-				id := args.ID
+				id := strings.TrimSpace(args.ID)
 				if id == "" {
 					return sdk.ToolOutput{}, errors.New("id is required")
 				}
@@ -214,7 +214,7 @@ func (p *ScheduleProvider) Tools(_ context.Context, session SessionContext) ([]t
 				if botID == "" {
 					return sdk.ToolOutput{}, errors.New("bot_id is required")
 				}
-				id := args.ID
+				id := strings.TrimSpace(args.ID)
 				if id == "" {
 					return sdk.ToolOutput{}, errors.New("id is required")
 				}

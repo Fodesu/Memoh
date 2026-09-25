@@ -191,3 +191,40 @@ func TestTypedKeepsCustomDecoderMessage(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// encoding/json matches object members to fields case-insensitively. The
+// approval policy and hook payloads read the document by its exact keys, so a
+// member that differs only in case must be rejected instead of silently
+// binding to a property the policy never saw.
+func TestTypedRejectsCaseVariantKeys(t *testing.T) {
+	type nested struct {
+		Path string `json:"path"`
+	}
+	type args struct {
+		Path    string            `json:"path"`
+		Targets []nested          `json:"targets,omitempty"`
+		Extra   map[string]nested `json:"extra,omitempty"`
+		Raw     ownDecoder        `json:"raw,omitempty"`
+	}
+	execute := Typed(func(*ToolExecContext, args) (sdk.ToolOutput, error) { return sdk.ToolOutput{}, nil })
+	for name, tc := range map[string]struct {
+		doc  string
+		want string
+	}{
+		"top level":  {`{"Path":"/etc/passwd"}`, `invalid arguments for probe: unknown property "Path" (did you mean "path")`},
+		"array item": {`{"path":"a","targets":[{"PATH":"b"}]}`, `invalid arguments for probe: unknown property "PATH" (did you mean "path")`},
+		"map value":  {`{"path":"a","extra":{"k":{"pAth":"b"}}}`, `invalid arguments for probe: unknown property "pAth" (did you mean "path")`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := execute(&ToolExecContext{ToolName: "probe"}, sdk.ParseToolArguments(tc.doc))
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	// Exact keys, unknown keys, and members inside a custom decoder's value
+	// are accepted as before.
+	if _, err := execute(&ToolExecContext{ToolName: "probe"}, sdk.ParseToolArguments(`{"path":"a","unknown":1,"raw":{"Path":"kept"}}`)); err != nil {
+		t.Fatalf("exact keys rejected: %v", err)
+	}
+}

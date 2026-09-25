@@ -282,3 +282,52 @@ func TestServiceLimitToolResultTextUsesAgentLimits(t *testing.T) {
 		t.Fatalf("tool result text missing prune marker:\n%s", got)
 	}
 }
+
+type workspaceTargetPolicyStubResolver struct {
+	policy toolapproval.WorkspaceTargetPolicy
+}
+
+func (r workspaceTargetPolicyStubResolver) ResolveWorkspaceTargetPolicy(context.Context, string, string) (toolapproval.WorkspaceTargetPolicy, error) {
+	return r.policy, nil
+}
+
+// The policy resolves the workspace target on a copy of the call arguments.
+// A bypass must hand that copy back so the tool executes on the target the
+// policy evaluated and the persisted call names it.
+func TestToolApprovalHandlerPinsWorkspaceTargetOnBypass(t *testing.T) {
+	t.Parallel()
+
+	log := slog.New(slog.DiscardHandler)
+	approvalService := toolapproval.NewService(log, nil, nil)
+	approvalService.SetWorkspaceTargetPolicyResolver(workspaceTargetPolicyStubResolver{policy: toolapproval.WorkspaceTargetPolicy{
+		TargetID: "canonical-target",
+		Kind:     "remote",
+		Name:     "Office Mac",
+		Config:   toolapproval.PolicyConfig{Enabled: true, Read: toolapproval.FilePolicy{Mode: toolapproval.PolicyModeAllow}},
+	}})
+	resolver := &Service{toolApproval: approvalService, logger: log}
+	handler := resolver.buildToolApprovalHandler(baseRunConfigParams{
+		BotID:       "bot-1",
+		SessionID:   "session-1",
+		SessionType: sessionmode.Chat,
+	})
+
+	result, err := handler(context.Background(), sdk.ToolCall{
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/file.txt", "target_id": "requested-target"}),
+	})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if result.Decision != toolexec.ToolApprovalDecisionApproved {
+		t.Fatalf("decision = %q, want approved", result.Decision)
+	}
+	if result.Input == nil {
+		t.Fatal("approval did not hand back the evaluated arguments")
+	}
+	args, _ := toolexec.ArgumentsValue(*result.Input).(map[string]any)
+	if args["target_id"] != "canonical-target" || args["path"] != "/data/file.txt" {
+		t.Fatalf("approved arguments = %#v, want the canonical target pinned", args)
+	}
+}

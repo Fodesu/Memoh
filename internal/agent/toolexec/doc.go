@@ -7,10 +7,12 @@
 //
 // The code is copied from twilight's sdk package at commit 44a22e5, the last
 // revision before the removal, with the package name changed and the SDK types
-// it still uses referenced through the sdk import. Behaviour is unchanged:
-// approvals resolve sequentially in call order, approved tools run in parallel,
-// a deferred approval keeps the results computed before it, and a call whose
+// it still uses referenced through the sdk import. Approvals resolve
+// sequentially in call order, approved tools run in parallel, and a call whose
 // arguments are not a JSON document is answered to the model without running.
+// One behaviour follows the executor Memoh ran before the copy rather than
+// the copied revision: a deferred approval executes nothing in its batch (see
+// ExecuteTools).
 //
 // Two fields deviate from the copy: ToolApprovalResult.Metadata and
 // ToolApprovalRequestPart.Metadata are map[string]any where the SDK had

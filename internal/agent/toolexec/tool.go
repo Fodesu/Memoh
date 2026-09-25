@@ -36,6 +36,12 @@ type ToolApprovalResult struct {
 	ApprovalID string               `json:"approvalId,omitempty"`
 	Reason     string               `json:"reason,omitempty"`
 	Metadata   map[string]any       `json:"metadata,omitempty"`
+	// Input, when set, replaces the call's arguments for execution and in
+	// the step record. Memoh's approval handler resolves the workspace
+	// target the policy was evaluated against and pins it here, so the tool
+	// runs where the policy looked and the persisted call names that target.
+	// (Memoh addition; the SDK executor had no such field.)
+	Input *sdk.ToolArguments `json:"input,omitempty"`
 }
 
 var ErrToolApprovalDeferred = errors.New("tool approval deferred")

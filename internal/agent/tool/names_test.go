@@ -153,6 +153,18 @@ func TestProtocolNameGuardsRejectRawStrings(t *testing.T) {
 		t.Fatal("toolexec.NewTool with a raw string name must be rejected")
 	}
 
+	expr, err = parser.ParseExpr(`toolexec.Define[readArgs]("raw_tool", "desc", fn)`)
+	if err != nil {
+		t.Fatalf("parse toolexec.Define raw expression: %v", err)
+	}
+	call = expr.(*ast.CallExpr)
+	if !isSDKNewToolCall(call, map[string]struct{}{"toolexec": {}}) {
+		t.Fatal("toolexec.Define must be scanned like toolexec.NewTool")
+	}
+	if err := checkSDKNewToolNameValue(call, map[string]struct{}{"ToolRead": {}}, nil); err == nil {
+		t.Fatal("toolexec.Define with a raw string name must be rejected")
+	}
+
 	expr, err = parser.ParseExpr(`toolexec.NewTool[map[string]any](ToolRead().String(), "desc", fn)`)
 	if err != nil {
 		t.Fatalf("parse toolexec.NewTool central value expression: %v", err)
@@ -822,7 +834,7 @@ func checkGoFileForSDKToolNames(t *testing.T, file string, src []byte, toolValue
 		}
 		if call, ok := n.(*ast.CallExpr); ok && isSDKNewToolCall(call, sdkAliases) {
 			if err := checkSDKNewToolNameValue(call, toolValues, shadowedTools); err != nil {
-				t.Fatalf("%s:%d registers toolexec.NewTool with invalid name: %v", file, fset.Position(call.Pos()).Line, err)
+				t.Fatalf("%s:%d registers a toolexec tool with invalid name: %v", file, fset.Position(call.Pos()).Line, err)
 			}
 		}
 		if assign, ok := n.(*ast.AssignStmt); ok {
@@ -1540,7 +1552,7 @@ func isSDKNewToolFun(expr ast.Expr, sdkAliases map[string]struct{}) bool {
 }
 
 func selectorIsSDKNewTool(sel *ast.SelectorExpr, sdkAliases map[string]struct{}) bool {
-	if sel.Sel.Name != "NewTool" {
+	if sel.Sel.Name != "NewTool" && sel.Sel.Name != "Define" {
 		return false
 	}
 	pkg, ok := sel.X.(*ast.Ident)

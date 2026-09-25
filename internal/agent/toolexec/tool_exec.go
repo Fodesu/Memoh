@@ -34,7 +34,8 @@ type ToolExecOutcome struct {
 	// not-found IsError results, and the outputs of already-approved tools).
 	Results []sdk.ToolResultPart
 	// Deferred is non-nil when an approval handler returned
-	// ToolApprovalDecisionDeferred: the batch parked at DeferredIndex.
+	// ToolApprovalDecisionDeferred: the batch parked at DeferredIndex and
+	// nothing in it executed, so Results is nil.
 	// Deferral is a normal outcome, not an error.
 	Deferred *ToolApprovalResult
 	// DeferredIndex is the index of the deferred call in calls when Deferred
@@ -46,19 +47,18 @@ type ToolExecOutcome struct {
 //
 // Approvals are resolved sequentially in call order; approved tools then
 // execute (in parallel when more than one). When a deferred approval is
-// encountered, tools already approved before the deferral point are still
-// executed and their results are returned alongside the deferral marker, so no
-// computed result is lost. A non-nil error is returned only for handler
-// failures (approval handler error, unknown decision); in that case the
-// outcome is empty.
+// encountered nothing in the batch executes: the outcome carries the deferral
+// marker and no results, the step is persisted with its tool calls open, and
+// the batch runs when the decision resumes the run. (This is the behaviour of
+// the SDK executor Memoh ran before the copy; the copied revision executed
+// the calls ahead of the deferral, which let a read_media result land in a
+// step whose carrier never reached the model.) A non-nil error is returned
+// only for handler failures (approval handler error, unknown decision); in
+// that case the outcome is empty.
 func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOptions) (ToolExecOutcome, error) {
 	toolMap := buildToolMap(opts.Tools)
 	results := make([]sdk.ToolResultPart, len(calls))
 	pending := make([]pendingToolExec, 0, len(calls))
-
-	finishPending := func() {
-		runPendingTools(ctx, pending, results, opts.OnPart)
-	}
 
 	for i, tc := range calls {
 		if !tc.Input.Valid() {
@@ -107,7 +107,12 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 			}
 			switch approval.Decision {
 			case "", ToolApprovalDecisionApproved:
-				// Continue to execution below.
+				if approval.Input != nil {
+					// The approved arguments are the ones that execute and the
+					// ones the step record keeps (calls is the caller's slice).
+					tc.Input = *approval.Input
+					calls[i].Input = *approval.Input
+				}
 			case ToolApprovalDecisionRejected:
 				if opts.OnPart != nil {
 					opts.OnPart(&ToolApprovalRequestPart{
@@ -139,10 +144,8 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 						Metadata:   approval.Metadata,
 					})
 				}
-				finishPending()
 				deferred := approval
 				return ToolExecOutcome{
-					Results:       results[:i],
 					Deferred:      &deferred,
 					DeferredIndex: i,
 				}, nil
@@ -154,7 +157,7 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 		pending = append(pending, pendingToolExec{idx: i, tc: tc, tool: tool})
 	}
 
-	finishPending()
+	runPendingTools(ctx, pending, results, opts.OnPart)
 	return ToolExecOutcome{Results: results, DeferredIndex: -1}, nil
 }
 

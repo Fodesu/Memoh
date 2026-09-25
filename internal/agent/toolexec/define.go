@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -64,6 +66,11 @@ func Typed[T any](execute func(*ToolExecContext, T) (sdk.ToolOutput, error)) Too
 			toolName = ctx.ToolName
 		}
 		var typed T
+		if input.Valid() {
+			if err := rejectCaseVariantKeys(input.JSON, reflect.TypeFor[T]()); err != nil {
+				return sdk.ToolOutput{}, fmt.Errorf("invalid arguments for %s: %w", toolName, err)
+			}
+		}
 		err := input.Unmarshal(&typed)
 		if err != nil && input.Valid() {
 			if coerced, changed := coerceArguments(input.JSON, reflect.TypeFor[T]()); changed {
@@ -126,6 +133,107 @@ func kindNoun(t reflect.Type) string {
 }
 
 var jsonUnmarshalerType = reflect.TypeFor[json.Unmarshaler]()
+
+// rejectCaseVariantKeys refuses an object member that names a property only
+// up to letter case ("Path" for "path"). encoding/json would accept it, but
+// the approval policy and the hook payloads read the document by its exact
+// keys, so such a member would let the tool act on an argument the policy
+// never saw. Members that match nothing are ignored as before.
+func rejectCaseVariantKeys(raw json.RawMessage, typ reflect.Type) error {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil // the decode below reports the syntax
+	}
+	return checkCaseVariantKeys(value, typ)
+}
+
+func checkCaseVariantKeys(value any, typ reflect.Type) error {
+	if value == nil || typ == nil {
+		return nil
+	}
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ != reflect.TypeFor[json.Number]() && reflect.PointerTo(typ).Implements(jsonUnmarshalerType) {
+		return nil
+	}
+	switch typ.Kind() {
+	case reflect.Struct:
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		fields := jsonFields(typ)
+		for key := range obj {
+			if _, exact := fields[key]; exact {
+				continue
+			}
+			for _, name := range slices.Sorted(maps.Keys(fields)) {
+				if strings.EqualFold(name, key) {
+					return fmt.Errorf("unknown property %q (did you mean %q)", key, name)
+				}
+			}
+		}
+		for name, field := range fields {
+			if v, present := obj[name]; present {
+				if err := checkCaseVariantKeys(v, field); err != nil {
+					return err
+				}
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		items, ok := value.([]any)
+		if !ok {
+			return nil
+		}
+		for _, item := range items {
+			if err := checkCaseVariantKeys(item, typ.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		for _, v := range obj {
+			if err := checkCaseVariantKeys(v, typ.Elem()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// jsonFields maps the JSON member names encoding/json reads for typ,
+// embedded structs flattened, to the field types they decode into.
+func jsonFields(typ reflect.Type) map[string]reflect.Type {
+	out := map[string]reflect.Type{}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.Anonymous && field.Tag.Get("json") == "" {
+			embedded := field.Type
+			for embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct {
+				for name, ft := range jsonFields(embedded) {
+					if _, taken := out[name]; !taken {
+						out[name] = ft
+					}
+				}
+			}
+			continue
+		}
+		if !field.IsExported() {
+			continue
+		}
+		if name := jsonFieldName(field); name != "" {
+			out[name] = field.Type
+		}
+	}
+	return out
+}
 
 // coerceArguments rewrites the scalar values the map-based helpers used to
 // accept so the typed decode accepts them too. It returns the rewritten
@@ -280,7 +388,7 @@ func coerceInteger(value any) (any, bool) {
 		return value, false
 	}
 	f, err := strconv.ParseFloat(text, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) || math.Abs(f) > 1<<53 {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) || math.Abs(f) >= 1<<53 {
 		return value, false
 	}
 	return json.Number(strconv.FormatInt(int64(f), 10)), true
