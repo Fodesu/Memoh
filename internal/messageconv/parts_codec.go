@@ -159,6 +159,12 @@ func canonicalOrRaw(raw json.RawMessage) json.RawMessage {
 
 // typedArguments reads stored arguments: a string is the invalid text a
 // provider kept verbatim, any other document is the arguments object.
+//
+// The encoding leaves one shape ambiguous: an argument document that is
+// itself a JSON string literal ("x") is stored exactly like the invalid text
+// x and reads back as that text. No provider emits a bare string as tool
+// arguments and no tool accepts one, so the row format keeps the simple rule
+// instead of a separate key for invalid text.
 func typedArguments(raw json.RawMessage) (json.RawMessage, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {

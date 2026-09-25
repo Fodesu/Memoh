@@ -120,3 +120,38 @@ func indexOf(s, sub string) (int, bool) {
 	}
 	return -1, false
 }
+
+// A stored string is invalid argument text. A string that parses as a JSON
+// document is typed as that document and written back as one; the single
+// ambiguous shape, a document that is itself a JSON string literal, reads
+// back as invalid text on the second pass. Neither shape is produced by any
+// provider; this pins the rule so a change to it is deliberate.
+func TestStoredStringArgumentsFollowTheInvalidTextRule(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		stored string
+		first  string
+		second string
+	}{
+		{`"hello world"`, `"hello world"`, `"hello world"`},
+		{`"{\"a\":1}"`, `{"a":1}`, `{"a":1}`},
+		{`"\"x\""`, `"x"`, `"x"`},
+	} {
+		row := `[{"input":` + tc.stored + `,"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`
+		first := roundTripStored(t, row)
+		wantFirst := `[{"input":` + tc.first + `,"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`
+		if first != wantFirst {
+			t.Fatalf("stored %s: first pass = %s, want %s", tc.stored, first, wantFirst)
+		}
+		second := roundTripStored(t, first)
+		wantSecond := `[{"input":` + tc.second + `,"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`
+		if second != wantSecond {
+			t.Fatalf("stored %s: second pass = %s, want %s", tc.stored, second, wantSecond)
+		}
+	}
+	// The ambiguous shape: "x" as a document reads back as the text x.
+	msg := ModelMessageToSDKMessage(turn.ModelMessage{Role: "assistant", Content: json.RawMessage(`[{"input":"x","toolCallId":"c1","toolName":"exec","type":"tool-call"}]`)})
+	if call := msg.Content[0].(sdk.ToolCallPart); call.Input.Valid() || call.Input.Text != "x" {
+		t.Fatalf("string literal document read back as %#v, want the invalid text x", call.Input)
+	}
+}
