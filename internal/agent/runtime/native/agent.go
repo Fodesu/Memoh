@@ -765,7 +765,13 @@ func annotateDeferredApproval(messages []sdk.Message, approval toolexec.ToolAppr
 					"operation":   approval.Metadata["operation"],
 				})
 			}
-			annotated[msgIdx].Content[partIdx] = call
+			// The message copy still shares its Content slice with the
+			// caller's committed step records; write the annotation to a
+			// fresh slice so those records stay as persisted.
+			content := make([]sdk.MessagePart, len(annotated[msgIdx].Content))
+			copy(content, annotated[msgIdx].Content)
+			content[partIdx] = call
+			annotated[msgIdx].Content = content
 			return annotated
 		}
 	}
@@ -778,10 +784,6 @@ func isUserInputMetadata(metadata map[string]any) bool {
 	}
 	kind, _ := metadata["kind"].(string)
 	return strings.TrimSpace(kind) == userinput.DeferredKind
-}
-
-func isAskUserArgumentParseError(message string) bool {
-	return strings.Contains(message, `unmarshal tool call arguments for "`+tools.ToolAskUser().String()+`"`)
 }
 
 // toolStreamEventToAgentEvent converts a tool-layer ToolStreamEvent into an

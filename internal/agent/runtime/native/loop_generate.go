@@ -205,6 +205,12 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 	)
 
 	for sdkStep := 0; ; sdkStep++ {
+		if pendingRefresh != nil {
+			// Installed before the prepare chain so budgeting and reselection
+			// price the request that is actually sent.
+			pendingRefresh.apply(&dispatch, &params)
+			pendingRefresh = nil
+		}
 		if sdkStep > 0 {
 			// Input refresh at the step boundary: the loop drains its own
 			// dynamic inputs (read-media carriers) into the thread, then the
@@ -231,10 +237,6 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			}
 		}
 
-		if pendingRefresh != nil {
-			pendingRefresh.apply(&dispatch, &params)
-			pendingRefresh = nil
-		}
 		stepParams := params
 		stepParams.Messages = messages
 		// Dispatch boundary: never invoke the provider on a dead context, and
@@ -296,10 +298,10 @@ func (a *Agent) runGenerateSegment(ctx context.Context, cfg RunConfig) (seg gene
 			return seg, fmt.Errorf("generate: %w", err)
 		}
 		if outcome.Deferred != nil {
-			// ExecuteTools finishes the calls before the deferral index before it
-			// returns, so outcome.Results carries real output. The step persists
-			// those results; the deferred call and everything after it stay as
-			// dangling ToolCallParts until the approval resolves.
+			// A deferred batch executes nothing: outcome.Results is empty and every
+			// call of the step stays a dangling ToolCallPart until the decision
+			// resumes the run. The approved call executes there; the step's other
+			// open calls are closed with synthetic error results.
 			stepMsgs := toolexec.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, outcome.Results, &result.Usage)
 			sr := step.Record{
 				Result:      result,

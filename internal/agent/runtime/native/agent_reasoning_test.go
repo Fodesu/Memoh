@@ -367,14 +367,3 @@ func systemTextPartAt(t *testing.T, messages []sdk.Message, index int) (string, 
 	}
 	return part.Text, part.CacheControl
 }
-
-func TestIsAskUserArgumentParseError(t *testing.T) {
-	t.Parallel()
-
-	if !isAskUserArgumentParseError(`openai: unmarshal tool call arguments for "ask_user": invalid character 'ç' after object key:value pair`) {
-		t.Fatal("expected ask_user argument parse error to match")
-	}
-	if isAskUserArgumentParseError(`openai: unmarshal tool call arguments for "web_search": invalid character`) {
-		t.Fatal("expected other tool argument errors not to match")
-	}
-}

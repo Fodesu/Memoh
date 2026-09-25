@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -153,8 +154,27 @@ func TestAgentStreamMidStreamRetryExhaustsAttempts(t *testing.T) {
 	if !gaveUp {
 		t.Fatalf("events = %#v, want the giving-up error", events)
 	}
-	if terminal := events[len(events)-1]; terminal.Type != EventAgentAbort {
+	// Every failed attempt publishes one EventError that its EventRetry then
+	// retracts (initial failure + MaxAttempts retries); the give-up adds the
+	// last one. Nothing is emitted twice.
+	if got, want := countEventType(events, EventError), 1+3+1; got != want {
+		t.Fatalf("EventError count = %d, want %d (one per failed attempt plus the give-up)", got, want)
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != EventAgentAbort {
 		t.Fatalf("terminal event = %q, want %q after exhausting attempts", terminal.Type, EventAgentAbort)
+	}
+	// The committed tool step survives the abort exactly once; the poisoned
+	// partial output of the failed attempts never reaches the terminal state.
+	var terminalMessages []sdk.Message
+	if err := json.Unmarshal(terminal.Messages, &terminalMessages); err != nil {
+		t.Fatalf("decode terminal messages: %v", err)
+	}
+	if got := countToolResultText(terminalMessages, "large tool result"); got != 1 {
+		t.Fatalf("terminal messages tool result occurrences = %d, want 1: %#v", got, terminalMessages)
+	}
+	if got := countRound8MessageText(terminalMessages, "exhaust-partial"); got != 0 {
+		t.Fatalf("terminal messages contain poisoned partial output: %#v", terminalMessages)
 	}
 	// Every retry resumes from the boundary that already contains the committed
 	// tool step, exactly once, and never sees the poisoned partial output.

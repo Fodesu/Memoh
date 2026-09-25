@@ -272,11 +272,11 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 // when the input was claimed, instead of letting persistence mint a second name
 // for it. The row is identified by position rather than by text, and the
 // position to take is the last one: the steer is the final user row a step can
-// carry. PrepareStep's other user-row injectors — the image-only row read_media
-// appends after reading media, and mid-turn platform injects — are wrapped
-// inside prepareQueuedSteer, so their rows are appended ahead of the steer, and
-// sdk.StepResult.Messages holds only the assistant and tool rows the provider
-// produced. So scan from the end and take the last user row nobody named.
+// carry. The loop appends its other user rows first at a step boundary — the
+// read-media carrier, then injected platform messages — and the steer
+// directive last (see streamEngine.run), and step.Record.Messages holds only
+// the assistant and tool rows the provider produced. So scan from the end and
+// take the last user row nobody named.
 // native.TestQueuedSteerIsAppendedAfterEveryOtherPreparedMessage pins the
 // ordering this depends on.
 func (c *agentStepCommitter) stampSteerTurn(inputs []messagepkg.PersistInput) {

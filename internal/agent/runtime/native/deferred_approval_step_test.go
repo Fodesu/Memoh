@@ -14,9 +14,10 @@ import (
 )
 
 // deferredApprovalBatch drives one model step that emits an unguarded tool call
-// followed by a call the approval handler defers. toolexec.ExecuteTools runs the
-// pending batch before it returns at the deferral index, so the deferred step
-// record must carry the completed result instead of dropping it.
+// followed by a call the approval handler defers. A deferred batch executes
+// nothing: the step record parks every call open; the decision path executes
+// the approved call when it resumes the run and closes the others with
+// synthetic error results.
 func deferredApprovalBatch(t *testing.T) (*Agent, *atomicMockProvider, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 
@@ -70,7 +71,7 @@ func deferOnExec(_ context.Context, call sdk.ToolCall) (toolexec.ToolApprovalRes
 	}, nil
 }
 
-func assertDeferredStepKeepsFinishedResults(t *testing.T, record *step.Record, searchRuns, execRuns *atomic.Int32) {
+func assertDeferredStepExecutesNothing(t *testing.T, record *step.Record, searchRuns, execRuns *atomic.Int32) {
 	t.Helper()
 
 	if record == nil {
@@ -79,15 +80,15 @@ func assertDeferredStepKeepsFinishedResults(t *testing.T, record *step.Record, s
 	if record.Deferred == nil {
 		t.Fatal("record.Deferred = nil, want the parked approval")
 	}
-	if got := searchRuns.Load(); got != 1 {
-		t.Fatalf("web_search executions = %d, want 1", got)
+	if got := searchRuns.Load(); got != 0 {
+		t.Fatalf("web_search executions = %d, want 0 while the batch is parked", got)
 	}
 	if got := execRuns.Load(); got != 0 {
 		t.Fatalf("exec executions = %d, want 0 while the approval is parked", got)
 	}
 
-	if len(record.ToolResults) != 1 || record.ToolResults[0].ToolCallID != "call-search" {
-		t.Fatalf("record.ToolResults = %#v, want the finished web_search result", record.ToolResults)
+	if len(record.ToolResults) != 0 {
+		t.Fatalf("record.ToolResults = %#v, want none for a parked batch", record.ToolResults)
 	}
 
 	var results []sdk.ToolResultPart
@@ -105,14 +106,14 @@ func assertDeferredStepKeepsFinishedResults(t *testing.T, record *step.Record, s
 	if len(calls) != 2 {
 		t.Fatalf("persisted tool calls = %d, want 2", len(calls))
 	}
-	// The finished call is answered; the deferred one stays dangling until the
-	// approval resolves and the resume path appends its result.
-	if len(results) != 1 || results[0].ToolCallID != "call-search" {
-		t.Fatalf("persisted tool results = %#v, want only call-search", results)
+	// Both calls stay dangling until the approval resolves and the resume
+	// path executes the batch and appends its results.
+	if len(results) != 0 {
+		t.Fatalf("persisted tool results = %#v, want none", results)
 	}
 }
 
-func TestAgentGenerateDeferredStepKeepsFinishedToolResults(t *testing.T) {
+func TestAgentGenerateDeferredStepExecutesNothing(t *testing.T) {
 	t.Parallel()
 
 	a, provider, searchRuns, execRuns := deferredApprovalBatch(t)
@@ -130,10 +131,10 @@ func TestAgentGenerateDeferredStepKeepsFinishedToolResults(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	assertDeferredStepKeepsFinishedResults(t, record, searchRuns, execRuns)
+	assertDeferredStepExecutesNothing(t, record, searchRuns, execRuns)
 }
 
-func TestAgentStreamDeferredStepKeepsFinishedToolResults(t *testing.T) {
+func TestAgentStreamDeferredStepExecutesNothing(t *testing.T) {
 	t.Parallel()
 
 	a, provider, searchRuns, execRuns := deferredApprovalBatch(t)
@@ -150,5 +151,5 @@ func TestAgentStreamDeferredStepKeepsFinishedToolResults(t *testing.T) {
 		},
 	}) {
 	}
-	assertDeferredStepKeepsFinishedResults(t, record, searchRuns, execRuns)
+	assertDeferredStepExecutesNothing(t, record, searchRuns, execRuns)
 }

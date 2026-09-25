@@ -133,6 +133,11 @@ func TestStreamSteerInterruptsOnlyInvocation(t *testing.T) {
 			if calls.Load() != int32(interruptions+retryAttempts+1) || disconnected.Load() != int32(interruptions) || starts != 1 || terminals != 1 {
 				t.Fatalf("calls=%d disconnected=%d starts=%d terminals=%d", calls.Load(), disconnected.Load(), starts, terminals)
 			}
+			// Every steered checkpoint advances the durable cursor, so the
+			// final answer lands on the step after the last interruption.
+			if len(steps) != interruptions+1 {
+				t.Fatalf("step cursor: %v, want %d checkpointed steps", steps, interruptions+1)
+			}
 			for i, index := range steps {
 				if index != i {
 					t.Fatalf("step cursor: %v", steps)

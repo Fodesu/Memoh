@@ -115,7 +115,7 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 	if contextViewErr != nil {
 		publicError := contextViewStreamError(contextViewErr)
 		turnError = publicError.Error
-		a.logger.Warn("context view preflight failed", slog.Any("error", contextViewErr))
+		a.logger.WarnContext(ctx, "context view preflight failed", slog.Any("error", contextViewErr))
 		sendEvent(ctx, ch, publicError)
 		return
 	}
@@ -197,6 +197,7 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 		streamCtx:             streamCtx,
 		cancel:                cancel,
 		events:                make(chan StreamEvent, streamEventBuffer),
+		done:                  make(chan struct{}),
 		dispatch:              dispatch,
 		sdkTools:              sdkTools,
 		approvalTools:         approvalTools,
@@ -229,14 +230,21 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 	eng.nextDurableStep = cfg.StepIndexOffset
 	eng.interruptedStep.rebase(cfg.StepIndexOffset)
 	if textLoopGuard != nil {
-		eng.textLoopProbeBuffer = NewTextLoopProbeBuffer(LoopDetectedProbeChars, func(text string) {
-			result := textLoopGuard.Inspect(text)
-			if result.Abort {
-				a.logger.Warn("text loop detected, will abort")
-				eng.aborted = true
-				cancel(ErrTextLoopDetected)
-			}
-		})
+		installTextLoopGuard := func() {
+			guard := NewTextLoopGuard(LoopDetectedStreakThreshold, LoopDetectedMinNewGramsPerChunk, SentialOptions{})
+			eng.textLoopProbeBuffer = NewTextLoopProbeBuffer(LoopDetectedProbeChars, func(text string) {
+				result := guard.Inspect(text)
+				if result.Abort {
+					a.logger.WarnContext(ctx, "text loop detected, will abort")
+					eng.aborted = true
+					cancel(ErrTextLoopDetected)
+				}
+			})
+		}
+		installTextLoopGuard()
+		// A steer checkpoint starts a fresh answer; the guard must not carry
+		// the interrupted attempt's text into it.
+		eng.resetTextLoopGuard = installTextLoopGuard
 	}
 	// The engine runs on the segment context it was built with; the steer
 	// checkpoint derives its origin-marked context from that field by design.
@@ -260,11 +268,8 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 	if ctx.Err() != nil {
 		aborted = true
 	}
-
-	if stepErr := contextStepBudgetError(streamCtx); stepErr != nil {
-		publicError := contextViewStreamError(stepErr)
-		turnError = publicError.Error
-		sendEvent(ctx, ch, publicError)
+	budgetErr := contextStepBudgetError(streamCtx)
+	if budgetErr != nil {
 		aborted = true
 	}
 
@@ -275,12 +280,30 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 		// the caller can fence and finalize the run as aborted.
 		cancel(context.Canceled)
 		engineClosed = drainEventsUntilClosed(ctx, eng.events, streamCancelDrainGrace, ch)
+		if !engineClosed {
+			// The drain may have spent its grace forwarding the backlog to a
+			// slow consumer; the engine's own exit signal says whether its
+			// state is safe to read regardless of what is still queued.
+			select {
+			case <-eng.done:
+				engineClosed = true
+			default:
+			}
+		}
 	}
-	// A closed engine channel is what makes the reads below safe: the engine
-	// goroutine has returned, no further complete step can commit after this
-	// checkpoint, and its published state is ordered by the channel close.
-	// When the engine refuses to exit within the drain grace, its state is
-	// dropped rather than risk racing a commit it is still about to make.
+	if budgetErr != nil {
+		// Published after the backlog so the consumer sees the events the
+		// engine produced before the boundary refused the next call.
+		publicError := contextViewStreamError(budgetErr)
+		turnError = publicError.Error
+		sendEvent(ctx, ch, publicError)
+	}
+	// The engine goroutine having returned is what makes the reads below
+	// safe: no further complete step can commit after this checkpoint, and
+	// its published state is ordered by the channel close (or the done
+	// signal). When the engine refuses to exit within the drain grace, its
+	// state is dropped rather than risk racing a commit it is still about to
+	// make.
 	streamClosed := engineClosed
 	if engineClosed {
 		if eng.aborted {
@@ -303,7 +326,7 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 			if err := cfg.OnStepInterrupted(dynamic.withMessageOrigins(streamCtx, stepIndex), stepIndex, step); err != nil {
 				// An owner that lost its lease, or a run another writer already
 				// finalized, is an expected outcome of racing an abort.
-				a.logger.Warn("persist interrupted model step failed", slog.Any("error", err))
+				a.logger.WarnContext(ctx, "persist interrupted model step failed", slog.Any("error", err))
 			} else {
 				interruptedMessages = step.Messages
 				interruptedFeedbackIndexes = dynamic.feedbackIndexes(stepIndex)
@@ -356,7 +379,7 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 		termEvent.Type = EventAgentEnd
 		// Warn if LLM produced no text and no tool calls — likely a context overflow.
 		if eng.allText.Len() == 0 && eng.stepNumber == 0 {
-			a.logger.Warn("agent produced empty response (no text, no tool calls)",
+			a.logger.WarnContext(ctx, "agent produced empty response (no text, no tool calls)",
 				slog.String("bot_id", cfg.Identity.BotID),
 				slog.Int("input_messages", len(cfg.Messages)),
 				slog.Int("input_tokens", totalUsage.InputTokens),
@@ -389,9 +412,6 @@ func (a *Agent) runStreamSegment(ctx context.Context, cfg RunConfig, ch chan<- S
 }
 
 // drainEventsUntilClosed discards what the engine still has buffered after
-// cancellation, reporting whether the engine exited (closed its channel)
-// within the grace period. The engine observes its own parts before exiting,
-// so unlike the provider-stream drain nothing here needs to be inspected.
 // drainEventsUntilClosed reads the engine channel until it closes or grace
 // runs out. Events still queued are forwarded to ch while the consumer
 // accepts them: a loop-guard abort queues the aborting call's tool_call_end
@@ -440,6 +460,9 @@ type streamEngine struct {
 	streamCtx context.Context
 	cancel    context.CancelCauseFunc
 	events    chan StreamEvent
+	// done closes after events: the engine goroutine has returned and its
+	// published state may be read even when events are still queued.
+	done chan struct{}
 
 	dispatch      generateDispatch
 	sdkTools      []toolexec.Tool
@@ -450,6 +473,7 @@ type streamEngine struct {
 	dynamic                *loopDynamicInputs
 	readMedia              *readMediaDecorationState
 	textLoopProbeBuffer    *TextLoopProbeBuffer
+	resetTextLoopGuard     func()
 	toolLoopAbortCallIDs   *toolAbortRegistry
 	pendingDirectiveInputs []DirectiveInput
 	// refreshTools re-assembles the tool set after a committed step reported a
@@ -496,6 +520,7 @@ func (e *streamEngine) emit(evt StreamEvent) bool {
 //
 //nolint:gocyclo,cyclop,maintidx // the loop inlines the previous SDK step accumulation plus the event switch and retry fold; splitting it would scatter the ordering invariants the tests pin.
 func (e *streamEngine) run() {
+	defer close(e.done)
 	defer close(e.events)
 	defer func() {
 		// The trailing probe flush mirrors the legacy post-loop flush: a loop
@@ -520,6 +545,13 @@ func (e *streamEngine) run() {
 	attemptStep := 0
 
 	for {
+		if e.pendingRefresh != nil {
+			// A refreshed tool set is installed before the prepare chain runs,
+			// so envelope budgeting and reselection price the request that is
+			// actually sent.
+			e.pendingRefresh.apply(&e.dispatch, &params)
+			e.pendingRefresh = nil
+		}
 		if attemptStep > 0 {
 			// Input refresh at the step boundary: the loop drains its own
 			// dynamic inputs (read-media carriers, then injected messages)
@@ -541,10 +573,6 @@ func (e *streamEngine) run() {
 				params = *override
 			}
 			convo = params.Messages
-		}
-		if e.pendingRefresh != nil {
-			e.pendingRefresh.apply(&e.dispatch, &params)
-			e.pendingRefresh = nil
 		}
 		stepParams := params
 		stepParams.Messages = convo
@@ -606,7 +634,7 @@ func (e *streamEngine) run() {
 		// The failed attempt's partial output is regenerated from the last
 		// committed boundary, so it must not survive as a checkpoint.
 		e.interruptedStep.rebase(e.baseCfg.StepIndexOffset + len(e.steps))
-		e.agent.logger.Warn("mid-stream error, retrying",
+		e.agent.logger.WarnContext(e.streamCtx, "mid-stream error, retrying",
 			slog.Int("step", e.stepNumber),
 			slog.Int("attempt", retryAttempts+1),
 			slog.Int("max_attempts", retryCfg.MaxAttempts),
@@ -734,7 +762,7 @@ func (e *streamEngine) checkpointSteeredStep(
 		// A failed checkpoint cannot resume: the claimed input is not durable
 		// and the attempt's output is lost. Report the stable public
 		// interruption error and keep the diagnostic in the log.
-		e.agent.logger.Error("checkpoint steered model invocation failed",
+		e.agent.logger.ErrorContext(e.streamCtx, "checkpoint steered model invocation failed",
 			slog.Int("step", attemptStep), slog.Any("error", err))
 		e.aborted = true
 		event := StreamEvent{Type: EventError, Error: publicResponseInterruptedError}
@@ -754,6 +782,9 @@ func (e *streamEngine) checkpointSteeredStep(
 	*attemptSteps = append(*attemptSteps, *snapshot)
 	e.nextDurableStep = stepIndex + 1
 	e.interruptedStep.rebase(stepIndex + 1)
+	if e.resetTextLoopGuard != nil {
+		e.resetTextLoopGuard()
+	}
 	e.takeDirective(dir)
 	*convo = append(*convo, steerCheckpointMessages(snapshot.Messages)...)
 	return "", false, false
@@ -938,12 +969,6 @@ partLoop:
 				e.aborted = true
 				break
 			}
-			if isAskUserArgumentParseError(p.Error.Error()) {
-				// The poisoned step never commits, exactly like the SDK loop's
-				// stepErrored path, but the error stays off the event wire.
-				stepErrored = true
-				continue
-			}
 			if e.streamCtx.Err() != nil {
 				// The provider is reporting the run's own cancellation.
 				e.aborted = true
@@ -1048,10 +1073,10 @@ partLoop:
 		return msg, retriable, e.aborted
 	}
 	if outcome.Deferred != nil {
-		// ExecuteTools finishes the calls before the deferral index before it
-		// returns, so outcome.Results carries real output. The step persists
-		// those results; the deferred call and everything after it stay as
-		// dangling ToolCallParts until the approval resolves.
+		// A deferred batch executes nothing: outcome.Results is empty and every
+		// call of the step stays a dangling ToolCallPart until the decision
+		// resumes the run. The approved call executes there; the step's other
+		// open calls are closed with synthetic error results.
 		stepMsgs := toolexec.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, outcome.Results, &stepUsage)
 		sr := step.Record{
 			Result:      stepResult(),
@@ -1181,7 +1206,7 @@ func (e *streamEngine) drainInjectedMessages(boundary int, messages []sdk.Messag
 				cfg.ContextMutations.Record(contextfrag.MutationInjectedMessage, fmt.Sprintf("bytes=%d", len(text)))
 				e.dynamic.append(message, false, text, len(messages))
 				messages = append(messages, message)
-				e.agent.logger.Info("injected user message into agent stream",
+				e.agent.logger.InfoContext(e.streamCtx, "injected user message into agent stream",
 					slog.String("bot_id", cfg.Identity.BotID),
 					slog.Int("after_step", boundary-1),
 					slog.Int("image_parts", len(extra)),
@@ -1272,7 +1297,7 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 			e.aborted = true
 		}
 		if shouldAbort {
-			e.agent.logger.Warn("tool loop abort triggered", slog.String("tool_call_id", p.ToolCallID))
+			e.agent.logger.WarnContext(e.streamCtx, "tool loop abort triggered", slog.String("tool_call_id", p.ToolCallID))
 			e.cancel(ErrToolLoopDetected)
 			e.aborted = true
 		}
@@ -1291,7 +1316,7 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 			e.aborted = true
 		}
 		if shouldAbort {
-			e.agent.logger.Warn("tool loop abort triggered", slog.String("tool_call_id", p.ToolCallID))
+			e.agent.logger.WarnContext(e.streamCtx, "tool loop abort triggered", slog.String("tool_call_id", p.ToolCallID))
 			e.cancel(ErrToolLoopDetected)
 			e.aborted = true
 		}

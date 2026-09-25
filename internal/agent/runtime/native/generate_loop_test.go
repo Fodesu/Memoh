@@ -18,8 +18,6 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 )
 
-// responseMetadataValue flattens a ModelResult's optional response metadata for
-// the stream-part fixtures, whose Response field is a value.
 type staticToolProvider struct {
 	tools []toolexec.Tool
 }
