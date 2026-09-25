@@ -23,7 +23,7 @@ import (
 // same history gives the same request bytes whether it came from memory or
 // from the database. Rows are JSONB, so their bytes were never the SDK's.
 
-// storedPartsFromSDK rewrites the content array json.Marshal(sdk.Message)
+// storedPartsFromSDK rewrites the content array marshalJSON(sdk.Message)
 // produced into the stored shape.
 func storedPartsFromSDK(content json.RawMessage) json.RawMessage {
 	return rewriteParts(content, func(part map[string]json.RawMessage, partType string) {
@@ -53,7 +53,7 @@ func storedPartsFromSDK(content json.RawMessage) json.RawMessage {
 				delete(part, "providerMetadata")
 				return
 			}
-			if encoded, err := json.Marshal(stored); err == nil {
+			if encoded, err := marshalJSON(stored); err == nil {
 				part["providerMetadata"] = encoded
 			}
 		}
@@ -93,7 +93,7 @@ func sdkPartsFromStored(content json.RawMessage) json.RawMessage {
 				delete(part, "providerMetadata")
 				return
 			}
-			if encoded, err := json.Marshal(meta); err == nil {
+			if encoded, err := marshalJSON(meta); err == nil {
 				part["providerMetadata"] = encoded
 			}
 		}
@@ -121,14 +121,14 @@ func rewriteParts(content json.RawMessage, rewrite func(part map[string]json.Raw
 		var partType string
 		_ = json.Unmarshal(part["type"], &partType)
 		rewrite(part, partType)
-		encoded, err := json.Marshal(part)
+		encoded, err := marshalJSON(part)
 		if err != nil {
 			out = append(out, raw)
 			continue
 		}
 		out = append(out, encoded)
 	}
-	encoded, err := json.Marshal(out)
+	encoded, err := marshalJSON(out)
 	if err != nil {
 		return content
 	}
@@ -139,10 +139,22 @@ func rewriteParts(content json.RawMessage, rewrite func(part map[string]json.Raw
 // document itself, or the invalid text as a string.
 func storedArguments(args sdk.ToolArguments) json.RawMessage {
 	if !args.Valid() {
-		encoded, _ := json.Marshal(args.Text)
+		encoded, _ := marshalJSON(args.Text)
 		return encoded
 	}
-	return args.Object()
+	return canonicalOrRaw(args.Object())
+}
+
+// canonicalOrRaw re-encodes a document in the SDK's canonical form. Bytes
+// that arrived through json.Marshal carry HTML escapes ("\u0026" for "&");
+// the canonical form uses minimal escaping, so the row holds the text the
+// model produced and the live turn sent. A document the canonical form
+// rejects is kept as it is.
+func canonicalOrRaw(raw json.RawMessage) json.RawMessage {
+	if canonical, err := sdk.CanonicalJSON(raw); err == nil {
+		return canonical
+	}
+	return raw
 }
 
 // typedArguments reads stored arguments: a string is the invalid text a
@@ -167,7 +179,7 @@ func typedArguments(raw json.RawMessage) (json.RawMessage, bool) {
 			args = sdk.ToolArguments{JSON: trimmed}
 		}
 	}
-	encoded, err := json.Marshal(args)
+	encoded, err := marshalJSON(args)
 	if err != nil {
 		return nil, false
 	}
@@ -180,12 +192,12 @@ func typedArguments(raw json.RawMessage) (json.RawMessage, bool) {
 // keeps its shape.
 func storedOutput(output sdk.ToolOutput) json.RawMessage {
 	if output.IsJSON() {
-		return output.JSON
+		return canonicalOrRaw(output.JSON)
 	}
 	if output.Text == "" {
 		return json.RawMessage("null")
 	}
-	encoded, _ := json.Marshal(output.Text)
+	encoded, _ := marshalJSON(output.Text)
 	return encoded
 }
 
@@ -212,7 +224,7 @@ func typedOutput(raw json.RawMessage) (json.RawMessage, bool) {
 		}
 		output = canonical
 	}
-	encoded, err := json.Marshal(output)
+	encoded, err := marshalJSON(output)
 	if err != nil {
 		return nil, false
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -1085,5 +1086,32 @@ func TestListAgentsScopedByCurrentSession(t *testing.T) {
 	agents, _ := listA["agents"].([]any)
 	if len(agents) != 1 || asMap(t, agents[0])["agent_id"] != "alpha" {
 		t.Fatalf("expected only session A agent, got %v", listA)
+	}
+}
+
+// History rows hold the stored content shape; the subagent context reader
+// types them through the history codec, so argument objects and nested
+// annotations survive instead of failing an SDK decode.
+func TestSDKMessageFromPersistedTypesStoredRow(t *testing.T) {
+	msg, ok := sdkMessageFromPersisted(messagepkg.Message{
+		ID:      "m1",
+		Role:    "assistant",
+		Content: json.RawMessage(`{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"exec","input":{"command":"ls && pwd"},"providerMetadata":{"approval":{"approval_id":"a1","status":"approved"}}}]}`),
+	})
+	if !ok || msg.Role != sdk.MessageRoleAssistant || len(msg.Content) != 1 {
+		t.Fatalf("message = %#v, ok=%v", msg, ok)
+	}
+	call, isCall := msg.Content[0].(sdk.ToolCallPart)
+	if !isCall {
+		t.Fatalf("part = %#v, want a tool call", msg.Content[0])
+	}
+	if args, _ := toolexec.ArgumentsValue(call.Input).(map[string]any); args["command"] != "ls && pwd" {
+		t.Fatalf("tool call input = %#v", toolexec.ArgumentsValue(call.Input))
+	}
+	if approval, ok := partmeta.Object(call.ProviderMetadata, partmeta.KeyApproval); !ok || approval["status"] != "approved" {
+		t.Fatalf("approval annotation = %#v", call.ProviderMetadata)
+	}
+	if _, ok := sdkMessageFromPersisted(messagepkg.Message{Role: "assistant", Content: json.RawMessage(`{"role":"assistant","content":[]}`)}); ok {
+		t.Fatal("empty row must be skipped")
 	}
 }

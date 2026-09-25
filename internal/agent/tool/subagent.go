@@ -567,7 +567,9 @@ func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionConte
 		}
 		forkContext = make([]sessionpkg.SubagentForkContextMessage, 0, len(entries))
 		for i, entry := range entries {
-			content, marshalErr := json.Marshal(entry.Message)
+			// Fork rows share bot_history_messages' stored shape so every
+			// reader types them the same way as ordinary history.
+			content, marshalErr := historyfrag.MarshalStoredSDKMessage(entry.Message)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("marshal fork context message %d: %w", i, marshalErr)
 			}
@@ -1394,48 +1396,19 @@ func (p *SpawnProvider) loadAgentMessages(ctx context.Context, sessionID string)
 	return out
 }
 
+// sdkMessageFromPersisted types one history row for the SDK. Rows hold the
+// stored shape (arguments object, output value, nested annotations), so they
+// go through the history codec rather than being decoded as SDK JSON.
 func sdkMessageFromPersisted(msg messagepkg.Message) (sdk.Message, bool) {
-	var full sdk.Message
-	if err := json.Unmarshal(msg.Content, &full); err == nil && (full.Role != "" || len(full.Content) > 0) {
-		if full.Role == "" {
-			full.Role = sdk.MessageRole(msg.Role)
-		}
-		return full, true
+	stored := historyfrag.DecodeStoredModelMessage(nil, msg.ID, msg.Role, msg.Content)
+	converted := historyfrag.StoredModelMessageToSDKMessage(stored)
+	if converted.Role == "" {
+		converted.Role = sdk.MessageRole(msg.Role)
 	}
-
-	var envelope struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+	if len(converted.Content) == 0 {
+		return sdk.Message{}, false
 	}
-	if err := json.Unmarshal(msg.Content, &envelope); err == nil {
-		role := envelope.Role
-		if role == "" {
-			role = msg.Role
-		}
-		var text string
-		if err := json.Unmarshal(envelope.Content, &text); err == nil {
-			return sdk.Message{
-				Role:    sdk.MessageRole(role),
-				Content: []sdk.MessagePart{sdk.TextPart{Text: text}},
-			}, true
-		}
-		wrapped, _ := json.Marshal(struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		}{Role: role, Content: envelope.Content})
-		if err := json.Unmarshal(wrapped, &full); err == nil {
-			return full, true
-		}
-	}
-
-	var text string
-	if err := json.Unmarshal(msg.Content, &text); err == nil {
-		return sdk.Message{
-			Role:    sdk.MessageRole(msg.Role),
-			Content: []sdk.MessagePart{sdk.TextPart{Text: text}},
-		}, true
-	}
-	return sdk.Message{}, false
+	return converted, true
 }
 
 func dropLatestMatchingUserMessage(messages []sdk.Message, query string) []sdk.Message {

@@ -103,7 +103,18 @@ func Fold(stored map[string]any) sdk.ProviderMetadata {
 		return nil
 	}
 	out := sdk.ProviderMetadata{}
+	// A stored object may already carry the memoh namespace (a row written
+	// in the SDK shape). Its entries are taken first so an annotation stored
+	// at the top level always wins, whatever order the map iterates in.
+	if obj, ok := stored[Namespace].(map[string]any); ok {
+		if values := sdk.StringValues(obj); len(values) > 0 {
+			out[Namespace] = values
+		}
+	}
 	for key, value := range stored {
+		if key == Namespace {
+			continue
+		}
 		if obj, ok := value.(map[string]any); ok && !ownKeys[key] {
 			if values := sdk.StringValues(obj); len(values) > 0 {
 				out[key] = values
