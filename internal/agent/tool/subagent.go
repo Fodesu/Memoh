@@ -1377,6 +1377,12 @@ func (p *SpawnProvider) loadAgentForkContext(ctx context.Context, sessionID stri
 		// worth less for it.
 		converted, ok := sdkMessageFromPersisted(messagepkg.Message{Role: row.Role, Content: row.Message})
 		if !ok {
+			if strings.TrimSpace(string(row.Message)) != "" && p.logger != nil {
+				// A row with bytes but no decodable content is corruption
+				// worth a trace, not a reason to refuse the fork.
+				p.logger.WarnContext(ctx, "fork context row has no decodable content; skipping",
+					slog.String("session_id", sessionID), slog.String("role", row.Role))
+			}
 			continue
 		}
 		messages = append(messages, converted)

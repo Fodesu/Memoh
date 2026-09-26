@@ -142,7 +142,9 @@ func (r refreshedTools) apply(dispatch *generateDispatch, params *sdk.Request, m
 // prompt-cache plan placed at the head of the prefix, keeping its cache
 // control. Messages without such a head are returned as they are.
 func replacePromotedSystem(messages []sdk.Message, system string) []sdk.Message {
-	if len(messages) == 0 || messages[0].Role != sdk.MessageRoleSystem || len(messages[0].Content) == 0 {
+	// An empty refreshed prompt keeps the head as it is: a system message
+	// with an empty text part is a request some providers reject.
+	if system == "" || len(messages) == 0 || messages[0].Role != sdk.MessageRoleSystem || len(messages[0].Content) == 0 {
 		return messages
 	}
 	text, ok := messages[0].Content[0].(sdk.TextPart)

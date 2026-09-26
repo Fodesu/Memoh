@@ -2,9 +2,11 @@ package native
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -83,6 +85,70 @@ func TestUnknownToolCallIsAnsweredAndTheLoopContinues(t *testing.T) {
 			}
 			if len(records) != 2 || len(records[0].ToolResults) != 1 || !strings.Contains(records[0].ToolResults[0].Output.String(), "not found") {
 				t.Fatalf("records = %#v, want a tool step with the error result then a final step", records)
+			}
+		})
+	}
+}
+
+// Refused calls never reach a wrapped Execute, so the tool-loop guard does
+// not see them; the loop bounds them itself, with or without loop detection:
+// after maxRefusedBatches consecutive steps whose whole batch was refused, the
+// run ends as a tool loop with those steps committed. A batch with one
+// executable call in it resets the count.
+func TestRefusedBatchesAreBounded(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(map[bool]string{false: "generate", true: "stream"}[streaming], func(t *testing.T) {
+			var calls atomic.Int32
+			next := func(sdk.Request) (sdk.ModelResult, error) {
+				n := calls.Add(1)
+				toolCalls := []sdk.ToolCall{{ToolCallID: "c", ToolName: "no_such_tool", Input: toolexec.ArgumentsFromValue(map[string]any{"n": n})}}
+				if n == 2 {
+					// One executable call in the batch resets the count.
+					toolCalls = append(toolCalls, sdk.ToolCall{ToolCallID: "ok", ToolName: "lookup", Input: toolexec.ArgumentsFromValue(map[string]any{})})
+				}
+				return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: toolCalls}, nil
+			}
+			a := New(Deps{})
+			a.SetToolProviders(mockToolLoopTools())
+			var committed int
+			cfg := RunConfig{
+				Messages:         []sdk.Message{sdk.UserMessage("go")},
+				SupportsToolCall: true,
+				Identity:         SessionContext{BotID: "bot-1"},
+				OnStepCommitted: func(context.Context, int, *step.Record) (StepDirective, error) {
+					committed++
+					return StepDirective{}, nil
+				},
+			}
+			mock := &atomicMockProvider{handler: func(_ int, params sdk.Request) (sdk.ModelResult, error) { return next(params) }}
+			mock.stream = func(_ context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
+				result, _ := next(params)
+				parts := []sdk.StreamPart{}
+				for _, call := range result.ToolCalls {
+					parts = append(parts, &sdk.StreamToolCallPart{ToolCallID: call.ToolCallID, ToolName: call.ToolName, Input: call.Input})
+				}
+				parts = append(parts, &sdk.FinishStepPart{FinishReason: result.FinishReason})
+				return closedAgentTestStream(parts...), nil
+			}
+			cfg.Model = &sdk.Model{ID: "mock", Provider: mock}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if streaming {
+				var terminal StreamEvent
+				for event := range a.Stream(ctx, cfg) {
+					if event.IsTerminal() {
+						terminal = event
+					}
+				}
+				if terminal.Type != EventAgentAbort {
+					t.Fatalf("terminal = %q (%s), want the loop abort", terminal.Type, terminal.Error)
+				}
+			} else if _, err := a.Generate(ctx, cfg); !errors.Is(err, ErrToolLoopDetected) {
+				t.Fatalf("Generate error = %v, want ErrToolLoopDetected", err)
+			}
+			// Step 1 refused, step 2 mixed (reset), then maxRefusedBatches refused.
+			if want := int32(2 + maxRefusedBatches); calls.Load() != want || committed != int(want) {
+				t.Fatalf("calls=%d committed=%d, want %d of each", calls.Load(), committed, want)
 			}
 		})
 	}

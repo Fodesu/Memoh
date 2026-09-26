@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"unicode/utf8"
 
 	sdk "github.com/felinics/twilight/sdk"
 )
@@ -31,6 +32,11 @@ type ToolExecOutcome struct {
 	// Results holds one ToolResultPart per call, in call order, including
 	// rejected and not-found IsError results. It is nil when Deferred is set.
 	Results []sdk.ToolResultPart
+	// Refused counts the calls the executor did not run because their
+	// arguments were not a JSON document or named a tool the model was not
+	// offered; each has an IsError result. A loop can tell a batch the model
+	// got entirely wrong from one that executed.
+	Refused int
 	// Deferred is non-nil when an approval handler returned
 	// ToolApprovalDecisionDeferred. The batch parked at that call and nothing
 	// in it executed; the step persists with its calls open and the decision
@@ -54,6 +60,7 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 	toolMap := buildToolMap(opts.Tools)
 	results := make([]sdk.ToolResultPart, len(calls))
 	pending := make([]pendingToolExec, 0, len(calls))
+	refused := 0
 
 	for i, tc := range calls {
 		if !tc.Input.Valid() {
@@ -63,11 +70,13 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 			// text it sent travels in the result; the step message replays
 			// the call with an empty object (see BuildStepMessages).
 			results[i] = failedToolResult(opts.OnPart, tc, fmt.Errorf("invalid tool arguments for %q: not a JSON document: %s", tc.ToolName, invalidArgumentExcerpt(tc.Input.Text)))
+			refused++
 			continue
 		}
 		tool, ok := toolMap[tc.ToolName]
 		if !ok || tool.Execute == nil {
 			results[i] = failedToolResult(opts.OnPart, tc, fmt.Errorf("tool %q not found or has no execute handler", tc.ToolName))
+			refused++
 			continue
 		}
 
@@ -148,7 +157,7 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 	}
 
 	runPendingTools(ctx, pending, results, opts.OnPart)
-	return ToolExecOutcome{Results: results}, nil
+	return ToolExecOutcome{Results: results, Refused: refused}, nil
 }
 
 // runPendingTools executes approved tool calls, in parallel when more than one,
@@ -286,5 +295,9 @@ func invalidArgumentExcerpt(text string) string {
 	if len(text) <= invalidArgumentExcerptLimit {
 		return text
 	}
-	return text[:invalidArgumentExcerptLimit] + "…"
+	cut := invalidArgumentExcerptLimit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "…"
 }

@@ -465,12 +465,15 @@ type streamEngine struct {
 	approvalTools []toolexec.Tool
 	prepareStep   func(*sdk.Request) *sdk.Request
 
-	toolExecutionMetadata  *toolExecutionMetadataRegistry
-	dynamic                *loopDynamicInputs
-	readMedia              *readMediaDecorationState
-	textLoopProbeBuffer    *TextLoopProbeBuffer
-	resetTextLoopGuard     func()
-	toolLoopAbortCallIDs   *toolAbortRegistry
+	toolExecutionMetadata *toolExecutionMetadataRegistry
+	dynamic               *loopDynamicInputs
+	readMedia             *readMediaDecorationState
+	textLoopProbeBuffer   *TextLoopProbeBuffer
+	resetTextLoopGuard    func()
+	toolLoopAbortCallIDs  *toolAbortRegistry
+	// refused counts consecutive steps whose whole batch the executor
+	// refused; see refusedBatches.
+	refused                refusedBatches
 	pendingDirectiveInputs []DirectiveInput
 	// refreshTools re-assembles the tool set after a committed step reported a
 	// capability change; pendingRefresh holds the result until the next call.
@@ -1110,6 +1113,14 @@ partLoop:
 	// committed, matching the legacy flow where the guard fenced only the
 	// next provider call.
 	if e.aborted {
+		return "", false, true
+	}
+	if e.refused.note(batchRefused(outcome.Refused, len(stepToolCalls))) {
+		// Every call of the last maxRefusedBatches steps was refused: the
+		// model is not converging on a call the loop can run. Ended like a
+		// detected tool loop, with the answered steps committed.
+		e.cancel(ErrToolLoopDetected)
+		e.aborted = true
 		return "", false, true
 	}
 	*convo = append(*convo, stepMsgs...)

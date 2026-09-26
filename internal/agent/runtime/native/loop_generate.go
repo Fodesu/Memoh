@@ -131,6 +131,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 
 	var pendingDirectiveInputs []DirectiveInput
 	var pendingRefresh *refreshedTools
+	var refused refusedBatches
 	commitStep := func(sdkStep int, sr *step.Record) (StepDirective, error) {
 		var dir StepDirective
 		if cfg.OnStepCommitted != nil {
@@ -319,6 +320,11 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			return nil, loopErr
 		}
 		pendingDirectiveInputs = collectDirectiveInputs(pendingDirectiveInputs, dir.NextInputs)
+		if refused.note(batchRefused(outcome.Refused, len(result.ToolCalls))) {
+			// Every call of the last maxRefusedBatches steps was refused; the
+			// run ends like a detected tool loop, its answered steps committed.
+			return nil, ErrToolLoopDetected
+		}
 		messages = append(messages, stepMsgs...)
 	}
 

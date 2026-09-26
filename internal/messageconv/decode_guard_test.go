@@ -159,6 +159,19 @@ func directSDKMessageDecodes(t *testing.T, path string) []string {
 			if unary, ok := target.(*ast.UnaryExpr); ok && unary.Op == token.AND {
 				target = unary.X
 			}
+			// &env.Messages or &byID["k"] decodes into the declared variable
+			// all the same; follow the chain back to it.
+			for {
+				switch chain := target.(type) {
+				case *ast.SelectorExpr:
+					target = chain.X
+					continue
+				case *ast.IndexExpr:
+					target = chain.X
+					continue
+				}
+				break
+			}
 			if ident, ok := target.(*ast.Ident); ok && targets[ident.Name] {
 				pos := fset.Position(call.Pos())
 				found = append(found, fmt.Sprintf("%d %s", pos.Line, ident.Name))
@@ -223,6 +236,8 @@ func TestDecodeGuardRecognisesDecodeShapes(t *testing.T) {
 		"func f(raw []byte, m *sdk.Message) { _ = json.Unmarshal(raw, m) }",
 		"func f(r io.Reader) { var m sdk.Message; _ = json.NewDecoder(r).Decode(&m) }",
 		"func f(raw []byte) { env := &struct{ Messages []sdk.Message }{}; _ = json.Unmarshal(raw, env) }",
+		"func f(raw []byte) { var env struct{ Messages []sdk.Message }; _ = json.Unmarshal(raw, &env.Messages) }",
+		"func f(raw []byte) { byID := map[string]sdk.Message{}; m := byID[\"k\"]; _ = m; _ = json.Unmarshal(raw, &byID) }",
 	}
 	clean := []string{
 		"func f(raw []byte) { var v map[string]any; _ = json.Unmarshal(raw, &v) }",

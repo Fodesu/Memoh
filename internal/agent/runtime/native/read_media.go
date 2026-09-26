@@ -14,14 +14,15 @@ import (
 )
 
 func decorateReadMediaTools(model *sdk.Model, tools []toolexec.Tool) ([]toolexec.Tool, *readMediaDecorationState) {
-	if len(tools) == 0 {
-		return tools, nil
-	}
-	// The state exists even when the initial set has no read tool: a
-	// capability refresh that adds one wraps it over this same state, so
-	// media it reads reaches the model instead of the raw base64 envelope.
+	// The state exists even when the initial set has no read tool, or no
+	// tool at all: a capability refresh that adds one wraps it over this same
+	// state, so media it reads reaches the model instead of the raw base64
+	// envelope.
 	state := &readMediaDecorationState{
 		pendingMedia: make(map[string]sdk.MessagePart),
+	}
+	if len(tools) == 0 {
+		return tools, state
 	}
 	return decorateReadMediaToolsWithState(model, tools, state), state
 }
