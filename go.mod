@@ -19,7 +19,7 @@ require (
 	github.com/felinics/acgo v0.0.0-20260829152557-fc78bf271ef8
 	github.com/felinics/connect-it/sdk/go v0.1.1-0.20260829153217-0dcd18de667d
 	github.com/felinics/dingtalk-stream-sdk-go v0.0.0-20260829152622-ce4b7ea674a5
-	github.com/felinics/twilight v0.6.1-0.20260924124231-cef8f18c7c76
+	github.com/felinics/twilight v0.6.1-0.20260926071655-22d89a43c2d7
 	github.com/go-ego/gse v1.0.2
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/golang-jwt/jwt/v5 v5.3.1
