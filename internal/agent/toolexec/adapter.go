@@ -51,9 +51,13 @@ func ArgumentsFromValue(value any) sdk.ToolArguments {
 }
 
 // OutputValue is the output as a plain JSON value: a JSON document decodes,
-// text stays a string.
+// text stays a string, and no output at all is nil, the value a tool that
+// returned nothing has always produced for hooks, events and rows.
 func OutputValue(output sdk.ToolOutput) any {
 	if !output.IsJSON() {
+		if output.Text == "" {
+			return nil
+		}
 		return output.Text
 	}
 	var value any

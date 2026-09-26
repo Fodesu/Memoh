@@ -790,6 +790,9 @@ func (e *streamEngine) checkpointSteeredStep(
 		e.resetTextLoopGuard()
 	}
 	e.takeDirective(dir)
+	// A steer checkpoint begins a fresh answer on new input; the refused-batch
+	// count starts over.
+	e.refused = 0
 	*convo = append(*convo, steerCheckpointMessages(snapshot.Messages)...)
 	return "", false, false
 }
@@ -1052,6 +1055,7 @@ partLoop:
 		*attemptSteps = append(*attemptSteps, sr)
 		e.afterStep(attemptStep, &sr)
 		e.takeDirective(dir)
+		e.refused.note(false)
 		// A directive or a refreshed tool set gives the model another call
 		// on the same thread; the step is committed either way.
 		if len(e.pendingDirectiveInputs) > 0 || e.pendingRefresh != nil {
@@ -1116,12 +1120,19 @@ partLoop:
 		return "", false, true
 	}
 	if e.refused.note(batchRefused(outcome.Refused, len(stepToolCalls))) {
-		// Every call of the last maxRefusedBatches steps was refused: the
-		// model is not converging on a call the loop can run. Ended like a
-		// detected tool loop, with the answered steps committed.
-		e.cancel(ErrToolLoopDetected)
-		e.aborted = true
-		return "", false, true
+		if len(e.pendingDirectiveInputs) > 0 || e.pendingRefresh != nil {
+			// The commit handed back new input (a claimed steer, a refreshed
+			// tool set); it reaches the model and the count starts over.
+			e.refused = 0
+		} else {
+			// Every call of the last maxRefusedBatches steps was refused and
+			// nothing new arrived: the model is not converging on a call the
+			// loop can run. Ended like a detected tool loop, with the answered
+			// steps committed.
+			e.cancel(ErrToolLoopDetected)
+			e.aborted = true
+			return "", false, true
+		}
 	}
 	*convo = append(*convo, stepMsgs...)
 	return "", false, false

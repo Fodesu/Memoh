@@ -263,6 +263,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 				return nil, loopErr
 			}
 			pendingDirectiveInputs = collectDirectiveInputs(pendingDirectiveInputs, dir.NextInputs)
+			refused.note(false)
 			// A directive or a refreshed tool set gives the model another
 			// call on the same thread; the step is committed either way.
 			if len(pendingDirectiveInputs) > 0 || pendingRefresh != nil {
@@ -321,9 +322,16 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 		}
 		pendingDirectiveInputs = collectDirectiveInputs(pendingDirectiveInputs, dir.NextInputs)
 		if refused.note(batchRefused(outcome.Refused, len(result.ToolCalls))) {
-			// Every call of the last maxRefusedBatches steps was refused; the
-			// run ends like a detected tool loop, its answered steps committed.
-			return nil, ErrToolLoopDetected
+			if len(pendingDirectiveInputs) > 0 || pendingRefresh != nil {
+				// The commit handed back new input; it reaches the model and
+				// the count starts over.
+				refused = 0
+			} else {
+				// Every call of the last maxRefusedBatches steps was refused and
+				// nothing new arrived; the run ends like a detected tool loop,
+				// its answered steps committed.
+				return nil, ErrToolLoopDetected
+			}
 		}
 		messages = append(messages, stepMsgs...)
 	}

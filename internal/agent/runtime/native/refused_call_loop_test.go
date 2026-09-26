@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -149,6 +150,90 @@ func TestRefusedBatchesAreBounded(t *testing.T) {
 			// Step 1 refused, step 2 mixed (reset), then maxRefusedBatches refused.
 			if want := int32(2 + maxRefusedBatches); calls.Load() != want || committed != int(want) {
 				t.Fatalf("calls=%d committed=%d, want %d of each", calls.Load(), committed, want)
+			}
+		})
+	}
+}
+
+// The refused-batch count yields to new information. A final step that a
+// directive continues resets it, and so does a directive handed back on the
+// very step that would have tripped it: the claimed input reaches the model
+// instead of being dropped by an abort. Only refusals that follow with
+// nothing new in between end the run.
+func TestRefusedBoundYieldsToDirectiveInput(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(map[bool]string{false: "generate", true: "stream"}[streaming], func(t *testing.T) {
+			var calls atomic.Int32
+			var sawSteer atomic.Bool
+			refusedCall := func(n int32) sdk.ModelResult {
+				return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "c", ToolName: "no_such_tool", Input: toolexec.ArgumentsFromValue(map[string]any{"n": n})}}}
+			}
+			next := func(params sdk.Request) (sdk.ModelResult, error) {
+				n := calls.Add(1)
+				if providerAttemptContainsText(params.Messages, "steer text") {
+					sawSteer.Store(true)
+				}
+				if n == 4 {
+					// A final answer; the commit hands back a directive, so the
+					// loop continues and the count starts over.
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonStop, Text: "interim answer"}, nil
+				}
+				return refusedCall(n), nil
+			}
+			a := New(Deps{})
+			a.SetToolProviders(mockToolLoopTools())
+			commits := 0
+			cfg := RunConfig{
+				Messages:         []sdk.Message{sdk.UserMessage("go")},
+				SupportsToolCall: true,
+				Identity:         SessionContext{BotID: "bot-1"},
+				OnStepCommitted: func(_ context.Context, _ int, _ *step.Record) (StepDirective, error) {
+					commits++
+					switch commits {
+					case maxRefusedBatches, maxRefusedBatches + 1:
+						// Step 3 would trip the bound: the steer claimed here must
+						// continue the run. Step 4 is the interim final answer.
+						return StepDirective{NextInputs: []DirectiveInput{{ID: fmt.Sprintf("steer-%d", commits), Text: "steer text"}}}, nil
+					}
+					return StepDirective{}, nil
+				},
+			}
+			mock := &atomicMockProvider{handler: func(_ int, params sdk.Request) (sdk.ModelResult, error) { return next(params) }}
+			mock.stream = func(_ context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
+				result, _ := next(params)
+				parts := []sdk.StreamPart{}
+				for _, call := range result.ToolCalls {
+					parts = append(parts, &sdk.StreamToolCallPart{ToolCallID: call.ToolCallID, ToolName: call.ToolName, Input: call.Input})
+				}
+				if result.Text != "" {
+					parts = append(parts, &sdk.TextDeltaPart{Text: result.Text})
+				}
+				parts = append(parts, &sdk.FinishStepPart{FinishReason: result.FinishReason})
+				return closedAgentTestStream(parts...), nil
+			}
+			cfg.Model = &sdk.Model{ID: "mock", Provider: mock}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if streaming {
+				var terminal StreamEvent
+				for event := range a.Stream(ctx, cfg) {
+					if event.IsTerminal() {
+						terminal = event
+					}
+				}
+				if terminal.Type != EventAgentAbort {
+					t.Fatalf("terminal = %q (%s), want the loop abort at the end", terminal.Type, terminal.Error)
+				}
+			} else if _, err := a.Generate(ctx, cfg); !errors.Is(err, ErrToolLoopDetected) {
+				t.Fatalf("Generate error = %v, want ErrToolLoopDetected at the end", err)
+			}
+			// Refused ×3 (steer on the third resets), final ×1 (directive
+			// continues, resets), then refused ×maxRefusedBatches end the run.
+			if want := int32(3 + 1 + maxRefusedBatches); calls.Load() != want {
+				t.Fatalf("provider calls = %d, want %d", calls.Load(), want)
+			}
+			if !sawSteer.Load() {
+				t.Fatal("the steer claimed on the tripping step never reached the model")
 			}
 		})
 	}
