@@ -82,8 +82,9 @@ func jsonEqual(t *testing.T, a, b string) bool {
 
 // A provider namespace whose values are not strings is the one legacy shape
 // the typed metadata cannot hold verbatim: its nested values come back
-// encoded the way sdk.StringValues encodes them. No provider Memoh ships wrote
-// such a value; this pins what happens if a row carries one.
+// encoded the way sdk.StringValues encodes them. The previous SDK wrote such
+// rows for MiniMax (reasoning_details is an array), so this pins how those
+// rows read back and what a rollback would find in rows written since.
 func TestStoredProviderMetadataNestedValuesAreStringified(t *testing.T) {
 	t.Parallel()
 	content := `[{"providerMetadata":{"openai":{"item":"rs_1","nested":{"a":1}}},"text":"answer","type":"text"}]`
@@ -153,5 +154,36 @@ func TestStoredStringArgumentsFollowTheInvalidTextRule(t *testing.T) {
 	msg := ModelMessageToSDKMessage(turn.ModelMessage{Role: "assistant", Content: json.RawMessage(`[{"input":"x","toolCallId":"c1","toolName":"exec","type":"tool-call"}]`)})
 	if call := msg.Content[0].(sdk.ToolCallPart); call.Input.Valid() || call.Input.Text != "x" {
 		t.Fatalf("string literal document read back as %#v, want the invalid text x", call.Input)
+	}
+}
+
+// Outputs follow the same rule as arguments: a stored string is text, any
+// other value is a document. A JSON output that is itself a string literal is
+// the one shape that reads back as text; the native path never stores one,
+// and this pins the rule so a change to it is deliberate.
+func TestStoredOutputsFollowTheTextRule(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ stored, want string }{
+		{`"plain text"`, `"plain text"`},
+		{`{"ok":true}`, `{"ok":true}`},
+		{`[1,2]`, `[1,2]`},
+		{`42`, `42`},
+		{`null`, `null`},
+	} {
+		row := `[{"result":` + tc.stored + `,"toolCallId":"c1","toolName":"exec","type":"tool-result"}]`
+		want := `[{"result":` + tc.want + `,"toolCallId":"c1","toolName":"exec","type":"tool-result"}]`
+		if got := roundTripStored(t, row); got != want {
+			t.Fatalf("stored %s: round trip = %s, want %s", tc.stored, got, want)
+		}
+	}
+	literal, err := sdk.JSONOutput("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "c1", ToolName: "exec", Result: literal})
+	stored := SDKMessagesToModelMessages([]sdk.Message{live})[0]
+	reloaded := ModelMessageToSDKMessage(stored).Content[0].(sdk.ToolResultPart)
+	if reloaded.Result.IsJSON() || reloaded.Result.Text != "x" {
+		t.Fatalf("string-literal document read back as %#v, want the text x", reloaded.Result)
 	}
 }

@@ -208,7 +208,10 @@ func storedOutput(output sdk.ToolOutput) json.RawMessage {
 }
 
 // typedOutput reads a stored output: a string is text, anything else is a
-// document.
+// document. As with arguments, a JSON output that is itself a string literal
+// is stored like text and reads back as text; the native path normalizes
+// outputs through WrapToolOutputLimits before they are stored, so no live
+// output takes that shape.
 func typedOutput(raw json.RawMessage) (json.RawMessage, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
