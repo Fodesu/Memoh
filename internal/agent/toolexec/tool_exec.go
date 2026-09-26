@@ -59,23 +59,15 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 		if !tc.Input.Valid() {
 			// The model's argument text was not a JSON document. The call is
 			// answered, never run: the model reads the failure on its next
-			// step and can correct the call (TRN-style invalid arguments).
-			results[i] = sdk.ToolResultPart{
-				ToolCallID: tc.ToolCallID,
-				ToolName:   tc.ToolName,
-				Result:     sdk.TextOutput(fmt.Sprintf("invalid tool arguments for %q: not a JSON document", tc.ToolName)),
-				IsError:    true,
-			}
+			// step and can correct the call (TRN-style invalid arguments). The
+			// text it sent travels in the result; the step message replays
+			// the call with an empty object (see BuildStepMessages).
+			results[i] = failedToolResult(opts.OnPart, tc, fmt.Errorf("invalid tool arguments for %q: not a JSON document: %s", tc.ToolName, invalidArgumentExcerpt(tc.Input.Text)))
 			continue
 		}
 		tool, ok := toolMap[tc.ToolName]
 		if !ok || tool.Execute == nil {
-			results[i] = sdk.ToolResultPart{
-				ToolCallID: tc.ToolCallID,
-				ToolName:   tc.ToolName,
-				Result:     sdk.TextOutput(fmt.Sprintf("tool %q not found or has no execute handler", tc.ToolName)),
-				IsError:    true,
-			}
+			results[i] = failedToolResult(opts.OnPart, tc, fmt.Errorf("tool %q not found or has no execute handler", tc.ToolName))
 			continue
 		}
 
@@ -130,6 +122,12 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 				}
 				continue
 			case ToolApprovalDecisionDeferred:
+				if approval.Input != nil {
+					// The parked call is persisted and shown with the arguments
+					// the decision was evaluated on, not the model's raw ones.
+					tc.Input = *approval.Input
+					calls[i].Input = *approval.Input
+				}
 				if opts.OnPart != nil {
 					opts.OnPart(&ToolApprovalRequestPart{
 						ApprovalID: approval.ApprovalID,
@@ -261,4 +259,32 @@ func runTool(ctx context.Context, tc *sdk.ToolCall, tool *Tool, sendProgress fun
 		ToolName:   tc.ToolName,
 		Result:     output,
 	}
+}
+
+// failedToolResult answers a call the executor refused to run. The error part
+// closes the call's live block the way a failing tool would; without it a
+// consumer that opened the block on tool_call_start waits for an end that
+// never comes.
+func failedToolResult(onPart func(sdk.StreamPart), tc sdk.ToolCall, err error) sdk.ToolResultPart {
+	if onPart != nil {
+		onPart(&StreamToolErrorPart{ToolCallID: tc.ToolCallID, ToolName: tc.ToolName, Error: err})
+	}
+	return sdk.ToolResultPart{
+		ToolCallID: tc.ToolCallID,
+		ToolName:   tc.ToolName,
+		Result:     sdk.TextOutput(err.Error()),
+		IsError:    true,
+	}
+}
+
+// invalidArgumentExcerptLimit bounds the model's argument text echoed in an
+// invalid-arguments result; the text is model output and can be arbitrarily
+// long.
+const invalidArgumentExcerptLimit = 2000
+
+func invalidArgumentExcerpt(text string) string {
+	if len(text) <= invalidArgumentExcerptLimit {
+		return text
+	}
+	return text[:invalidArgumentExcerptLimit] + "…"
 }

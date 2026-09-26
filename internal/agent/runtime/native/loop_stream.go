@@ -105,7 +105,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
-	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
+	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaToolPresent(sdkTools), a != nil && a.hookService != nil, true)
 	var contextViewErr error
 	cfg, contextViewErr = a.applyContextView(streamCtx, cfg)
 	if contextViewErr != nil {
@@ -630,6 +630,11 @@ func (e *streamEngine) run() {
 		// The failed attempt's partial output is regenerated from the last
 		// committed boundary, so it must not survive as a checkpoint.
 		e.interruptedStep.rebase(e.baseCfg.StepIndexOffset + len(e.steps))
+		// The regenerated attempt starts a new answer; the repeated-text
+		// detector must not carry the failed attempt's windows into it.
+		if e.resetTextLoopGuard != nil {
+			e.resetTextLoopGuard()
+		}
 		e.agent.logger.WarnContext(e.streamCtx, "mid-stream error, retrying",
 			slog.Int("step", e.stepNumber),
 			slog.Int("attempt", retryAttempts+1),
@@ -993,8 +998,9 @@ partLoop:
 		return failureMsg, true, false
 	}
 	if stepErrored {
-		// ask_user argument parse poison: the run ends quietly with the steps
-		// committed so far.
+		// A provider error that is neither retryable nor a cancellation:
+		// streamFailure published it and marked the run aborted; the steps
+		// committed so far stand.
 		return "", false, true
 	}
 	if !sawFinishStep {
@@ -1015,19 +1021,22 @@ partLoop:
 	// same accumulators.
 	stepResult := func() sdk.ModelResult {
 		return sdk.ModelResult{
-			Text:            stepText,
-			Reasoning:       stepReasoning.text(),
-			ReasoningParts:  stepReasoning.parts,
-			FinishReason:    stepFinishReason,
-			RawFinishReason: stepRawFinishReason,
-			Usage:           stepUsage,
-			ToolCalls:       stepToolCalls,
-			Response:        stepResponse,
+			Text:                 stepText,
+			TextProviderMetadata: stepTextMeta,
+			Reasoning:            stepReasoning.text(),
+			ReasoningParts:       stepReasoning.parts,
+			FinishReason:         stepFinishReason,
+			RawFinishReason:      stepRawFinishReason,
+			Usage:                stepUsage,
+			ToolCalls:            stepToolCalls,
+			Response:             stepResponse,
 		}
 	}
 
-	// No tool calls, a non-tool-calls finish, or no executable tool → final step.
-	if stepFinishReason != sdk.FinishReasonToolCalls || len(stepToolCalls) == 0 || !hasExecutableToolCall(e.dispatch.execTools, stepToolCalls) {
+	// No tool calls or a non-tool-calls finish → final step. A call to a tool
+	// the model was not offered is a tool step like any other: the executor
+	// answers it with an error result, so the step never carries an open call.
+	if stepFinishReason != sdk.FinishReasonToolCalls || len(stepToolCalls) == 0 {
 		stepMsgs := toolexec.BuildStepMessages(stepText, stepTextMeta, stepReasoning.parts, stepToolCalls, nil, &stepUsage)
 		sr := step.Record{Result: stepResult(), Messages: stepMsgs}
 		dir, err := e.commitStep(attemptStep, &sr)
@@ -1310,17 +1319,4 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 			e.aborted = true
 		}
 	}
-}
-
-// hasExecutableToolCall reports whether any call in the batch resolves to a
-// tool with an execute handler, mirroring the SDK loop's final-step check.
-func hasExecutableToolCall(execTools []toolexec.Tool, calls []sdk.ToolCall) bool {
-	for _, call := range calls {
-		for i := range execTools {
-			if execTools[i].Name == call.ToolName && execTools[i].Execute != nil {
-				return true
-			}
-		}
-	}
-	return false
 }

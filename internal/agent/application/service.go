@@ -1262,6 +1262,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 			Decision:   toolexec.ToolApprovalDecisionDeferred,
 			ApprovalID: req.ID,
 			Metadata:   approvalResultMetadata(req),
+			Input:      approvedInput,
 		}, nil
 	}
 }

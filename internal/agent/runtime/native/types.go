@@ -239,10 +239,11 @@ type RunConfig struct {
 	// and appends user messages to the conversation before the next LLM call.
 	InjectCh <-chan InjectMessage
 
-	// InjectedRecorder is called during terminal delivery for each injected
-	// message admitted by a provider attempt, recording the headerified text
-	// and the number of SDK output messages that preceded the injection. Used
-	// by the resolver to interleave injected messages in storeRound.
+	// InjectedRecorder is called during terminal delivery for each user
+	// message the loop appended at a step boundary and a provider attempt
+	// admitted: live injections and steer directive inputs alike. It records
+	// the headerified text and the number of output messages that preceded
+	// the message, so the resolver can interleave them in storeRound.
 	InjectedRecorder func(headerifiedText string, insertAfter int)
 
 	// OnProviderStreamEventObserved receives normalized provider parts before

@@ -274,3 +274,103 @@ func TestCapabilityRefreshRewritesPromotedSystemPrompt(t *testing.T) {
 		})
 	}
 }
+
+// capabilityReadProvider offers the read tool only after an install: the
+// refreshed set must wrap it over the loop's read-media state, so the media
+// it returns reaches the model as a message part instead of the internal
+// envelope.
+type capabilityReadProvider struct {
+	installed bool
+	readRuns  int
+}
+
+func (p *capabilityReadProvider) Tools(_ context.Context, session tools.SessionContext) ([]toolexec.Tool, error) {
+	result := []toolexec.Tool{{Name: "install_reader", Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+		p.installed = true
+		session.CapabilitiesChanged()
+		return toolexec.OutputFromValue(map[string]any{"installed": true}), nil
+	}}}
+	if p.installed {
+		result = append(result, toolexec.Tool{Name: tools.ReadMediaToolName().String(), Parameters: toolexec.SchemaFromValue(map[string]any{"type": "object"}), Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+			p.readRuns++
+			return toolexec.OutputFromValue(tools.ReadMediaToolOutput{ImageBase64: "aW1hZ2U=", ImageMediaType: "image/png"}), nil
+		}})
+	}
+	return result, nil
+}
+
+func TestCapabilityRefreshDecoratesNewReadTool(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(strconv.FormatBool(streaming), func(t *testing.T) {
+			capability := &capabilityReadProvider{}
+			a := New(Deps{})
+			a.SetToolProviders([]tools.ToolProvider{capability})
+			calls := 0
+			var mediaDelivered, envelopeLeaked bool
+			next := func(params sdk.Request) (sdk.ModelResult, error) {
+				calls++
+				switch calls {
+				case 1:
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "install", ToolName: "install_reader", Input: toolexec.ArgumentsFromValue(map[string]any{})}}}, nil
+				case 2:
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "read", ToolName: tools.ReadMediaToolName().String(), Input: toolexec.ArgumentsFromValue(map[string]any{"path": "a.png"})}}}, nil
+				default:
+					for _, msg := range params.Messages {
+						for _, part := range msg.Content {
+							if _, ok := part.(sdk.ImagePart); ok && msg.Role == sdk.MessageRoleUser {
+								mediaDelivered = true
+							}
+							if result, ok := part.(sdk.ToolResultPart); ok && strings.Contains(result.Result.String(), "memoh_read_media") {
+								envelopeLeaked = true
+							}
+						}
+					}
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonStop, Text: "done"}, nil
+				}
+			}
+			mock := &atomicMockProvider{handler: func(_ int, params sdk.Request) (sdk.ModelResult, error) { return next(params) }}
+			mock.stream = func(_ context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
+				result, err := next(params)
+				if err != nil {
+					return nil, err
+				}
+				parts := []sdk.StreamPart{}
+				for _, call := range result.ToolCalls {
+					parts = append(parts, &sdk.StreamToolCallPart{ToolCallID: call.ToolCallID, ToolName: call.ToolName, Input: call.Input})
+				}
+				if result.Text != "" {
+					parts = append(parts, &sdk.TextDeltaPart{Text: result.Text})
+				}
+				parts = append(parts, &sdk.FinishStepPart{FinishReason: result.FinishReason})
+				return closedAgentTestStream(parts...), nil
+			}
+			cfg := RunConfig{
+				Model:              &sdk.Model{ID: "test", Provider: mock},
+				Messages:           []sdk.Message{sdk.UserMessage("install then read")},
+				SupportsToolCall:   true,
+				SupportsImageInput: true,
+				Identity:           SessionContext{BotID: "bot-1"},
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if streaming {
+				for event := range a.Stream(ctx, cfg) {
+					if event.Type == EventError {
+						t.Error(event.Error)
+					}
+				}
+			} else if _, err := a.Generate(ctx, cfg); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 3 || capability.readRuns != 1 {
+				t.Fatalf("calls=%d readRuns=%d", calls, capability.readRuns)
+			}
+			if envelopeLeaked {
+				t.Fatal("the refreshed read tool returned the internal read-media envelope to the model")
+			}
+			if !mediaDelivered {
+				t.Fatal("the image read by the refreshed read tool did not reach the model as a message part")
+			}
+		})
+	}
+}

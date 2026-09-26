@@ -2,6 +2,7 @@ package toolexec_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -349,5 +350,91 @@ func TestExecuteTools_ApprovalInputRewritesCall(t *testing.T) {
 	// on it as well.
 	if got := string(calls[0].Input.Object()); got != `{"cmd":"ls","target_id":"canonical-target"}` {
 		t.Fatalf("persisted call input = %s, want the pinned arguments", got)
+	}
+}
+
+// A call the executor refuses to run (arguments that are not a JSON
+// document, or a tool the model was not offered) is answered with an error
+// result and closes its live block with an error part, like a failing tool.
+// The argument text the model sent travels in the invalid-arguments result.
+func TestExecuteTools_RefusedCallsCloseTheirLiveBlock(t *testing.T) {
+	var parts []sdk.StreamPart
+	calls := []sdk.ToolCall{
+		{ToolCallID: "c1", ToolName: "tool-a", Input: sdk.ParseToolArguments(`{"path":"a`)},
+		{ToolCallID: "c2", ToolName: "missing"},
+	}
+	outcome, err := toolexec.ExecuteTools(context.Background(), calls, toolexec.ToolExecOptions{
+		Tools:  []toolexec.Tool{echoTool("tool-a", nil)},
+		OnPart: func(part sdk.StreamPart) { parts = append(parts, part) },
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTools: %v", err)
+	}
+	if len(outcome.Results) != 2 || !outcome.Results[0].IsError || !outcome.Results[1].IsError {
+		t.Fatalf("results = %#v, want two error results", outcome.Results)
+	}
+	if text := outcome.Results[0].Result.String(); !strings.Contains(text, `{"path":"a`) {
+		t.Fatalf("invalid-arguments result = %q, want the model's argument text", text)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts = %#v, want one error part per refused call", parts)
+	}
+	for i, part := range parts {
+		errPart, ok := part.(*toolexec.StreamToolErrorPart)
+		if !ok || errPart.ToolCallID != calls[i].ToolCallID {
+			t.Fatalf("part %d = %#v, want StreamToolErrorPart for %s", i, part, calls[i].ToolCallID)
+		}
+	}
+}
+
+// A deferred approval that pinned arguments parks the call with them: the
+// persisted call and the approval request name the target the decision was
+// evaluated on.
+func TestExecuteTools_DeferredApprovalPinsInput(t *testing.T) {
+	tool := echoTool("exec", nil)
+	tool.RequireApproval = true
+	pinned := sdk.ParseToolArguments(`{"cmd":"ls","target_id":"canonical-target"}`)
+	calls := []sdk.ToolCall{{ToolCallID: "c1", ToolName: "exec", Input: sdk.ParseToolArguments(`{"cmd":"ls","target_id":"requested"}`)}}
+	var request *toolexec.ToolApprovalRequestPart
+	outcome, err := toolexec.ExecuteTools(context.Background(), calls, toolexec.ToolExecOptions{
+		Tools: []toolexec.Tool{tool},
+		Approve: func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error) {
+			return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionDeferred, ApprovalID: "a1", Input: &pinned}, nil
+		},
+		OnPart: func(part sdk.StreamPart) {
+			if p, ok := part.(*toolexec.ToolApprovalRequestPart); ok {
+				request = p
+			}
+		},
+	})
+	if err != nil || outcome.Deferred == nil {
+		t.Fatalf("outcome = %#v err = %v, want a deferral", outcome, err)
+	}
+	if got := string(calls[0].Input.Object()); got != `{"cmd":"ls","target_id":"canonical-target"}` {
+		t.Fatalf("parked call input = %s, want the pinned arguments", got)
+	}
+	if request == nil || string(request.Input.Object()) != `{"cmd":"ls","target_id":"canonical-target"}` {
+		t.Fatalf("approval request part = %#v, want the pinned arguments", request)
+	}
+}
+
+// Invalid arguments never reach a provider request: the persisted call
+// replays as the empty object, and the text stays in the error result.
+func TestBuildStepMessages_InvalidArgumentsReplayAsEmptyObject(t *testing.T) {
+	calls := []sdk.ToolCall{
+		{ToolCallID: "c1", ToolName: "tool-a", Input: sdk.ParseToolArguments(`{"path":"a`)},
+		{ToolCallID: "c2", ToolName: "tool-b", Input: sdk.ParseToolArguments(`{"n":1}`)},
+	}
+	msgs := toolexec.BuildStepMessages("", nil, nil, calls, nil, nil)
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %d, want the assistant message only", len(msgs))
+	}
+	first := msgs[0].Content[0].(sdk.ToolCallPart)
+	if !first.Input.Valid() || string(first.Input.Object()) != `{}` {
+		t.Fatalf("invalid call replays as %#v, want {}", first.Input)
+	}
+	second := msgs[0].Content[1].(sdk.ToolCallPart)
+	if string(second.Input.Object()) != `{"n":1}` {
+		t.Fatalf("valid call changed: %#v", second.Input)
 	}
 }

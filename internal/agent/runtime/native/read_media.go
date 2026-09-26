@@ -17,14 +17,13 @@ func decorateReadMediaTools(model *sdk.Model, tools []toolexec.Tool) ([]toolexec
 	if len(tools) == 0 {
 		return tools, nil
 	}
+	// The state exists even when the initial set has no read tool: a
+	// capability refresh that adds one wraps it over this same state, so
+	// media it reads reaches the model instead of the raw base64 envelope.
 	state := &readMediaDecorationState{
 		pendingMedia: make(map[string]sdk.MessagePart),
 	}
-	wrapped := decorateReadMediaToolsWithState(model, tools, state)
-	if len(wrapped) == len(tools) && !readMediaToolPresent(tools) {
-		return tools, nil
-	}
-	return wrapped, state
+	return decorateReadMediaToolsWithState(model, tools, state), state
 }
 
 // readMediaToolPresent reports whether the set carries an executable read tool.

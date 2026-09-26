@@ -79,7 +79,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 		}
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
-	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
+	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaToolPresent(sdkTools), a != nil && a.hookService != nil, false)
 	var contextViewErr error
 	cfg, contextViewErr = a.applyContextView(genCtx, cfg)
 	if contextViewErr != nil {
@@ -127,13 +127,6 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	}
 	if cfg.Model.Provider == nil {
 		return nil, fmt.Errorf("generate: %w", fmt.Errorf("twilightai: model %q has no provider", cfg.Model.ID))
-	}
-
-	// Read the executable set live: a capability refresh replaces it between
-	// steps, and the final-step decision must see the tools the model was
-	// offered on this call.
-	hasExecutableToolCalls := func(calls []sdk.ToolCall) bool {
-		return hasExecutableToolCall(dispatch.execTools, calls)
 	}
 
 	var pendingDirectiveInputs []DirectiveInput
@@ -252,8 +245,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 		}
 		lastResult = result
 
-		// No tool calls, a non-tool-calls finish, or no executable tool → final step.
-		if result.FinishReason != sdk.FinishReasonToolCalls || len(result.ToolCalls) == 0 || !hasExecutableToolCalls(result.ToolCalls) {
+		// No tool calls or a non-tool-calls finish → final step; a call to a tool
+		// the model was not offered is answered by the executor like any other.
+		if result.FinishReason != sdk.FinishReasonToolCalls || len(result.ToolCalls) == 0 {
 			stepMsgs := toolexec.BuildStepMessages(result.Text, result.TextProviderMetadata, result.ReasoningParts, result.ToolCalls, nil, &result.Usage)
 			// The step's model result is the call's result verbatim: this path
 			// executes no tools and defers nothing.
