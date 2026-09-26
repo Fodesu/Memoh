@@ -11,6 +11,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -176,9 +177,9 @@ func execApplyPatchInput(input sdk.ToolArguments) (applyPatchArgs, error) {
 		}
 		return applyPatchArgs{Patch: text}, nil
 	}
-	var args applyPatchArgs
-	if err := input.Unmarshal(&args); err != nil {
-		return applyPatchArgs{}, errors.New("patch must be a string")
+	args, err := toolexec.DecodeArguments[applyPatchArgs](ToolApplyPatch().String(), input)
+	if err != nil {
+		return applyPatchArgs{}, err
 	}
 	if strings.TrimSpace(args.Patch) == "" {
 		return applyPatchArgs{}, errors.New("patch is required")

@@ -568,7 +568,10 @@ func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionConte
 		forkContext = make([]sessionpkg.SubagentForkContextMessage, 0, len(entries))
 		for i, entry := range entries {
 			// Fork rows share bot_history_messages' stored shape so every
-			// reader types them the same way as ordinary history.
+			// reader types them the same way as ordinary history. That
+			// includes the row rule that document bytes are never stored: a
+			// forked agent inherits images and file names, and reads a
+			// document's content from the workspace itself.
 			content, marshalErr := historyfrag.MarshalStoredSDKMessage(entry.Message)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("marshal fork context message %d: %w", i, marshalErr)
@@ -1369,9 +1372,12 @@ func (p *SpawnProvider) loadAgentForkContext(ctx context.Context, sessionID stri
 	}
 	messages := make([]sdk.Message, 0, len(rows))
 	for _, row := range rows {
+		// A row without content (an empty assistant message the parent kept)
+		// is skipped, as the direct-turn reader skips it; the fork is not
+		// worth less for it.
 		converted, ok := sdkMessageFromPersisted(messagepkg.Message{Role: row.Role, Content: row.Message})
 		if !ok {
-			return nil, fmt.Errorf("invalid fork context message role %q", row.Role)
+			continue
 		}
 		messages = append(messages, converted)
 	}

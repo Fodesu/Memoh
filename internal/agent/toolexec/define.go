@@ -65,24 +65,35 @@ func Typed[T any](execute func(*ToolExecContext, T) (sdk.ToolOutput, error)) Too
 		if ctx != nil && ctx.ToolName != "" {
 			toolName = ctx.ToolName
 		}
-		var typed T
-		if input.Valid() {
-			if err := rejectCaseVariantKeys(input.JSON, reflect.TypeFor[T]()); err != nil {
-				return sdk.ToolOutput{}, fmt.Errorf("invalid arguments for %s: %w", toolName, err)
-			}
-		}
-		err := input.Unmarshal(&typed)
-		if err != nil && input.Valid() {
-			if coerced, changed := coerceArguments(input.JSON, reflect.TypeFor[T]()); changed {
-				typed = *new(T)
-				err = json.Unmarshal(coerced, &typed)
-			}
-		}
+		typed, err := DecodeArguments[T](toolName, input)
 		if err != nil {
-			return sdk.ToolOutput{}, describeDecodeError(toolName, err)
+			return sdk.ToolOutput{}, err
 		}
 		return execute(ctx, typed)
 	}
+}
+
+// DecodeArguments is the decode Typed applies, for a handler that inspects
+// the document before choosing a struct: the same case-variant rejection,
+// lenient coercion, and property-named errors.
+func DecodeArguments[T any](toolName string, input sdk.ToolArguments) (T, error) {
+	var typed T
+	if input.Valid() {
+		if err := rejectCaseVariantKeys(input.JSON, reflect.TypeFor[T]()); err != nil {
+			return typed, fmt.Errorf("invalid arguments for %s: %w", toolName, err)
+		}
+	}
+	err := input.Unmarshal(&typed)
+	if err != nil && input.Valid() {
+		if coerced, changed := coerceArguments(input.JSON, reflect.TypeFor[T]()); changed {
+			typed = *new(T)
+			err = json.Unmarshal(coerced, &typed)
+		}
+	}
+	if err != nil {
+		return *new(T), describeDecodeError(toolName, err)
+	}
+	return typed, nil
 }
 
 // describeDecodeError turns a decode failure into text the model can act on:

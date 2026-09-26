@@ -1115,3 +1115,72 @@ func TestSDKMessageFromPersistedTypesStoredRow(t *testing.T) {
 		t.Fatal("empty row must be skipped")
 	}
 }
+
+// A parent thread may hold an assistant message without content (a step that
+// produced neither text nor calls). The fork skips such a row, as the
+// direct-turn reader does, instead of refusing the whole fork.
+func TestForkedSubagentToleratesEmptyParentMessage(t *testing.T) {
+	agent := &fakeSpawnAgent{}
+	p, _, _, _ := newAgentControlProvider(t, agent)
+	parentMessages := []sdk.Message{
+		sdk.UserMessage("parent question"),
+		{Role: sdk.MessageRoleAssistant},
+		sdk.AssistantMessage("parent working context"),
+	}
+	session := SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: NewMessageSnapshot(parentMessages)}
+
+	result := asMap(t, mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true}))
+	if result["fork"] != true {
+		t.Fatalf("fork result = %v", result)
+	}
+	// The follow-up reloads the fork rows from storage.
+	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
+	second, ok := agent.callAt(1)
+	if !ok {
+		t.Fatal("follow-up call missing")
+	}
+	var texts []string
+	for _, msg := range second.Messages[:2] {
+		texts = append(texts, messageContentTextForTest(msg))
+	}
+	if texts[0] != "parent question" || texts[1] != "parent working context" {
+		t.Fatalf("fork prefix after reload = %q, want the two non-empty parent messages", texts)
+	}
+}
+
+// Fork rows follow the history-row rule: a document's bytes are never stored.
+// The forked agent inherits the file's name and type as text and reads the
+// content from the workspace itself; images are inherited as they are.
+func TestForkedSubagentInheritsFileNameNotFileBytes(t *testing.T) {
+	agent := &fakeSpawnAgent{}
+	p, _, _, _ := newAgentControlProvider(t, agent)
+	parentMessages := []sdk.Message{
+		sdk.UserMessage("read this", sdk.FilePart{Data: "JVBERi0xLjQ=", MediaType: "application/pdf", Filename: "brief.pdf"}),
+	}
+	session := SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: NewMessageSnapshot(parentMessages)}
+	mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true})
+	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
+	second, ok := agent.callAt(1)
+	if !ok {
+		t.Fatal("follow-up call missing")
+	}
+	text := messageContentTextForTest(second.Messages[0])
+	if !strings.Contains(text, "brief.pdf") || !strings.Contains(text, "application/pdf") {
+		t.Fatalf("forked prefix = %q, want the attachment name and type", text)
+	}
+	for _, part := range second.Messages[0].Content {
+		if _, isFile := part.(sdk.FilePart); isFile {
+			t.Fatalf("forked prefix carries document bytes: %#v", part)
+		}
+	}
+}
+
+func messageContentTextForTest(message sdk.Message) string {
+	var b strings.Builder
+	for _, part := range message.Content {
+		if text, ok := part.(sdk.TextPart); ok {
+			b.WriteString(text.Text)
+		}
+	}
+	return b.String()
+}

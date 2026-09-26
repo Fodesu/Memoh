@@ -325,7 +325,7 @@ func (p *HistoryProvider) execSearchMessages(ctx context.Context, sess SessionCo
 		MaxCount:   limit,
 	}
 
-	if v := args.SessionID; v != "" {
+	if v := strings.TrimSpace(args.SessionID); v != "" {
 		if !historySessionVisible(allowed, v) {
 			return nil, errors.New("session_id is not accessible from the current context")
 		}
@@ -344,7 +344,7 @@ func (p *HistoryProvider) execSearchMessages(ctx context.Context, sess SessionCo
 	if v := strings.TrimSpace(args.Keyword); v != "" {
 		params.Keyword = pgtype.Text{String: v, Valid: true}
 	}
-	if v := args.StartTime; v != "" {
+	if v := strings.TrimSpace(args.StartTime); v != "" {
 		if t, parseErr := parseFlexibleTime(v); parseErr == nil {
 			params.StartTime = pgtype.Timestamptz{Time: t, Valid: true}
 		}
@@ -352,7 +352,7 @@ func (p *HistoryProvider) execSearchMessages(ctx context.Context, sess SessionCo
 		defaultLookback := time.Now().UTC().AddDate(0, 0, -defaultMaxLookbackDays)
 		params.StartTime = pgtype.Timestamptz{Time: defaultLookback, Valid: true}
 	}
-	if v := args.EndTime; v != "" {
+	if v := strings.TrimSpace(args.EndTime); v != "" {
 		if t, parseErr := parseFlexibleTime(v); parseErr == nil {
 			params.EndTime = pgtype.Timestamptz{Time: t, Valid: true}
 		}
