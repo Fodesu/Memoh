@@ -106,7 +106,7 @@ func agentStreamLifecycleError(event native.StreamEvent) error {
 	// reason: an exhausted balance and a rejected key both need the user to go
 	// change something, and "the model response was interrupted, please try
 	// again" sends them back into a call that cannot succeed.
-	if code := providerFailureCode(event.Error); code != "" {
+	if code := providerFailureCode(event.Error, event.ErrorStatusCode); code != "" {
 		return apperror.Wrap(code, err, nil)
 	}
 	return apperror.Wrap(apperror.CodeAgentResponseInterrupted, err, nil)

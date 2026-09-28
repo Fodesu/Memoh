@@ -1149,7 +1149,15 @@ func (e *streamEngine) streamFailure(err error) (string, bool) {
 	}
 	msg := err.Error()
 	e.turnError = msg
-	e.emit(StreamEvent{Type: EventError, Error: msg})
+	event := StreamEvent{Type: EventError, Error: msg}
+	// Keep the upstream status on the event so the application layer can
+	// classify the failure by status code instead of parsing the text; the
+	// field never reaches the wire.
+	var apiErr *sdk.APIError
+	if errors.As(err, &apiErr) {
+		event.ErrorStatusCode = apiErr.StatusCode
+	}
+	e.emit(event)
 	if isRetryableStreamError(err) {
 		return msg, true
 	}

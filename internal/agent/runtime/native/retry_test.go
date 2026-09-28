@@ -3,8 +3,12 @@ package native
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/felinics/twilight/sdk"
 )
 
 func TestRetryableStreamErrorSeparatesProviderStatusFromApplicationTimeout(t *testing.T) {
@@ -29,6 +33,70 @@ func TestRetryableStreamErrorSeparatesProviderStatusFromApplicationTimeout(t *te
 				t.Fatalf("isRetryableStreamError(%q) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRetryableStreamErrorReadsAPIErrorStatus pins the twilight #63 contract:
+// a provider failure crosses as *sdk.APIError wrapped with %w, and the retry
+// decision reads StatusCode from the chain. Non-2xx statuses other than 429
+// and 5xx fail again on the next attempt, whatever the message wording says.
+func TestRetryableStreamErrorReadsAPIErrorStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "wrapped 429",
+			err:  fmt.Errorf("anthropic: stream failed: %w", &sdk.APIError{StatusCode: http.StatusTooManyRequests, Message: "rate limited"}),
+			want: true,
+		},
+		{
+			name: "wrapped 503",
+			err:  fmt.Errorf("openai: stream failed: %w", &sdk.APIError{StatusCode: http.StatusServiceUnavailable}),
+			want: true,
+		},
+		{
+			name: "wrapped 401",
+			err:  fmt.Errorf("openai: stream failed: %w", &sdk.APIError{StatusCode: http.StatusUnauthorized, Message: "incorrect api key"}),
+			want: false,
+		},
+		{
+			name: "wrapped 400",
+			err:  fmt.Errorf("anthropic: stream failed: %w", &sdk.APIError{StatusCode: http.StatusBadRequest, Message: "bad request"}),
+			want: false,
+		},
+		{
+			// The status code wins over rate-limit wording: a 400 cannot be
+			// ridden out by re-sending the same request.
+			name: "wrapped 400 with rate limit wording",
+			err:  fmt.Errorf("anthropic: stream failed: %w", &sdk.APIError{StatusCode: http.StatusBadRequest, Message: "usage limit reached"}),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isRetryableStreamError(tt.err); got != tt.want {
+				t.Fatalf("isRetryableStreamError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRetryableStreamErrorReadsAPIErrorStatusDirect pins the unwrapped form:
+// sdk.ErrorPart.Error reaches the engine as the bare *sdk.APIError.
+func TestRetryableStreamErrorReadsAPIErrorStatusDirect(t *testing.T) {
+	t.Parallel()
+
+	if got := isRetryableStreamError(&sdk.APIError{StatusCode: http.StatusTooManyRequests}); !got {
+		t.Fatal("bare *sdk.APIError 429 = false, want true")
+	}
+	if got := isRetryableStreamError(&sdk.APIError{StatusCode: http.StatusForbidden}); got {
+		t.Fatal("bare *sdk.APIError 403 = true, want false")
 	}
 }
 

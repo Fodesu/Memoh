@@ -11,9 +11,10 @@ func TestProviderFailureCode(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name   string
-		detail string
-		want   apperror.Code
+		name       string
+		detail     string
+		statusCode int
+		want       apperror.Code
 	}{
 		{
 			name:   "codex overload",
@@ -62,13 +63,59 @@ func TestProviderFailureCode(t *testing.T) {
 			name:   "a request id that merely contains the digits",
 			detail: "openai: stream failed: request req_4291 ended early",
 		},
+		{
+			name:       "status 401 with empty detail",
+			statusCode: 401,
+			want:       apperror.CodeAgentProviderAuthFailed,
+		},
+		{
+			name:       "status 403",
+			detail:     "openai: stream failed",
+			statusCode: 403,
+			want:       apperror.CodeAgentProviderAuthFailed,
+		},
+		{
+			name:       "status 402",
+			detail:     "openai: stream failed",
+			statusCode: 402,
+			want:       apperror.CodeAgentProviderQuotaExhausted,
+		},
+		{
+			// Quota wording wins over the 429 status: an exhausted balance
+			// reported with a rate-limit status still sends the user to
+			// billing, not to waiting.
+			name:       "status 429 carrying quota wording",
+			detail:     "openai: stream failed: You exceeded your current quota, please check your plan and billing details.",
+			statusCode: 429,
+			want:       apperror.CodeAgentProviderQuotaExhausted,
+		},
+		{
+			name:       "status 429 plain",
+			detail:     "openai: stream failed: rate_limit_error",
+			statusCode: 429,
+			want:       apperror.CodeAgentProviderRateLimited,
+		},
+		{
+			name:       "status 529",
+			detail:     "anthropic: stream failed",
+			statusCode: 529,
+			want:       apperror.CodeAgentProviderOverloaded,
+		},
+		{
+			// The status code wins over rate-limit wording: a 400 cannot be
+			// resolved by waiting.
+			name:       "status 400 with rate limit wording",
+			detail:     "openai: stream failed: usage limit reached",
+			statusCode: 400,
+			want:       "",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := providerFailureCode(tc.detail); got != tc.want {
-				t.Fatalf("providerFailureCode(%q) = %q, want %q", tc.detail, got, tc.want)
+			if got := providerFailureCode(tc.detail, tc.statusCode); got != tc.want {
+				t.Fatalf("providerFailureCode(%q, %d) = %q, want %q", tc.detail, tc.statusCode, got, tc.want)
 			}
 		})
 	}

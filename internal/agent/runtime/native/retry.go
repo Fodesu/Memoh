@@ -5,9 +5,12 @@ import (
 	"errors"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/felinics/twilight/sdk"
 )
 
 // RetryConfig controls retry behavior for stream failures.
@@ -75,7 +78,16 @@ func isRetryableStreamError(err error) bool {
 	if errors.As(err, &netErr) {
 		return true
 	}
-	// HTTP status errors: retry on 429 and 5xx
+	// An upstream HTTP failure is judged by its status code alone: 429 and
+	// 5xx ride out a transient rejection window, anything else fails again
+	// on the next attempt. Providers cross sdk.APIError wrapped with %w, so
+	// the code is read from the chain instead of the Error() text.
+	var apiErr *sdk.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500
+	}
+	// Non-HTTP failures keep the message-based checks: a flattened provider
+	// error (text rebuilt without the APIError chain) still matches here.
 	errStr := err.Error()
 	if err429Pattern.MatchString(errStr) {
 		return true

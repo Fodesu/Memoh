@@ -73,12 +73,18 @@ type StreamEvent struct {
 	Reasoning      []string         `json:"reasoning,omitempty"`
 	Code           string           `json:"code,omitempty"`
 	Error          string           `json:"error,omitempty"`
-	Attempt        int              `json:"attempt,omitempty"`
-	MaxAttempt     int              `json:"maxAttempt,omitempty"`
-	RetryError     string           `json:"retryError,omitempty"`
-	StepNumber     int              `json:"stepNumber,omitempty"`
-	TotalSteps     int              `json:"totalSteps,omitempty"`
-	ProgressStatus string           `json:"progressStatus,omitempty"`
+	// ErrorStatusCode carries the upstream HTTP status when Error names a
+	// provider HTTP failure backed by sdk.APIError. The runtime sets it when
+	// flattening the error, and the application layer uses it for failure
+	// classification. Internal only: never serialized, so the wire format
+	// WebSocket clients consume is unchanged.
+	ErrorStatusCode int    `json:"-"`
+	Attempt         int    `json:"attempt,omitempty"`
+	MaxAttempt      int    `json:"maxAttempt,omitempty"`
+	RetryError      string `json:"retryError,omitempty"`
+	StepNumber      int    `json:"stepNumber,omitempty"`
+	TotalSteps      int    `json:"totalSteps,omitempty"`
+	ProgressStatus  string `json:"progressStatus,omitempty"`
 }
 
 // IsTerminal returns true for events that signal end of stream.

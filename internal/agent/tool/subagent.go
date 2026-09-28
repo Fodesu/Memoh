@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1541,6 +1542,22 @@ func isRetryableSubagentError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// A nested run reports context cancellation only after the callers above
+	// have handled parent-side cancellation, so a bare context error here is
+	// the nested runtime's own timeout rather than the parent's stop signal.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	// Upstream HTTP failures retry on 429 and 5xx only; the status code is
+	// read from the sdk.APIError chain, not the Error() text.
+	var apiErr *sdk.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500
+	}
 	errStr := err.Error()
 	if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "rate_limit") {
 		return true
@@ -1551,11 +1568,7 @@ func isRetryableSubagentError(err error) bool {
 	if errEOFPattern.MatchString(errStr) {
 		return true
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return false
 }
 
 func (p *SpawnProvider) persistMessages(
