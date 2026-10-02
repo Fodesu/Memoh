@@ -6,8 +6,8 @@ config:
   chat_completions_compat: deepseek
 
 models:
-  - model_id: deepseek-v4-flash
-    name: DeepSeek V4 Flash
+  - model_id: deepseek-flash
+    name: DeepSeek Flash
     type: chat
     config:
       compatibilities: [tool-call, reasoning]
@@ -16,6 +16,15 @@ models:
       # disable is hand-maintained: LiteLLM has no off signal for DeepSeek, but the
       # chat_completions_compat layer maps a disabled toggle onto thinking-off
       # (models.dev and OpenRouter both confirm V4 can be turned off).
+      reasoning_efforts: [disable, low, medium, high]
+
+  - model_id: deepseek-v4-flash
+    name: DeepSeek V4 Flash
+    type: chat
+    config:
+      compatibilities: [tool-call, reasoning]
+      context_window: 1000000
+      thinking_mode: toggle
       reasoning_efforts: [disable, low, medium, high]
 
   - model_id: deepseek-v4-pro
