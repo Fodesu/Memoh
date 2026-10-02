@@ -10,7 +10,7 @@ models:
     name: DeepSeek Flash
     type: chat
     config:
-      compatibilities: [tool-call, reasoning]
+      compatibilities: [tool-call, reasoning, vision]
       context_window: 1000000
       thinking_mode: toggle
       # disable is hand-maintained: LiteLLM has no off signal for DeepSeek, but the
