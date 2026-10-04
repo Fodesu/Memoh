@@ -7,8 +7,9 @@ export default [
   ...tseslint.configs.recommended,
   ...vue.configs['flat/recommended'],
   // internal/**/protocolref holds vendored protocol reference snapshots
-  // (pinned verbatim; a freshness test diffs them against upstream).
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/out/**', '**/cache/**', '**/target/**', '**/.toolkit/**', 'packages/sdk/src/**', 'internal/**/protocolref/**'] },
+  // (pinned verbatim; a freshness test diffs them against upstream). Claude
+  // worktrees are complete repository copies, not source owned by this checkout.
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/out/**', '**/cache/**', '**/target/**', '**/.toolkit/**', '**/.claude/**', 'packages/sdk/src/**', 'internal/**/protocolref/**'] },
   {
     files: ['packages/**/*.{js,jsx,ts,tsx}', 'apps/**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
