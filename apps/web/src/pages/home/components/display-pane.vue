@@ -28,6 +28,7 @@
       @keydown="onKeyDown"
       @keyup.prevent="onKeyUp"
       @paste.prevent="onPaste"
+      @blur="releaseKeyboard"
     />
     <textarea
       ref="keyboardRef"
@@ -41,6 +42,7 @@
       @keydown="onKeyDown"
       @keyup.prevent="onKeyUp"
       @paste.prevent="onPaste"
+      @blur="releaseKeyboard"
     />
     <div
       v-if="prepareProgress"
@@ -234,7 +236,7 @@ import { useDocumentVisibility, useMagicKeys, useMouseInElement, useToggle } fro
 import { useBotDisplayConnection } from '@/composables/useBotDisplayConnection'
 import { captureDisplaySnapshot } from '@/utils/display-snapshot'
 import { useDisplayClipboard } from '@/composables/useDisplayClipboard'
-import { remoteCopyKeys } from '@/composables/display-clipboard'
+import { createDisplayKeyboard } from '@/composables/display-keyboard'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { detectPlatform } from '@/lib/keyboard-bindings'
 
@@ -293,11 +295,25 @@ const clipboard = useDisplayClipboard(connection, () => viewing.value)
 const keyboardRef = useTemplateRef('keyboardRef')
 const macKeyboard = detectPlatform() === 'mac'
 let pasteWithShift = false
+const keyboard = createDisplayKeyboard({
+  mac: macKeyboard,
+  active: () => viewing.value && connection.inputReady(),
+  send: event => connection.sendInput(event),
+  copy: clipboard.prepareRemoteCopy,
+  pasteShortcut: shift => { pasteWithShift = shift },
+})
+watch(connection.inputChannel, () => keyboard.reset(), { flush: 'sync' })
 watch(viewing, (active) => {
   if (!active) {
+    releaseKeyboard()
     cleanupLocalUI()
   }
 }, { flush: 'sync' })
+
+function releaseKeyboard() {
+  keyboard.release()
+  pasteWithShift = false
+}
 
 watch(connection.clipboardError, (error) => {
   if (error && viewing.value) toast.error(resolveApiErrorMessage(error, t('errors.workspace.display_clipboard_failed')))
@@ -310,6 +326,7 @@ function onPaste(event: ClipboardEvent) {
   pasteWithShift = false
   if (text !== undefined) {
     clipboard.pasteText(text, shift)
+    keyboard.restoreModifiers()
   }
 }
 
@@ -768,66 +785,13 @@ function onWheel(event: WheelEvent) {
   sendPointer(event, pointerMask)
 }
 
-function keysymForEvent(event: KeyboardEvent): number | null {
-  if (event.key.length === 1) {
-    return event.key.codePointAt(0) ?? null
-  }
-  const keysyms: Record<string, number> = {
-    Backspace: 0xff08,
-    Tab: 0xff09,
-    Enter: 0xff0d,
-    Escape: 0xff1b,
-    Delete: 0xffff,
-    Home: 0xff50,
-    ArrowLeft: 0xff51,
-    ArrowUp: 0xff52,
-    ArrowRight: 0xff53,
-    ArrowDown: 0xff54,
-    PageUp: 0xff55,
-    PageDown: 0xff56,
-    End: 0xff57,
-    Insert: 0xff63,
-    Shift: 0xffe1,
-    Control: 0xffe3,
-    Alt: 0xffe9,
-    Meta: 0xffeb,
-  }
-  if (/^F([1-9]|1[0-2])$/.test(event.key)) {
-    return 0xffbe + Number(event.key.slice(1)) - 1
-  }
-  return keysyms[event.key] ?? null
-}
-
-function sendKey(event: KeyboardEvent, down: boolean) {
-  const keysym = keysymForEvent(event)
-  if (!keysym) return
-  sendInput({
-    type: 'key',
-    keysym,
-    down,
-  })
-}
-
 function onKeyDown(event: KeyboardEvent) {
-  const nativePasteModifier = macKeyboard ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
-  if (nativePasteModifier && !event.altKey && event.key.toLowerCase() === 'v') {
-    pasteWithShift = event.shiftKey
-    return
-  }
-  event.preventDefault()
-  if (event.repeat) return
-  const copyKeys = remoteCopyKeys(event, macKeyboard)
-  if (copyKeys) {
-    if (!macKeyboard || event.metaKey || event.shiftKey) clipboard.prepareRemoteCopy()
-    copyKeys.forEach(sendInput)
-    return
-  }
-  sendKey(event, true)
+  keyboard.keydown(event)
 }
 
 function onKeyUp(event: KeyboardEvent) {
   if (event.key.toLowerCase() === 'v') pasteWithShift = false
-  sendKey(event, false)
+  keyboard.keyup(event)
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -987,11 +951,14 @@ watch([connection.stream, videoRef, viewing], () => {
 
 onMounted(() => {
   window.addEventListener('focus', syncLocalClipboard)
+  window.addEventListener('blur', releaseKeyboard)
   navigator.clipboard?.addEventListener?.('clipboardchange', syncLocalClipboard)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('focus', syncLocalClipboard)
+  window.removeEventListener('blur', releaseKeyboard)
+  releaseKeyboard()
   navigator.clipboard?.removeEventListener?.('clipboardchange', syncLocalClipboard)
   if (fullScreenIconTimer) {
     clearTimeout(fullScreenIconTimer)
