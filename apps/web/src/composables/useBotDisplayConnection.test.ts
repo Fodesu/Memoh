@@ -161,6 +161,60 @@ describe('BotDisplayConnection transport recovery', () => {
     expect(connection.status.value).toBe('connecting')
   })
 
+  it.each(['disconnected', 'failed', 'closed'] as const)('recovers when the peer becomes %s before the channel closes', async (state) => {
+    const { connection, peer } = await connected()
+    peer.connectionState = state
+    peer.dispatchEvent(new Event('connectionstatechange'))
+    peer.channel.dispatchEvent(new Event('close'))
+    expect(connection.stream.value).toBeNull()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getDisplay).toHaveBeenCalledTimes(2)
+    expect(connection.peer.value).not.toBeNull()
+    expect(connection.peer.value).not.toBe(peer)
+  })
+
+  it('keeps retrying temporary readiness and offer failures with backoff', async () => {
+    const { connection, peer } = await connected()
+    getDisplay.mockRejectedValueOnce(new Error('temporarily offline'))
+    vi.mocked(BotDisplayConnection.prototype.exchangeOffer).mockRejectedValueOnce(new Error('offer interrupted'))
+    peer.channel.close()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getDisplay).toHaveBeenCalledTimes(2)
+    expect(connection.status.value).toBe('unavailable')
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(getDisplay).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(getDisplay).toHaveBeenCalledTimes(3)
+    expect(connection.peer.value).toBeNull()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(getDisplay).toHaveBeenCalledTimes(4)
+    const recovered = connection.peer.value as unknown as Peer
+    expect(recovered).not.toBeNull()
+    recovered.connectionState = 'connected'
+    recovered.dispatchEvent(new Event('connectionstatechange'))
+    recovered.channel.close()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getDisplay).toHaveBeenCalledTimes(5)
+  })
+
+  it('stops recovery after a failed retry when the final viewer hides', async () => {
+    const visible = ref(true)
+    const { connection } = viewer('hide-during-recovery', visible)
+    await connection.acquireConnection()
+    const peer = connection.peer.value as unknown as Peer
+    peer.connectionState = 'connected'
+    peer.dispatchEvent(new Event('connectionstatechange'))
+    getDisplay.mockRejectedValue(new Error('offline'))
+    peer.channel.close()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getDisplay).toHaveBeenCalledTimes(2)
+    visible.value = false
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(getDisplay).toHaveBeenCalledTimes(2)
+    expect(connection.status.value).toBe('idle')
+  })
+
   function viewer(botId: string, visible: Ref<boolean>) {
     const scope = effectScope()
     const connection = scope.run(() => useBotDisplayConnection(botId, visible))!

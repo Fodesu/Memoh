@@ -915,14 +915,15 @@ watch([() => status.value, viewing], ([st, active]) => {
     stopSnapshotCapture()
     stopStatsPolling()
   }
-})
+}, { immediate: true, flush: 'post' })
 
 // The track event can land before connectionstatechange flips to 'connected'
 // (track is negotiated at setRemoteDescription, ICE may still be gathering),
 // so bind as soon as the stream arrives rather than gating on status.
-watch(() => connection.stream.value, () => {
+// Also bind an existing shared stream when a new pane's video element mounts.
+watch([connection.stream, videoRef, viewing], () => {
   bindStream()
-})
+}, { immediate: true, flush: 'post' })
 
 onBeforeUnmount(() => {
   if (fullScreenIconTimer) {
