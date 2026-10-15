@@ -71,6 +71,8 @@ export class BotDisplayConnection {
   private acquirePromise: Promise<boolean> | null = null
   private refs = 0
   private reconnectTimer: number | null = null
+  private recovering = false
+  private reconnectAttempts = 0
   private acquireAbort: AbortController | null = null
 
   constructor(botId: string) {
@@ -85,6 +87,8 @@ export class BotDisplayConnection {
     if (this.refs === 0) return
     this.refs--
     if (this.refs === 0) {
+      this.recovering = false
+      this.reconnectAttempts = 0
       this.acquireAbort?.abort()
       this.acquireAbort = null
       this.acquirePromise = null
@@ -110,6 +114,7 @@ export class BotDisplayConnection {
     const promise = this.doAcquire(abort.signal).finally(() => {
       if (this.acquirePromise === promise) this.acquirePromise = null
       if (this.acquireAbort === abort) this.acquireAbort = null
+      if (!abort.signal.aborted && this.recovering && !this.peer.value) this.scheduleReconnect()
     })
     this.acquirePromise = promise
     return promise
@@ -131,7 +136,7 @@ export class BotDisplayConnection {
 
     try {
       await this.createPeer(signal)
-      return !signal.aborted
+      return !signal.aborted && this.peer.value !== null
     } catch (error) {
       // A viewer may hide and return while an old acquisition settles.
       // Never clear the newer viewer's peer, status or in-flight promise.
@@ -151,22 +156,31 @@ export class BotDisplayConnection {
     this.inputChannel.value = inputChannel
     const disconnect = () => {
       if (this.peer.value !== peer || this.inputChannel.value !== inputChannel) return
-      const wasConnected = this.status.value === 'connected'
+      this.recovering = true
       this.cleanupPeer()
       this.status.value = 'disconnected'
-      if (wasConnected && this.refs > 0) {
-        this.reconnectTimer = window.setTimeout(() => {
-          this.reconnectTimer = null
-          if (this.refs > 0 && this.status.value === 'disconnected') void this.acquireConnection().catch(() => {})
-        }, 1000)
-      }
+      this.scheduleReconnect()
     }
     inputChannel.addEventListener('close', disconnect)
     inputChannel.addEventListener('error', disconnect)
     peer.addTransceiver('video', { direction: 'recvonly' })
 
     peer.addEventListener('connectionstatechange', () => {
-      if (this.peer.value === peer) this.setPeerStatus(peer.connectionState)
+      if (this.peer.value !== peer) return
+      switch (peer.connectionState) {
+        case 'connected':
+          this.recovering = false
+          this.reconnectAttempts = 0
+          this.status.value = 'connected'
+          break
+        case 'failed':
+        case 'closed':
+        case 'disconnected':
+          disconnect()
+          break
+        default:
+          this.status.value = 'connecting'
+      }
     })
     peer.addEventListener('track', (event) => {
       if (this.peer.value !== peer) return
@@ -181,21 +195,6 @@ export class BotDisplayConnection {
     this.sessionId.value = answer.session_id ?? ''
 
     this.prepareProgress.value = null
-  }
-
-  private setPeerStatus(next: RTCPeerConnectionState) {
-    switch (next) {
-      case 'connected':
-        this.status.value = 'connected'
-        break
-      case 'failed':
-      case 'closed':
-      case 'disconnected':
-        this.status.value = 'disconnected'
-        break
-      default:
-        this.status.value = 'connecting'
-    }
   }
 
   private cleanupPeer() {
@@ -213,6 +212,15 @@ export class BotDisplayConnection {
     if (this.reconnectTimer === null) return
     window.clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
+  }
+
+  private scheduleReconnect() {
+    if (!this.recovering || this.refs === 0 || this.acquirePromise || this.reconnectTimer !== null) return
+    const wait = Math.min(1000 * 2 ** Math.min(this.reconnectAttempts++, 5), 30_000)
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null
+      if (this.recovering && this.refs > 0) void this.acquireConnection().catch(() => {})
+    }, wait)
   }
 
   /**
