@@ -203,7 +203,7 @@ type Entry struct {
 	// dependency, empty until a check ran.
 	LatestVersion string
 	// UpdateAvailable is set for present dependencies whose last upstream
-	// check reported a version other than the one in effect.
+	// check explicitly reported an update for the version still in effect.
 	UpdateAvailable   bool
 	PlatformSupported bool
 	// Actions lists what the UI may offer right now.
@@ -602,7 +602,8 @@ func buildEntry(entry Entry, dep catalog.Dependency, rec *Installation, obs Obse
 		}
 		entry.ImageVersion = image.Version
 		entry.Overlay = effective.Source == SourceManaged && image.Path != ""
-		entry.UpdateAvailable = entry.LatestVersion != "" && entry.LatestVersion != entry.InstalledVersion
+		entry.UpdateAvailable = rec != nil && rec.UpdateAvailable &&
+			rec.UpdateCheckedVersion == entry.InstalledVersion
 	}
 	entry.Actions = availableActions(dep, rec, obs)
 	return entry
@@ -1042,7 +1043,7 @@ func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, e
 				mu.Unlock()
 				return
 			}
-			err := s.recordCheck(ctx, key, check, checkErr)
+			err := s.recordCheck(ctx, key, entry.InstalledVersion, check, checkErr)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -1658,7 +1659,7 @@ func (s *Service) checkUpdate(ctx context.Context, client *bridge.Client, dataRo
 	return check, nil
 }
 
-func (s *Service) recordCheck(ctx context.Context, key InstallationKey, check updateCheck, checkErr error) error {
+func (s *Service) recordCheck(ctx context.Context, key InstallationKey, installedVersion string, check updateCheck, checkErr error) error {
 	if errors.Is(checkErr, ErrBusy) {
 		return nil
 	}
@@ -1670,6 +1671,8 @@ func (s *Service) recordCheck(ctx context.Context, key InstallationKey, check up
 	} else {
 		latest, cleared := check.Latest, ""
 		upd.LatestVersion = &latest
+		upd.UpdateAvailable = &check.UpdateAvailable
+		upd.UpdateCheckedVersion = &installedVersion
 		upd.LastErrorCode = &cleared
 	}
 	storeCtx, cancel := finalizeContext(ctx)
