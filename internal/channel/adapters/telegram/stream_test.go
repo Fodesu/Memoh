@@ -1975,3 +1975,22 @@ func TestSegmentEnd_EmptyBufferIsNoOp(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamLimiterIsPerChannelConfig(t *testing.T) {
+	adapter := NewTelegramAdapter(nil)
+	busy := adapter.streamLimiter("cfg-busy")
+	for i := 0; i < 3; i++ {
+		if !busy.Allow() {
+			t.Fatalf("burst request %d was refused", i+1)
+		}
+	}
+	if busy.Allow() {
+		t.Fatal("cfg-busy should be out of burst")
+	}
+	if adapter.streamLimiter("cfg-busy") != busy {
+		t.Fatal("streams of one config must share a limiter")
+	}
+	if !adapter.streamLimiter("cfg-other").Allow() {
+		t.Fatal("another bot must not wait on cfg-busy's limiter")
+	}
+}
