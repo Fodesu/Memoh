@@ -142,13 +142,17 @@ WHERE run.team_id = public.memoh_current_team_id()
 
 -- name: LockBotForSessionRunClaim :one
 -- Claim uses a real transaction and a fresh statement after this parent lock.
--- Reset acquisition takes the same lock, so neither can cross the other's
--- committed gate using a statement snapshot captured while waiting.
+-- Reset acquisition locks the same row FOR UPDATE, which conflicts with this
+-- lock, so neither can cross the other's committed gate using a statement
+-- snapshot captured while waiting. NO KEY UPDATE rather than UPDATE: rows that
+-- reference the bot take FOR KEY SHARE in their foreign key check, and a FOR
+-- UPDATE here made those inserts wait on admission while admission waited on
+-- the session row they had already key-share locked.
 SELECT id
 FROM bots
 WHERE team_id = public.memoh_current_team_id()
   AND id = sqlc.arg(bot_id)
-FOR UPDATE;
+FOR NO KEY UPDATE;
 
 -- name: ClaimLockedSessionRun :one
 -- Ownership change: the only write that touches owner_id, fencing_token,
@@ -167,7 +171,7 @@ WITH target_session AS MATERIALIZED (
     AND bot.status <> 'deleting'
     AND (bot.runtime_reset_expires_at IS NULL OR bot.runtime_reset_expires_at <= clock_timestamp())
     AND (session.runtime_reset_expires_at IS NULL OR session.runtime_reset_expires_at <= clock_timestamp())
-  FOR UPDATE OF session
+  FOR NO KEY UPDATE OF session
 )
 UPDATE session_runs run
 SET owner_id = sqlc.arg(owner_id),
