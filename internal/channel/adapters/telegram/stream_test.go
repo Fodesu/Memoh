@@ -1994,3 +1994,19 @@ func TestStreamLimiterIsPerChannelConfig(t *testing.T) {
 		t.Fatal("another bot must not wait on cfg-busy's limiter")
 	}
 }
+
+func TestDropStreamLimiterForgetsTheConfig(t *testing.T) {
+	adapter := NewTelegramAdapter(nil)
+	stale := adapter.streamLimiter("cfg-stopped")
+	adapter.streamLimiter("cfg-running")
+	adapter.dropStreamLimiter("cfg-stopped")
+	if _, ok := adapter.streamLimiters["cfg-stopped"]; ok {
+		t.Fatal("a stopped config's limiter is still kept")
+	}
+	if _, ok := adapter.streamLimiters["cfg-running"]; !ok {
+		t.Fatal("dropping one config removed another")
+	}
+	if adapter.streamLimiter("cfg-stopped") == stale {
+		t.Fatal("a reconnected config reused the dropped limiter")
+	}
+}

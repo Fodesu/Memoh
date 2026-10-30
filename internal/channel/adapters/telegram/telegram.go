@@ -143,6 +143,16 @@ func (a *TelegramAdapter) streamLimiter(configID string) *rate.Limiter {
 	return limiter
 }
 
+// dropStreamLimiter forgets the limiter of a channel config whose connection
+// stopped, so the map does not keep every config this process ever served.
+// A stream still running keeps the limiter it already holds; one opened after
+// a reconnect gets a fresh limiter.
+func (a *TelegramAdapter) dropStreamLimiter(configID string) {
+	a.streamLimitersMu.Lock()
+	delete(a.streamLimiters, configID)
+	a.streamLimitersMu.Unlock()
+}
+
 // SetAssetOpener injects the media asset reader for storage-first file delivery.
 func (a *TelegramAdapter) SetAssetOpener(opener assetOpener) {
 	a.assets = opener
@@ -532,6 +542,7 @@ func (a *TelegramAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig
 			// connection: by the time stop runs, that one is usually done.
 			a.logger.InfoContext(stopCtx, "stop", slog.String("config_id", cfg.ID))
 		}
+		a.dropStreamLimiter(cfg.ID)
 		bot.Stop()
 		cancel()
 		flushAllMediaGroups()
