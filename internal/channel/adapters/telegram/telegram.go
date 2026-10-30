@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,13 @@ const (
 	telegramUpdateDedupeTTL         = 10 * time.Minute
 	defaultTelegramFileEndpoint     = "https://api.telegram.org/file/bot%s/%s"
 	telegramLongPollTimeout         = 30 * time.Second
+	// telegramFileConcurrency caps the getFile calls and download requests one
+	// bot has in flight. A backlog dispatches its updates together, and each
+	// resolves its files on its own goroutine.
+	telegramFileConcurrency = 4
+	// telegramGetFileRetries is how many more times getFile is tried after
+	// Telegram answers 429.
+	telegramGetFileRetries = 2
 )
 
 type telegramMediaGroupBuffer struct {
@@ -69,6 +77,10 @@ type TelegramAdapter struct {
 	askUserPrompts     *askUserTextPromptStore
 	userInput          askUserInteractionService
 	userInputAuthorize func(context.Context, channel.ChannelConfig, channel.InboundMessage) (bool, error)
+
+	// fileSlots holds each channel config's telegramFileConcurrency slots.
+	fileSlotsMu sync.Mutex
+	fileSlots   map[string]chan struct{}
 }
 
 // askUserInteractionService is the slice of *userinput.Service the adapter
@@ -195,13 +207,68 @@ func (a *TelegramAdapter) getFileDirectURL(bot *tele.Bot, fileID string) (string
 	if err != nil {
 		return "", err
 	}
+	return a.fileURL(bot, file.FilePath), nil
+}
+
+func (a *TelegramAdapter) fileURL(bot *tele.Bot, filePath string) string {
 	a.mu.RLock()
 	endpoint := a.fileEndpoints[bot]
 	a.mu.RUnlock()
 	if endpoint == "" {
 		endpoint = defaultTelegramFileEndpoint
 	}
-	return formatTelegramFileURL(endpoint, bot.Token, file.FilePath), nil
+	return formatTelegramFileURL(endpoint, bot.Token, filePath)
+}
+
+// getFileWithRetry calls getFile, waiting out Telegram's retry_after when it
+// answers 429.
+func getFileWithRetry(ctx context.Context, bot *tele.Bot, fileID string) (tele.File, error) {
+	for attempt := 0; ; attempt++ {
+		file, err := bot.FileByID(fileID)
+		if err == nil || !isTelegramTooManyRequests(err) || attempt == telegramGetFileRetries {
+			return file, err
+		}
+		wait := getTelegramRetryAfter(err)
+		if wait <= 0 {
+			wait = time.Second
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return tele.File{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// acquireFileSlot waits for one of the bot's telegramFileConcurrency slots and
+// returns the function that gives it back.
+func (a *TelegramAdapter) acquireFileSlot(ctx context.Context, configID string) (func(), error) {
+	a.fileSlotsMu.Lock()
+	slots, ok := a.fileSlots[configID]
+	if !ok {
+		if a.fileSlots == nil {
+			a.fileSlots = make(map[string]chan struct{})
+		}
+		slots = make(chan struct{}, telegramFileConcurrency)
+		a.fileSlots[configID] = slots
+	}
+	a.fileSlotsMu.Unlock()
+	release := func() { <-slots }
+	// A free slot is taken even when ctx is already done, so the call fails
+	// the way it would without the cap.
+	select {
+	case slots <- struct{}{}:
+		return release, nil
+	default:
+	}
+	select {
+	case slots <- struct{}{}:
+		return release, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func formatTelegramFileURL(endpoint, token, filePath string) string {
@@ -2340,11 +2407,26 @@ func (a *TelegramAdapter) ResolveAttachment(ctx context.Context, cfg channel.Cha
 	if err != nil {
 		return channel.AttachmentPayload{}, err
 	}
+	// The slot covers getFile and the download request up to its response
+	// headers. The body is read after the slot is returned, so a caller that
+	// never closes the reader cannot hold one.
+	release, err := a.acquireFileSlot(ctx, cfg.ID)
+	if err != nil {
+		return channel.AttachmentPayload{}, err
+	}
+	defer release()
+	name := strings.TrimSpace(attachment.Name)
 	downloadURL := strings.TrimSpace(attachment.URL)
 	if downloadURL == "" {
-		downloadURL, err = a.getFileDirectURL(bot, fileID)
+		file, err := getFileWithRetry(ctx, bot, fileID)
 		if err != nil {
 			return channel.AttachmentPayload{}, fmt.Errorf("resolve telegram file url: %w", err)
+		}
+		downloadURL = a.fileURL(bot, file.FilePath)
+		if name == "" && file.FilePath != "" {
+			// Photos and voice notes carry no file name; Telegram's file path
+			// ends in one, such as photos/file_12.jpg.
+			name = path.Base(file.FilePath)
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
@@ -2385,7 +2467,7 @@ func (a *TelegramAdapter) ResolveAttachment(ctx context.Context, cfg channel.Cha
 	return channel.AttachmentPayload{
 		Reader: resp.Body,
 		Mime:   mime,
-		Name:   strings.TrimSpace(attachment.Name),
+		Name:   name,
 		Size:   size,
 	}, nil
 }
