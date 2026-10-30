@@ -568,7 +568,7 @@ func (a *TelegramAdapter) buildTelegramInboundMessage(bot *tele.Bot, cfg channel
 	if text == "" && caption != "" {
 		text = caption
 	}
-	attachments := a.collectTelegramAttachments(bot, raw)
+	attachments := a.collectTelegramAttachments(raw)
 	return a.toInboundTelegramMessage(bot, cfg, raw, text, attachments, map[string]any{
 		"update_id": update.ID,
 	})
@@ -1063,7 +1063,7 @@ func (a *TelegramAdapter) buildTelegramMediaGroupInboundMessage(
 			text = candidate
 			anchor = msg
 		}
-		attachments = append(attachments, a.collectTelegramAttachments(bot, msg)...)
+		attachments = append(attachments, a.collectTelegramAttachments(msg)...)
 		if !isMentioned {
 			isMentioned = isTelegramBotMentioned(msg, botUsername)
 		}
@@ -1141,7 +1141,7 @@ func (a *TelegramAdapter) toInboundTelegramMessage(
 	}
 	replyRef := buildTelegramReplyRef(raw, chatID)
 	if replyRef != nil {
-		replyRef.Attachments = a.collectTelegramAttachments(bot, raw.ReplyTo)
+		replyRef.Attachments = a.collectTelegramAttachments(raw.ReplyTo)
 		replyRef.AttachmentsKnown = true
 	}
 	forwardRef := buildTelegramForwardRef(raw)
@@ -2200,47 +2200,47 @@ func isTelegramUsernameByte(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9' || value == '_'
 }
 
-func (a *TelegramAdapter) collectTelegramAttachments(bot *tele.Bot, msg *tele.Message) []channel.Attachment {
+func (a *TelegramAdapter) collectTelegramAttachments(msg *tele.Message) []channel.Attachment {
 	if msg == nil {
 		return nil
 	}
 	attachments := make([]channel.Attachment, 0, 1)
 	if msg.Photo != nil {
-		att := a.buildTelegramAttachment(bot, channel.AttachmentImage, msg.Photo.FileID, "", "", msg.Photo.FileSize)
+		att := a.buildTelegramAttachment(channel.AttachmentImage, msg.Photo.FileID, "", "", msg.Photo.FileSize)
 		att.Width = msg.Photo.Width
 		att.Height = msg.Photo.Height
 		attachments = append(attachments, att)
 	}
 	if msg.Document != nil {
-		att := a.buildTelegramAttachment(bot, channel.AttachmentFile, msg.Document.FileID, msg.Document.FileName, msg.Document.MIME, msg.Document.FileSize)
+		att := a.buildTelegramAttachment(channel.AttachmentFile, msg.Document.FileID, msg.Document.FileName, msg.Document.MIME, msg.Document.FileSize)
 		attachments = append(attachments, att)
 	}
 	if msg.Audio != nil {
-		att := a.buildTelegramAttachment(bot, channel.AttachmentAudio, msg.Audio.FileID, msg.Audio.FileName, msg.Audio.MIME, msg.Audio.FileSize)
+		att := a.buildTelegramAttachment(channel.AttachmentAudio, msg.Audio.FileID, msg.Audio.FileName, msg.Audio.MIME, msg.Audio.FileSize)
 		att.DurationMs = int64(msg.Audio.Duration) * 1000
 		attachments = append(attachments, att)
 	}
 	if msg.Voice != nil {
-		att := a.buildTelegramAttachment(bot, channel.AttachmentVoice, msg.Voice.FileID, "", msg.Voice.MIME, msg.Voice.FileSize)
+		att := a.buildTelegramAttachment(channel.AttachmentVoice, msg.Voice.FileID, "", msg.Voice.MIME, msg.Voice.FileSize)
 		att.DurationMs = int64(msg.Voice.Duration) * 1000
 		attachments = append(attachments, att)
 	}
 	if msg.Video != nil {
-		att := a.buildTelegramAttachment(bot, channel.AttachmentVideo, msg.Video.FileID, msg.Video.FileName, msg.Video.MIME, msg.Video.FileSize)
+		att := a.buildTelegramAttachment(channel.AttachmentVideo, msg.Video.FileID, msg.Video.FileName, msg.Video.MIME, msg.Video.FileSize)
 		att.Width = msg.Video.Width
 		att.Height = msg.Video.Height
 		att.DurationMs = int64(msg.Video.Duration) * 1000
 		attachments = append(attachments, att)
 	}
 	if msg.Animation != nil {
-		att := a.buildTelegramAttachment(bot, channel.AttachmentGIF, msg.Animation.FileID, msg.Animation.FileName, msg.Animation.MIME, msg.Animation.FileSize)
+		att := a.buildTelegramAttachment(channel.AttachmentGIF, msg.Animation.FileID, msg.Animation.FileName, msg.Animation.MIME, msg.Animation.FileSize)
 		att.Width = msg.Animation.Width
 		att.Height = msg.Animation.Height
 		att.DurationMs = int64(msg.Animation.Duration) * 1000
 		attachments = append(attachments, att)
 	}
 	if msg.Sticker != nil {
-		attachments = append(attachments, a.buildTelegramStickerAttachment(bot, msg.Sticker))
+		attachments = append(attachments, a.buildTelegramStickerAttachment(msg.Sticker))
 	}
 	caption := strings.TrimSpace(msg.Caption)
 	if caption != "" {
@@ -2265,7 +2265,7 @@ func (a *TelegramAdapter) collectTelegramAttachments(bot *tele.Bot, msg *tele.Me
 // The sticker emoji rides along in the name: it is Telegram's own description
 // of what the sticker means, and it is the only signal left when neither the
 // animation nor a thumbnail can be shown.
-func (a *TelegramAdapter) buildTelegramStickerAttachment(bot *tele.Bot, sticker *tele.Sticker) channel.Attachment {
+func (a *TelegramAdapter) buildTelegramStickerAttachment(sticker *tele.Sticker) channel.Attachment {
 	fileID, mime := sticker.FileID, "image/webp"
 	width, height, size := sticker.Width, sticker.Height, sticker.FileSize
 	usedThumbnail := false
@@ -2287,7 +2287,7 @@ func (a *TelegramAdapter) buildTelegramStickerAttachment(bot *tele.Bot, sticker 
 			}
 		}
 	}
-	att := a.buildTelegramAttachment(bot, channel.AttachmentImage, fileID, telegramStickerName(sticker), mime, size)
+	att := a.buildTelegramAttachment(channel.AttachmentImage, fileID, telegramStickerName(sticker), mime, size)
 	att.Width = width
 	att.Height = height
 	if usedThumbnail {
@@ -2305,21 +2305,13 @@ func telegramStickerName(sticker *tele.Sticker) string {
 	return "sticker"
 }
 
-func (a *TelegramAdapter) buildTelegramAttachment(bot *tele.Bot, attType channel.AttachmentType, fileID, name, mime string, size int64) channel.Attachment {
-	url := ""
-	if bot != nil && strings.TrimSpace(fileID) != "" {
-		value, err := a.getFileDirectURL(bot, fileID)
-		if err != nil {
-			if a.logger != nil {
-				a.logger.Warn("resolve file url failed", slog.Any("error", err))
-			}
-		} else {
-			url = value
-		}
-	}
+// buildTelegramAttachment records the file by its id only. The download URL
+// costs a getFile round trip, and the poller builds attachments one update at
+// a time, so resolving it here held up every update behind it; ingest resolves
+// the id through ResolveAttachment when it needs the bytes.
+func (*TelegramAdapter) buildTelegramAttachment(attType channel.AttachmentType, fileID, name, mime string, size int64) channel.Attachment {
 	att := channel.Attachment{
 		Type:           attType,
-		URL:            strings.TrimSpace(url),
 		PlatformKey:    strings.TrimSpace(fileID),
 		SourcePlatform: Type.String(),
 		Name:           strings.TrimSpace(name),
