@@ -145,9 +145,9 @@ WHERE run.team_id = public.memoh_current_team_id()
 -- Reset acquisition locks the same row FOR UPDATE, which conflicts with this
 -- lock, so neither can cross the other's committed gate using a statement
 -- snapshot captured while waiting. NO KEY UPDATE rather than UPDATE: rows that
--- reference the bot take FOR KEY SHARE in their foreign key check, and a FOR
--- UPDATE here made those inserts wait on admission while admission waited on
--- the session row they had already key-share locked.
+-- reference the bot take FOR KEY SHARE on it in their foreign key check, which
+-- FOR UPDATE blocks. Such an insert may already hold the session row that
+-- admission or claim locks next, and the two then deadlocked.
 SELECT id
 FROM bots
 WHERE team_id = public.memoh_current_team_id()
@@ -171,6 +171,8 @@ WITH target_session AS MATERIALIZED (
     AND bot.status <> 'deleting'
     AND (bot.runtime_reset_expires_at IS NULL OR bot.runtime_reset_expires_at <= clock_timestamp())
     AND (session.runtime_reset_expires_at IS NULL OR session.runtime_reset_expires_at <= clock_timestamp())
+  -- NO KEY UPDATE: rows that reference the session take FOR KEY SHARE on it
+  -- in their foreign key check, and FOR UPDATE would block them.
   FOR NO KEY UPDATE OF session
 )
 UPDATE session_runs run
