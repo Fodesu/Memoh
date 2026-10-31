@@ -3,6 +3,8 @@ package route
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -191,5 +193,109 @@ func TestEnrichThreadsSkipsProjectionQueryWithoutRouteIDs(t *testing.T) {
 	}
 	if len(got) != len(threads) || got[0].ID != "thread-1" || got[1].ID != "thread-2" {
 		t.Fatalf("EnrichThreads() = %#v", got)
+	}
+}
+
+// raceStore is one route and its threads as the database holds them, shared by
+// every caller; it serves as both the route and the thread store.
+type raceStore struct {
+	mu       sync.Mutex
+	activeID string
+	movedTo  string // when set, another process selects it right after the first route read
+	threads  map[string]session.Thread
+	created  int
+	deleted  []string
+	entered  chan struct{} // when set, closed as the first Create starts
+	gate     chan struct{} // when set, Create waits for it to close
+	once     sync.Once
+}
+
+func (s *raceStore) GetByID(context.Context, string) (Route, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	route := Route{ActiveThreadID: s.activeID}
+	if s.movedTo != "" {
+		s.activeID, s.movedTo = s.movedTo, ""
+	}
+	return route, nil
+}
+
+func (*raceStore) SetActiveThread(context.Context, string, string) error { return nil }
+
+func (s *raceStore) CompareAndSetActiveThread(_ context.Context, _, expected, threadID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeID != expected {
+		return false, nil
+	}
+	s.activeID = threadID
+	return true, nil
+}
+
+func (s *raceStore) Get(_ context.Context, id string) (session.Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if thread, ok := s.threads[id]; ok {
+		return thread, nil
+	}
+	return session.Thread{}, pgx.ErrNoRows
+}
+
+func (s *raceStore) Create(context.Context, session.CreateInput) (session.Thread, error) {
+	if s.gate != nil {
+		s.once.Do(func() { close(s.entered) })
+		<-s.gate
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.created++
+	thread := session.Thread{ID: fmt.Sprintf("thread-%d", s.created)}
+	s.threads[thread.ID] = thread
+	return thread, nil
+}
+
+func (s *raceStore) SoftDelete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleted = append(s.deleted, id)
+	return nil
+}
+
+func TestThreadCoordinatorCreateIfAbsentGivesConcurrentCallersOneThread(t *testing.T) {
+	store := &raceStore{threads: map[string]session.Thread{}, entered: make(chan struct{}), gate: make(chan struct{})}
+	coordinator := NewThreadCoordinator(nil, store, store)
+	call := func() {
+		thread, err := coordinator.CreateIfAbsent(context.Background(), session.CreateInput{RouteID: "route-1"})
+		if err != nil || thread.ID != "thread-1" {
+			t.Errorf("CreateIfAbsent = %q, %v; want every caller on thread-1", thread.ID, err)
+		}
+	}
+	// The first caller holds its creation open while 19 more arrive.
+	var arrived, done sync.WaitGroup
+	done.Add(20)
+	go func() { defer done.Done(); call() }()
+	<-store.entered
+	arrived.Add(19)
+	for i := 0; i < 19; i++ {
+		go func() { defer done.Done(); arrived.Done(); call() }()
+	}
+	arrived.Wait()
+	close(store.gate)
+	done.Wait()
+	if store.created != 1 || store.activeID != "thread-1" {
+		t.Fatalf("created %d threads, route points at %q; want one thread selected", store.created, store.activeID)
+	}
+}
+
+func TestThreadCoordinatorCreateIfAbsentYieldsToAnotherProcess(t *testing.T) {
+	// The route points at a deleted thread, so this caller creates one; another
+	// process selects its own thread before this caller writes.
+	store := &raceStore{activeID: "thread-deleted", movedTo: "thread-other", threads: map[string]session.Thread{"thread-other": {ID: "thread-other"}}}
+	got, err := NewThreadCoordinator(nil, store, store).CreateIfAbsent(context.Background(), session.CreateInput{RouteID: "route-1"})
+	if err != nil || got.ID != "thread-other" || store.activeID != "thread-other" {
+		t.Fatalf("CreateIfAbsent = %q, %v, route points at %q; want the other process's thread kept", got.ID, err, store.activeID)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != "thread-1" {
+		t.Fatalf("deleted %v, want the thread this caller created", store.deleted)
 	}
 }
