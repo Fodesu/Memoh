@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/sync/singleflight"
 
 	session "github.com/felinics/memoh/internal/chat/thread"
 	dbpkg "github.com/felinics/memoh/internal/db"
@@ -19,12 +20,16 @@ import (
 type ThreadStore interface {
 	Create(context.Context, session.CreateInput) (session.Thread, error)
 	Get(context.Context, string) (session.Thread, error)
+	SoftDelete(context.Context, string) error
 }
 
 // ThreadRouteStore owns the active-thread pointer for an external route.
 type ThreadRouteStore interface {
 	GetByID(context.Context, string) (Route, error)
 	SetActiveThread(context.Context, string, string) error
+	// CompareAndSetActiveThread moves the pointer to threadID only while it
+	// still holds expectedThreadID ("" for none) and reports whether it did.
+	CompareAndSetActiveThread(ctx context.Context, routeID, expectedThreadID, threadID string) (bool, error)
 }
 
 // ThreadCoordinator coordinates the Channel-owned route pointer with
@@ -33,6 +38,9 @@ type ThreadCoordinator struct {
 	routes  ThreadRouteStore
 	threads ThreadStore
 	logger  *slog.Logger
+	// creating joins the callers that find one route without a usable Thread
+	// at the same time, so they create a single Thread between them.
+	creating singleflight.Group
 }
 
 func NewThreadCoordinator(log *slog.Logger, routes ThreadRouteStore, threads ThreadStore) *ThreadCoordinator {
@@ -78,11 +86,7 @@ func (c *ThreadCoordinator) CreateNew(ctx context.Context, input session.CreateI
 // EnsureActive returns the selected Thread, or creates one when the route
 // currently has no usable active Thread.
 func (c *ThreadCoordinator) EnsureActive(ctx context.Context, botID, routeID, channelType string) (session.Thread, error) {
-	thread, err := c.GetActive(ctx, routeID)
-	if err == nil {
-		return thread, nil
-	}
-	thread, err = c.CreateNew(ctx, session.CreateInput{
+	thread, err := c.CreateIfAbsent(ctx, session.CreateInput{
 		BotID:       botID,
 		RouteID:     routeID,
 		ChannelType: channelType,
@@ -91,6 +95,64 @@ func (c *ThreadCoordinator) EnsureActive(ctx context.Context, botID, routeID, ch
 		return session.Thread{}, fmt.Errorf("auto-create session: %w", err)
 	}
 	return thread, nil
+}
+
+// CreateIfAbsent returns the route's usable active Thread, and creates one from
+// input only when the route has none. Messages that reach a new route together
+// (a channel's first backlog, a burst of forwards) all land in the Thread this
+// returns: callers in one process share a single creation, and the route
+// pointer moves only from the value its creator read, so a creator in another
+// process that loses discards its Thread and returns the one that won.
+func (c *ThreadCoordinator) CreateIfAbsent(ctx context.Context, input session.CreateInput) (session.Thread, error) {
+	routeID := strings.TrimSpace(input.RouteID)
+	// WithoutCancel: the callers joined here share this creation, so one of
+	// them giving up must not fail it for the rest.
+	shared, err, _ := c.creating.Do(routeID, func() (any, error) {
+		return c.createIfAbsent(context.WithoutCancel(ctx), input)
+	})
+	if err != nil {
+		return session.Thread{}, err
+	}
+	return shared.(session.Thread), nil
+}
+
+func (c *ThreadCoordinator) createIfAbsent(ctx context.Context, input session.CreateInput) (session.Thread, error) {
+	route, err := c.routes.GetByID(ctx, input.RouteID)
+	if err != nil {
+		return session.Thread{}, err
+	}
+	expected := strings.TrimSpace(route.ActiveThreadID)
+	if expected != "" {
+		if thread, err := c.threads.Get(ctx, expected); err == nil {
+			return thread, nil
+		}
+	}
+	if strings.TrimSpace(input.Type) == "" {
+		input.Type = session.TypeChat
+	}
+	thread, err := c.threads.Create(ctx, input)
+	if err != nil {
+		return session.Thread{}, fmt.Errorf("create new session: %w", err)
+	}
+	set, err := c.routes.CompareAndSetActiveThread(ctx, input.RouteID, expected, thread.ID)
+	if err != nil {
+		// As in CreateNew: the Thread exists, so it is returned even when the
+		// route pointer could not be moved.
+		c.logger.WarnContext(ctx, "failed to set active session on route", slog.Any("error", err))
+		return thread, nil
+	}
+	if set {
+		return thread, nil
+	}
+	winner, err := c.GetActive(ctx, input.RouteID)
+	if err != nil {
+		c.logger.WarnContext(ctx, "another session took the route but cannot be read; keeping the new one", slog.Any("error", err))
+		return thread, nil
+	}
+	if err := c.threads.SoftDelete(ctx, thread.ID); err != nil {
+		c.logger.WarnContext(ctx, "discard session that lost the route failed", slog.String("session_id", thread.ID), slog.Any("error", err))
+	}
+	return winner, nil
 }
 
 // SetActiveThread updates the Channel-owned active Thread pointer.
@@ -110,6 +172,35 @@ func (s *DBService) SetActiveThread(ctx context.Context, routeID, threadID strin
 		ID:              pgRouteID,
 		ActiveSessionID: pgThreadID,
 	})
+}
+
+// CompareAndSetActiveThread moves the route pointer to threadID only while it
+// still holds expectedThreadID ("" for none).
+func (s *DBService) CompareAndSetActiveThread(ctx context.Context, routeID, expectedThreadID, threadID string) (bool, error) {
+	pgRouteID, err := dbpkg.ParseUUID(routeID)
+	if err != nil {
+		return false, fmt.Errorf("invalid route id: %w", err)
+	}
+	pgThreadID, err := dbpkg.ParseUUID(threadID)
+	if err != nil {
+		return false, fmt.Errorf("invalid session id: %w", err)
+	}
+	var pgExpected pgtype.UUID
+	if strings.TrimSpace(expectedThreadID) != "" {
+		pgExpected, err = dbpkg.ParseUUID(expectedThreadID)
+		if err != nil {
+			return false, fmt.Errorf("invalid expected session id: %w", err)
+		}
+	}
+	rows, err := s.queries.CompareAndSetRouteActiveSession(ctx, sqlc.CompareAndSetRouteActiveSessionParams{
+		ID:                pgRouteID,
+		ActiveSessionID:   pgThreadID,
+		ExpectedSessionID: pgExpected,
+	})
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
 }
 
 // EnrichThreads projects Channel-owned route metadata onto Thread view

@@ -402,8 +402,23 @@ func (a *sessionEnsurerAdapter) GetActiveSession(ctx context.Context, routeID st
 }
 
 func (a *sessionEnsurerAdapter) CreateNewSession(ctx context.Context, botID, routeID, channelType string, spec inbound.NewSessionSpec) (inbound.SessionResult, error) {
-	createdByUserID := newSessionCreatedByUserID(spec)
-	sess, err := a.coordinator.CreateNew(ctx, sessionpkg.CreateInput{
+	sess, err := a.coordinator.CreateNew(ctx, newSessionCreateInput(botID, routeID, channelType, spec))
+	if err != nil {
+		return inbound.SessionResult{}, err
+	}
+	return inboundSessionResult(sess), nil
+}
+
+func (a *sessionEnsurerAdapter) CreateSessionIfAbsent(ctx context.Context, botID, routeID, channelType string, spec inbound.NewSessionSpec) (inbound.SessionResult, error) {
+	sess, err := a.coordinator.CreateIfAbsent(ctx, newSessionCreateInput(botID, routeID, channelType, spec))
+	if err != nil {
+		return inbound.SessionResult{}, err
+	}
+	return inboundSessionResult(sess), nil
+}
+
+func newSessionCreateInput(botID, routeID, channelType string, spec inbound.NewSessionSpec) sessionpkg.CreateInput {
+	return sessionpkg.CreateInput{
 		BotID:           botID,
 		BotAgentID:      spec.BotAgentID,
 		RouteID:         routeID,
@@ -414,12 +429,8 @@ func (a *sessionEnsurerAdapter) CreateNewSession(ctx context.Context, botID, rou
 		Metadata:        spec.Metadata,
 		RuntimeMetadata: spec.Metadata,
 		Title:           spec.Title,
-		CreatedByUserID: createdByUserID,
-	})
-	if err != nil {
-		return inbound.SessionResult{}, err
+		CreatedByUserID: newSessionCreatedByUserID(spec),
 	}
-	return inboundSessionResult(sess), nil
 }
 
 func newSessionCreatedByUserID(spec inbound.NewSessionSpec) string {

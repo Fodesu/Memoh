@@ -104,6 +104,10 @@ type SessionEnsurer interface {
 	// active session for the given route, replacing any previous one.
 	// Spec.Type defaults to "chat" if empty.
 	CreateNewSession(ctx context.Context, botID, routeID, channelType string, spec NewSessionSpec) (SessionResult, error)
+	// CreateSessionIfAbsent returns the route's usable active session, and
+	// creates one from spec only when there is none. Concurrent calls for one
+	// route return the same session.
+	CreateSessionIfAbsent(ctx context.Context, botID, routeID, channelType string, spec NewSessionSpec) (SessionResult, error)
 }
 
 type ToolApprovalRunner interface {
@@ -836,9 +840,14 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			if pendingSkillIntent != nil && !newSessionSpecSupportsRequestedSkills(spec) {
 				return p.sendSlashError(ctx, sender, msg, apperror.New(slash.CodeUnsupportedSkillSlashContext, nil))
 			}
-			sess, createErr := p.sessionEnsurer.CreateNewSession(ctx, identity.BotID, resolved.RouteID, msg.Channel.String(), spec)
+			// Other messages of a new route can be here at the same moment, so
+			// the session may be one another of them created from its own spec.
+			sess, createErr := p.sessionEnsurer.CreateSessionIfAbsent(ctx, identity.BotID, resolved.RouteID, msg.Channel.String(), spec)
 			if createErr != nil {
 				return p.replyFailure(ctx, sender, msg, identity, createErr, friendlyOps(p.localizer(ctx, identity.BotID), "ops.verb.startSession"))
+			}
+			if pendingSkillIntent != nil && !sessionSupportsRequestedSkills(sess) {
+				return p.sendSlashError(ctx, sender, msg, apperror.New(slash.CodeUnsupportedSkillSlashContext, nil))
 			}
 			sessionID = sess.ID
 			sessionType = sess.Type

@@ -350,6 +350,7 @@ type fakeSessionEnsurer struct {
 	lastRouteID   string
 	lastSpec      NewSessionSpec
 	createCalls   int
+	ifAbsentCalls int
 }
 
 type fakeQueueCommandHandler struct {
@@ -402,6 +403,11 @@ func (f *fakeSessionEnsurer) CreateNewSession(_ context.Context, _, routeID, _ s
 		}, nil
 	}
 	return f.activeSession, nil
+}
+
+func (f *fakeSessionEnsurer) CreateSessionIfAbsent(ctx context.Context, botID, routeID, channelType string, spec NewSessionSpec) (SessionResult, error) {
+	f.ifAbsentCalls++
+	return f.CreateNewSession(ctx, botID, routeID, channelType, spec)
 }
 
 type fakeRequestedSkillResolver struct {

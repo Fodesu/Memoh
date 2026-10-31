@@ -29,6 +29,11 @@ func (s *coordinatorRouteStore) SetActiveThread(_ context.Context, _ string, thr
 	return s.activeErr
 }
 
+func (s *coordinatorRouteStore) CompareAndSetActiveThread(_ context.Context, _, _, threadID string) (bool, error) {
+	s.activeID = threadID
+	return s.activeErr == nil, s.activeErr
+}
+
 type coordinatorThreadStore struct {
 	thread      session.Thread
 	getID       string
@@ -45,6 +50,8 @@ func (s *coordinatorThreadStore) Create(_ context.Context, input session.CreateI
 	s.createInput = input
 	return s.thread, s.createErr
 }
+
+func (*coordinatorThreadStore) SoftDelete(context.Context, string) error { return nil }
 
 func TestThreadCoordinatorGetActiveReadsRouteThenThread(t *testing.T) {
 	routes := &coordinatorRouteStore{route: Route{ActiveThreadID: "thread-1"}}
