@@ -40,10 +40,12 @@ const (
 	telegramUpdateDedupeTTL         = 10 * time.Minute
 	defaultTelegramFileEndpoint     = "https://api.telegram.org/file/bot%s/%s"
 	telegramLongPollTimeout         = 30 * time.Second
-	// telegramFileConcurrency caps the getFile calls and download requests one
-	// bot has in flight. A backlog dispatches its updates together, and each
-	// resolves its files on its own goroutine.
-	telegramFileConcurrency = 4
+	// telegramFileConcurrency caps the attachment downloads one bot has in
+	// flight, from getFile until the body is read. A backlog dispatches its
+	// updates together, and each resolves its files on its own goroutine.
+	// Against the real Bot API, 90 distinct photos took 18s at 4, 10s at 8 and
+	// 9s at 16; at 64 downloads began to fail.
+	telegramFileConcurrency = 8
 	// telegramGetFileRetries is how many more times getFile is tried after
 	// Telegram answers 429.
 	telegramGetFileRetries = 2
@@ -2407,14 +2409,18 @@ func (a *TelegramAdapter) ResolveAttachment(ctx context.Context, cfg channel.Cha
 	if err != nil {
 		return channel.AttachmentPayload{}, err
 	}
-	// The slot covers getFile and the download request up to its response
-	// headers. The body is read after the slot is returned, so a caller that
-	// never closes the reader cannot hold one.
+	// The slot is held until the caller has read or closed the body.
 	release, err := a.acquireFileSlot(ctx, cfg.ID)
 	if err != nil {
 		return channel.AttachmentPayload{}, err
 	}
-	defer release()
+	releaseOnce := sync.OnceFunc(release)
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			releaseOnce()
+		}
+	}()
 	name := strings.TrimSpace(attachment.Name)
 	downloadURL := strings.TrimSpace(attachment.URL)
 	if downloadURL == "" {
@@ -2464,12 +2470,34 @@ func (a *TelegramAdapter) ResolveAttachment(ctx context.Context, cfg channel.Cha
 	if size <= 0 && resp.ContentLength > 0 {
 		size = resp.ContentLength
 	}
+	handedOff = true
 	return channel.AttachmentPayload{
-		Reader: resp.Body,
+		Reader: &slotReleasingBody{ReadCloser: resp.Body, release: releaseOnce},
 		Mime:   mime,
 		Name:   name,
 		Size:   size,
 	}, nil
+}
+
+// slotReleasingBody returns the download slot once the body is read to the
+// end or closed, whichever comes first.
+type slotReleasingBody struct {
+	io.ReadCloser
+	release func()
+}
+
+func (b *slotReleasingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.release()
+	}
+	return n, err
+}
+
+func (b *slotReleasingBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.release()
+	return err
 }
 
 // withoutFileURLPath removes the path and query from the URL that net/http

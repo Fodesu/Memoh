@@ -413,6 +413,53 @@ func TestTelegramResolveAttachmentRetriesGetFileOnTooManyRequests(t *testing.T) 
 	}
 }
 
+func TestTelegramResolveAttachmentHoldsSlotUntilBodyIsDone(t *testing.T) {
+	const botToken = "123456:hold"
+	adapter := newTelegramFileTestAdapter(t, botToken, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, telegramTestFileResult)
+	})
+	cfg := channel.ChannelConfig{ID: "config", Credentials: map[string]any{"bot_token": botToken}}
+	att := channel.Attachment{PlatformKey: "f"}
+
+	var bodies []io.ReadCloser
+	for i := 0; i < telegramFileConcurrency; i++ {
+		payload, err := adapter.ResolveAttachment(context.Background(), cfg, att)
+		if err != nil {
+			t.Fatalf("ResolveAttachment %d: %v", i, err)
+		}
+		bodies = append(bodies, payload.Reader)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := adapter.ResolveAttachment(waitCtx, cfg, att); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("with every slot held by an unread body, ResolveAttachment = %v, want it to wait", err)
+	}
+
+	if _, err := io.ReadAll(bodies[0]); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	payload, err := adapter.ResolveAttachment(context.Background(), cfg, att)
+	if err != nil {
+		t.Fatalf("ResolveAttachment after a body was read to the end: %v", err)
+	}
+	_ = payload.Reader.Close()
+	for _, body := range bodies {
+		_ = body.Close()
+		_ = body.Close() // returning a slot twice must not free another
+	}
+	full := make(chan struct{}, telegramFileConcurrency+1)
+	for i := 0; i < telegramFileConcurrency+1; i++ {
+		select {
+		case adapter.fileSlots["config"] <- struct{}{}:
+			full <- struct{}{}
+		default:
+		}
+	}
+	if len(full) != telegramFileConcurrency {
+		t.Fatalf("free slots after every body closed = %d, want %d", len(full), telegramFileConcurrency)
+	}
+}
+
 func TestTelegramResolveAttachmentCapsConcurrentFileRequestsPerBot(t *testing.T) {
 	const botToken = "123456:busy"
 	var inFlight, peak atomic.Int32
