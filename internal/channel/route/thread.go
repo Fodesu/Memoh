@@ -2,9 +2,11 @@ package route
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -83,19 +85,16 @@ func (c *ThreadCoordinator) CreateNew(ctx context.Context, input session.CreateI
 	return thread, nil
 }
 
-// EnsureActive returns the selected Thread, or creates one when the route
-// currently has no usable active Thread.
-func (c *ThreadCoordinator) EnsureActive(ctx context.Context, botID, routeID, channelType string) (session.Thread, error) {
-	thread, err := c.CreateIfAbsent(ctx, session.CreateInput{
-		BotID:       botID,
-		RouteID:     routeID,
-		ChannelType: channelType,
-	})
-	if err != nil {
-		return session.Thread{}, fmt.Errorf("auto-create session: %w", err)
-	}
-	return thread, nil
-}
+const (
+	// createSessionTimeout bounds the creation that joined callers share; it
+	// runs detached from the context of the caller that started it.
+	createSessionTimeout = 30 * time.Second
+	// createSessionAttempts bounds how often a creator reads the route again
+	// after another writer moved the pointer first.
+	createSessionAttempts = 3
+)
+
+var errRouteKeptChanging = errors.New("route active session kept changing")
 
 // CreateIfAbsent returns the route's usable active Thread, and creates one from
 // input only when the route has none. Messages that reach a new route together
@@ -104,55 +103,74 @@ func (c *ThreadCoordinator) EnsureActive(ctx context.Context, botID, routeID, ch
 // pointer moves only from the value its creator read, so a creator in another
 // process that loses discards its Thread and returns the one that won.
 func (c *ThreadCoordinator) CreateIfAbsent(ctx context.Context, input session.CreateInput) (session.Thread, error) {
-	routeID := strings.TrimSpace(input.RouteID)
-	// WithoutCancel: the callers joined here share this creation, so one of
-	// them giving up must not fail it for the rest.
-	shared, err, _ := c.creating.Do(routeID, func() (any, error) {
-		return c.createIfAbsent(context.WithoutCancel(ctx), input)
+	result := c.creating.DoChan(strings.TrimSpace(input.RouteID), func() (any, error) {
+		// Detached, because the callers joined here share it: one of them
+		// giving up must not fail it for the rest.
+		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), createSessionTimeout)
+		defer cancel()
+		return c.createIfAbsent(shared, input)
 	})
-	if err != nil {
-		return session.Thread{}, err
+	select {
+	case <-ctx.Done():
+		return session.Thread{}, ctx.Err()
+	case r := <-result:
+		if r.Err != nil {
+			return session.Thread{}, r.Err
+		}
+		return r.Val.(session.Thread), nil
 	}
-	return shared.(session.Thread), nil
 }
 
 func (c *ThreadCoordinator) createIfAbsent(ctx context.Context, input session.CreateInput) (session.Thread, error) {
-	route, err := c.routes.GetByID(ctx, input.RouteID)
-	if err != nil {
-		return session.Thread{}, err
-	}
-	expected := strings.TrimSpace(route.ActiveThreadID)
-	if expected != "" {
-		if thread, err := c.threads.Get(ctx, expected); err == nil {
-			return thread, nil
-		}
-	}
 	if strings.TrimSpace(input.Type) == "" {
 		input.Type = session.TypeChat
 	}
-	thread, err := c.threads.Create(ctx, input)
-	if err != nil {
-		return session.Thread{}, fmt.Errorf("create new session: %w", err)
+	var created session.Thread
+	discard := func() {
+		if created.ID == "" {
+			return
+		}
+		if err := c.threads.SoftDelete(ctx, created.ID); err != nil {
+			c.logger.WarnContext(ctx, "discard unselected session failed", slog.String("session_id", created.ID), slog.Any("error", err))
+		}
 	}
-	set, err := c.routes.CompareAndSetActiveThread(ctx, input.RouteID, expected, thread.ID)
-	if err != nil {
-		// As in CreateNew: the Thread exists, so it is returned even when the
-		// route pointer could not be moved.
-		c.logger.WarnContext(ctx, "failed to set active session on route", slog.Any("error", err))
-		return thread, nil
+	for range createSessionAttempts {
+		route, err := c.routes.GetByID(ctx, input.RouteID)
+		if err != nil {
+			discard()
+			return session.Thread{}, err
+		}
+		expected := strings.TrimSpace(route.ActiveThreadID)
+		if expected != "" {
+			thread, err := c.threads.Get(ctx, expected)
+			if err == nil {
+				discard()
+				return thread, nil
+			}
+			// Only a selected Thread that no longer exists is replaced; any
+			// other failure says nothing about whether it is still in use.
+			if !errors.Is(err, pgx.ErrNoRows) {
+				discard()
+				return session.Thread{}, fmt.Errorf("read active session: %w", err)
+			}
+		}
+		if created.ID == "" {
+			if created, err = c.threads.Create(ctx, input); err != nil {
+				return session.Thread{}, fmt.Errorf("create new session: %w", err)
+			}
+		}
+		set, err := c.routes.CompareAndSetActiveThread(ctx, input.RouteID, expected, created.ID)
+		if err != nil {
+			discard()
+			return session.Thread{}, fmt.Errorf("select new session on route: %w", err)
+		}
+		if set {
+			return created, nil
+		}
+		// Another writer moved the pointer since the read: read it again.
 	}
-	if set {
-		return thread, nil
-	}
-	winner, err := c.GetActive(ctx, input.RouteID)
-	if err != nil {
-		c.logger.WarnContext(ctx, "another session took the route but cannot be read; keeping the new one", slog.Any("error", err))
-		return thread, nil
-	}
-	if err := c.threads.SoftDelete(ctx, thread.ID); err != nil {
-		c.logger.WarnContext(ctx, "discard session that lost the route failed", slog.String("session_id", thread.ID), slog.Any("error", err))
-	}
-	return winner, nil
+	discard()
+	return session.Thread{}, errRouteKeptChanging
 }
 
 // SetActiveThread updates the Channel-owned active Thread pointer.

@@ -385,14 +385,6 @@ type sessionEnsurerAdapter struct {
 	coordinator *route.ThreadCoordinator
 }
 
-func (a *sessionEnsurerAdapter) EnsureActiveSession(ctx context.Context, botID, routeID, channelType string) (inbound.SessionResult, error) {
-	sess, err := a.coordinator.EnsureActive(ctx, botID, routeID, channelType)
-	if err != nil {
-		return inbound.SessionResult{}, err
-	}
-	return inboundSessionResult(sess), nil
-}
-
 func (a *sessionEnsurerAdapter) GetActiveSession(ctx context.Context, routeID string) (inbound.SessionResult, error) {
 	sess, err := a.coordinator.GetActive(ctx, routeID)
 	if err != nil {

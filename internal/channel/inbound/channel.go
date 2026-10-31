@@ -98,7 +98,6 @@ type transcriptionModelResolver interface {
 
 // SessionEnsurer resolves or creates an active session for a route.
 type SessionEnsurer interface {
-	EnsureActiveSession(ctx context.Context, botID, routeID, channelType string) (SessionResult, error)
 	GetActiveSession(ctx context.Context, routeID string) (SessionResult, error)
 	// CreateNewSession always creates a fresh session and sets it as the
 	// active session for the given route, replacing any previous one.
