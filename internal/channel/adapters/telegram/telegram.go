@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/sync/semaphore"
 	"golang.org/x/time/rate"
 	tele "gopkg.in/telebot.v4"
 
@@ -82,7 +83,7 @@ type TelegramAdapter struct {
 
 	// fileSlots holds each channel config's telegramFileConcurrency slots.
 	fileSlotsMu sync.Mutex
-	fileSlots   map[string]chan struct{}
+	fileSlots   map[string]*semaphore.Weighted
 }
 
 // askUserInteractionService is the slice of *userinput.Service the adapter
@@ -251,26 +252,29 @@ func (a *TelegramAdapter) acquireFileSlot(ctx context.Context, configID string) 
 	slots, ok := a.fileSlots[configID]
 	if !ok {
 		if a.fileSlots == nil {
-			a.fileSlots = make(map[string]chan struct{})
+			a.fileSlots = make(map[string]*semaphore.Weighted)
 		}
-		slots = make(chan struct{}, telegramFileConcurrency)
+		slots = semaphore.NewWeighted(telegramFileConcurrency)
 		a.fileSlots[configID] = slots
 	}
 	a.fileSlotsMu.Unlock()
-	release := func() { <-slots }
 	// A free slot is taken even when ctx is already done, so the call fails
-	// the way it would without the cap.
-	select {
-	case slots <- struct{}{}:
-		return release, nil
-	default:
+	// the way it would without the cap. Acquire alone would refuse it.
+	if !slots.TryAcquire(1) {
+		if err := slots.Acquire(ctx, 1); err != nil {
+			return nil, err
+		}
 	}
-	select {
-	case slots <- struct{}{}:
-		return release, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return func() { slots.Release(1) }, nil
+}
+
+// dropFileSlots forgets the download slots of a channel config whose
+// connection stopped. Downloads still running give their slot back to the
+// slots they took it from.
+func (a *TelegramAdapter) dropFileSlots(configID string) {
+	a.fileSlotsMu.Lock()
+	delete(a.fileSlots, configID)
+	a.fileSlotsMu.Unlock()
 }
 
 func formatTelegramFileURL(endpoint, token, filePath string) string {
@@ -588,6 +592,7 @@ func (a *TelegramAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig
 		bot.Stop()
 		cancel()
 		flushAllMediaGroups()
+		a.dropFileSlots(cfg.ID)
 		return nil
 	}
 	return channel.NewConnection(cfg, stop), nil
@@ -2395,7 +2400,9 @@ func (*TelegramAdapter) buildTelegramAttachment(attType channel.AttachmentType, 
 }
 
 // ResolveAttachment resolves a Telegram attachment reference to a byte stream.
-// It supports platform_key-based references and URL fallback.
+// It supports platform_key-based references and URL fallback. The returned
+// Reader holds one of the bot's download slots until it is read to the end or
+// closed, so the caller must do one of the two.
 func (a *TelegramAdapter) ResolveAttachment(ctx context.Context, cfg channel.ChannelConfig, attachment channel.Attachment) (channel.AttachmentPayload, error) {
 	fileID := strings.TrimSpace(attachment.PlatformKey)
 	if fileID == "" && strings.TrimSpace(attachment.URL) == "" {

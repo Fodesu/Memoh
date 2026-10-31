@@ -445,18 +445,29 @@ func TestTelegramResolveAttachmentHoldsSlotUntilBodyIsDone(t *testing.T) {
 	_ = payload.Reader.Close()
 	for _, body := range bodies {
 		_ = body.Close()
-		_ = body.Close() // returning a slot twice must not free another
+		_ = body.Close() // returning a slot twice must not panic
 	}
-	full := make(chan struct{}, telegramFileConcurrency+1)
-	for i := 0; i < telegramFileConcurrency+1; i++ {
-		select {
-		case adapter.fileSlots["config"] <- struct{}{}:
-			full <- struct{}{}
-		default:
-		}
+	if !adapter.fileSlots["config"].TryAcquire(telegramFileConcurrency) {
+		t.Fatal("some slots are still held after every body was closed")
 	}
-	if len(full) != telegramFileConcurrency {
-		t.Fatalf("free slots after every body closed = %d, want %d", len(full), telegramFileConcurrency)
+}
+
+func TestDropFileSlotsForgetsTheConfig(t *testing.T) {
+	adapter := NewTelegramAdapter(nil)
+	release, err := adapter.acquireFileSlot(context.Background(), "config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.dropFileSlots("config")
+	if _, ok := adapter.fileSlots["config"]; ok {
+		t.Fatal("a stopped config's slots are still kept")
+	}
+	release() // a download that outlived its connection
+	if _, err := adapter.acquireFileSlot(context.Background(), "config"); err != nil {
+		t.Fatal(err)
+	}
+	if !adapter.fileSlots["config"].TryAcquire(telegramFileConcurrency - 1) {
+		t.Fatal("a reconnected config started with slots already held")
 	}
 }
 
